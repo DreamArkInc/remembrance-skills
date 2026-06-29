@@ -1,0 +1,19 @@
+{
+  "name": "remembrance",
+  "owner": {
+    "name": "Remembrance"
+  },
+  "metadata": {
+    "description": "Remembrance agent skills, MCP tools, and prompt hooks.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "remembrance",
+      "source": "./packages/claude-code-plugin",
+      "description": "Auto-query Remembrance skills/resources before relevant Claude Code tasks and expose Remembrance MCP tools.",
+      "category": "productivity",
+      "tags": ["agent-skills", "mcp", "memory", "workflow"]
+    }
+  ]
+}
