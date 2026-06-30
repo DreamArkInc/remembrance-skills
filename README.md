@@ -37,9 +37,23 @@ install at all.
 
 ### Claude Code — plugin (skill + tools + auto-query hook)
 
-```text
-/plugin marketplace add dreamarkinc/remembrance-skills
-/plugin install remembrance@remembrance
+```bash
+claude plugin marketplace add dreamarkinc/remembrance-skills
+claude plugin install remembrance@remembrance
+```
+
+(The `claude plugin …` CLI works in every environment; the interactive
+`/plugin` slash command is equivalent but only inside a `claude` session.)
+
+For **org-scoped (enterprise) access**, set your org key as `REMEMBRANCE_API_KEY`
+and the bundled MCP server picks it up. In a terminal-launched agent, `export`
+it before starting `claude`; for the **Claude Code desktop app** (which doesn't
+inherit shell env) put it in `~/.claude/settings.json` (user-scoped) — **not**
+`~/.claude/settings.local.json`, which Claude Code does not read — then fully
+quit and relaunch the app:
+
+```json
+{ "env": { "REMEMBRANCE_API_KEY": "your-org-key" } }
 ```
 
 ### Claude Code — remote (zero install)

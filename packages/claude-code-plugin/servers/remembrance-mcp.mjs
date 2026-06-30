@@ -4455,7 +4455,16 @@ var remembrancePayloadSchema = external_exports.object({
   lesson: boundedString(MAX_LONG_TEXT_LENGTH),
   enterprise_encryption: enterpriseEncryptedPayloadEnvelopeSchema.optional(),
   suggested_update: suggestedUpdateSchema.default({ kind: "none" }),
-  evidence: evidenceSchema.default({ artifact_hashes: [] })
+  evidence: evidenceSchema.default({ artifact_hashes: [] }),
+  // Client-only directive: "sign this with my local TOFU key" (the MCP
+  // submit_remembrance tool exposes it, and feedback-next-step tells REST
+  // clients to POST the same payload). The server doesn't need it — the actual
+  // signature arrives in `evidence.attestation` — but a strict schema would
+  // 422 an otherwise-valid submission that forwards this documented field.
+  // Accept it here so a forwarding client can't 422; the REST route strips it
+  // after parse (before auth/idempotency/storage/verifier) so it is never
+  // persisted or hashed.
+  verified_attestation: external_exports.boolean().optional()
 }).strict();
 var skillMetadataSchema = external_exports.object({
   schema_version: external_exports.literal("0.1"),

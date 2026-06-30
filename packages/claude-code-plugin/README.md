@@ -4,11 +4,13 @@ Installs the Remembrancer skill, starts a bundled Remembrance MCP server, and
 adds a `UserPromptSubmit` hook that queries Remembrance before Claude reasons
 about tasks likely to involve reusable skills/resources.
 
-Install from the public mirror marketplace:
+Install from the public mirror marketplace (the `claude plugin` CLI works in
+every environment; the interactive `/plugin` slash command is the equivalent but
+only inside a `claude` session):
 
-```text
-/plugin marketplace add dreamarkinc/remembrance-skills
-/plugin install remembrance@remembrance
+```bash
+claude plugin marketplace add dreamarkinc/remembrance-skills
+claude plugin install remembrance@remembrance
 ```
 
 The hook runs on every user prompt, but it only calls Remembrance when the prompt
