@@ -4630,10 +4630,14 @@ var agentFeedbackRequestSchema = external_exports.object({
   idempotency_key: boundedString(MAX_SHORT_TEXT_LENGTH).optional(),
   evidence: evidenceSchema.default({ artifact_hashes: [] })
 });
+var adminReviewActionValueSchema = external_exports.enum([
+  ...verifierActionSchema.options,
+  "delete"
+]);
 var adminReviewActionSchema = external_exports.object({
   job_id: boundedString(MAX_SHORT_TEXT_LENGTH),
-  action: verifierActionSchema,
-  note: external_exports.string().max(MAX_LONG_TEXT_LENGTH).optional()
+  action: adminReviewActionValueSchema,
+  note: external_exports.string().max(MAX_LONG_TEXT_LENGTH).transform((value) => value.trim()).optional()
 });
 
 // ../core/src/seed.ts
@@ -4646,6 +4650,45 @@ var duplicateCandidateSchema = external_exports.object({
   id: external_exports.string().min(1).max(MAX_SHORT_TEXT_LENGTH),
   slug: external_exports.string().min(1).max(MAX_SHORT_TEXT_LENGTH).optional(),
   similarity: external_exports.number().min(0).max(1)
+});
+var PROPOSED_METADATA_MAX_KEYWORDS = 25;
+var PROPOSED_METADATA_MAX_TAGS = 15;
+var PROPOSED_METADATA_MAX_DOMAINS = 8;
+var PROPOSED_METADATA_MAX_TERM_LENGTH = 64;
+var PROPOSED_METADATA_MAX_RATIONALE_LENGTH = 2e3;
+var PROPOSED_METADATA_MAX_MODEL_LENGTH = MAX_SHORT_TEXT_LENGTH;
+var proposedMetadataTermArraySchema = (max) => external_exports.preprocess(
+  (value) => {
+    if (!Array.isArray(value)) {
+      return value;
+    }
+    const seen = /* @__PURE__ */ new Set();
+    const terms = [];
+    for (const entry of value) {
+      if (typeof entry !== "string") {
+        continue;
+      }
+      const trimmed = entry.trim().slice(0, PROPOSED_METADATA_MAX_TERM_LENGTH);
+      if (!trimmed) {
+        continue;
+      }
+      const key = trimmed.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      terms.push(trimmed);
+    }
+    return terms.slice(0, max);
+  },
+  external_exports.array(external_exports.string().min(1).max(PROPOSED_METADATA_MAX_TERM_LENGTH)).max(max)
+);
+var proposedSkillMetadataSchema = external_exports.object({
+  keywords: proposedMetadataTermArraySchema(PROPOSED_METADATA_MAX_KEYWORDS),
+  tags: proposedMetadataTermArraySchema(PROPOSED_METADATA_MAX_TAGS),
+  domains: proposedMetadataTermArraySchema(PROPOSED_METADATA_MAX_DOMAINS),
+  rationale: external_exports.string().trim().min(1).max(PROPOSED_METADATA_MAX_RATIONALE_LENGTH),
+  model: external_exports.string().trim().min(1).max(PROPOSED_METADATA_MAX_MODEL_LENGTH)
 });
 var verifierOutputSchema = external_exports.object({
   recommended_action: verifierActionSchema,
@@ -4665,7 +4708,10 @@ var verifierOutputSchema = external_exports.object({
         message: `score_updates must be ${MAX_JSON_FIELD_BYTES} bytes or smaller`
       });
     }
-  }).nullable().default(null)
+  }).nullable().default(null),
+  // Advisory retrieval enrichment (see proposedSkillMetadataSchema). Optional
+  // and defaults to null so existing verifier outputs remain valid.
+  proposed_metadata: proposedSkillMetadataSchema.nullable().default(null)
 });
 
 // src/server.ts

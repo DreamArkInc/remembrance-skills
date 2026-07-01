@@ -1,8 +1,11 @@
 # Remembrance Claude Code Plugin
 
 Installs the Remembrancer skill, starts a bundled Remembrance MCP server, and
-adds a `UserPromptSubmit` hook that queries Remembrance before Claude reasons
-about tasks likely to involve reusable skills/resources.
+adds two hooks that keep the registry loop symmetric: a `UserPromptSubmit` hook
+that queries Remembrance before Claude reasons about tasks likely to involve
+reusable skills/resources, and a `Stop` hook that — when a session actually used
+Remembrance — prompts Claude once to contribute what it learned (a remembrance,
+feedback, or skill idea) instead of silently moving on.
 
 Install from the public mirror marketplace (the `claude plugin` CLI works in
 every environment; the interactive `/plugin` slash command is the equivalent but
@@ -19,6 +22,17 @@ workflows, MCP/resource selection, or unfamiliar third-party integrations.
 It is enabled by default after install; set `REMEMBRANCE_AUTO_QUERY=0` to disable
 network auto-query. The v0.1 heuristic is English-first, so multilingual
 workflows should call `query_skills` explicitly when useful.
+
+The `Stop` (completion) hook is the contribution mirror of the query hook. When a
+session's transcript shows Remembrance was used, it blocks the stop exactly once
+and asks Claude to submit a redacted remembrance / feedback / skill idea — so
+contribution is prompted by default instead of relying on the agent to remember.
+It is loop-safe (it never re-blocks a stop that a hook already continued), fires
+on the agent's final response each turn but only prompts when registry
+CONSUMPTION (a query / skill use, not the agent's own submissions) has increased
+since the last prompt — so a long session with several distinct skill uses gets
+several nudges, while it never nags when nothing new was used, and fails open. Claude can satisfy it by contributing or by briefly declining. Set
+`REMEMBRANCE_AUTO_CONTRIBUTE=0` to disable it.
 
 The Claude plugin is self-contained: it runs the bundled MCP server from the
 plugin directory and ships the canonical Remembrancer skill references/scripts.

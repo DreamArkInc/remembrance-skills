@@ -34,6 +34,13 @@ const WORKFLOW_PATTERNS = [
   /\b(build error|release|rollback|provision|backfill)\b/i,
 ];
 
+const UI_PATTERNS = [
+  /\b(web ?ui|ux|usability|accessibility|a11y|responsive|frontend|front-end)\b/i,
+  /\b(dashboard|admin (page|panel|surface)|review card|settings layout)\b/i,
+  /\b(layout|nav(igation| bar| panel)?|sidebar|modal|tooltip|popover)\b/i,
+  /\b(tailwind|styling|component|button|form design|redesign|declutter|design system)\b/i,
+];
+
 const SKIP_PATTERNS = [
   /\b(general web search|search the web|google this|look up current facts?)\b/i,
   /^\s*(what|who|when|where)\s+(is|are|was|were)\b/i,
@@ -71,6 +78,7 @@ export function shouldQueryPrompt(prompt) {
     ...SERVICE_PATTERNS.map((pattern) => [pattern, "external_service"]),
     ...TOOL_PATTERNS.map((pattern) => [pattern, "tool_or_framework"]),
     ...WORKFLOW_PATTERNS.map((pattern) => [pattern, "workflow_shape"]),
+    ...UI_PATTERNS.map((pattern) => [pattern, "ui_or_dashboard_work"]),
   ];
   for (const [pattern, reason] of matches) {
     if (pattern.test(normalized)) {
@@ -399,23 +407,52 @@ function errorName(error) {
   return error instanceof Error ? error.name || error.message : "Error";
 }
 
+// Map a prompt to a seeded registry domain so the auto-query is filtered to the
+// right area instead of falling back to a generic catch-all (which surfaces the
+// entry skills regardless of task). Seeded domains: agent-skills, web-ui-qa,
+// resource-discovery, agent-commerce, mcp, mpp. Order matters — most specific
+// first. The web-ui vocabulary is intentionally broad (frontend / dashboard /
+// design work rarely says the words "web ui" or "accessibility").
 function inferDomain(prompt) {
-  if (/\b(mpp|x402|payment|stripe)\b/i.test(prompt)) {
+  if (/\b(mpp|x402)\b/i.test(prompt)) {
+    return "mpp";
+  }
+  if (/\b(payment|stripe|checkout|billing|invoice|commerce|receipt)\b/i.test(prompt)) {
     return "agent-commerce";
   }
-  if (/\b(playwright|web ui|accessibility|responsive)\b/i.test(prompt)) {
+  if (
+    /\b(web ?ui|ux|usability|accessibility|a11y|responsive|playwright|frontend|front-end|dashboard|admin (page|panel|surface)|layout|nav(igation| bar| panel)?|sidebar|css|tailwind|styling|component|modal|tooltip|popover|button|form design|redesign|declutter|design system)\b/i.test(
+      prompt,
+    )
+  ) {
     return "web-ui-qa";
   }
-  if (/\b(vercel|heroku|deploy|deployment|ci\/cd|github actions?)\b/i.test(prompt)) {
+  if (/\b(vercel|heroku|deploy|deployment|ci\/cd|github actions?|pipeline|rollback)\b/i.test(prompt)) {
     return "deployment";
   }
-  if (/\b(mongodb|atlas|redis|database)\b/i.test(prompt)) {
+  if (/\b(mongodb|atlas|redis|database|postgres|sql)\b/i.test(prompt)) {
     return "database";
   }
-  if (/\b(mcp)\b/i.test(prompt)) {
+  if (/\b(mcp|model context protocol|tool server)\b/i.test(prompt)) {
     return "mcp";
   }
-  return "agent-workflow";
+  if (
+    /\b(skill|registry|review queue|reviewer|verifier|remembranc\w*|agent memory|skill idea|suggestion)\b/i.test(
+      prompt,
+    )
+  ) {
+    return "agent-skills";
+  }
+  if (
+    /\b(api|endpoint|rest|graphql|webhook|resource|integration|integrate|sdk|service|connector|provider|dataset|docs site)\b/i.test(
+      prompt,
+    )
+  ) {
+    return "resource-discovery";
+  }
+  // No seeded domain fits; agent-skills is the safest default (its entry skill
+  // covers the query/submit workflow itself) rather than a non-existent domain.
+  return "agent-skills";
 }
 
 function inferConstraints(prompt) {
@@ -425,7 +462,11 @@ function inferConstraints(prompt) {
     [/\b(deploy|deployment|vercel|heroku)\b/i, "deployment"],
     [/\b(payment|stripe|mpp|x402)\b/i, "payment"],
     [/\b(migration|migrate|schema)\b/i, "migration"],
-    [/\b(playwright|browser|responsive|accessibility)\b/i, "qa"],
+    [/\b(playwright|browser|responsive|accessibility|a11y)\b/i, "qa"],
+    [
+      /\b(frontend|front-end|dashboard|ux|css|tailwind|react|next\.?js|component|layout|nav|redesign|declutter)\b/i,
+      "frontend",
+    ],
   ]) {
     if (pattern.test(prompt)) {
       constraints.push(value);

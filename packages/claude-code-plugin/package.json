@@ -6,10 +6,10 @@
   "description": "Claude Code plugin for Remembrance auto-query hooks, skill docs, and MCP server configuration.",
   "type": "module",
   "scripts": {
-    "build": "node scripts/refresh-mcp-bundle.mjs && node --check scripts/query-on-prompt.mjs",
+    "build": "node scripts/refresh-mcp-bundle.mjs && node --check scripts/query-on-prompt.mjs && node --check scripts/contribute-on-stop.mjs",
     "refresh:mcp": "node scripts/refresh-mcp-bundle.mjs",
     "test": "vitest run",
-    "typecheck": "node --check scripts/query-on-prompt.mjs && node --check scripts/refresh-mcp-bundle.mjs"
+    "typecheck": "node --check scripts/query-on-prompt.mjs && node --check scripts/contribute-on-stop.mjs && node --check scripts/refresh-mcp-bundle.mjs"
   },
   "devDependencies": {
     "vitest": "^3.1.2"

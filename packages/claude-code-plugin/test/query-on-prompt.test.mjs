@@ -337,6 +337,9 @@ describe("Remembrance Claude Code prompt hook", () => {
     expect(hooks.hooks.UserPromptSubmit[0].hooks[0].command).toContain(
       "query-on-prompt.mjs",
     );
+    expect(hooks.hooks.Stop[0].hooks[0].command).toContain(
+      "contribute-on-stop.mjs",
+    );
     expect(plugin.mcpServers).toBe("./.mcp.json");
     expect(mcp.mcpServers.remembrance).toMatchObject({
       command: "node",
@@ -435,6 +438,12 @@ describe("Remembrance Claude Code prompt hook", () => {
     expect(shouldQueryPrompt("Deploy a Next.js app on Vercel")).toMatchObject({
       likely_match: true,
     });
+    expect(
+      shouldQueryPrompt("Redesign the dashboard and declutter the review card"),
+    ).toMatchObject({
+      likely_match: true,
+      reason: "ui_or_dashboard_work",
+    });
     expect(shouldQueryPrompt("Search the web for current news")).toMatchObject({
       likely_match: false,
     });
@@ -452,5 +461,33 @@ describe("Remembrance Claude Code prompt hook", () => {
         REMEMBRANCE_AUTO_QUERY_LIMIT: "99",
       }).limit,
     ).toBe(3);
+  });
+
+  it("infers the right seeded domain from the task, not a generic fallback", () => {
+    const domainFor = (prompt) => buildQueryPayload(prompt, {}).task.domain;
+    // The bug this guards: frontend/dashboard work said none of the old narrow
+    // web-ui keywords, so it fell through to a non-seeded catch-all and surfaced
+    // the wrong skills. These must resolve to real seeded domains.
+    expect(domainFor("Redesign the dashboard and declutter the review card")).toBe(
+      "web-ui-qa",
+    );
+    expect(domainFor("Add a left nav side panel and fix the settings layout")).toBe(
+      "web-ui-qa",
+    );
+    expect(domainFor("Build a Tailwind modal component with a tooltip")).toBe(
+      "web-ui-qa",
+    );
+    // Framework name alone in a build/deploy context is NOT web-ui.
+    expect(domainFor("Fix the Vercel Next.js build error in GitHub Actions")).toBe(
+      "deployment",
+    );
+    expect(domainFor("Submit a skill idea and review the queue")).toBe(
+      "agent-skills",
+    );
+    expect(domainFor("Find an MPP endpoint for x402 payments")).toBe("mpp");
+    // Unknown work falls back to a real seeded domain, not a made-up one.
+    expect(domainFor("Help me think through an unrelated idea")).toBe(
+      "agent-skills",
+    );
   });
 });
