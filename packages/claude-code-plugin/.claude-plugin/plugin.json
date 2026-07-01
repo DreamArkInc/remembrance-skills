@@ -1,6 +1,6 @@
 {
   "name": "remembrance",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Auto-query Remembrance skills/resources before relevant Claude Code tasks and expose Remembrance MCP tools.",
   "author": {
     "name": "Remembrance"
@@ -10,6 +10,5 @@
   "license": "Apache-2.0",
   "keywords": ["agent-skills", "mcp", "memory", "workflow"],
   "skills": "./skills",
-  "hooks": "./hooks/hooks.json",
   "mcpServers": "./.mcp.json"
 }

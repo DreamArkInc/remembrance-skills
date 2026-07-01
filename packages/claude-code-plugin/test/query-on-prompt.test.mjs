@@ -330,10 +330,13 @@ describe("Remembrance Claude Code prompt hook", () => {
 
     expect(plugin).toMatchObject({
       name: "remembrance",
-      hooks: "./hooks/hooks.json",
       mcpServers: "./.mcp.json",
       skills: "./skills",
     });
+    // The manifest must NOT reference the standard hooks/hooks.json — Claude Code
+    // auto-loads that path, and a manifest `hooks` pointing at it makes the
+    // plugin fail to load with a "Duplicate hooks file detected" error.
+    expect(plugin.hooks).toBeUndefined();
     expect(hooks.hooks.UserPromptSubmit[0].hooks[0].command).toContain(
       "query-on-prompt.mjs",
     );
