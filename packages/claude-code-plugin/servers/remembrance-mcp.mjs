@@ -6138,7 +6138,7 @@ function inputSchemaFor(schema, name) {
 
 // src/server.ts
 var apiBase = (process.env.REMEMBRANCE_API_URL ?? "https://remembrance.dev").replace(/\/$/, "");
-var SERVER_VERSION = true ? "0.1.1" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.2" : "0.0.0-dev";
 var tools = toolDefinitions;
 var inputBuffer = Buffer.alloc(0);
 process.stdin.on("data", (chunk) => {
