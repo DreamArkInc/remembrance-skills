@@ -1,130 +1,91 @@
 #!/usr/bin/env node
+// Claude Code UserPromptSubmit adapter.
+//
+// Claude Code invokes this before the prompt is sent, with stdin JSON
+// {hook_event_name, prompt, session_id, ...}. We inject context by printing JSON
+// {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "..."}}
+// on stdout. All runtime-agnostic decision/query/format logic lives in the shared
+// hook-core.mjs (byte-identical across the Codex / OpenClaw / Claude plugins;
+// re-synced by `npm run sync:hook-core`). This file keeps only the Claude glue:
+//   • the per-prompt disk cache (Claude fires this hook synchronously on every
+//     prompt, so repeated matching prompts are served from cache without a
+//     re-query — Codex/OpenClaw have no such cache);
+//   • the `provider: "claude"` payload agent identity;
+//   • a Claude-branded query wrapper (its own user-agent) that layers the shared
+//     apiUrl / resolveApiKey / timeout logic;
+//   • Claude's stdin/stdout shape.
+// Fail-open: any no-match, disabled flag, or error prints nothing and exits 0.
+
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import {
+  buildQueryPayload as buildSharedQueryPayload,
+  debugLog,
+  disabled,
+  formatContext,
+  readRemembranceConfig,
+  redactPrompt,
+  resolveApiKey,
+  shouldQueryPrompt,
+} from "./hook-core.mjs";
 
+const CACHE_TTL_MS = 60_000;
+const CACHE_MAX_ENTRIES = 64;
 const DEFAULT_API_URL = "https://remembrance.dev";
 const DEFAULT_LIMIT = 3;
 const DEFAULT_TIMEOUT_MS = 2000;
-const MAX_SUMMARY_CHARS = 1200;
-const MAX_CONTEXT_CHARS = 4000;
-const MAX_CONTEXT_FIELD_CHARS = 280;
-const CACHE_TTL_MS = 60_000;
-const CACHE_MAX_ENTRIES = 64;
 
-const SERVICE_PATTERNS = [
-  /\b(vercel|heroku|netlify|cloudflare|aws|gcp|azure)\b/i,
-  /\b(github actions?|circleci|gitlab ci|buildkite|jenkins)\b/i,
-  /\b(stripe|x402|mpp|model payment protocol|mcp servers?)\b/i,
-  /\b(openai|anthropic|claude|cursor|codex|voyage|mongodb atlas)\b/i,
-];
-
-const TOOL_PATTERNS = [
-  /\b(next\.?js|turbopack|webpack|vite|react|prisma|drizzle)\b/i,
-  /\b(esbuild|playwright|vitest|jest|typescript|node\.?js|npm)\b/i,
-  /\b(mongodb|redis|bullmq|atlas vector search)\b/i,
-];
-
-const WORKFLOW_PATTERNS = [
-  /\b(deploy|deployment|migrate|migration|ci\/cd|ci|pipeline)\b/i,
-  /\b(payment integration|schema upgrade|observability|monitoring)\b/i,
-  /\b(build error|release|rollback|provision|backfill)\b/i,
-];
-
-const UI_PATTERNS = [
-  /\b(web ?ui|ux|usability|accessibility|a11y|responsive|frontend|front-end)\b/i,
-  /\b(dashboard|admin (page|panel|surface)|review card|settings layout)\b/i,
-  /\b(layout|nav(igation| bar| panel)?|sidebar|modal|tooltip|popover)\b/i,
-  /\b(tailwind|styling|component|button|form design|redesign|declutter|design system)\b/i,
-];
-
-const SKIP_PATTERNS = [
-  /\b(general web search|search the web|google this|look up current facts?)\b/i,
-  /^\s*(what|who|when|where)\s+(is|are|was|were)\b/i,
-  /\b(one[- ]off fact|private scratch memory|brainstorm)\b/i,
-];
-
-const SECRET_PATTERNS = [
-  /\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9_-]{12,}\b/g,
-  /\bsk-proj-[A-Za-z0-9_-]{12,}\b/g,
-  /\bsk-[A-Za-z0-9_-]{20,}\b/g,
-  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
-  /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g,
-  /\bxox[abp]-[A-Za-z0-9-]{20,}\b/g,
-  /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
-  /\bya29\.[A-Za-z0-9_-]{20,}\b/g,
-  /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
-  /\bAIza[0-9A-Za-z_-]{16,}\b/g,
-  /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}\b/gi,
-  /\b(?:aws_secret_access_key|aws_secret_key|secret_access_key)\s*[:=]\s*["']?[A-Za-z0-9/+=]{32,}["']?/gi,
-  /\b(password|secret|token|api[_-]?key)\s*[:=]\s*["']?[^"'\s]+/gi,
-  /\b(?:mongodb(?:\+srv)?|redis(?:s)?|postgres(?:ql)?:)\/\/[^\s"'<>]+/gi,
-  /\bhttps?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[0-1])\.\d+\.\d+)[^\s)"']*/gi,
-  /\bhttps?:\/\/[^/\s)"']*(?:\.internal|\.local|\.corp|\.onion)(?::\d+)?[^\s)"']*/gi,
-];
-
-export function shouldQueryPrompt(prompt) {
-  const normalized = String(prompt ?? "").trim();
-  if (!normalized || normalized.length < 8) {
-    return { likely_match: false, reason: "empty_or_too_short" };
-  }
-  if (SKIP_PATTERNS.some((pattern) => pattern.test(normalized))) {
-    return { likely_match: false, reason: "skip_pattern" };
-  }
-  const matches = [
-    ...SERVICE_PATTERNS.map((pattern) => [pattern, "external_service"]),
-    ...TOOL_PATTERNS.map((pattern) => [pattern, "tool_or_framework"]),
-    ...WORKFLOW_PATTERNS.map((pattern) => [pattern, "workflow_shape"]),
-    ...UI_PATTERNS.map((pattern) => [pattern, "ui_or_dashboard_work"]),
-  ];
-  for (const [pattern, reason] of matches) {
-    if (pattern.test(normalized)) {
-      return { likely_match: true, reason };
-    }
-  }
-  if (/\b(integrate|integration|configure|setup|set up)\b/i.test(normalized)) {
-    return { likely_match: true, reason: "third_party_integration" };
-  }
-  return { likely_match: false, reason: "no_trigger_match" };
+// Small env-scoped helpers. These mirror the (non-exported) internals of the
+// shared hook-core verbatim; they live here so the adapter can layer its cache
+// and Claude-branded query wrapper without the core exposing internals. Kept in
+// sync by inspection — they are pure and trivially auditable.
+function apiUrl(env) {
+  const fromFile = readRemembranceConfig(env).apiUrl;
+  return String(env.REMEMBRANCE_API_URL || fromFile || DEFAULT_API_URL).replace(
+    /\/$/,
+    "",
+  );
 }
 
-export function redactPrompt(prompt) {
-  let redacted = String(prompt ?? "");
-  for (const pattern of SECRET_PATTERNS) {
-    redacted = redacted.replace(pattern, (match, prefix) => {
-      if (typeof prefix === "string" && /^Bearer\s+/i.test(prefix)) {
-        return `${prefix}[redacted-token]`;
-      }
-      if (/^https?:\/\//i.test(match)) {
-        return "[redacted-private-url]";
-      }
-      return "[redacted-secret]";
-    });
-  }
-  return redacted;
+function limitFromEnv(env) {
+  const parsed = Number.parseInt(String(env.REMEMBRANCE_AUTO_QUERY_LIMIT ?? ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= 10
+    ? parsed
+    : DEFAULT_LIMIT;
 }
 
+function timeoutMsFromEnv(env) {
+  const parsed = Number.parseInt(
+    String(env.REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS ?? ""),
+    10,
+  );
+  return Number.isFinite(parsed) && parsed >= 100 && parsed <= 10_000
+    ? parsed
+    : DEFAULT_TIMEOUT_MS;
+}
+
+function errorName(error) {
+  return error instanceof Error ? error.name || error.message : "Error";
+}
+
+// Re-export the pure helpers the plugin test imports from this module.
+export { redactPrompt, shouldQueryPrompt };
+// Kept as a named export for compatibility with the shared core / any importer.
+export const formatAdditionalContext = formatContext;
+
+// The shared buildQueryPayload stamps the canonical (Codex) agent identity; the
+// Claude adapter reports itself as the Claude Code runtime instead. Everything
+// else (redaction, summary truncation, domain/constraint inference, limit) comes
+// straight from the shared core. Exported because the plugin test and any
+// importer expect this module's payload to carry the Claude identity.
 export function buildQueryPayload(prompt, env = process.env) {
-  const redacted = redactPrompt(prompt).trim();
-  const summary =
-    redacted.length <= MAX_SUMMARY_CHARS
-      ? redacted
-      : `${redacted.slice(0, MAX_SUMMARY_CHARS - 3).trim()}...`;
-  return {
-    agent: {
-      provider: "claude",
-      model: "claude-code",
-    },
-    task: {
-      domain: inferDomain(summary),
-      summary,
-      constraints: inferConstraints(summary),
-    },
-    limit: limitFromEnv(env),
-  };
+  const payload = buildSharedQueryPayload(prompt, env);
+  payload.agent = { provider: "claude", model: "claude-code" };
+  return payload;
 }
 
 export async function handleHookInput(input, options = {}) {
@@ -162,11 +123,7 @@ export async function handleHookInput(input, options = {}) {
   if (!response) {
     return null;
   }
-  const context = formatAdditionalContext(
-    response,
-    decision.reason,
-    limitFromEnv(env),
-  );
+  const context = formatContext(response, decision.reason, limitFromEnv(env));
   if (!context) {
     await writeCachedOutput(cacheKey, null, env, options);
     return null;
@@ -181,56 +138,6 @@ export async function handleHookInput(input, options = {}) {
   return output;
 }
 
-export function formatAdditionalContext(
-  response,
-  reason = "trigger_match",
-  limit = DEFAULT_LIMIT,
-) {
-  const body = response?.body ?? response;
-  const itemLimit = Math.min(Math.max(Number(limit) || DEFAULT_LIMIT, 1), 10);
-  const skills = Array.isArray(body?.skills)
-    ? body.skills.slice(0, itemLimit)
-    : [];
-  const resources = Array.isArray(body?.resources)
-    ? body.resources.slice(0, itemLimit)
-    : [];
-  const noResults = body?.no_results ?? null;
-  if (skills.length === 0 && resources.length === 0 && !noResults) {
-    return null;
-  }
-
-  const lines = [
-    "Remembrance auto-query context:",
-    `Trigger: ${reason}. Use these results only if they fit the user's task constraints.`,
-  ];
-  if (skills.length > 0) {
-    lines.push("Skills:");
-    for (const skill of skills) {
-      lines.push(
-        `- ${safeText(skill.slug, 80)} (${safeText(skill.trust_tier ?? "unknown", 40)}, uses ${numberValue(skill.verified_uses)}/${numberValue(skill.total_uses)}): ${safeText(skill.description, MAX_CONTEXT_FIELD_CHARS)}`,
-      );
-    }
-  }
-  if (resources.length > 0) {
-    lines.push("Resources:");
-    for (const resource of resources) {
-      lines.push(
-        `- ${safeText(resource.slug, 80)} [${safeText(resource.kind, 40)}]: ${safeText(resource.description, MAX_CONTEXT_FIELD_CHARS)}`,
-      );
-    }
-  }
-  if (noResults) {
-    const payload = safeText(
-      JSON.stringify(noResults.propose_skill_idea_payload ?? noResults),
-      1200,
-    );
-    lines.push(
-      `No matching skill/resource. Proposed skill idea payload: ${payload}`,
-    );
-  }
-  return safeText(lines.join("\n"), MAX_CONTEXT_CHARS);
-}
-
 async function queryRemembrance(payload, options) {
   const env = options.env;
   const controller = new AbortController();
@@ -240,8 +147,9 @@ async function queryRemembrance(payload, options) {
       "content-type": "application/json",
       "user-agent": "@remembrance/claude-code-plugin",
     };
-    if (env.REMEMBRANCE_API_KEY) {
-      headers["x-remembrance-api-key"] = env.REMEMBRANCE_API_KEY;
+    const apiKey = resolveApiKey(env);
+    if (apiKey) {
+      headers["x-remembrance-api-key"] = apiKey;
     }
     const response = await options.fetchImpl(
       `${apiUrl(env)}/api/v1/agent/query`,
@@ -383,138 +291,8 @@ function shortCacheKey(value) {
   return value.slice(0, 12);
 }
 
-function debugLog(env, event, fields = {}, options = {}) {
-  if (!debugEnabled(env.REMEMBRANCE_DEBUG)) {
-    return;
-  }
-  const writer = options.stderr ?? process.stderr;
-  const body = redactPrompt(JSON.stringify({ event, ...fields })).slice(
-    0,
-    1000,
-  );
-  writer.write(`[remembrance] ${body}\n`);
-}
-
-function debugEnabled(value) {
-  return /^(1|true|yes)$/i.test(String(value ?? ""));
-}
-
 function nowMs(options = {}) {
   return typeof options.nowMs === "number" ? options.nowMs : Date.now();
-}
-
-function errorName(error) {
-  return error instanceof Error ? error.name || error.message : "Error";
-}
-
-// Map a prompt to a seeded registry domain so the auto-query is filtered to the
-// right area instead of falling back to a generic catch-all (which surfaces the
-// entry skills regardless of task). Seeded domains: agent-skills, web-ui-qa,
-// resource-discovery, agent-commerce, mcp, mpp. Order matters — most specific
-// first. The web-ui vocabulary is intentionally broad (frontend / dashboard /
-// design work rarely says the words "web ui" or "accessibility").
-function inferDomain(prompt) {
-  if (/\b(mpp|x402)\b/i.test(prompt)) {
-    return "mpp";
-  }
-  if (/\b(payment|stripe|checkout|billing|invoice|commerce|receipt)\b/i.test(prompt)) {
-    return "agent-commerce";
-  }
-  if (
-    /\b(web ?ui|ux|usability|accessibility|a11y|responsive|playwright|frontend|front-end|dashboard|admin (page|panel|surface)|layout|nav(igation| bar| panel)?|sidebar|css|tailwind|styling|component|modal|tooltip|popover|button|form design|redesign|declutter|design system)\b/i.test(
-      prompt,
-    )
-  ) {
-    return "web-ui-qa";
-  }
-  if (/\b(vercel|heroku|deploy|deployment|ci\/cd|github actions?|pipeline|rollback)\b/i.test(prompt)) {
-    return "deployment";
-  }
-  if (/\b(mongodb|atlas|redis|database|postgres|sql)\b/i.test(prompt)) {
-    return "database";
-  }
-  if (/\b(mcp|model context protocol|tool server)\b/i.test(prompt)) {
-    return "mcp";
-  }
-  if (
-    /\b(skill|registry|review queue|reviewer|verifier|remembranc\w*|agent memory|skill idea|suggestion)\b/i.test(
-      prompt,
-    )
-  ) {
-    return "agent-skills";
-  }
-  if (
-    /\b(api|endpoint|rest|graphql|webhook|resource|integration|integrate|sdk|service|connector|provider|dataset|docs site)\b/i.test(
-      prompt,
-    )
-  ) {
-    return "resource-discovery";
-  }
-  // No seeded domain fits; agent-skills is the safest default (its entry skill
-  // covers the query/submit workflow itself) rather than a non-existent domain.
-  return "agent-skills";
-}
-
-function inferConstraints(prompt) {
-  const constraints = [];
-  for (const [pattern, value] of [
-    [/\b(ci|github actions?|circleci)\b/i, "ci"],
-    [/\b(deploy|deployment|vercel|heroku)\b/i, "deployment"],
-    [/\b(payment|stripe|mpp|x402)\b/i, "payment"],
-    [/\b(migration|migrate|schema)\b/i, "migration"],
-    [/\b(playwright|browser|responsive|accessibility|a11y)\b/i, "qa"],
-    [
-      /\b(frontend|front-end|dashboard|ux|css|tailwind|react|next\.?js|component|layout|nav|redesign|declutter)\b/i,
-      "frontend",
-    ],
-  ]) {
-    if (pattern.test(prompt)) {
-      constraints.push(value);
-    }
-  }
-  return [...new Set(constraints)];
-}
-
-function apiUrl(env) {
-  return String(env.REMEMBRANCE_API_URL ?? DEFAULT_API_URL).replace(/\/$/, "");
-}
-
-function limitFromEnv(env) {
-  const parsed = Number.parseInt(String(env.REMEMBRANCE_AUTO_QUERY_LIMIT ?? ""), 10);
-  return Number.isFinite(parsed) && parsed > 0 && parsed <= 10
-    ? parsed
-    : DEFAULT_LIMIT;
-}
-
-function timeoutMsFromEnv(env) {
-  const parsed = Number.parseInt(
-    String(env.REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS ?? ""),
-    10,
-  );
-  return Number.isFinite(parsed) && parsed >= 100 && parsed <= 10_000
-    ? parsed
-    : DEFAULT_TIMEOUT_MS;
-}
-
-function disabled(value) {
-  return /^(0|false|no)$/i.test(String(value ?? ""));
-}
-
-function stringValue(value) {
-  const text = String(value ?? "").trim();
-  return text || "unknown";
-}
-
-function safeText(value, maxLength) {
-  const text = redactPrompt(stringValue(value)).replace(/\s+/g, " ").trim();
-  if (text.length <= maxLength) {
-    return text;
-  }
-  return `${text.slice(0, Math.max(0, maxLength - 3)).trim()}...`;
-}
-
-function numberValue(value) {
-  return Number.isFinite(Number(value)) ? String(Number(value)) : "0";
 }
 
 async function readStdin() {

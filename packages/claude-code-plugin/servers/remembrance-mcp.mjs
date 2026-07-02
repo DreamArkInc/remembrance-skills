@@ -4715,7 +4715,7 @@ var verifierOutputSchema = external_exports.object({
 });
 
 // src/server.ts
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -6137,8 +6137,33 @@ function inputSchemaFor(schema, name) {
 }
 
 // src/server.ts
-var apiBase = (process.env.REMEMBRANCE_API_URL ?? "https://remembrance.dev").replace(/\/$/, "");
-var SERVER_VERSION = true ? "0.1.2" : "0.0.0-dev";
+function remembranceConfigPath() {
+  return join(
+    process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"),
+    "remembrance",
+    "config.json"
+  );
+}
+function readRemembranceConfig() {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(remembranceConfigPath(), "utf8")
+    );
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function resolveApiKey() {
+  const fromEnv = process.env.REMEMBRANCE_API_KEY;
+  if (fromEnv) {
+    return fromEnv;
+  }
+  const fromFile = readRemembranceConfig().apiKey;
+  return fromFile ? String(fromFile) : "";
+}
+var apiBase = (process.env.REMEMBRANCE_API_URL || readRemembranceConfig().apiUrl || "https://remembrance.dev").replace(/\/$/, "");
+var SERVER_VERSION = true ? "0.1.4" : "0.0.0-dev";
 var tools = toolDefinitions;
 var inputBuffer = Buffer.alloc(0);
 process.stdin.on("data", (chunk) => {
@@ -6218,6 +6243,7 @@ async function handleRequest(request) {
   }
   writeResponse(response.id, response.result, response.error);
 }
+var SERVER_INSTRUCTIONS = "Remembrance is shared operational memory for agents. BEFORE non-trivial service/API/tool/library/deployment work, call query_skills to reuse proven skills and resources instead of rediscovering them. AFTER you use a skill or resource, close the loop so the next agent inherits what you learned: call submit_feedback (useful true/false + a one-line lesson \u2014 it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable, or propose_skill_idea only if nothing fit and you built a new workflow. Redact secrets, private URLs, credentials, and proprietary content; submit summaries and hashes, not raw traces.";
 async function dispatchJsonRpcRequest(request) {
   if (request.method === "initialize") {
     return {
@@ -6228,7 +6254,8 @@ async function dispatchJsonRpcRequest(request) {
         serverInfo: {
           name: "@remembrance-ai/mcp-server",
           version: SERVER_VERSION
-        }
+        },
+        instructions: SERVER_INSTRUCTIONS
       }
     };
   }
@@ -6522,7 +6549,7 @@ async function callRemembrance(definition, rawArguments) {
   const headers = {
     "content-type": "application/json"
   };
-  const apiKey = process.env.REMEMBRANCE_API_KEY;
+  const apiKey = resolveApiKey();
   if (apiKey) {
     headers["x-remembrance-api-key"] = apiKey;
   }

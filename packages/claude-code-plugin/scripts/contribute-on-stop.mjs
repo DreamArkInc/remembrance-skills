@@ -1,12 +1,23 @@
 #!/usr/bin/env node
 
-// Completion hook — the contribution mirror of query-on-prompt.mjs.
+// Claude Code Stop adapter — the contribution mirror of query-on-prompt.mjs.
 //
 // The query hook automates CONSUMPTION (it queries Remembrance on every prompt).
 // Contribution had no trigger, so agents reliably query but rarely submit what
 // they learned. This Stop hook closes that asymmetry: when a session that
 // actually used Remembrance is about to end, it blocks the stop ONCE and asks
 // the agent to contribute a redacted remembrance / feedback / skill idea.
+//
+// Shared vs Claude-specific:
+// - The runtime-agnostic pieces (contributeDisabled, countRegistryConsumption,
+//   contributionReason) come from the shared hook-core.mjs, byte-identical across
+//   the Codex / OpenClaw / Claude plugins (re-synced by `npm run sync:hook-core`).
+// - The CONSUMPTION count is derived by SCANNING THE TRANSCRIPT here. Claude's
+//   Stop payload carries a transcript_path, so — unlike Codex/OpenClaw, which
+//   have no transcript and drive the same decision off per-session usage markers
+//   — this adapter reads the transcript and counts consumption markers directly.
+//   The per-session sentinel therefore lives under `remembrance-contribute` (a
+//   single prompted-count file), not the marker directory the core's helpers use.
 //
 // Safety:
 // - Env-flagged: disable with REMEMBRANCE_AUTO_CONTRIBUTE in {0,false,no}.
@@ -24,17 +35,22 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  contributeDisabled,
+  contributionReason,
+  countRegistryConsumption,
+} from "./hook-core.mjs";
 
 const MAX_TRANSCRIPT_BYTES = 4 * 1024 * 1024;
 
-export function contributeDisabled(value) {
-  return /^(0|false|no)$/i.test(String(value ?? "").trim());
-}
+// Re-export the shared helpers the plugin test imports from this module.
+export { contributeDisabled, contributionReason, countRegistryConsumption };
 
 // True when the session's transcript shows Remembrance was engaged — an
 // auto-query context injection, a Remembrance MCP tool call, a REST agent
 // endpoint, or the remembrancer skill. Boolean only; no transcript content is
-// ever emitted by this hook.
+// ever emitted by this hook. (Claude-specific: keyed off the transcript, which
+// only the Claude Stop payload provides.)
 export function sessionUsedRemembrance(transcript) {
   const text = String(transcript ?? "");
   if (!text) {
@@ -50,30 +66,6 @@ export function sessionUsedRemembrance(transcript) {
     ) ||
     /\bremembrancer\b/i.test(text)
   );
-}
-
-// Count only CONSUMPTION of the registry (queries / explicit skill retrieval) — not the
-// agent's own submissions. The decision re-prompts when consumption has grown
-// since the last prompt, so a long session with several distinct skill uses
-// gets several nudges, while contributing (submit_*) never triggers a re-prompt.
-const CONSUMPTION_MARKERS =
-  /Remembrance auto-query context|mcp__[a-z0-9_]*remembrance[a-z0-9_]*__(query_skills|get_skill|get_resource)|\/api\/v1\/agent\/query\b/gi;
-
-export function countRegistryConsumption(transcript) {
-  const matches = String(transcript ?? "").match(CONSUMPTION_MARKERS);
-  return matches ? matches.length : 0;
-}
-
-export function contributionReason() {
-  return [
-    "Before you finish: you used Remembrance this session.",
-    "If you learned something reusable — a lesson, a gotcha, a fix, a skill that helped, or a skill that was missing — contribute it now so the next agent inherits it instead of rediscovering it:",
-    "• submit_remembrance — a redacted, evidence-backed lesson tied to the skill/resource you used (the fastest path: a prior submit_feedback response includes a ready next_step.submit_remembrance_payload you can post as-is).",
-    "• submit_feedback — a quick useful / not-useful signal plus a one-line lesson.",
-    "• propose_skill_idea — only if no existing skill fit and you built a reusable workflow.",
-    "Redact secrets, private URLs, and proprietary content; submit redacted summaries and hashes, not raw traces.",
-    "If nothing is genuinely worth capturing, just say so in one line — you will not be asked again this session.",
-  ].join("\n");
 }
 
 function sentinelPath(sessionId) {
