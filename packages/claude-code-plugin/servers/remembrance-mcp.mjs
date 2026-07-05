@@ -4183,6 +4183,7 @@ var agentProviderSchema = external_exports.enum([
   "codex",
   "cursor",
   "claude",
+  "openclaw",
   "generic",
   "other"
 ]);
@@ -6163,7 +6164,7 @@ function resolveApiKey() {
   return fromFile ? String(fromFile) : "";
 }
 var apiBase = (process.env.REMEMBRANCE_API_URL || readRemembranceConfig().apiUrl || "https://remembrance.dev").replace(/\/$/, "");
-var SERVER_VERSION = true ? "0.1.4" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.5" : "0.0.0-dev";
 var tools = toolDefinitions;
 var inputBuffer = Buffer.alloc(0);
 process.stdin.on("data", (chunk) => {
@@ -6190,8 +6191,9 @@ function readJsonRpcMessages(buffer) {
   const errors = [];
   let remaining = buffer;
   while (true) {
-    const text = remaining.toString("utf8");
-    const legacyHeader = text.match(/^content-length:/i);
+    const legacyHeader = /^content-length:/i.test(
+      remaining.subarray(0, 16).toString("utf8")
+    );
     let body = null;
     if (legacyHeader) {
       const headerEnd = remaining.indexOf("\r\n\r\n");

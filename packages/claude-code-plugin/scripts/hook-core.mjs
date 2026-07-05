@@ -75,7 +75,7 @@ const SECRET_PATTERNS = [
   /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}\b/gi,
   /\b(?:aws_secret_access_key|aws_secret_key|secret_access_key)\s*[:=]\s*["']?[A-Za-z0-9/+=]{32,}["']?/gi,
   /\b(password|secret|token|api[_-]?key)\s*[:=]\s*["']?[^"'\s]+/gi,
-  /\b(?:mongodb(?:\+srv)?|redis(?:s)?|postgres(?:ql)?:)\/\/[^\s"'<>]+/gi,
+  /\b(?:mongodb(?:\+srv)?|redis(?:s)?|postgres(?:ql)?):\/\/[^\s"'<>]+/gi,
   /\bhttps?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[0-1])\.\d+\.\d+)[^\s)"']*/gi,
   /\bhttps?:\/\/[^/\s)"']*(?:\.internal|\.local|\.corp|\.onion)(?::\d+)?[^\s)"']*/gi,
 ];
@@ -127,7 +127,19 @@ export function redactPrompt(prompt) {
 
 // --- Query payload -----------------------------------------------------------
 
-export function buildQueryPayload(prompt, env = process.env) {
+// Canonical (Codex) agent identity. "codex" must be a value the server's
+// agentProviderSchema accepts — a non-enum provider (the old "openai") makes the
+// /api/v1/agent/query request fail validation, so the fail-open hook silently
+// injects nothing. Other runtimes override via runQuery's identity/userAgent
+// options; the Claude adapter builds its own payload with its own identity.
+export const DEFAULT_AGENT_IDENTITY = { provider: "codex", model: "codex" };
+export const DEFAULT_USER_AGENT = "@remembrance/codex-plugin";
+
+export function buildQueryPayload(
+  prompt,
+  env = process.env,
+  identity = DEFAULT_AGENT_IDENTITY,
+) {
   const redacted = redactPrompt(prompt).trim();
   const summary =
     redacted.length <= MAX_SUMMARY_CHARS
@@ -135,8 +147,8 @@ export function buildQueryPayload(prompt, env = process.env) {
       : `${redacted.slice(0, MAX_SUMMARY_CHARS - 3).trim()}...`;
   return {
     agent: {
-      provider: "openai",
-      model: "codex",
+      provider: identity.provider,
+      model: identity.model,
     },
     task: {
       domain: inferDomain(summary),
@@ -227,7 +239,7 @@ export async function queryRemembrance(payload, options = {}) {
   try {
     const headers = {
       "content-type": "application/json",
-      "user-agent": "@remembrance/codex-plugin",
+      "user-agent": options.userAgent ?? DEFAULT_USER_AGENT,
     };
     const apiKey = resolveApiKey(env);
     if (apiKey) {
@@ -328,11 +340,15 @@ export async function runQuery(prompt, options = {}) {
     debugLog(env, "skip", { reason: decision.reason }, options);
     return null;
   }
-  const response = await queryRemembrance(buildQueryPayload(redacted, env), {
-    env,
-    fetchImpl: options.fetchImpl ?? fetch,
-    stderr: options.stderr,
-  });
+  const response = await queryRemembrance(
+    buildQueryPayload(redacted, env, options.identity),
+    {
+      env,
+      fetchImpl: options.fetchImpl ?? fetch,
+      stderr: options.stderr,
+      userAgent: options.userAgent,
+    },
+  );
   if (!response) {
     return null;
   }

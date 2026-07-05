@@ -265,6 +265,11 @@ function cacheKeyForPrompt(prompt, env) {
       prompt: normalizeForCache(prompt),
       api_url: apiUrl(env),
       limit: limitFromEnv(env),
+      // Scope the cache to the resolved key: an org key can surface org-private
+      // skills, so two same-machine sessions with different keys (or one keyed,
+      // one anonymous) must not share a cached response. Hashed one-way here, so
+      // the raw key is never written to the on-disk cache. null = anonymous.
+      api_key: resolveApiKey(env) ?? null,
     }),
   );
 }

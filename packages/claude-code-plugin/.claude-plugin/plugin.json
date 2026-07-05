@@ -1,6 +1,6 @@
 {
   "name": "remembrance",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Auto-query Remembrance skills/resources before relevant Claude Code tasks and expose Remembrance MCP tools.",
   "author": {
     "name": "Remembrance"

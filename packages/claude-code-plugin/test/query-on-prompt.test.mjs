@@ -349,7 +349,10 @@ describe("Remembrance Claude Code prompt hook", () => {
       args: ["${CLAUDE_PLUGIN_ROOT}/servers/remembrance-mcp.mjs"],
     });
     expect(mcp.mcpServers.remembrance.env).toMatchObject({
-      REMEMBRANCE_API_URL: "${REMEMBRANCE_API_URL:-https://remembrance.dev}",
+      // Empty default (not a baked remembrance.dev): lets the bundled MCP
+      // server fall through to a config-file apiUrl before its own default, so
+      // the hooks and the server can't target different registries.
+      REMEMBRANCE_API_URL: "${REMEMBRANCE_API_URL:-}",
       REMEMBRANCE_API_KEY: "${REMEMBRANCE_API_KEY:-}",
       REMEMBRANCE_AGENT_KEY_PATH: "${REMEMBRANCE_AGENT_KEY_PATH:-}",
     });
