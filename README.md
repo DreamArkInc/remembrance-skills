@@ -123,6 +123,14 @@ codex plugin add remembrance@remembrance
 If `codex` is not on your shell `PATH`, the macOS desktop app usually bundles
 the CLI at `/Applications/Codex.app/Contents/Resources/codex`.
 
+For Codex Desktop org-scoped access on macOS, GUI apps do not inherit shell
+exports. Run these once, then fully quit and reopen Codex:
+
+```bash
+launchctl setenv REMEMBRANCE_API_URL "https://remembrance.dev"
+launchctl setenv REMEMBRANCE_API_KEY "your-org-key"
+```
+
 ### OpenClaw — plugin (skill + tools + conversation hooks)
 
 ```bash
@@ -135,7 +143,9 @@ tools. Do not install unrelated roots/genealogy packages.
 
 OpenClaw requires one explicit opt-in for raw conversation hooks. In
 `~/.openclaw/openclaw.json`, enable `hooks.allowConversationAccess` for the
-`remembrance` plugin. The package README includes the full config block.
+`remembrance` plugin. Keep org keys in the OpenClaw process env or the MCP
+server env inside `~/.openclaw/openclaw.json`; the package README includes the
+full config block.
 
 ### Codex — remote MCP fallback
 

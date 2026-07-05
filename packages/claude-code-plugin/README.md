@@ -75,6 +75,19 @@ Environment:
 - `REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS`: hook query timeout, default `2000`.
 - `REMEMBRANCE_AGENT_KEY_PATH`: optional local TOFU key path for MCP identity.
 
+For the Claude Code desktop app, macOS GUI apps do not reliably inherit shell
+exports. Put org keys in `~/.claude/settings.json` (not
+`~/.claude/settings.local.json`) and fully quit/relaunch:
+
+```json
+{
+  "env": {
+    "REMEMBRANCE_API_URL": "https://remembrance.dev",
+    "REMEMBRANCE_API_KEY": "YOUR_ORG_KEY"
+  }
+}
+```
+
 The hook fails open on API errors, malformed responses, no heuristic match, or
 timeout. It redacts common secrets and private-network URLs before sending a
 query. Its file-backed prompt cache is best-effort and uses atomic file

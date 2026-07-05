@@ -86,8 +86,8 @@ or Claude thread usually cannot hot-load newly installed plugin tools.
 
 ## Enterprise/org key setup
 
-Use the least surprising shared config first. The native plugins and bundled
-MCP server read this file:
+Use the least surprising shared config first. Native plugin hooks and local or
+bundled MCP servers read this file:
 
 ~~~bash
 mkdir -p ~/.config/remembrance
@@ -100,6 +100,33 @@ Use an environment variable when the agent process reliably inherits shell env:
 ~~~bash
 export REMEMBRANCE_API_KEY="YOUR_ORG_KEY"
 export REMEMBRANCE_API_URL="https://remembrance.dev"
+~~~
+
+For Codex Desktop on macOS, GUI apps do not inherit shell exports. Use
+`launchctl setenv`, fully quit Codex, and reopen it so the native hooks and
+hosted MCP endpoint can read the org key:
+
+~~~bash
+launchctl setenv REMEMBRANCE_API_URL "https://remembrance.dev"
+launchctl setenv REMEMBRANCE_API_KEY "YOUR_ORG_KEY"
+~~~
+
+If Codex still sees `<your org key>` after restart, remove stale
+`REMEMBRANCE_API_KEY` exports from shell profiles such as `~/.zshrc` and
+`~/.zprofile`. A terminal-launched Codex inherits shell env, and shell env
+overrides `launchctl` and the config file.
+
+For the Claude Code desktop app, put the key in the user-scoped settings file
+and fully quit/relaunch the app. Use `~/.claude/settings.json`, not
+`~/.claude/settings.local.json`:
+
+~~~json
+{
+  "env": {
+    "REMEMBRANCE_API_URL": "https://remembrance.dev",
+    "REMEMBRANCE_API_KEY": "YOUR_ORG_KEY"
+  }
+}
 ~~~
 
 For direct REST clients, send either:
@@ -156,7 +183,23 @@ REMEMBRANCE_API_KEY = "YOUR_ORG_KEY"
 
 OpenClaw MCP config uses "mcp.servers", not "mcpServers" or "mcp_servers".
 OpenClaw does not define a portable plugin-root variable for MCP args; use an
-absolute path or the OpenClaw MCP CLI.
+absolute path or the OpenClaw MCP CLI. Also keep the enterprise key in the MCP
+server env if OpenClaw does not inherit shell exports:
+
+~~~json
+{
+  "mcp": {
+    "servers": {
+      "remembrance": {
+        "env": {
+          "REMEMBRANCE_API_URL": "https://remembrance.dev",
+          "REMEMBRANCE_API_KEY": "YOUR_ORG_KEY"
+        }
+      }
+    }
+  }
+}
+~~~
 
 ## Skill-only install
 

@@ -93,7 +93,8 @@ merging into `~/.openclaw/openclaw.json`:
         // Absolute path — OpenClaw does not expand a plugin-root variable here.
         "args": ["/abs/path/to/openclaw-plugin/servers/remembrance-mcp.mjs"],
         "env": {
-          "REMEMBRANCE_API_URL": "https://remembrance.dev"
+          "REMEMBRANCE_API_URL": "https://remembrance.dev",
+          "REMEMBRANCE_API_KEY": "YOUR_ORG_KEY"
         }
       }
     }
