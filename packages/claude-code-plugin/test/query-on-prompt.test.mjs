@@ -301,13 +301,22 @@ describe("Remembrance Claude Code prompt hook", () => {
     const plugin = JSON.parse(
       readFileSync(resolve(root, ".claude-plugin/plugin.json"), "utf8"),
     );
+    const codexPlugin = JSON.parse(
+      readFileSync(resolve(root, ".codex-plugin/plugin.json"), "utf8"),
+    );
     const packageJson = JSON.parse(
       readFileSync(resolve(root, "package.json"), "utf8"),
     );
     const hooks = JSON.parse(
       readFileSync(resolve(root, "hooks/hooks.json"), "utf8"),
     );
+    const codexHooks = JSON.parse(
+      readFileSync(resolve(root, "hooks/codex-hooks.json"), "utf8"),
+    );
     const mcp = JSON.parse(readFileSync(resolve(root, ".mcp.json"), "utf8"));
+    const codexMcp = JSON.parse(
+      readFileSync(resolve(root, ".mcp.codex.json"), "utf8"),
+    );
     const skill = readFileSync(
       resolve(root, "skills/remembrancer/SKILL.md"),
       "utf8",
@@ -333,6 +342,12 @@ describe("Remembrance Claude Code prompt hook", () => {
       mcpServers: "./.mcp.json",
       skills: "./skills",
     });
+    expect(codexPlugin).toMatchObject({
+      name: "remembrance",
+      hooks: "./hooks/codex-hooks.json",
+      mcpServers: "./.mcp.codex.json",
+      skills: "./skills",
+    });
     // The manifest must NOT reference the standard hooks/hooks.json — Claude Code
     // auto-loads that path, and a manifest `hooks` pointing at it makes the
     // plugin fail to load with a "Duplicate hooks file detected" error.
@@ -343,10 +358,20 @@ describe("Remembrance Claude Code prompt hook", () => {
     expect(hooks.hooks.Stop[0].hooks[0].command).toContain(
       "contribute-on-stop.mjs",
     );
+    expect(codexHooks.hooks.UserPromptSubmit[0].hooks[0].command).toBe(
+      'node "${PLUGIN_ROOT}/scripts/codex-query-on-prompt.mjs"',
+    );
+    expect(codexHooks.hooks.Stop[0].hooks[0].command).toBe(
+      'node "${PLUGIN_ROOT}/scripts/codex-contribute-on-stop.mjs"',
+    );
     expect(plugin.mcpServers).toBe("./.mcp.json");
     expect(mcp.mcpServers.remembrance).toMatchObject({
       command: "node",
       args: ["${CLAUDE_PLUGIN_ROOT}/servers/remembrance-mcp.mjs"],
+    });
+    expect(codexMcp.mcp_servers.remembrance).toMatchObject({
+      command: "node",
+      args: ["${PLUGIN_ROOT}/servers/remembrance-mcp.mjs"],
     });
     expect(mcp.mcpServers.remembrance.env).toMatchObject({
       // Empty default (not a baked remembrance.dev): lets the bundled MCP
@@ -356,14 +381,30 @@ describe("Remembrance Claude Code prompt hook", () => {
       REMEMBRANCE_API_KEY: "${REMEMBRANCE_API_KEY:-}",
       REMEMBRANCE_AGENT_KEY_PATH: "${REMEMBRANCE_AGENT_KEY_PATH:-}",
     });
+    expect(codexMcp.mcp_servers.remembrance.env).toMatchObject({
+      REMEMBRANCE_API_URL: "${REMEMBRANCE_API_URL:-}",
+      REMEMBRANCE_API_KEY: "${REMEMBRANCE_API_KEY:-}",
+      REMEMBRANCE_AGENT_KEY_PATH: "${REMEMBRANCE_AGENT_KEY_PATH:-}",
+    });
     expect(JSON.stringify(mcp)).not.toContain("${REMEMBRANCE_API_KEY}");
     expect(JSON.stringify(mcp)).not.toContain("${REMEMBRANCE_AGENT_KEY_PATH}");
+    expect(JSON.stringify(codexMcp)).not.toContain("${REMEMBRANCE_API_KEY}");
+    expect(JSON.stringify(codexMcp)).not.toContain(
+      "${REMEMBRANCE_AGENT_KEY_PATH}",
+    );
     expect(marketplace.plugins[0]).toMatchObject({
       name: "remembrance",
       source: "./packages/claude-code-plugin",
     });
     expect(packageJson.version).toBe(plugin.version);
+    expect(packageJson.version).toBe(codexPlugin.version);
     expect(marketplace.metadata.version).toBe(plugin.version);
+    expect(
+      existsSync(resolve(root, "scripts/codex-query-on-prompt.mjs")),
+    ).toBe(true);
+    expect(
+      existsSync(resolve(root, "scripts/codex-contribute-on-stop.mjs")),
+    ).toBe(true);
     expect(skill).toBe(canonicalSkill);
     expect(attestationReference).toBe(canonicalAttestationReference);
     expect(

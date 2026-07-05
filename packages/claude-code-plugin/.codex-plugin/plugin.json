@@ -1,0 +1,20 @@
+{
+  "name": "remembrance",
+  "version": "0.1.5",
+  "description": "Auto-query Remembrance skills/resources before relevant Codex tasks and expose Remembrance MCP tools.",
+  "author": {
+    "name": "Remembrance"
+  },
+  "homepage": "https://remembrance.dev/docs/remembrancer",
+  "repository": "https://github.com/dreamarkinc/remembrance-skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "agent-skills",
+    "mcp",
+    "memory",
+    "workflow"
+  ],
+  "skills": "./skills",
+  "hooks": "./hooks/codex-hooks.json",
+  "mcpServers": "./.mcp.codex.json"
+}

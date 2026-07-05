@@ -1,11 +1,11 @@
-# Remembrance Claude Code Plugin
+# Remembrance Native Agent Plugin
 
 Installs the Remembrancer skill, starts a bundled Remembrance MCP server, and
 adds two hooks that keep the registry loop symmetric: a `UserPromptSubmit` hook
-that queries Remembrance before Claude reasons about tasks likely to involve
+that queries Remembrance before Claude Code or Codex reasons about tasks likely to involve
 reusable skills/resources, and a `Stop` hook that — when a session actually used
-Remembrance — prompts Claude once to contribute what it learned (a remembrance,
-feedback, or skill idea) instead of silently moving on.
+Remembrance — prompts the agent once to contribute what it learned (a
+remembrance, feedback, or skill idea) instead of silently moving on.
 
 Install from the public mirror marketplace (the `claude plugin` CLI works in
 every environment; the interactive `/plugin` slash command is the equivalent but
@@ -15,6 +15,16 @@ only inside a `claude` session):
 claude plugin marketplace add dreamarkinc/remembrance-skills
 claude plugin install remembrance@remembrance
 ```
+
+For Codex:
+
+```bash
+codex plugin marketplace add dreamarkinc/remembrance-skills
+codex plugin add remembrance@remembrance
+```
+
+If `codex` is not on your shell `PATH`, the macOS desktop app usually bundles
+the CLI at `/Applications/Codex.app/Contents/Resources/codex`.
 
 The hook runs on every user prompt, but it only calls Remembrance when the prompt
 mentions named services, APIs, CLIs, frameworks, deployment/CI/payment/migration
@@ -31,13 +41,13 @@ It is loop-safe (it never re-blocks a stop that a hook already continued), fires
 on the agent's final response each turn but only prompts when registry
 CONSUMPTION (a query / skill use, not the agent's own submissions) has increased
 since the last prompt — so a long session with several distinct skill uses gets
-several nudges, while it never nags when nothing new was used, and fails open. Claude can satisfy it by contributing or by briefly declining. Set
+several nudges, while it never nags when nothing new was used, and fails open. The agent can satisfy it by contributing or by briefly declining. Set
 `REMEMBRANCE_AUTO_CONTRIBUTE=0` to disable it.
 
-The Claude plugin is self-contained: it runs the bundled MCP server from the
+The native plugin package is self-contained: it runs the bundled MCP server from the
 plugin directory and ships the canonical Remembrancer skill references/scripts.
 It does not require separate `npx @remembrance-ai/mcp-server` setup. The standalone
-npm MCP package remains available for non-Claude clients.
+npm MCP package remains available for clients without native plugin support.
 After install, the `remembrance` MCP server should expose tools such as
 `query_skills`, `bootstrap_agent_identity`, `submit_feedback`,
 `submit_remembrance`, `get_skill`, and `get_resource`; some clients display

@@ -51,19 +51,20 @@ Do not use this skill when:
 ## Specialized skills
 
 Remembrance has exactly one published file-system skill: this `remembrancer`
-entry skill. Every other public skill in the registry — `mpp`, `web-ui-ux-qa`,
-`resource-scout`, and any new skills accepted over time — lives as a record in
-the Remembrance database and is reachable via `/api/v1/agent/query`. When a
-query returns one of those skills, consult its workflow at
-`references/<slug>.md`.
+entry skill. Every other public skill in the registry — `remembrance-setup`,
+`mpp`, `web-ui-ux-qa`, `resource-scout`, and any new skills accepted over time
+— lives as a record in the Remembrance database and is reachable via
+`/api/v1/agent/query`. When a query returns one of those skills, consult its
+workflow at `references/<slug>.md`.
 
 **Where to find the reference:**
 
 1. **Local bundle (preferred when present, fastest, works offline):**
    `references/<slug>.md` next to this SKILL.md. The bundle ships static
    references for every public seeded skill at install time. Today these are
-   `mpp.md`, `web-ui-ux-qa.md`, and `resource-scout.md`, plus the topical
-   references `remembrance-payloads.md` and `attestation-rest.md`.
+   `remembrance-setup.md`, `mpp.md`, `web-ui-ux-qa.md`, and
+   `resource-scout.md`, plus the topical references `remembrance-payloads.md`
+   and `attestation-rest.md`.
 2. **Live URL (always current, covers newly accepted skills):**
    `https://remembrance.dev/skills/remembrancer/references/<slug>.md`. Returns
    `text/markdown` with the latest content from the registry. Use this when

@@ -9,7 +9,8 @@ for human review, so skills get **better** over time instead of drifting.
 This repository is the public, open distribution surface:
 
 - `skills/remembrancer/` — the entry skill (installable via skills.sh)
-- `packages/claude-code-plugin/` — the Claude Code plugin (skill + MCP server + prompt hook)
+- `packages/claude-code-plugin/` — the native Claude Code and Codex plugin package (skill + MCP server + prompt hooks)
+- `packages/openclaw-plugin/` — the native OpenClaw plugin package (conversation hooks + MCP server)
 - `.claude-plugin/marketplace.json` — the plugin marketplace manifest
 
 The clients here are intentionally thin and inspectable. The registry, the
@@ -96,7 +97,47 @@ For org-scoped access, add a header (Cursor resolves `${env:VAR}`):
 }
 ```
 
-### Codex
+### Gemini CLI
+
+Use the hosted MCP endpoint in Gemini's MCP settings, or run the local stdio
+server below if your Gemini setup launches command-based MCP servers:
+
+```json
+{
+  "mcpServers": {
+    "remembrance": {
+      "url": "https://remembrance.dev/api/mcp",
+      "headers": { "Authorization": "Bearer ${env:REMEMBRANCE_API_KEY}" }
+    }
+  }
+}
+```
+
+### Codex — plugin (skill + tools + auto-query hook)
+
+```bash
+codex plugin marketplace add dreamarkinc/remembrance-skills
+codex plugin add remembrance@remembrance
+```
+
+If `codex` is not on your shell `PATH`, the macOS desktop app usually bundles
+the CLI at `/Applications/Codex.app/Contents/Resources/codex`.
+
+### OpenClaw — plugin (skill + tools + conversation hooks)
+
+```bash
+openclaw plugins install clawhub:@remembrance/openclaw-plugin
+```
+
+If ClawHub search shows multiple Remembrance matches, use the package that
+points to `dreamarkinc/remembrance-skills` and exposes the Remembrance MCP
+tools. Do not install unrelated roots/genealogy packages.
+
+OpenClaw requires one explicit opt-in for raw conversation hooks. In
+`~/.openclaw/openclaw.json`, enable `hooks.allowConversationAccess` for the
+`remembrance` plugin. The package README includes the full config block.
+
+### Codex — remote MCP fallback
 
 Add to `~/.codex/config.toml` (global) or `.codex/config.toml` (per project):
 
@@ -111,6 +152,15 @@ url = "https://remembrance.dev/api/mcp"
 
 ```bash
 npx skills add dreamarkinc/remembrance-skills --skill remembrancer
+```
+
+### REST / HTTPS fallback
+
+Add this instruction to agents without plugin, MCP, or skill support:
+
+```text
+Before solving a recurring task, query the Remembrance registry first.
+Endpoints and payloads: https://remembrance.dev/llms.txt
 ```
 
 ### Any MCP client — local stdio server (npx)

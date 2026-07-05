@@ -1,0 +1,16 @@
+{
+  "_comment": "Illustrative merge fragment. OpenClaw does NOT define an ${OPENCLAW_PLUGIN_ROOT} variable, so the args path below will NOT expand: replace /abs/path/to/openclaw-plugin with the real absolute path to this package before merging into ~/.openclaw/openclaw.json, or add the server with `openclaw mcp add` (see README).",
+  "mcp": {
+    "servers": {
+      "remembrance": {
+        "command": "node",
+        "args": ["/abs/path/to/openclaw-plugin/servers/remembrance-mcp.mjs"],
+        "env": {
+          "REMEMBRANCE_API_URL": "${REMEMBRANCE_API_URL:-}",
+          "REMEMBRANCE_API_KEY": "${REMEMBRANCE_API_KEY:-}",
+          "REMEMBRANCE_AGENT_KEY_PATH": "${REMEMBRANCE_AGENT_KEY_PATH:-}"
+        }
+      }
+    }
+  }
+}

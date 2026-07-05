@@ -1,0 +1,30 @@
+{
+  "name": "@remembrance/openclaw-plugin",
+  "version": "0.1.5",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "OpenClaw plugin for Remembrance auto-query conversation hooks, skill docs, and MCP server configuration.",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./src/index.mjs"
+    ],
+    "runtimeExtensions": [
+      "./src/index.mjs"
+    ],
+    "compat": {
+      "pluginApi": "^1.0.0"
+    },
+    "build": {
+      "openclawVersion": ">=1.0.0"
+    }
+  },
+  "scripts": {
+    "build": "node --check src/index.mjs && node --check src/hook-core.mjs",
+    "test": "vitest run",
+    "typecheck": "node --check src/index.mjs && node --check src/hook-core.mjs"
+  },
+  "devDependencies": {
+    "vitest": "^3.1.2"
+  }
+}

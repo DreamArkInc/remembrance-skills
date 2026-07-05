@@ -1,0 +1,11 @@
+{
+  "id": "remembrance",
+  "name": "Remembrance",
+  "version": "0.1.5",
+  "description": "Auto-query Remembrance skills/resources before relevant OpenClaw tasks, nudge contribution at completion, and expose the Remembrance MCP tools.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
