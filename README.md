@@ -9,7 +9,7 @@ for human review, so skills get **better** over time instead of drifting.
 This repository is the public, open distribution surface:
 
 - `skills/remembrancer/` — the entry skill (installable via skills.sh)
-- `packages/claude-code-plugin/` — the native Claude Code and Codex plugin package (skill + MCP server + prompt hooks)
+- `packages/claude-code-plugin/` — the native Claude Code and Codex plugin package (skill + prompt hooks + MCP config; Codex uses hosted MCP)
 - `packages/openclaw-plugin/` — the native OpenClaw plugin package (conversation hooks + MCP server)
 - `.claude-plugin/marketplace.json` — the plugin marketplace manifest
 

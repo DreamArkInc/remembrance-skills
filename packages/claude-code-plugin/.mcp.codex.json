@@ -1,13 +1,9 @@
 {
   "mcpServers": {
     "remembrance": {
-      "command": "node",
-      "args": ["${PLUGIN_ROOT}/servers/remembrance-mcp.mjs"],
-      "env": {
-        "REMEMBRANCE_API_URL": "${REMEMBRANCE_API_URL:-}",
-        "REMEMBRANCE_API_KEY": "${REMEMBRANCE_API_KEY:-}",
-        "REMEMBRANCE_AGENT_KEY_PATH": "${REMEMBRANCE_AGENT_KEY_PATH:-}"
-      }
+      "type": "http",
+      "url": "https://remembrance.dev/api/mcp",
+      "bearer_token_env_var": "REMEMBRANCE_API_KEY"
     }
   }
 }

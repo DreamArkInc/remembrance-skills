@@ -392,8 +392,9 @@ describe("Remembrance Claude Code prompt hook", () => {
       args: ["${CLAUDE_PLUGIN_ROOT}/servers/remembrance-mcp.mjs"],
     });
     expect(codexMcp.mcpServers.remembrance).toMatchObject({
-      command: "node",
-      args: ["${PLUGIN_ROOT}/servers/remembrance-mcp.mjs"],
+      type: "http",
+      url: "https://remembrance.dev/api/mcp",
+      bearer_token_env_var: "REMEMBRANCE_API_KEY",
     });
     expect(mcp.mcpServers.remembrance.env).toMatchObject({
       // Empty default (not a baked remembrance.dev): lets the bundled MCP
@@ -403,11 +404,10 @@ describe("Remembrance Claude Code prompt hook", () => {
       REMEMBRANCE_API_KEY: "${REMEMBRANCE_API_KEY:-}",
       REMEMBRANCE_AGENT_KEY_PATH: "${REMEMBRANCE_AGENT_KEY_PATH:-}",
     });
-    expect(codexMcp.mcpServers.remembrance.env).toMatchObject({
-      REMEMBRANCE_API_URL: "${REMEMBRANCE_API_URL:-}",
-      REMEMBRANCE_API_KEY: "${REMEMBRANCE_API_KEY:-}",
-      REMEMBRANCE_AGENT_KEY_PATH: "${REMEMBRANCE_AGENT_KEY_PATH:-}",
-    });
+    expect(JSON.stringify(codexMcp)).not.toContain("PLUGIN_ROOT");
+    expect(codexMcp.mcpServers.remembrance.command).toBeUndefined();
+    expect(codexMcp.mcpServers.remembrance.args).toBeUndefined();
+    expect(codexMcp.mcpServers.remembrance.env).toBeUndefined();
     expect(JSON.stringify(mcp)).not.toContain("${REMEMBRANCE_API_KEY}");
     expect(JSON.stringify(mcp)).not.toContain("${REMEMBRANCE_AGENT_KEY_PATH}");
     expect(JSON.stringify(codexMcp)).not.toContain("${REMEMBRANCE_API_KEY}");

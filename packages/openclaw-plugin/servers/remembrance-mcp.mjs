@@ -6164,9 +6164,10 @@ function resolveApiKey() {
   return fromFile ? String(fromFile) : "";
 }
 var apiBase = (process.env.REMEMBRANCE_API_URL || readRemembranceConfig().apiUrl || "https://remembrance.dev").replace(/\/$/, "");
-var SERVER_VERSION = true ? "0.1.6" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.7" : "0.0.0-dev";
 var tools = toolDefinitions;
 var inputBuffer = Buffer.alloc(0);
+var clientFraming = "ndjson";
 process.stdin.on("data", (chunk) => {
   inputBuffer = Buffer.concat([inputBuffer, chunk]);
   processMessages().catch((error) => {
@@ -6179,6 +6180,9 @@ process.stdin.on("data", (chunk) => {
 async function processMessages() {
   const parsed = readJsonRpcMessages(inputBuffer);
   inputBuffer = parsed.remaining;
+  if (parsed.framing) {
+    clientFraming = parsed.framing;
+  }
   for (const error of parsed.errors) {
     writeResponse(null, null, error);
   }
@@ -6189,6 +6193,7 @@ async function processMessages() {
 function readJsonRpcMessages(buffer) {
   const messages = [];
   const errors = [];
+  let framing;
   let remaining = buffer;
   while (true) {
     const legacyHeader = /^content-length:/i.test(
@@ -6198,7 +6203,7 @@ function readJsonRpcMessages(buffer) {
     if (legacyHeader) {
       const headerEnd = remaining.indexOf("\r\n\r\n");
       if (headerEnd < 0) {
-        return { messages, remaining, errors };
+        return { messages, remaining, errors, framing };
       }
       const header = remaining.slice(0, headerEnd).toString("utf8");
       const length = Number.parseInt(
@@ -6210,26 +6215,29 @@ function readJsonRpcMessages(buffer) {
           code: -32600,
           message: "Invalid Content-Length header."
         });
+        framing = "content-length";
         remaining = remaining.slice(headerEnd + 4);
         continue;
       }
       const messageStart = headerEnd + 4;
       const messageEnd = messageStart + length;
       if (remaining.byteLength < messageEnd) {
-        return { messages, remaining, errors };
+        return { messages, remaining, errors, framing };
       }
       body = remaining.slice(messageStart, messageEnd).toString("utf8");
       remaining = remaining.slice(messageEnd);
+      framing = "content-length";
     } else {
       const newline = remaining.indexOf("\n");
       if (newline < 0) {
-        return { messages, remaining, errors };
+        return { messages, remaining, errors, framing };
       }
       body = remaining.slice(0, newline).toString("utf8").trim();
       remaining = remaining.slice(newline + 1);
       if (!body) {
         continue;
       }
+      framing = "ndjson";
     }
     try {
       messages.push(JSON.parse(body));
@@ -6635,15 +6643,19 @@ function agentProviderForIdentity(provider) {
 function writeResponse(id, result, error) {
   process.stdout.write(formatJsonRpcResponse(id, result, error));
 }
-function formatJsonRpcResponse(id, result, error) {
+function formatJsonRpcResponse(id, result, error, framing = clientFraming) {
   const body = JSON.stringify({
     jsonrpc: "2.0",
     id: id ?? null,
     ...error ? { error } : { result }
   });
-  return `Content-Length: ${Buffer.byteLength(body, "utf8")}\r
+  if (framing === "content-length") {
+    return `Content-Length: ${Buffer.byteLength(body, "utf8")}\r
 \r
 ${body}`;
+  }
+  return `${body}
+`;
 }
 export {
   callTool,
