@@ -369,7 +369,7 @@ describe("Remembrance Claude Code prompt hook", () => {
       command: "node",
       args: ["${CLAUDE_PLUGIN_ROOT}/servers/remembrance-mcp.mjs"],
     });
-    expect(codexMcp.mcp_servers.remembrance).toMatchObject({
+    expect(codexMcp.mcpServers.remembrance).toMatchObject({
       command: "node",
       args: ["${PLUGIN_ROOT}/servers/remembrance-mcp.mjs"],
     });
@@ -381,7 +381,7 @@ describe("Remembrance Claude Code prompt hook", () => {
       REMEMBRANCE_API_KEY: "${REMEMBRANCE_API_KEY:-}",
       REMEMBRANCE_AGENT_KEY_PATH: "${REMEMBRANCE_AGENT_KEY_PATH:-}",
     });
-    expect(codexMcp.mcp_servers.remembrance.env).toMatchObject({
+    expect(codexMcp.mcpServers.remembrance.env).toMatchObject({
       REMEMBRANCE_API_URL: "${REMEMBRANCE_API_URL:-}",
       REMEMBRANCE_API_KEY: "${REMEMBRANCE_API_KEY:-}",
       REMEMBRANCE_AGENT_KEY_PATH: "${REMEMBRANCE_AGENT_KEY_PATH:-}",
