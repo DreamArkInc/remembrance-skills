@@ -6164,7 +6164,7 @@ function resolveApiKey() {
   return fromFile ? String(fromFile) : "";
 }
 var apiBase = (process.env.REMEMBRANCE_API_URL || readRemembranceConfig().apiUrl || "https://remembrance.dev").replace(/\/$/, "");
-var SERVER_VERSION = true ? "0.1.5" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.6" : "0.0.0-dev";
 var tools = toolDefinitions;
 var inputBuffer = Buffer.alloc(0);
 process.stdin.on("data", (chunk) => {
@@ -6633,16 +6633,21 @@ function agentProviderForIdentity(provider) {
   return "generic";
 }
 function writeResponse(id, result, error) {
+  process.stdout.write(formatJsonRpcResponse(id, result, error));
+}
+function formatJsonRpcResponse(id, result, error) {
   const body = JSON.stringify({
     jsonrpc: "2.0",
     id: id ?? null,
     ...error ? { error } : { result }
   });
-  process.stdout.write(`${body}
-`);
+  return `Content-Length: ${Buffer.byteLength(body, "utf8")}\r
+\r
+${body}`;
 }
 export {
   callTool,
   dispatchJsonRpcRequest,
+  formatJsonRpcResponse,
   readJsonRpcMessages
 };

@@ -50,15 +50,37 @@ function testEnv(env = {}) {
 }
 
 function frame(payload) {
-  return `${JSON.stringify(payload)}\n`;
+  const body = JSON.stringify(payload);
+  return `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`;
 }
 
 function readFrames(buffer) {
-  return buffer
-    .toString("utf8")
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
+  const responses = [];
+  let remaining = buffer;
+  while (remaining.byteLength > 0) {
+    const headerEnd = remaining.indexOf("\r\n\r\n");
+    if (headerEnd < 0) {
+      break;
+    }
+    const header = remaining.subarray(0, headerEnd).toString("utf8");
+    const length = Number.parseInt(
+      header.match(/content-length:\s*(\d+)/i)?.[1] ?? "",
+      10,
+    );
+    if (!Number.isFinite(length)) {
+      throw new Error(`Invalid MCP frame header: ${header}`);
+    }
+    const bodyStart = headerEnd + 4;
+    const bodyEnd = bodyStart + length;
+    if (remaining.byteLength < bodyEnd) {
+      break;
+    }
+    responses.push(
+      JSON.parse(remaining.subarray(bodyStart, bodyEnd).toString("utf8")),
+    );
+    remaining = remaining.subarray(bodyEnd);
+  }
+  return responses;
 }
 
 describe("Remembrance Claude Code prompt hook", () => {

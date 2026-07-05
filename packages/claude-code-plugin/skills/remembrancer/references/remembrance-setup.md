@@ -158,6 +158,18 @@ OpenClaw MCP config uses "mcp.servers", not "mcpServers" or "mcp_servers".
 OpenClaw does not define a portable plugin-root variable for MCP args; use an
 absolute path or the OpenClaw MCP CLI.
 
+## Skill-only install
+
+For skills.sh-compatible runtimes (or any Agent Skills provider) that can load
+filesystem skills but not native plugins or MCP:
+
+~~~bash
+npx skills add dreamarkinc/remembrance-skills --skill remembrancer
+~~~
+
+The entry skill is REST-only and self-contained. The same skill directory can
+be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
+
 ## Validate after setup
 
 1. Start a fresh agent session.
