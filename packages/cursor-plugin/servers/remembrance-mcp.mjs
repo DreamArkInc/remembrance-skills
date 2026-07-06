@@ -4658,6 +4658,50 @@ var PROPOSED_METADATA_MAX_DOMAINS = 8;
 var PROPOSED_METADATA_MAX_TERM_LENGTH = 64;
 var PROPOSED_METADATA_MAX_RATIONALE_LENGTH = 2e3;
 var PROPOSED_METADATA_MAX_MODEL_LENGTH = MAX_SHORT_TEXT_LENGTH;
+var LOW_VALUE_PROPOSED_METADATA_EXACT_TERMS = /* @__PURE__ */ new Set([
+  "agent",
+  "agents",
+  "agent-skill",
+  "agent-skills",
+  "backfill",
+  "candidate",
+  "candidates",
+  "leaderboard",
+  "rank",
+  "ranking",
+  "skill",
+  "skills",
+  "skills-sh",
+  "skill-candidate",
+  "skill-candidates"
+]);
+var LOW_VALUE_PROPOSED_METADATA_PATTERNS = [
+  /\bagent\s+skills?\b/i,
+  /\bagentspace\b/i,
+  /\bskill\s+candidates?\b/i,
+  /\bskills?[\s.-]*sh\b/i,
+  /\bleaderboard\s+rank\b/i,
+  /\bnpx\s+skills\s+add\b/i
+];
+function sanitizeProposedMetadataTerm(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim().slice(0, PROPOSED_METADATA_MAX_TERM_LENGTH);
+  if (!trimmed) {
+    return null;
+  }
+  const normalized = trimmed.toLowerCase().replace(/[_/.]+/g, "-").replace(/\s+/g, " ").replace(/^-+|-+$/g, "");
+  if (LOW_VALUE_PROPOSED_METADATA_EXACT_TERMS.has(normalized)) {
+    return null;
+  }
+  if (LOW_VALUE_PROPOSED_METADATA_PATTERNS.some(
+    (pattern) => pattern.test(trimmed)
+  )) {
+    return null;
+  }
+  return trimmed;
+}
 var proposedMetadataTermArraySchema = (max) => external_exports.preprocess(
   (value) => {
     if (!Array.isArray(value)) {
@@ -4666,10 +4710,7 @@ var proposedMetadataTermArraySchema = (max) => external_exports.preprocess(
     const seen = /* @__PURE__ */ new Set();
     const terms = [];
     for (const entry of value) {
-      if (typeof entry !== "string") {
-        continue;
-      }
-      const trimmed = entry.trim().slice(0, PROPOSED_METADATA_MAX_TERM_LENGTH);
+      const trimmed = sanitizeProposedMetadataTerm(entry);
       if (!trimmed) {
         continue;
       }
