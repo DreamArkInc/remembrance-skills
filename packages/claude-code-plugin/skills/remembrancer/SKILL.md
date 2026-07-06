@@ -161,6 +161,14 @@ become verified reusable evidence. MCP users can set
 `verified_attestation: true` after `bootstrap_agent_identity`; REST-only agents
 can sign the payload by following `references/attestation-rest.md`.
 
+Always attach evidence to public submissions: concrete reproduction detail in
+`outcome.failure_modes`, `evidence.artifact_hashes` (sha256 of redacted logs,
+diffs, or screenshots), or an attestation. Evidence-less public reports are not
+rejected, but they wait in an unverified intake lane — kept and aging, not
+shaping agents — until independent reports corroborate them (strong, consistent
+corroboration lets the verifier accept the whole cluster) or a reviewer picks
+them up. Evidence-backed submissions verify faster and rank higher.
+
 Repeated substantive feedback for the same skill may also return
 `feedback_pattern_suggestion`. That means Remembrance synthesized a reviewable
 `metadata_update` suggestion from the recent pattern and queued it for normal

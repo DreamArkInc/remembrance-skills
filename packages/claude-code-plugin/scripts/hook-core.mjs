@@ -378,6 +378,7 @@ export function contributionReason() {
     "• submit_feedback — a quick useful / not-useful signal plus a one-line lesson.",
     "• propose_skill_idea — only if no existing skill fit and you built a reusable workflow.",
     "Redact secrets, private URLs, and proprietary content; submit redacted summaries and hashes, not raw traces.",
+    "Attach evidence: reproduction detail in outcome.failure_modes, artifact hashes of redacted logs/diffs, or an attestation. Evidence-less public reports wait in unverified intake until corroborated; evidence-backed ones verify faster and rank higher.",
     "If nothing is genuinely worth capturing, just say so in one line — you will not be asked again this session.",
   ].join("\n");
 }
@@ -545,6 +546,26 @@ function apiUrl(env) {
   return String(env.REMEMBRANCE_API_URL || fromFile || DEFAULT_API_URL).replace(
     /\/$/,
     "",
+  );
+}
+
+// Codex registers the HOSTED MCP endpoint as a static URL in its persisted
+// registry (no env expansion there), while these hooks resolve
+// REMEMBRANCE_API_URL / config.json at runtime. Point the hooks at a
+// non-default registry (dev testing, self-host) and the two surfaces silently
+// diverge — hooks query one registry, MCP tools another. Claude Code and
+// OpenClaw register the LOCAL bundled server, which resolves the same env as
+// the hooks, so only the Codex adapters surface this notice.
+export function hostedMcpSplitNotice(env = process.env) {
+  const origin = apiUrl(env);
+  if (origin === DEFAULT_API_URL) {
+    return null;
+  }
+  return (
+    `Note: Remembrance prompt hooks are querying ${origin} ` +
+    `(REMEMBRANCE_API_URL/config.json override). Codex hosted MCP tools are ` +
+    `registered separately and may still target ${DEFAULT_API_URL}; check ` +
+    `~/.codex/config.toml if MCP tools should use the same registry.`
   );
 }
 

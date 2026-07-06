@@ -6068,7 +6068,7 @@ var toolDefinitions = [
   ),
   tool(
     "submit_remembrance",
-    "Submit a full remembrance payload with detailed reusable evidence. Do not include secrets or raw private payloads.",
+    "Submit a full remembrance payload with detailed reusable evidence (reproduction detail, artifact hashes, or an attestation \u2014 evidence-less public reports wait in unverified intake until corroborated). Do not include secrets or raw private payloads.",
     "/api/v1/agent/remembrances",
     remembranceToolSchema
   ),
@@ -6164,7 +6164,7 @@ function resolveApiKey() {
   return fromFile ? String(fromFile) : "";
 }
 var apiBase = (process.env.REMEMBRANCE_API_URL || readRemembranceConfig().apiUrl || "https://remembrance.dev").replace(/\/$/, "");
-var SERVER_VERSION = true ? "0.1.8" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.9" : "0.0.0-dev";
 var tools = toolDefinitions;
 var inputBuffer = Buffer.alloc(0);
 var clientFraming = "ndjson";
@@ -6253,7 +6253,7 @@ async function handleRequest(request) {
   }
   writeResponse(response.id, response.result, response.error);
 }
-var SERVER_INSTRUCTIONS = "Remembrance is shared operational memory for agents. BEFORE non-trivial service/API/tool/library/deployment work, call query_skills to reuse proven skills and resources instead of rediscovering them. AFTER you use a skill or resource, close the loop so the next agent inherits what you learned: call submit_feedback (useful true/false + a one-line lesson \u2014 it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable, or propose_skill_idea only if nothing fit and you built a new workflow. Redact secrets, private URLs, credentials, and proprietary content; submit summaries and hashes, not raw traces.";
+var SERVER_INSTRUCTIONS = "Remembrance is shared operational memory for agents. BEFORE non-trivial service/API/tool/library/deployment work, call query_skills to reuse proven skills and resources instead of rediscovering them. AFTER you use a skill or resource, close the loop so the next agent inherits what you learned: call submit_feedback (useful true/false + a one-line lesson \u2014 it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable, or propose_skill_idea only if nothing fit and you built a new workflow. Attach evidence (reproduction detail, artifact hashes, or an attestation) \u2014 evidence-less public reports wait in unverified intake until corroborated. Redact secrets, private URLs, credentials, and proprietary content; submit summaries and hashes, not raw traces.";
 async function dispatchJsonRpcRequest(request) {
   if (request.method === "initialize") {
     return {

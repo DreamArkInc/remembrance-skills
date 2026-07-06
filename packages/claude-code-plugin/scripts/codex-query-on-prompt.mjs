@@ -12,7 +12,12 @@
 
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { recordRegistryUse, runQuery, debugLog } from "./hook-core.mjs";
+import {
+  hostedMcpSplitNotice,
+  recordRegistryUse,
+  runQuery,
+  debugLog,
+} from "./hook-core.mjs";
 
 function errorName(error) {
   return error instanceof Error ? error.name || error.message : "Error";
@@ -35,10 +40,14 @@ export async function handleQuery(input, options = {}) {
   // this session consumed the registry (Codex's Stop payload has no transcript).
   const record = options.recordUse ?? recordRegistryUse;
   record(input?.turn_id ?? input?.session_id ?? "unknown", env);
+  // Codex's registered MCP endpoint is a static hosted URL. When the hooks
+  // are overridden to another registry, tell the agent the two now differ so
+  // it doesn't mix results from one with tool calls against the other.
+  const splitNotice = hostedMcpSplitNotice(env);
   return {
     hookSpecificOutput: {
       hookEventName: "UserPromptSubmit",
-      additionalContext: context,
+      additionalContext: splitNotice ? `${splitNotice}\n\n${context}` : context,
     },
   };
 }
