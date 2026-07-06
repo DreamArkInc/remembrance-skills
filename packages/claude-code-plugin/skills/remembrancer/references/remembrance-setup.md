@@ -80,6 +80,25 @@ OpenClaw also needs conversation access for hooks. In
 }
 ~~~
 
+Cursor:
+
+Install the native plugin from Cursor > Customize > Plugins or from a team
+marketplace that imports "packages/cursor-plugin" from the public mirror. The
+Cursor plugin installs this Remembrancer skill, an always-apply Cursor rule, a
+plugin-managed MCP server config, and hooks that ask for feedback only after
+actual Remembrance MCP use.
+
+For local plugin testing before marketplace approval:
+
+~~~bash
+mkdir -p ~/.cursor/plugins/local
+ln -s /absolute/path/to/remembrance/packages/cursor-plugin ~/.cursor/plugins/local/remembrance
+~~~
+
+Cursor cloud agents do not currently support the plugin's sessionStart,
+afterMCPExecution, or stop hooks. For cloud agents, use project rules plus MCP
+or REST until Cursor exposes those hooks in cloud agents.
+
 After installing any native plugin, restart the agent app/session and approve
 the one-time trust prompt if the runtime asks for it. A currently running Codex
 or Claude thread usually cannot hot-load newly installed plugin tools.
@@ -129,6 +148,14 @@ and fully quit/relaunch the app. Use `~/.claude/settings.json`, not
 }
 ~~~
 
+For Cursor, prefer the shared config file above. The Cursor plugin-managed MCP
+server and local hooks read it. If using a non-prod Remembrance endpoint, include
+`apiUrl` in the same config:
+
+~~~json
+{"apiKey":"YOUR_ORG_KEY","apiUrl":"https://remembrance.dev"}
+~~~
+
 For direct REST clients, send either:
 
 ~~~text
@@ -154,7 +181,7 @@ Local stdio MCP server:
 npx @remembrance-ai/mcp-server
 ~~~
 
-Cursor-style hosted config:
+Cursor MCP fallback config (use this only when plugin install is unavailable):
 
 ~~~json
 {

@@ -40,9 +40,9 @@ export async function handleQuery(input, options = {}) {
   // this session consumed the registry (Codex's Stop payload has no transcript).
   const record = options.recordUse ?? recordRegistryUse;
   record(input?.turn_id ?? input?.session_id ?? "unknown", env);
-  // Codex's registered MCP endpoint is a static hosted URL. When the hooks
-  // are overridden to another registry, tell the agent the two now differ so
-  // it doesn't mix results from one with tool calls against the other.
+  // Codex's hosted MCP endpoint is configured separately from this hook. When
+  // the resolved MCP URL differs from the hook API URL, tell the agent so it
+  // doesn't mix results from one registry with tool calls against another.
   const splitNotice = hostedMcpSplitNotice(env);
   return {
     hookSpecificOutput: {

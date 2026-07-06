@@ -1,6 +1,6 @@
 {
   "name": "@remembrance/claude-code-plugin",
-  "version": "0.1.9",
+  "version": "0.1.11",
   "private": true,
   "license": "Apache-2.0",
   "description": "Claude Code plugin for Remembrance auto-query hooks, skill docs, and MCP server configuration.",

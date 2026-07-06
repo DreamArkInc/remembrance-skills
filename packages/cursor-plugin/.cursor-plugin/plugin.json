@@ -1,9 +1,10 @@
 {
   "name": "remembrance",
   "version": "0.1.11",
-  "description": "Auto-query Remembrance skills/resources before relevant Claude Code tasks and expose Remembrance MCP tools.",
+  "description": "Query proven Remembrance skills/resources from Cursor, then nudge redacted feedback when the agent used them.",
   "author": {
-    "name": "Remembrance"
+    "name": "Remembrance",
+    "email": "noreply@remembrance.dev"
   },
   "homepage": "https://remembrance.dev/docs/remembrancer",
   "repository": "https://github.com/dreamarkinc/remembrance-skills",
@@ -12,8 +13,11 @@
     "agent-skills",
     "mcp",
     "memory",
+    "cursor",
     "workflow"
   ],
   "skills": "./skills",
-  "mcpServers": "./.mcp.json"
+  "rules": "./rules",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./mcp.json"
 }

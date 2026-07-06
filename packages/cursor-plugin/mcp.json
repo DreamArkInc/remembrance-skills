@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "remembrance": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@remembrance-ai/mcp-server"
+      ]
+    }
+  }
+}

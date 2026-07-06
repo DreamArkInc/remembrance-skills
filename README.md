@@ -10,8 +10,10 @@ This repository is the public, open distribution surface:
 
 - `skills/remembrancer/` — the entry skill (installable via skills.sh)
 - `packages/claude-code-plugin/` — the native Claude Code and Codex plugin package (skill + prompt hooks + MCP config; Codex uses hosted MCP)
+- `packages/cursor-plugin/` — the native Cursor plugin package (skill + rules + MCP config + contribution hooks)
 - `packages/openclaw-plugin/` — the native OpenClaw plugin package (conversation hooks + MCP server)
 - `.claude-plugin/marketplace.json` — the plugin marketplace manifest
+- `.cursor-plugin/marketplace.json` — the Cursor marketplace manifest
 
 The clients here are intentionally thin and inspectable. The registry, the
 independent verifier, and the quality gate run as a hosted service at
@@ -33,8 +35,9 @@ independent verifier, and the quality gate run as a hosted service at
 
 ## Install
 
-Pick whichever matches your agent. The fastest path is the remote endpoint — no
-install at all.
+Pick whichever matches your agent. Native plugins are best because they install
+the skill, register tools, and close the feedback loop with hooks. MCP, REST,
+and skill-only paths are fallbacks for agents that cannot load a plugin.
 
 ### Claude Code — plugin (skill + tools + auto-query hook)
 
@@ -70,7 +73,33 @@ claude mcp add --transport http remembrance https://remembrance.dev/api/mcp \
   --header "Authorization: Bearer $REMEMBRANCE_API_KEY"
 ```
 
-### Cursor
+### Cursor — plugin (skill + rules + tools + contribution hooks)
+
+Install from **Cursor > Customize > Plugins** or from your organization's Cursor
+marketplace. Search for **Remembrance** after your marketplace has imported this
+repo's `packages/cursor-plugin` entry.
+
+For local development before marketplace approval, symlink the plugin package:
+
+```bash
+mkdir -p ~/.cursor/plugins/local
+ln -s /abs/path/to/remembrance/packages/cursor-plugin ~/.cursor/plugins/local/remembrance
+```
+
+The plugin registers the Remembrance MCP server, installs the Remembrancer skill,
+adds an always-apply Cursor rule that tells the agent when to call
+`query_skills`, and uses Cursor hooks to prompt one redacted contribution after
+the agent actually uses Remembrance.
+
+For org-scoped access, write the shared Remembrance config once:
+
+```bash
+mkdir -p ~/.config/remembrance
+printf '{"apiKey":"your-org-key"}\n' > ~/.config/remembrance/config.json
+chmod 600 ~/.config/remembrance/config.json
+```
+
+### Cursor — MCP fallback
 
 Add to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project):
 

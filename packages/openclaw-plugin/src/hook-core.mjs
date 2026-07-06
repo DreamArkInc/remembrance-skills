@@ -17,7 +17,7 @@
 // transcript scans.
 
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import process from "node:process";
@@ -549,24 +549,172 @@ function apiUrl(env) {
   );
 }
 
-// Codex registers the HOSTED MCP endpoint as a static URL in its persisted
-// registry (no env expansion there), while these hooks resolve
-// REMEMBRANCE_API_URL / config.json at runtime. Point the hooks at a
-// non-default registry (dev testing, self-host) and the two surfaces silently
-// diverge — hooks query one registry, MCP tools another. Claude Code and
-// OpenClaw register the LOCAL bundled server, which resolves the same env as
-// the hooks, so only the Codex adapters surface this notice.
+// Codex hosted MCP registration is separate from the hook runtime config. Point
+// the hooks at a non-default registry (dev testing, self-host) while MCP still
+// points at another URL, and the two surfaces silently diverge — hooks query one
+// registry, MCP tools another. Claude Code and OpenClaw register the LOCAL
+// bundled server, which resolves the same env as the hooks, so only the Codex
+// adapters surface this notice.
 export function hostedMcpSplitNotice(env = process.env) {
-  const origin = apiUrl(env);
-  if (origin === DEFAULT_API_URL) {
+  const hookBase = normalizeRegistryBaseUrl(apiUrl(env));
+  if (hookBase === normalizeRegistryBaseUrl(DEFAULT_API_URL)) {
+    return null;
+  }
+  const hostedMcp = resolveHostedMcpRegistry(env);
+  if (hostedMcp.apiBase === hookBase) {
     return null;
   }
   return (
-    `Note: Remembrance prompt hooks are querying ${origin} ` +
-    `(REMEMBRANCE_API_URL/config.json override). Codex hosted MCP tools are ` +
-    `registered separately and may still target ${DEFAULT_API_URL}; check ` +
-    `~/.codex/config.toml if MCP tools should use the same registry.`
+    `Note: Remembrance prompt hooks are querying ${hookBase}, but Codex ` +
+    `hosted MCP tools are configured for ${hostedMcp.apiBase} ` +
+    `(${hostedMcp.source}). Update REMEMBRANCE_API_URL or the Codex MCP ` +
+    `configuration so both surfaces use the same registry.`
   );
+}
+
+export function resolveHostedMcpRegistry(env = process.env) {
+  const codexMcpUrl = stringOrNull(env.REMEMBRANCE_CODEX_MCP_URL);
+  if (codexMcpUrl) {
+    return {
+      apiBase: normalizeRegistryBaseUrl(codexMcpUrl),
+      mcpUrl: codexMcpUrl,
+      source: "REMEMBRANCE_CODEX_MCP_URL",
+    };
+  }
+  const genericMcpUrl = stringOrNull(env.REMEMBRANCE_MCP_URL);
+  if (genericMcpUrl) {
+    return {
+      apiBase: normalizeRegistryBaseUrl(genericMcpUrl),
+      mcpUrl: genericMcpUrl,
+      source: "REMEMBRANCE_MCP_URL",
+    };
+  }
+
+  const config = readCodexMcpConfig(env);
+  if (config?.url) {
+    return {
+      apiBase: normalizeRegistryBaseUrl(config.url),
+      mcpUrl: config.url,
+      source: config.path,
+    };
+  }
+
+  const packagedUrl = readPackagedCodexMcpUrl() ?? `${DEFAULT_API_URL}/api/mcp`;
+  return {
+    apiBase: normalizeRegistryBaseUrl(packagedUrl),
+    mcpUrl: packagedUrl,
+    source: "packaged Codex MCP manifest",
+  };
+}
+
+export function normalizeRegistryBaseUrl(value) {
+  const raw = String(value ?? "").trim().replace(/\/+$/, "");
+  if (!raw) {
+    return "";
+  }
+  try {
+    const url = new URL(raw);
+    let pathname = url.pathname.replace(/\/+$/, "");
+    if (pathname === "/api/mcp") {
+      pathname = "";
+    } else if (pathname.endsWith("/api/mcp")) {
+      pathname = pathname.slice(0, -"/api/mcp".length);
+    }
+    const normalized = `${url.origin}${pathname}`.replace(/\/+$/, "");
+    return normalized || url.origin;
+  } catch {
+    return raw.replace(/\/api\/mcp$/, "").replace(/\/+$/, "");
+  }
+}
+
+export function readCodexMcpConfig(env = process.env) {
+  for (const path of codexConfigPaths(env)) {
+    try {
+      if (!existsSync(path)) {
+        continue;
+      }
+      const url = parseCodexMcpUrl(readFileSync(path, "utf8"));
+      if (url) {
+        return { path, url };
+      }
+    } catch {
+      // Fail open: a malformed/unreadable Codex config should not break hooks.
+    }
+  }
+  return null;
+}
+
+export function parseCodexMcpUrl(toml) {
+  let inRemembranceServer = false;
+  for (const rawLine of String(toml ?? "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+    const section = line.match(/^\[([^\]]+)\]$/);
+    if (section) {
+      inRemembranceServer =
+        section[1].trim().replace(/["']/g, "") === "mcp_servers.remembrance";
+      continue;
+    }
+    if (!inRemembranceServer) {
+      continue;
+    }
+    const url = line.match(/^url\s*=\s*(.+)$/);
+    if (url) {
+      return parseTomlString(url[1]);
+    }
+  }
+  return null;
+}
+
+function codexConfigPaths(env) {
+  const explicit = stringOrNull(env.REMEMBRANCE_CODEX_CONFIG_PATH);
+  if (explicit) {
+    return [explicit];
+  }
+  const codexHome = stringOrNull(env.CODEX_HOME) ?? join(homedir(), ".codex");
+  return [
+    join(process.cwd(), ".codex", "config.toml"),
+    join(codexHome, "config.toml"),
+  ];
+}
+
+function readPackagedCodexMcpUrl() {
+  for (const relativePath of ["../.mcp.codex.json", "../.mcp.json"]) {
+    try {
+      const parsed = JSON.parse(
+        readFileSync(new URL(relativePath, import.meta.url), "utf8"),
+      );
+      const url = stringOrNull(parsed?.mcpServers?.remembrance?.url);
+      if (url) {
+        return url;
+      }
+    } catch {
+      // Hook-core is copied into multiple plugin packages; not every copy has a
+      // hosted Codex MCP manifest next to it.
+    }
+  }
+  return null;
+}
+
+function parseTomlString(value) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) {
+    return null;
+  }
+  const quote = trimmed[0];
+  if (quote === "\"" || quote === "'") {
+    const end = trimmed.indexOf(quote, 1);
+    return end > 0 ? trimmed.slice(1, end) : null;
+  }
+  const unquoted = trimmed.split("#")[0]?.trim();
+  return unquoted || null;
+}
+
+function stringOrNull(value) {
+  const text = String(value ?? "").trim();
+  return text || null;
 }
 
 function limitFromEnv(env) {

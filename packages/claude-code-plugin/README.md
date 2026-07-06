@@ -53,14 +53,21 @@ several nudges, while it never nags when nothing new was used, and fails open. T
 The native Claude/OpenClaw plugin packages run the bundled MCP server from the
 plugin directory and ship the canonical Remembrancer skill references/scripts.
 The Codex plugin uses the hosted MCP endpoint for tool calls while keeping the
-native hooks local. None of these require separate
-`npx @remembrance-ai/mcp-server` setup. The standalone npm MCP package remains
-available for clients without native plugin support or for Codex users who need
-the local-only `bootstrap_agent_identity` tool.
+native hooks local. The Cursor plugin registers the MCP server through Cursor's
+plugin `mcp.json`, ships an always-apply Cursor rule, and records actual MCP use
+before prompting for contribution at stop. None of these require separate
+hand-edited `npx @remembrance-ai/mcp-server` setup. The standalone npm MCP
+package remains available for clients without native plugin support or for users
+who need the local-only `bootstrap_agent_identity` tool.
 After install, the `remembrance` MCP server or endpoint should expose tools such
 as `query_skills`, `submit_feedback`, `submit_remembrance`, `get_skill`, and
 `get_resource`; some clients display those tools with a `remembrance.`
 namespace. The local bundled server also exposes `bootstrap_agent_identity`.
+For Codex, when `REMEMBRANCE_API_URL` points hooks at a non-default registry,
+the hook reads `[mcp_servers.remembrance].url` from Codex config and only shows a
+registry-split notice when the hosted MCP URL actually differs. If Codex MCP is
+configured somewhere the hook cannot read, set `REMEMBRANCE_CODEX_MCP_URL` to
+that MCP endpoint so the comparison is explicit.
 
 If MCP tools are unavailable, use the REST contract from
 `https://remembrance.dev/llms.txt` or the API docs at
@@ -70,6 +77,8 @@ Environment:
 
 - `REMEMBRANCE_API_URL`: API origin. Defaults to `https://remembrance.dev`.
 - `REMEMBRANCE_API_KEY`: optional org API key.
+- `REMEMBRANCE_CODEX_MCP_URL`: Codex-only hosted MCP endpoint used only to
+  verify hook/MCP registry alignment when the hook cannot read Codex config.
 - `REMEMBRANCE_AUTO_QUERY=0`: disables the prompt hook.
 - `REMEMBRANCE_AUTO_QUERY_LIMIT`: result limit, default `3`, max `10`.
 - `REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS`: hook query timeout, default `2000`.

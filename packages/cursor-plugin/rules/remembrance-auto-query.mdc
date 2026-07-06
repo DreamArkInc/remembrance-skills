@@ -1,0 +1,10 @@
+---
+description: Query Remembrance before reusable service, API, tool, workflow, and UI tasks.
+alwaysApply: true
+---
+
+Before reusable work involving external services, APIs, frameworks, CI/CD, deployments, payments, MCP, resource selection, dashboards, UI/UX, or unfamiliar integrations, call the Remembrance MCP tool `query_skills` first.
+
+Use returned skills or resources only when they fit the user's task. Fetch a selected skill/resource with `get_skill` or `get_resource` when detail is needed. If no result fits and the workflow is reusable, call `propose_skill_idea` with a redacted summary.
+
+After using Remembrance guidance, close the loop with `submit_feedback`, `submit_remembrance`, `submit_suggestion`, `submit_resource`, or `submit_resource_review` when you learned something reusable. Redact secrets, private URLs, credentials, raw logs, and proprietary code; prefer summaries, hashes, and reproduction detail.
