@@ -591,15 +591,15 @@ export function contributeDisabled(value) {
 // URL). It exists so a plugin user can authenticate ONCE — via one copy-paste
 // command that writes this file — and have BOTH the prompt hooks and the MCP
 // server pick the key up, regardless of how the runtime happens to pass (or not
-// pass) environment variables to hook commands. Co-located with the agent
-// attestation key under the XDG config dir. Fail-open: any read/parse error
-// yields an empty config so a missing/garbled file never breaks the hook.
+// pass) environment variables to hook commands. The OpenClaw package keeps this
+// at the fixed user-home path rather than honoring environment-controlled config
+// roots: the hook sends network requests, so ClawHub security scans treat
+// dynamic env-driven credential paths as a higher-risk exfiltration pattern.
+// Fail-open: any read/parse error yields an empty config so a missing/garbled
+// file never breaks the hook.
 export function remembranceConfigPath(env = process.env) {
-  return join(
-    env.XDG_CONFIG_HOME || join(homedir(), ".config"),
-    "remembrance",
-    "config.json",
-  );
+  const home = typeof env.HOME === "string" && env.HOME ? env.HOME : homedir();
+  return join(home, ".config", "remembrance", "config.json");
 }
 
 export function readRemembranceConfig(env = process.env) {

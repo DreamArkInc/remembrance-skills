@@ -225,7 +225,7 @@ const api = (
 const keyPath =
   process.env.REMEMBRANCE_AGENT_KEY_PATH ??
   join(
-    process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"),
+    join(homedir(), ".config"),
     "remembrance",
     "agent-key.json",
   );

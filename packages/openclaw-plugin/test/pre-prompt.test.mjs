@@ -1,8 +1,18 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { handlePrePrompt, promptFromEvent, sessionIdFromEvent } from "../src/index.mjs";
+import {
+  handlePrePrompt,
+  promptFromEvent,
+  sessionIdFromEvent,
+} from "../src/index.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const tempRoot = mkdtempSync(join(tmpdir(), "remembrance-openclaw-pre-"));
@@ -63,11 +73,16 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
       // Reports as OpenClaw (an accepted agentProviderSchema value), not the
       // shared-core Codex default — otherwise the query would fail validation.
       agent: { provider: "openclaw", model: "openclaw" },
-      task: { domain: "deployment", constraints: expect.arrayContaining(["ci", "deployment"]) },
+      task: {
+        domain: "deployment",
+        constraints: expect.arrayContaining(["ci", "deployment"]),
+      },
       limit: 2,
     });
     expect(calls[0].headers["user-agent"]).toBe("@remembrance/openclaw-plugin");
-    expect(result.appendSystemContext).toContain("Remembrance auto-query context");
+    expect(result.appendSystemContext).toContain(
+      "Remembrance auto-query context",
+    );
     expect(result.appendSystemContext).toContain("vercel-build-debug");
     // A real injection must record the per-session use marker (from ctx.runId).
     expect(recorded).toEqual(["r1"]);
@@ -76,12 +91,18 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
   it("really increments the on-disk use marker on a hit", async () => {
     const env = testEnv();
     const fetchImpl = vi.fn(async () =>
-      Response.json({ skills: [{ slug: "s", description: "d" }], resources: [] }),
+      Response.json({
+        skills: [{ slug: "s", description: "d" }],
+        resources: [],
+      }),
     );
-    await handlePrePrompt(event("Set up Vercel deployment.", { runId: "r-marker" }), {
-      env,
-      fetchImpl,
-    });
+    await handlePrePrompt(
+      event("Set up Vercel deployment.", { runId: "r-marker" }),
+      {
+        env,
+        fetchImpl,
+      },
+    );
     const { readRegistryUseCount } = await import("../src/hook-core.mjs");
     expect(readRegistryUseCount("r-marker", env)).toBe(1);
   });
@@ -89,11 +110,14 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
   it("no-ops (undefined) for one-off fact prompts and never queries or records", async () => {
     const fetchImpl = vi.fn();
     const recorded = [];
-    const result = await handlePrePrompt(event("What is the capital of France?"), {
-      env: testEnv(),
-      fetchImpl,
-      recordUse: (id) => recorded.push(id),
-    });
+    const result = await handlePrePrompt(
+      event("What is the capital of France?"),
+      {
+        env: testEnv(),
+        fetchImpl,
+        recordUse: (id) => recorded.push(id),
+      },
+    );
     expect(result).toBeUndefined();
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(recorded).toEqual([]);
@@ -101,50 +125,59 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
 
   it("sends the x-remembrance-api-key header from REMEMBRANCE_API_KEY when set", async () => {
     const headers = [];
-    await handlePrePrompt(event("Set up Vercel deployment.", { runId: "r-key-env" }), {
-      env: testEnv({ REMEMBRANCE_API_KEY: "env-key-123" }),
-      recordUse: () => {},
-      fetchImpl: vi.fn(async (_url, init) => {
-        headers.push(init.headers);
-        return Response.json({ skills: [], resources: [] });
-      }),
-    });
+    await handlePrePrompt(
+      event("Set up Vercel deployment.", { runId: "r-key-env" }),
+      {
+        env: testEnv({ REMEMBRANCE_API_KEY: "env-key-123" }),
+        recordUse: () => {},
+        fetchImpl: vi.fn(async (_url, init) => {
+          headers.push(init.headers);
+          return Response.json({ skills: [], resources: [] });
+        }),
+      },
+    );
     expect(headers).toHaveLength(1);
     expect(headers[0]["x-remembrance-api-key"]).toBe("env-key-123");
   });
 
   it("falls back to the config-file apiKey when the env key is empty", async () => {
-    const configHome = join(tempRoot, `xdg-${(counter += 1)}`);
-    mkdirSync(join(configHome, "remembrance"), { recursive: true });
+    const home = join(tempRoot, `home-${(counter += 1)}`);
+    mkdirSync(join(home, ".config", "remembrance"), { recursive: true });
     writeFileSync(
-      join(configHome, "remembrance", "config.json"),
+      join(home, ".config", "remembrance", "config.json"),
       JSON.stringify({ apiKey: "file-key-456" }),
     );
     const headers = [];
-    await handlePrePrompt(event("Set up Vercel deployment.", { runId: "r-key-file" }), {
-      env: testEnv({ REMEMBRANCE_API_KEY: "", XDG_CONFIG_HOME: configHome }),
-      recordUse: () => {},
-      fetchImpl: vi.fn(async (_url, init) => {
-        headers.push(init.headers);
-        return Response.json({ skills: [], resources: [] });
-      }),
-    });
+    await handlePrePrompt(
+      event("Set up Vercel deployment.", { runId: "r-key-file" }),
+      {
+        env: testEnv({ REMEMBRANCE_API_KEY: "", HOME: home }),
+        recordUse: () => {},
+        fetchImpl: vi.fn(async (_url, init) => {
+          headers.push(init.headers);
+          return Response.json({ skills: [], resources: [] });
+        }),
+      },
+    );
     expect(headers).toHaveLength(1);
     expect(headers[0]["x-remembrance-api-key"]).toBe("file-key-456");
   });
 
   it("omits the x-remembrance-api-key header when neither env nor config sets it", async () => {
-    const configHome = join(tempRoot, `xdg-empty-${(counter += 1)}`);
-    mkdirSync(configHome, { recursive: true });
+    const home = join(tempRoot, `home-empty-${(counter += 1)}`);
+    mkdirSync(home, { recursive: true });
     const headers = [];
-    await handlePrePrompt(event("Set up Vercel deployment.", { runId: "r-key-none" }), {
-      env: testEnv({ XDG_CONFIG_HOME: configHome }),
-      recordUse: () => {},
-      fetchImpl: vi.fn(async (_url, init) => {
-        headers.push(init.headers);
-        return Response.json({ skills: [], resources: [] });
-      }),
-    });
+    await handlePrePrompt(
+      event("Set up Vercel deployment.", { runId: "r-key-none" }),
+      {
+        env: testEnv({ HOME: home }),
+        recordUse: () => {},
+        fetchImpl: vi.fn(async (_url, init) => {
+          headers.push(init.headers);
+          return Response.json({ skills: [], resources: [] });
+        }),
+      },
+    );
     expect(headers).toHaveLength(1);
     expect(headers[0]["x-remembrance-api-key"]).toBeUndefined();
   });
@@ -190,23 +223,31 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
       fetchImpl: vi.fn(
         async (_url, init) =>
           new Promise((_res, reject) => {
-            init.signal.addEventListener("abort", () => reject(new Error("aborted")));
+            init.signal.addEventListener("abort", () =>
+              reject(new Error("aborted")),
+            );
           }),
       ),
     });
-    const serverError = await handlePrePrompt(event("Set up Stripe payment integration."), {
-      env: testEnv(),
-      fetchImpl: vi.fn(async () => new Response("no", { status: 500 })),
-    });
-    const malformed = await handlePrePrompt(event("Set up Vercel deployment."), {
-      env: testEnv(),
-      fetchImpl: vi.fn(async () => ({
-        ok: true,
-        json: async () => {
-          throw new Error("bad json");
-        },
-      })),
-    });
+    const serverError = await handlePrePrompt(
+      event("Set up Stripe payment integration."),
+      {
+        env: testEnv(),
+        fetchImpl: vi.fn(async () => new Response("no", { status: 500 })),
+      },
+    );
+    const malformed = await handlePrePrompt(
+      event("Set up Vercel deployment."),
+      {
+        env: testEnv(),
+        fetchImpl: vi.fn(async () => ({
+          ok: true,
+          json: async () => {
+            throw new Error("bad json");
+          },
+        })),
+      },
+    );
     expect(timeout).toBeUndefined();
     expect(serverError).toBeUndefined();
     expect(malformed).toBeUndefined();
@@ -217,7 +258,12 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
     expect(promptFromEvent({ userPrompt: "b" })).toBe("b");
     expect(promptFromEvent({ input: { prompt: "c" } })).toBe("c");
     expect(
-      promptFromEvent({ messages: [{ role: "assistant", content: "x" }, { role: "user", content: "d" }] }),
+      promptFromEvent({
+        messages: [
+          { role: "assistant", content: "x" },
+          { role: "user", content: "d" },
+        ],
+      }),
     ).toBe("d");
     expect(
       promptFromEvent({
@@ -229,7 +275,9 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
   });
 
   it("sessionIdFromEvent prefers runId then sessionId, and normalizes missing to unknown", () => {
-    expect(sessionIdFromEvent({ context: { runId: "R", sessionId: "S" } })).toBe("R");
+    expect(
+      sessionIdFromEvent({ context: { runId: "R", sessionId: "S" } }),
+    ).toBe("R");
     expect(sessionIdFromEvent({ context: { sessionId: "S" } })).toBe("S");
     expect(sessionIdFromEvent({})).toBe("unknown");
   });
@@ -239,13 +287,18 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
       readFileSync(resolve(root, "openclaw.plugin.json"), "utf8"),
     );
     const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
-    const mcp = JSON.parse(readFileSync(resolve(root, "openclaw.mcp.json"), "utf8"));
+    const mcp = JSON.parse(
+      readFileSync(resolve(root, "openclaw.mcp.json"), "utf8"),
+    );
 
     // Version is not pinned to a literal here — the monorepo-wide version sync
     // is enforced by `check:versions`, and line below cross-checks pkg⇄manifest.
     expect(manifest).toMatchObject({ id: "remembrance" });
     expect(manifest.version).toMatch(/^\d+\.\d+\.\d+/);
-    expect(manifest.configSchema).toMatchObject({ type: "object", properties: {} });
+    expect(manifest.configSchema).toMatchObject({
+      type: "object",
+      properties: {},
+    });
     expect(pkg.name).toBe("@remembrance/openclaw-plugin");
     expect(pkg.version).toBe(manifest.version);
     // package.json declares the native entrypoint under openclaw.extensions.
@@ -259,7 +312,9 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
       command: "node",
       args: ["/abs/path/to/openclaw-plugin/servers/remembrance-mcp.mjs"],
     });
-    expect(mcp.mcp.servers.remembrance.args[0]).not.toContain("OPENCLAW_PLUGIN_ROOT");
+    expect(mcp.mcp.servers.remembrance.args[0]).not.toContain(
+      "OPENCLAW_PLUGIN_ROOT",
+    );
     expect(mcp.mcp.servers.remembrance.env).toMatchObject({
       // Empty default (not a baked remembrance.dev): lets the bundled MCP
       // server fall through to a config-file apiUrl before its own default, so

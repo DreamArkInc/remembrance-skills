@@ -1,24 +1,24 @@
-# Remembrance OpenClaw Plugin
+# Remembrance for OpenClaw
 
-Ports the [Remembrance Claude Code plugin](../claude-code-plugin) (and its
-[Codex sibling](../codex-plugin)) to [OpenClaw](https://docs.openclaw.ai). It
-installs the Remembrancer skill, configures a bundled Remembrance MCP server, and
-registers two in-process conversation hooks that keep the registry loop
-symmetric:
+Give [OpenClaw](https://docs.openclaw.ai) shared operational memory.
+Remembrance helps your agent reuse reviewed skills, trusted resources, and
+team-specific lessons before it spends tokens solving a workflow from scratch
+again.
 
-- a **pre-prompt** hook that queries Remembrance before OpenClaw reasons about
-  tasks likely to involve reusable skills/resources, injecting matching results
-  as extra system context; and
-- a **completion** hook that — when a session actually used Remembrance — asks
-  the agent once to contribute what it learned (a remembrance, feedback, or skill
-  idea) instead of silently finishing.
+Install the plugin once, then OpenClaw can:
 
-Unlike the Claude/Codex plugins, whose hooks are stdin/stdout scripts, **OpenClaw
-hooks are in-process JavaScript handlers**: a loaded plugin module registers
-handlers with `api.on(name, handler, opts?)`, and each handler is
-`async (event) => ...`. See
-[Plugin hooks](https://docs.openclaw.ai/plugins/hooks) and
-[Plugin entry points](https://docs.openclaw.ai/plugins/sdk-entrypoints).
+- find relevant Remembrance skills before service, API, CI/CD, migration,
+  payment, deployment, MCP, or unfamiliar integration work;
+- use public registry knowledge, plus private organization knowledge when you
+  provide an enterprise key;
+- expose Remembrance MCP tools for direct lookup, feedback, and skill
+  submission; and
+- ask once at the end of a useful session whether the agent should contribute
+  what it learned back to the registry.
+
+The hooks are quiet by default. They only query on prompts that look reusable,
+redact common secrets before sending text, and fail open if Remembrance is
+unavailable.
 
 ## Install from ClawHub
 
@@ -26,23 +26,18 @@ handlers with `api.on(name, handler, opts?)`, and each handler is
 openclaw plugins install clawhub:@remembrance/openclaw-plugin
 ```
 
-If `openclaw plugins search remembrance` returns unrelated packages, such as a
-genealogy/roots package, do not install them. The official package must point to
-`https://github.com/dreamarkinc/remembrance-skills`, mention the Remembrance
-agent skill/resource service, and expose the expected Remembrance MCP tools such
-as `query_skills`, `submit_remembrance`, `get_skill`, and `get_resource`.
+If you only want public registry results, the plugin can run without a key. For
+private team memory, create an enterprise key in the Remembrance dashboard and
+make it available to OpenClaw:
 
-To pin a specific published version, see the version selector on the plugin's
-ClawHub release page. The normal install path should use the latest official
-`clawhub:@remembrance/openclaw-plugin` package unless a rollout explicitly
-requires a pinned version.
+```bash
+mkdir -p ~/.config/remembrance
+printf '{"apiKey":"YOUR_ORG_KEY","apiUrl":"https://remembrance.dev"}\n' > ~/.config/remembrance/config.json
+chmod 600 ~/.config/remembrance/config.json
+```
 
-### Allow conversation access (required)
-
-This is a **non-bundled plugin** and its hooks read raw conversation content
-(`before_prompt_build` reads the prompt; `before_agent_finalize` inspects the
-final answer). OpenClaw gates raw conversation hooks behind an explicit,
-per-plugin opt-in. In `~/.openclaw/openclaw.json`:
+Then enable conversation access for the Remembrance plugin in
+`~/.openclaw/openclaw.json`:
 
 ```json5
 {
@@ -60,22 +55,60 @@ per-plugin opt-in. In `~/.openclaw/openclaw.json`:
 }
 ```
 
+Restart OpenClaw after changing the plugin or key config.
+
+If `openclaw plugins search remembrance` returns unrelated packages, such as a
+genealogy/roots package, do not install them. The official package is
+`clawhub:@remembrance/openclaw-plugin`, points to
+`https://github.com/dreamarkinc/remembrance-skills`, and describes the
+Remembrance agent skill/resource service.
+
+To pin a specific published version, see the version selector on the plugin's
+ClawHub release page. The normal install path should use the latest official
+`clawhub:@remembrance/openclaw-plugin` package unless a rollout explicitly
+requires a pinned version.
+
+## What it does
+
+Remembrance uses two OpenClaw conversation hooks:
+
+- **Before a prompt:** the plugin checks whether the work looks like something
+  that could benefit from reusable guidance. If it finds matching skills or
+  resources, it injects a compact context block before OpenClaw reasons.
+- **Before final answer:** if the session actually used Remembrance, the plugin
+  asks OpenClaw once to submit redacted feedback, a reusable lesson, or a missing
+  skill idea.
+
+This creates the loop you want from an agent memory system: use reviewed
+knowledge when it exists, and improve the registry when the agent learns
+something worth reusing.
+
+## Conversation access
+
+This is a **non-bundled plugin**. OpenClaw requires explicit opt-in before
+non-bundled plugins can receive raw conversation content. Remembrance needs that
+access because `before_prompt_build` reads the prompt and
+`before_agent_finalize` inspects the final answer.
+
+Without `allowConversationAccess: true`, OpenClaw will not deliver prompt or
+answer text to these hooks. The plugin will no-op instead of breaking the run.
+
 > "Non-bundled plugins that need raw conversation hooks (`before_model_resolve`,
 > `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`,
 > `agent_end`, or `before_agent_run`) must set … `allowConversationAccess`."
 > — [Plugin hooks](https://docs.openclaw.ai/plugins/hooks),
 > [Configuration reference](https://docs.openclaw.ai/gateway/configuration-reference).
 
-Without `allowConversationAccess: true`, OpenClaw will not deliver the raw
-prompt/answer to these hooks and the plugin no-ops (fail-open).
-
-## MCP server
+## MCP tools
 
 The plugin ships a self-contained Remembrance MCP server
-(`servers/remembrance-mcp.mjs`) — the same bundled server the Claude plugin
-ships. OpenClaw configures MCP servers under **`mcp.servers.<id>`** (not
-`mcpServers` like Claude, nor `mcp_servers` like Codex) in
-`~/.openclaw/openclaw.json`
+(`servers/remembrance-mcp.mjs`). The hooks provide automatic behavior; the MCP
+server gives OpenClaw direct tools such as `query_skills`,
+`bootstrap_agent_identity`, `submit_feedback`, `submit_remembrance`,
+`get_skill`, and `get_resource`.
+
+OpenClaw configures MCP servers under **`mcp.servers.<id>`** (not `mcpServers`
+like Claude, nor `mcp_servers` like Codex) in `~/.openclaw/openclaw.json`
 ([Configuration reference](https://docs.openclaw.ai/gateway/configuration-reference),
 [MCP CLI](https://docs.openclaw.ai/cli/mcp)). `openclaw.mcp.json` in this package
 is an **illustrative** merge fragment. OpenClaw only expands real uppercase
@@ -111,13 +144,14 @@ openclaw mcp add remembrance \
   --arg /abs/path/to/openclaw-plugin/servers/remembrance-mcp.mjs
 ```
 
-After it starts, the `remembrance` MCP server exposes tools such as
-`query_skills`, `bootstrap_agent_identity`, `submit_feedback`,
-`submit_remembrance`, `get_skill`, and `get_resource`. If MCP tools are
-unavailable, use the REST contract from `https://remembrance.dev/llms.txt` or the
-API docs at `https://remembrance.dev/docs/api`.
+If MCP tools are unavailable, the plugin hooks can still run. For raw REST usage,
+use `https://remembrance.dev/llms.txt` or the API docs at
+`https://remembrance.dev/docs/api`.
 
-## Publish to ClawHub
+## Maintainers: publish to ClawHub
+
+Everything above is for installing and using the plugin. This section is for
+maintainers publishing a new ClawHub release.
 
 Code plugins publish through the ClawHub CLI with the `code-plugin` family
 ([ClawHub quickstart](https://github.com/openclaw/clawhub/blob/main/docs/quickstart.md)):
@@ -193,7 +227,8 @@ distinct use, so a revise never re-triggers itself. Set
 The Claude plugin decides whether to prompt for a contribution by scanning the
 session transcript for registry-consumption markers. OpenClaw's
 `before_agent_finalize` event does not carry a transcript, so this plugin reuses
-the Codex plugin's marker mechanism (`src/hook-core.mjs`, copied verbatim):
+the Codex plugin's marker mechanism (`src/hook-core.mjs`, generated from the
+shared core with OpenClaw-specific security hardening):
 
 - The pre-prompt hook calls `recordRegistryUse(sessionId)` whenever it actually
   injects skills, incrementing a per-session counter file under
@@ -223,12 +258,14 @@ redacted for common secrets and private-network URLs before any query is sent.
 ## Generated / copied files
 
 `servers/remembrance-mcp.mjs`, the entire `skills/remembrancer/` tree, and
-`src/hook-core.mjs` are **copied verbatim from the canonical source** —
-`src/hook-core.mjs` from `packages/codex-plugin/scripts/hook-core.mjs`, and the
-MCP server + skills from `packages/claude-code-plugin/` (see that plugin's
-`scripts/refresh-mcp-bundle.mjs`). Do not edit them here; refresh upstream and
-re-copy whenever `packages/mcp-server`, `skills/remembrancer`, or the shared core
-changes.
+`src/hook-core.mjs` are generated from the same canonical sources used by the
+other Remembrance plugins, then OpenClaw applies a narrow ClawHub security
+hardening transform that removes generic environment-controlled credential-path
+lookups from the packaged artifact. The fixed `~/.config/remembrance/...`
+fallback, `REMEMBRANCE_API_KEY`, `REMEMBRANCE_API_URL`, and the explicit
+`REMEMBRANCE_AGENT_KEY_PATH` override remain supported. Do not edit these files
+by hand; change the canonical source or the OpenClaw hardening transform and run
+`npm run sync:hook-core` / `npm run refresh:generated`.
 
 ## Verified vs. unverified against OpenClaw docs
 
