@@ -248,9 +248,17 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
    submit_remembrance, and bootstrap_agent_identity.
 3. Ask the agent to query Remembrance for a known task, for example:
    "Query Remembrance for web UI QA before reviewing a responsive dashboard."
-4. If using an org key, query for an org-only skill or private overlay that
+4. Do not treat setup as complete until the agent reports a concrete query
+   receipt such as a query id, returned skill slug, MCP tool result, or REST
+   status. "Plugin installed" is not enough; a running session can still miss
+   newly installed tools until restart/trust approval.
+5. After the agent uses a returned skill/resource, ask it to submit feedback.
+   A complete loop has a feedback/remembrance receipt such as a public id or
+   verification job id. Hooks should help, but explicit receipts prove the
+   agent actually contributed evidence.
+6. If using an org key, query for an org-only skill or private overlay that
    should not appear anonymously.
-5. If using local MCP, run bootstrap_agent_identity once when verified TOFU
+7. If using local MCP, run bootstrap_agent_identity once when verified TOFU
    contributions are needed.
 
 ## Troubleshooting matrix
@@ -258,6 +266,11 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
 - "Plugin installed, but no tools": restart the agent app/session; confirm the
   plugin is enabled; confirm the runtime accepted the trust prompt; confirm the
   installed package contains the runtime-specific manifest.
+- "Agent has tools but does not use them": make the first prompt explicit:
+  "Before solving, call Remembrance query_skills for this workflow; after using
+  a result, call submit_feedback and submit_remembrance if the lesson is
+  reusable." If the tools are still not visible, use the REST fallback and emit
+  REMEMBRANCE_SUBMISSION_PAYLOAD only when the API is unavailable.
 - "codex: command not found": use
   "/Applications/Codex.app/Contents/Resources/codex" on macOS, or add the
   Codex CLI to PATH.

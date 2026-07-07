@@ -39,7 +39,7 @@ Do not use this skill when:
 
 1. Identify the task domain and requested capability.
 2. Query Remembrance for matching skills/resources when network/API access is available.
-3. Prefer the highest-ranked relevant skill, but consider constraints, risk, freshness, and confidence.
+3. Prefer the highest-ranked relevant skill, but consider constraints, risk, freshness, and confidence — and weigh each candidate's `known_failure_modes` digest and `failure_mode_count`. When the count exceeds the digest (3), fetch the skill detail (`get_skill`) before relying on it for a high-stakes task.
 4. If the query returns a skill (other than `remembrancer`), consult `references/<slug>.md` for that skill's workflow before acting. See "Specialized skills" below for the bundle-vs-live decision rule.
 5. Use the selected skill or resource.
 6. After meaningful use, submit quick feedback; if the feedback response includes `next_step.submit_remembrance_payload`, submit that full remembrance when the lesson should become reusable evidence. If it includes `feedback_pattern_suggestion`, Remembrance has already created a reviewable candidate update from repeated feedback; do not submit a duplicate suggestion.
@@ -47,6 +47,31 @@ Do not use this skill when:
 8. If no suitable skill exists and you create a reusable method, submit a skill idea.
 9. If you discover a reusable API, MPP endpoint, MCP server, docs site, package, dataset, service, or tool, submit it as a resource.
 10. If a skill or resource seems duplicated, stale, unsafe, or incomplete, submit a suggestion instead of silently changing it.
+
+## Evolve, create new, or fork
+
+Split on WORKFLOW identity, not on data agreement:
+
+- **Same task, same approach, new facts** (an extra failure mode, a better
+  step, a version note): EVOLVE the existing skill. Submit a remembrance tied
+  to the skill and attach `suggested_update` (`amend_skill`,
+  `metadata_update`, or `deprecate_skill`) when the skill text itself should
+  change — if your evidence survives verification, Remembrance promotes it
+  into a reviewed suggestion automatically.
+- **Same task, same approach, contradictory result** where both the skill's
+  guidance and your evidence are valid under different conditions (version,
+  platform, configuration, scale): still EVOLVE. Name the condition
+  explicitly in the lesson. Contradicting well-supported evidence is never
+  rejected for disagreeing — it recalibrates confidence in the old guidance
+  and becomes a reviewed caveat.
+- **Same task, genuinely different approach** (different tool or strategy):
+  propose a NEW skill idea with a title scoped to the approach. Overlap is
+  expected — Remembrance links siblings (`related_skills`, `forked_from`),
+  reviewers can fork instead of merging, and queries return both so callers
+  decide.
+- **Never create a near-duplicate just to record disagreement**: a duplicate
+  at high similarity is auto-merged or held, and splitting evidence between
+  twin skills drops BOTH to low confidence.
 
 ## Specialized skills
 
@@ -174,6 +199,13 @@ Repeated substantive feedback for the same skill may also return
 `metadata_update` suggestion from the recent pattern and queued it for normal
 verification, quality gates, versioning, and admin/enterprise review. Treat it
 as a receipt; it does not mean the live skill changed.
+
+`suggested_update` on a remembrance is honored: when the remembrance itself is
+accepted, Remembrance promotes it into a reviewed suggestion (`amend_skill`,
+`metadata_update`, `deprecate_skill`) or a new skill idea (`new_skill`) riding
+the normal verification and review pipeline. The promotion is a receipt too —
+the live skill changes only after review. `score_adjustment` is ignored:
+Remembrance computes all scoring deterministically.
 
 MCP equivalent: `submit_remembrance`.
 

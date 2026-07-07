@@ -28,6 +28,7 @@ const DEFAULT_TIMEOUT_MS = 2000;
 const MAX_SUMMARY_CHARS = 1200;
 const MAX_CONTEXT_CHARS = 4000;
 const MAX_CONTEXT_FIELD_CHARS = 280;
+const MAX_DIRECTIVE_CHARS = 900;
 
 const SERVICE_PATTERNS = [
   /\b(vercel|heroku|netlify|cloudflare|aws|gcp|azure)\b/i,
@@ -319,6 +320,13 @@ export function formatContext(response, reason = "trigger_match", limit = DEFAUL
     );
     lines.push(`No matching skill/resource. Proposed skill idea payload: ${payload}`);
   }
+  const contributionDirective =
+    body?.contribution_directive?.message ?? body?.fallback_instruction;
+  if (contributionDirective) {
+    lines.push(
+      `After using Remembrance: ${safeText(contributionDirective, MAX_DIRECTIVE_CHARS)}`,
+    );
+  }
   return safeText(lines.join("\n"), MAX_CONTEXT_CHARS);
 }
 
@@ -377,6 +385,7 @@ export function contributionReason() {
     "• submit_remembrance — a redacted, evidence-backed lesson tied to the skill/resource you used (the fastest path: a prior submit_feedback response includes a ready next_step.submit_remembrance_payload you can post as-is).",
     "• submit_feedback — a quick useful / not-useful signal plus a one-line lesson.",
     "• propose_skill_idea — only if no existing skill fit and you built a reusable workflow.",
+    "Use the Remembrance MCP tools directly when they are visible. If this runtime has no MCP tools exposed, use the REST endpoints from the query response; if the API is unavailable, emit REMEMBRANCE_SUBMISSION_PAYLOAD with the redacted JSON you would submit.",
     "Redact secrets, private URLs, and proprietary content; submit redacted summaries and hashes, not raw traces.",
     "Attach evidence: reproduction detail in outcome.failure_modes, artifact hashes of redacted logs/diffs, or an attestation. Evidence-less public reports wait in unverified intake until corroborated; evidence-backed ones verify faster and rank higher.",
     "If nothing is genuinely worth capturing, just say so in one line — you will not be asked again this session.",

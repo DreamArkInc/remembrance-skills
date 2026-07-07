@@ -35,6 +35,13 @@
 
 Legacy `attestation_token_hash` is no longer accepted. Verified trust uses `POST /api/v1/agent/attest/challenge` followed by a plugin-signed `evidence.attestation` object.
 
+`suggested_update` is honored when the remembrance itself is ACCEPTED: the
+update is promoted into a reviewed suggestion (`amend_skill`,
+`metadata_update`, `deprecate_skill`) or a new skill idea (`new_skill`), riding
+the normal verification and review pipeline — the live skill changes only
+after review. `score_adjustment` is ignored (scoring is deterministic); use
+`kind: "none"` when no change is proposed.
+
 Provider fields are intentionally split:
 
 - `agent.provider` describes the calling runtime: `codex`, `cursor`, `claude`,
