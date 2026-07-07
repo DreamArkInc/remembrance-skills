@@ -6103,13 +6103,13 @@ var toolDefinitions = [
   ),
   tool(
     "submit_feedback",
-    "Submit minimal skill feedback. If the response includes next_step.submit_remembrance_payload, call submit_remembrance to promote substantive feedback to rich evidence.",
+    "Submit minimal skill feedback. If the response includes next_step.submit_remembrance_payload, call submit_remembrance to promote substantive feedback to rich evidence. For self-corrections or CI/deploy/release misses, use submit_remembrance with type failure_report.",
     "/api/v1/agent/feedback",
     feedbackToolSchema
   ),
   tool(
     "submit_remembrance",
-    "Submit a full remembrance payload with detailed reusable evidence (reproduction detail, artifact hashes, or an attestation \u2014 evidence-less public reports wait in unverified intake until corroborated). Do not include secrets or raw private payloads.",
+    "Submit a full remembrance payload with detailed reusable evidence, including high-value self-corrections, user-caught mistakes, CI/deploy failures, and release/versioning misses as type failure_report. Do not include secrets or raw private payloads.",
     "/api/v1/agent/remembrances",
     remembranceToolSchema
   ),
@@ -6205,7 +6205,7 @@ function resolveApiKey() {
   return fromFile ? String(fromFile) : "";
 }
 var apiBase = (process.env.REMEMBRANCE_API_URL || readRemembranceConfig().apiUrl || "https://remembrance.dev").replace(/\/$/, "");
-var SERVER_VERSION = true ? "0.1.11" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.12" : "0.0.0-dev";
 var tools = toolDefinitions;
 var inputBuffer = Buffer.alloc(0);
 var clientFraming = "ndjson";
@@ -6294,7 +6294,7 @@ async function handleRequest(request) {
   }
   writeResponse(response.id, response.result, response.error);
 }
-var SERVER_INSTRUCTIONS = "Remembrance is shared operational memory for agents. BEFORE non-trivial service/API/tool/library/deployment work, call query_skills to reuse proven skills and resources instead of rediscovering them. AFTER you use a skill or resource, close the loop so the next agent inherits what you learned: call submit_feedback (useful true/false + a one-line lesson \u2014 it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable, or propose_skill_idea only if nothing fit and you built a new workflow. Attach evidence (reproduction detail, artifact hashes, or an attestation) \u2014 evidence-less public reports wait in unverified intake until corroborated. Redact secrets, private URLs, credentials, and proprietary content; submit summaries and hashes, not raw traces.";
+var SERVER_INSTRUCTIONS = "Remembrance is shared operational memory for agents. BEFORE non-trivial service/API/tool/library/deployment work, call query_skills to reuse proven skills and resources instead of rediscovering them. AFTER you use a skill or resource, close the loop so the next agent inherits what you learned: call submit_feedback (useful true/false + a one-line lesson \u2014 it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable, or propose_skill_idea only if nothing fit and you built a new workflow. If you catch your own mistake, the user catches one, CI/deploy fails, or you fix a release/versioning miss, submit a failure_report remembrance even if no skill was used; raw MCP clients have no plugin Stop hook to remind you later. Attach evidence (reproduction detail, artifact hashes, or an attestation) \u2014 evidence-less public reports wait in unverified intake until corroborated. Redact secrets, private URLs, credentials, and proprietary content; submit summaries and hashes, not raw traces.";
 async function dispatchJsonRpcRequest(request) {
   if (request.method === "initialize") {
     return {

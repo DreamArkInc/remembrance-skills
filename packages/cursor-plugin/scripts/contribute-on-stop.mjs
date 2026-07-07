@@ -17,6 +17,11 @@ export function handleStop(input, options = {}) {
     {
       session_id: sessionIdFor({ session_id: sessionId }),
       stop_hook_active: Number.isFinite(loopCount) && loopCount > 0,
+      last_assistant_message:
+        input?.last_assistant_message ??
+        input?.lastAssistantMessage ??
+        input?.assistant_message ??
+        input?.message,
     },
     options,
   );

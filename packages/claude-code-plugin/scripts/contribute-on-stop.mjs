@@ -39,6 +39,7 @@ import {
   contributeDisabled,
   contributionReason,
   countRegistryConsumption,
+  detectHighValueLessonSignalInText,
 } from "./hook-core.mjs";
 
 const MAX_TRANSCRIPT_BYTES = 4 * 1024 * 1024;
@@ -129,19 +130,29 @@ export function decideContribution(input, options = {}) {
   }
   const sessionId = input?.session_id ?? "unknown";
   const read = options.readTranscript ?? readTranscriptSafe;
-  const consumption = countRegistryConsumption(read(input?.transcript_path));
-  if (consumption === 0) {
+  const transcript = read(input?.transcript_path);
+  const consumption = countRegistryConsumption(transcript);
+  const highValueSignal = detectHighValueLessonSignalInText(transcript);
+  const readCount = options.readCount ?? readPromptedCount;
+  const promptedCount = readCount(sessionId);
+  if (consumption === 0 && !highValueSignal) {
     return { allow: true, why: "registry_not_used" };
   }
-  const readCount = options.readCount ?? readPromptedCount;
-  if (consumption <= readCount(sessionId)) {
+  if (consumption <= promptedCount && !highValueSignal) {
     return { allow: true, why: "no_new_usage" };
+  }
+  if (highValueSignal && promptedCount > 0 && consumption <= promptedCount) {
+    return { allow: true, why: "high_value_lesson_already_prompted" };
   }
   return {
     allow: false,
-    why: "prompt_contribution",
-    reason: contributionReason(),
-    consumption,
+    why: highValueSignal
+      ? "prompt_high_value_lesson_contribution"
+      : "prompt_contribution",
+    reason: contributionReason(highValueSignal),
+    consumption: highValueSignal
+      ? Math.max(consumption, promptedCount + 1, 1)
+      : consumption,
   };
 }
 

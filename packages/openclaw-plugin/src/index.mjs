@@ -169,7 +169,11 @@ export function handleCompletion(event, options = {}) {
     // safety comes from the prompted-count sentinel the core already applies
     // (it only revises when use > prompted), plus recording the new count here.
     const decision = decideStop(
-      { turn_id: sessionId, stop_hook_active: false },
+      {
+        turn_id: sessionId,
+        stop_hook_active: false,
+        last_assistant_message: completionMessageFromEvent(event),
+      },
       {
         env,
         readUseCount: options.readUseCount ?? readRegistryUseCount,
@@ -198,6 +202,19 @@ export function handleCompletion(event, options = {}) {
 
 function errorName(error) {
   return error instanceof Error ? error.name || error.message : "Error";
+}
+
+function completionMessageFromEvent(event) {
+  return (
+    event?.last_assistant_message ??
+    event?.lastAssistantMessage ??
+    event?.assistant_message ??
+    event?.message ??
+    event?.response?.content ??
+    event?.result?.content ??
+    event?.context?.last_assistant_message ??
+    event?.context?.lastAssistantMessage
+  );
 }
 
 // --- Plugin definition -------------------------------------------------------

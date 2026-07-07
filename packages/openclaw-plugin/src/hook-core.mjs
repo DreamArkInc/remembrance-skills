@@ -373,14 +373,52 @@ export async function runQuery(prompt, options = {}) {
 const CONSUMPTION_MARKERS =
   /Remembrance auto-query context|mcp__[a-z0-9_]*remembrance[a-z0-9_]*__(query_skills|get_skill|get_resource)|\/api\/v1\/agent\/query\b/gi;
 
+const CONTRIBUTION_SUBMITTED_PATTERNS = [
+  /\brpub_[a-f0-9]{16,}\b/i,
+  /\bsubmitted (?:it|this|the lesson|the failure|the remembrance) (?:to|as) Remembrance\b/i,
+  /\bsubmit_remembrance\b/i,
+  /\bREMEMBRANCE_SUBMISSION_PAYLOAD\b/,
+];
+
+const HIGH_VALUE_LESSON_PATTERNS = [
+  {
+    pattern:
+      /\b(?:missed|missing|forgot(?:ten)?)\b.{0,80}\b(?:version bump|package version|plugin version|mcp package version)\b/i,
+    reason: "release versioning miss",
+  },
+  {
+    pattern:
+      /\b(?:publish-impacting|check:mcp-package-version|sync:versions|refresh:generated)\b/i,
+    reason: "publish or generated-artifact release lesson",
+  },
+  {
+    pattern:
+      /\b(?:regression|circleci failed|ci failed|deployment failed|deploy failed)\b/i,
+    reason: "failure or regression",
+  },
+  {
+    pattern:
+      /\bI (?:missed|forgot|overlooked|failed to|should have|should've|did not|didn't)\b/i,
+    reason: "self-correction or missed step",
+  },
+  {
+    pattern: /\b(?:you|the user) (?:caught|pointed out|had to ask)\b/i,
+    reason: "user-caught agent miss",
+  },
+];
+
 export function countRegistryConsumption(transcript) {
   const matches = String(transcript ?? "").match(CONSUMPTION_MARKERS);
   return matches ? matches.length : 0;
 }
 
-export function contributionReason() {
+export function contributionReason(signal = null) {
+  const signalLine = signal
+    ? `High-value lesson detected: ${signal}. Capture it unless you already submitted the lesson.`
+    : null;
   return [
     "Before you finish: you used Remembrance this session.",
+    signalLine,
     "If you learned something reusable — a lesson, a gotcha, a fix, a skill that helped, or a skill that was missing — contribute it now so the next agent inherits it instead of rediscovering it:",
     "• submit_remembrance — a redacted, evidence-backed lesson tied to the skill/resource you used (the fastest path: a prior submit_feedback response includes a ready next_step.submit_remembrance_payload you can post as-is).",
     "• submit_feedback — a quick useful / not-useful signal plus a one-line lesson.",
@@ -389,7 +427,35 @@ export function contributionReason() {
     "Redact secrets, private URLs, and proprietary content; submit redacted summaries and hashes, not raw traces.",
     "Attach evidence: reproduction detail in outcome.failure_modes, artifact hashes of redacted logs/diffs, or an attestation. Evidence-less public reports wait in unverified intake until corroborated; evidence-backed ones verify faster and rank higher.",
     "If nothing is genuinely worth capturing, just say so in one line — you will not be asked again this session.",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function detectHighValueLessonSignal(input) {
+  return detectHighValueLessonSignalInText(
+    input?.last_assistant_message ??
+      input?.lastAssistantMessage ??
+      input?.assistant_message ??
+      input?.message ??
+      "",
+  );
+}
+
+export function detectHighValueLessonSignalInText(text) {
+  const value = String(text ?? "");
+  if (!value.trim()) {
+    return null;
+  }
+  if (CONTRIBUTION_SUBMITTED_PATTERNS.some((pattern) => pattern.test(value))) {
+    return null;
+  }
+  for (const { pattern, reason } of HIGH_VALUE_LESSON_PATTERNS) {
+    if (pattern.test(value)) {
+      return reason;
+    }
+  }
+  return null;
 }
 
 // Pure decision function (unit-tested): given the current registry-use count and
@@ -408,18 +474,25 @@ export function decideStop(input, options = {}) {
   const sessionId = sessionIdFor(input);
   const readUse = options.readUseCount ?? readRegistryUseCount;
   const useCount = readUse(sessionId, env);
-  if (useCount === 0) {
+  const readPrompted = options.readPromptedCount ?? readPromptedCount;
+  const promptedCount = readPrompted(sessionId, env);
+  const highValueSignal = detectHighValueLessonSignal(input);
+  if (useCount === 0 && !highValueSignal) {
     return { allow: true, why: "registry_not_used" };
   }
-  const readPrompted = options.readPromptedCount ?? readPromptedCount;
-  if (useCount <= readPrompted(sessionId, env)) {
+  if (useCount <= promptedCount && !highValueSignal) {
     return { allow: true, why: "no_new_usage" };
+  }
+  if (highValueSignal && promptedCount > 0 && useCount <= promptedCount) {
+    return { allow: true, why: "high_value_lesson_already_prompted" };
   }
   return {
     allow: false,
-    why: "prompt_contribution",
-    reason: contributionReason(),
-    useCount,
+    why: highValueSignal
+      ? "prompt_high_value_lesson_contribution"
+      : "prompt_contribution",
+    reason: contributionReason(highValueSignal),
+    useCount: highValueSignal ? Math.max(useCount, promptedCount + 1, 1) : useCount,
   };
 }
 

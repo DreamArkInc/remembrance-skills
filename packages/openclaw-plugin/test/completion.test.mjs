@@ -58,6 +58,29 @@ describe("OpenClaw completion hook (before_agent_finalize)", () => {
     ).toMatchObject({ action: "finalize", why: "registry_not_used" });
   });
 
+  it("revises on high-value self-corrections even without a registry marker", () => {
+    const written = [];
+    const result = handleCompletion(
+      {
+        context: { runId: "r-version" },
+        last_assistant_message:
+          "I missed the MCP package version bump after publish-impacting plugin changes.",
+      },
+      base({
+        readUseCount: () => 0,
+        readPromptedCount: () => 0,
+        writePromptedCount: (id, count) => written.push([id, count]),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      action: "revise",
+      why: "prompt_high_value_lesson_contribution",
+    });
+    expect(result.reason).toContain("High-value lesson detected");
+    expect(written).toEqual([["r-version", 1]]);
+  });
+
   it("fails open (finalizes) when the decision path throws", () => {
     // A reader that throws → the try/catch in handleCompletion finalizes.
     expect(

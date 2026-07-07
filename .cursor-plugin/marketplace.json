@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Remembrance plugins, skills, and MCP tooling for AI coding agents.",
-    "version": "0.1.11"
+    "version": "0.1.12"
   },
   "plugins": [
     {

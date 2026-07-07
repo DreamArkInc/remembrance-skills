@@ -122,6 +122,32 @@ describe("Remembrance contribute-on-stop hook", () => {
     ).toMatchObject({ allow: true, why: "registry_not_used" });
   });
 
+  it("prompts on high-value self-corrections even without registry consumption", () => {
+    const transcript =
+      '{"role":"assistant","content":"I missed the MCP package version bump after publish-impacting plugin changes."}\n';
+    expect(
+      decideContribution(
+        { session_id: "s-version-miss", stop_hook_active: false },
+        { ...base, readCount: () => 0, readTranscript: () => transcript },
+      ),
+    ).toMatchObject({
+      allow: false,
+      why: "prompt_high_value_lesson_contribution",
+      consumption: 1,
+    });
+  });
+
+  it("does not prompt when the high-value lesson was already submitted", () => {
+    const transcript =
+      '{"role":"assistant","content":"I submitted it to Remembrance as rpub_769ded635ea04884a8."}\n';
+    expect(
+      decideContribution(
+        { session_id: "s-submitted", stop_hook_active: false },
+        { ...base, readCount: () => 0, readTranscript: () => transcript },
+      ),
+    ).toMatchObject({ allow: true, why: "registry_not_used" });
+  });
+
   it("fails open (allows stop) when the transcript can't be read", () => {
     expect(
       decideContribution(

@@ -45,4 +45,28 @@ describe("Cursor stop hook", () => {
 
     expect(result).toEqual({ allow: true, why: "no_new_usage" });
   });
+
+  it("nudges on a high-value self-correction even without a registry marker", () => {
+    const writePromptedCount = vi.fn();
+    const result = handleStop(
+      {
+        status: "completed",
+        loop_count: 0,
+        conversation_id: "conv_version",
+        last_assistant_message:
+          "I missed the MCP package version bump after publish-impacting plugin changes.",
+      },
+      {
+        env: {},
+        readUseCount: () => 0,
+        readPromptedCount: () => 0,
+        writePromptedCount,
+      },
+    );
+
+    expect(result.allow).toBe(false);
+    expect(result.why).toBe("prompt_high_value_lesson_contribution");
+    expect(result.output.followup_message).toContain("High-value lesson detected");
+    expect(writePromptedCount).toHaveBeenCalledWith("conv_version", 1, {});
+  });
 });

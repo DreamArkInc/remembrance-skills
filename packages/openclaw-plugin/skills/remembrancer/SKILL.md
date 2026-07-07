@@ -23,6 +23,7 @@ Also use this skill when:
 - The agent found a missing, stale, duplicated, unsafe, or weak skill.
 - The agent created or adapted a reusable workflow that should become a candidate skill.
 - The agent used a resource, site, API, MPP endpoint, MCP server, or tool and can report usefulness.
+- The agent catches its own mistake, the user catches one, CI/deploy fails, or a release/versioning miss was fixed and future agents should not repeat it.
 
 Do not directly mutate shared skills. Submit structured remembrances, suggestions, or candidate skills for verification.
 
@@ -43,10 +44,11 @@ Do not use this skill when:
 4. If the query returns a skill (other than `remembrancer`), consult `references/<slug>.md` for that skill's workflow before acting. See "Specialized skills" below for the bundle-vs-live decision rule.
 5. Use the selected skill or resource.
 6. After meaningful use, submit quick feedback; if the feedback response includes `next_step.submit_remembrance_payload`, submit that full remembrance when the lesson should become reusable evidence. If it includes `feedback_pattern_suggestion`, Remembrance has already created a reviewable candidate update from repeated feedback; do not submit a duplicate suggestion.
-7. If no suitable skill exists and the query response includes `no_results.propose_skill_idea_payload`, submit that ready-to-use skill idea payload after verifying it is accurate.
-8. If no suitable skill exists and you create a reusable method, submit a skill idea.
-9. If you discover a reusable API, MPP endpoint, MCP server, docs site, package, dataset, service, or tool, submit it as a resource.
-10. If a skill or resource seems duplicated, stale, unsafe, or incomplete, submit a suggestion instead of silently changing it.
+7. Before finishing, self-check for high-value failure lessons. If you caught your own mistake, the user caught one, CI/deploy failed, or you fixed a release/versioning miss, submit a `failure_report` remembrance even if no skill was used. Native plugins may prompt this with Stop hooks; raw MCP, REST, and skill-only installs must do it proactively.
+8. If no suitable skill exists and the query response includes `no_results.propose_skill_idea_payload`, submit that ready-to-use skill idea payload after verifying it is accurate.
+9. If no suitable skill exists and you create a reusable method, submit a skill idea.
+10. If you discover a reusable API, MPP endpoint, MCP server, docs site, package, dataset, service, or tool, submit it as a resource.
+11. If a skill or resource seems duplicated, stale, unsafe, or incomplete, submit a suggestion instead of silently changing it.
 
 ## Evolve, create new, or fork
 
@@ -239,6 +241,14 @@ Use the full remembrance shape when you have richer task/outcome/evidence data:
   }
 }
 ```
+
+For self-corrections and other reusable failures, use `type: "failure_report"`.
+Good triggers include: the agent admits it missed a required step, the user
+catches a mistake, CI/deploy fails, a smoke/probe exposes a regression, or a
+release/versioning miss is fixed. Put the reusable lesson in `lesson`, the
+concrete failure class in `outcome.failure_modes`, and use
+`suggested_update.kind` only when an existing skill or a new skill should change
+after review.
 
 Use `agent.provider: "claude"` for a skill-only Claude install. Use
 `evidence.attestation.provider: "other"` for independent REST TOFU

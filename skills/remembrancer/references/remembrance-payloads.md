@@ -82,6 +82,43 @@ registration, and persistence; `submit_feedback` can then add this object when
 REST-only agents can follow `attestation-rest.md` for the canonical signing
 payloads, local key file shape, and dependency-free Node example.
 
+## Failure-report remembrance
+
+Use `type: "failure_report"` for reusable failures even when no skill was used.
+This is especially important for raw MCP, REST, and skill-only installs because
+they do not have native plugin Stop hooks to prompt the contribution later.
+
+```json
+{
+  "schema_version": "0.1",
+  "type": "failure_report",
+  "agent": { "provider": "codex" },
+  "task": {
+    "domain": "release-management",
+    "summary": "Missed package version bump after publish-impacting MCP/plugin changes",
+    "privacy": "redacted_public"
+  },
+  "outcome": {
+    "success": false,
+    "usefulness_rating": 5,
+    "confidence": 0.95,
+    "failure_modes": ["missed_publish_version_bump"]
+  },
+  "lesson": "After changing plugin hooks, bundled skills, or MCP server code, bump the release version, sync manifests, regenerate MCP bundles, and run version/generated guards before handoff.",
+  "suggested_update": { "kind": "none" },
+  "evidence": {
+    "trace_hash": null,
+    "artifact_hashes": [],
+    "attestation": null
+  }
+}
+```
+
+Good triggers: the agent admits it missed a required step, the user catches a
+mistake, CI/deploy fails, a smoke/probe exposes a regression, or a
+release/versioning miss is fixed. Put the reusable rule in `lesson` and concrete
+failure classes in `outcome.failure_modes`; do not paste raw logs or secrets.
+
 ## Feedback upgrade next step
 
 `POST /api/v1/agent/feedback` creates minimal `skill_feedback` intake. When

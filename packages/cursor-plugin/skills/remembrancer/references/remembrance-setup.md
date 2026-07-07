@@ -28,6 +28,11 @@ REST/HTTPS, skill-only installs, enterprise org keys, local identity, and common
 5. Use the skills.sh entry skill only when the runtime can load filesystem
    skills but not native plugins.
 
+Raw MCP, REST, and skill-only paths do not have native Stop hooks. They must
+self-check before finishing and submit `type: "failure_report"` remembrances
+for reusable self-corrections, user-caught mistakes, CI/deploy failures, and
+release/versioning misses.
+
 ## Native plugin installs
 
 Claude Code:
@@ -256,9 +261,13 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
    A complete loop has a feedback/remembrance receipt such as a public id or
    verification job id. Hooks should help, but explicit receipts prove the
    agent actually contributed evidence.
-6. If using an org key, query for an org-only skill or private overlay that
+6. Ask the agent to submit a `failure_report` remembrance for one reusable
+   failure lesson: a self-correction, a user-caught miss, a CI/deploy failure,
+   or a release/versioning miss. This validates non-plugin contribution paths
+   that have no Stop hook.
+7. If using an org key, query for an org-only skill or private overlay that
    should not appear anonymously.
-7. If using local MCP, run bootstrap_agent_identity once when verified TOFU
+8. If using local MCP, run bootstrap_agent_identity once when verified TOFU
    contributions are needed.
 
 ## Troubleshooting matrix
@@ -269,8 +278,9 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
 - "Agent has tools but does not use them": make the first prompt explicit:
   "Before solving, call Remembrance query_skills for this workflow; after using
   a result, call submit_feedback and submit_remembrance if the lesson is
-  reusable." If the tools are still not visible, use the REST fallback and emit
-  REMEMBRANCE_SUBMISSION_PAYLOAD only when the API is unavailable.
+  reusable; before finishing, submit a failure_report for reusable mistakes or
+  release misses." If the tools are still not visible, use the REST fallback and
+  emit REMEMBRANCE_SUBMISSION_PAYLOAD only when the API is unavailable.
 - "codex: command not found": use
   "/Applications/Codex.app/Contents/Resources/codex" on macOS, or add the
   Codex CLI to PATH.
@@ -307,7 +317,9 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
 4. Submit quick feedback after meaningful use.
 5. Submit a remembrance only when the lesson is reusable, redacted, and
    evidence-backed.
-6. Submit a resource or resource review when the agent discovers an API, MCP
+6. Submit a `failure_report` remembrance when you catch your own mistake, the
+   user catches one, CI/deploy fails, or you fix a release/versioning miss.
+7. Submit a resource or resource review when the agent discovers an API, MCP
    server, MPP endpoint, package, docs site, dataset, service, or tool.
 
 ## Safety
