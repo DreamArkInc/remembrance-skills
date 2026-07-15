@@ -75,6 +75,10 @@ function attestationEvidenceHashForRemembrance(payload) {
   );
 }
 
+// ../core/src/agent-guidance.ts
+var REMEMBRANCE_QUERY_TOOL_DESCRIPTION = "Call before non-trivial service, API, tool, library, workflow, UI, review, test, security, or deployment work to find relevant Remembrance skills and resources. For short context-dependent follow-ups, infer the concrete task from the full conversation, preserve any plugin-supplied client_context.directive_id/runtime/trigger_reason, and query anyway. High matches should be fetched before custom work; possible and exploratory matches remain optional. Do not use for broad web search or one-off facts.";
+var REMEMBRANCE_MCP_SERVER_INSTRUCTIONS = "Remembrance is shared operational memory for agents. BEFORE non-trivial service/API/tool/library/workflow/UI/review/test/security/deployment work, call query_skills to reuse proven skills and resources instead of rediscovering them. A local repository change still qualifies when it involves a reusable workflow or lesson; skip only genuinely trivial throwaway edits and one-off facts. For short follow-ups such as 'fix these issues', 'continue', or 'try again', infer the concrete task, domain, and constraints from the full conversation and still call query_skills; do not wait for the current prompt to repeat trigger keywords. Treat match_tier as a decision aid: for a high match, call get_skill or get_resource before custom work and pass the returned query_id/result_id so the surfaced-to-fetch funnel closes; possible and exploratory matches are optional. The response includes approximate context tokens, verified uses, and risk so you can weigh the detour. Honor query_skills.skill_access on every response. When policy is org_only, use only returned organization skills and never substitute bundled or live public skill references; if an organization key is configured and the query is unavailable, fail closed because the policy cannot be confirmed. AFTER query_skills, call submit_query_feedback once with one complete set of explicit good/partial/poor judgments using the returned query_id and result_id values; leave unrated results neutral, and remember that a poor query match is not the same as a globally bad skill. Reuse the same organization or anonymous auth scope as the query. AFTER you actually use a skill or resource, close the post-use loop with submit_feedback (useful true/false plus a one-line lesson and the originating query_id/result_id; it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable, or propose_skill_idea only if nothing fit and you built a new workflow. When delegating, pass the selected slug, query_id, and result_id to the subagent; it should fetch that result or run its own full-context query. Before finishing any reusable task, self-check for a missed query. If you catch your own mistake, the user catches one, CI/deploy fails, a security issue appears, or you fix a release/versioning miss, submit a failure_report remembrance even if no skill was used; raw MCP clients have no plugin Stop hook to remind you later. Attach evidence (reproduction detail, artifact hashes, or an attestation); evidence-less public reports wait in unverified intake until corroborated. Redact secrets, private URLs, credentials, raw logs, and proprietary content; submit summaries and hashes, not raw traces.";
+
 // ../core/src/redaction.ts
 var SECRET_PATTERN_SPECS = [
   [
@@ -4165,6 +4169,9 @@ function boundedString(max) {
 function finiteNumber() {
   return external_exports.number().finite();
 }
+function canonicalStringArray(values) {
+  return [...values].sort().join("\0");
+}
 function boundedJsonRecord(maxBytes = MAX_JSON_FIELD_BYTES) {
   return external_exports.record(external_exports.unknown()).superRefine((value, ctx) => {
     const byteLength = new TextEncoder().encode(JSON.stringify(value)).length;
@@ -4378,11 +4385,215 @@ var queryTaskSchema = external_exports.object({
   summary: boundedString(MAX_LONG_TEXT_LENGTH),
   constraints: external_exports.array(boundedString(MAX_SHORT_TEXT_LENGTH)).max(40).default([])
 });
+var queryRuntimeSchema = external_exports.enum([
+  "codex",
+  "claude_code",
+  "cursor",
+  "openclaw",
+  "other",
+  "unknown"
+]);
+var queryDirectiveIdSchema = external_exports.string().regex(/^dir_[A-Za-z0-9_-]{16,80}$/);
+var queryClientContextSchema = external_exports.object({
+  surface: external_exports.enum(["plugin_hook", "mcp", "rest", "unknown"]).default("unknown"),
+  runtime: queryRuntimeSchema.optional(),
+  trigger_reason: boundedString(MAX_SHORT_TEXT_LENGTH).optional(),
+  directive_id: queryDirectiveIdSchema.optional()
+}).strict();
+var reasoningEffortSchema = external_exports.enum([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "max",
+  "unknown"
+]);
+var economicsTaskStageSchema = external_exports.enum([
+  "planning",
+  "implementation",
+  "debugging",
+  "review",
+  "testing",
+  "deployment",
+  "research",
+  "other",
+  "unknown"
+]);
+var economicsTaskComplexitySchema = external_exports.enum([
+  "low",
+  "medium",
+  "high",
+  "unknown"
+]);
+var economicsMeasurementCapabilitySchema = external_exports.enum([
+  "token_usage",
+  "cache_usage",
+  "reasoning_tokens",
+  "latency",
+  "provider_response_id",
+  "observed_model_revision"
+]);
+var boundedScopeCountSchema = external_exports.number().int().min(0).max(1e5);
+var economicsContextSchema = external_exports.object({
+  runtime: queryRuntimeSchema,
+  runtime_version: boundedString(MAX_SHORT_TEXT_LENGTH).optional(),
+  requested_model: boundedString(MAX_SHORT_TEXT_LENGTH).optional(),
+  observed_model_revision: boundedString(MAX_SHORT_TEXT_LENGTH).optional(),
+  reasoning_effort: reasoningEffortSchema.default("unknown"),
+  task_stage: economicsTaskStageSchema.default("unknown"),
+  complexity: economicsTaskComplexitySchema.default("unknown"),
+  scope: external_exports.object({
+    file_count: boundedScopeCountSchema.optional(),
+    service_count: boundedScopeCountSchema.optional(),
+    artifact_count: boundedScopeCountSchema.optional(),
+    expected_step_count: boundedScopeCountSchema.optional()
+  }).strict().default({}),
+  measurement_capabilities: external_exports.array(economicsMeasurementCapabilitySchema).max(economicsMeasurementCapabilitySchema.options.length).default([])
+}).strict();
+var agentDirectiveShownEventSchema = external_exports.object({
+  event: external_exports.literal("shown"),
+  directive_id: queryDirectiveIdSchema,
+  surface: external_exports.literal("plugin_hook"),
+  runtime: queryRuntimeSchema,
+  trigger_reason: boundedString(MAX_SHORT_TEXT_LENGTH)
+}).strict();
+var agentDirectiveFollowedEventSchema = external_exports.object({
+  event: external_exports.literal("followed"),
+  directive_id: queryDirectiveIdSchema,
+  query_id: boundedString(MAX_SHORT_TEXT_LENGTH)
+}).strict();
+var agentDirectiveEventRequestSchema = external_exports.discriminatedUnion("event", [
+  agentDirectiveShownEventSchema,
+  agentDirectiveFollowedEventSchema
+]);
+var MAX_AGENT_QUERY_RESULTS_PER_TYPE = 20;
 var agentQueryRequestSchema = external_exports.object({
   agent: agentSchema.optional(),
   task: queryTaskSchema,
-  limit: external_exports.number().int().min(1).max(20).default(5)
+  // Caller-reported analytics only. This never contributes identity, trust,
+  // authorization, or ranking weight; transports overwrite `surface` when
+  // they know it authoritatively.
+  client_context: queryClientContextSchema.optional(),
+  // Privacy-bounded value measurement context. Prompts, paths, URLs, source,
+  // transcripts, and outputs are intentionally not representable here.
+  economics_context: economicsContextSchema.optional(),
+  limit: external_exports.number().int().min(1).max(MAX_AGENT_QUERY_RESULTS_PER_TYPE).default(5)
 });
+var tokenUsageSchema = external_exports.object({
+  uncached_input_tokens: external_exports.number().int().min(0).max(1e7),
+  cache_read_tokens: external_exports.number().int().min(0).max(1e7).default(0),
+  cache_write_tokens: external_exports.number().int().min(0).max(1e7).default(0),
+  visible_output_tokens: external_exports.number().int().min(0).max(1e7),
+  reasoning_tokens: external_exports.number().int().min(0).max(1e7).default(0)
+}).strict();
+var economicsMeasurementSourceSchema = external_exports.enum([
+  "provider_metered",
+  "gateway_metered",
+  "plugin_observed",
+  "agent_reported",
+  "controlled_eval"
+]);
+var economicsMeteringReferenceSchema = external_exports.object({
+  adapter: external_exports.literal("vercel_ai_gateway"),
+  generation_ids: external_exports.array(
+    boundedString(MAX_SHORT_TEXT_LENGTH).regex(
+      /^gen_[A-Za-z0-9]+$/,
+      "Vercel generation identifiers must use the gen_ format"
+    )
+  ).min(1).max(8)
+}).strict().superRefine((value, ctx) => {
+  if (new Set(value.generation_ids).size !== value.generation_ids.length) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "Each generation_id may appear only once",
+      path: ["generation_ids"]
+    });
+  }
+});
+var taskOutcomeStatusSchema = external_exports.enum(["completed", "abandoned"]);
+var economicsSessionProviderSchema = attestationProviderSchema.exclude([
+  "org_api_key"
+]);
+var economicsOutcomeAttestationSchema = external_exports.object({
+  version: external_exports.literal("v2").default("v2"),
+  provider: economicsSessionProviderSchema,
+  challenge_id: boundedString(MAX_SHORT_TEXT_LENGTH),
+  key_id: boundedString(MAX_SHORT_TEXT_LENGTH),
+  algorithm: external_exports.literal("ed25519").default("ed25519"),
+  issued_at: external_exports.string().datetime(),
+  expires_at: external_exports.string().datetime(),
+  signature: boundedString(MAX_LONG_TEXT_LENGTH)
+}).strict();
+var agentTaskOutcomeRequestSchema = external_exports.object({
+  query_id: boundedString(MAX_SHORT_TEXT_LENGTH),
+  result_ids: external_exports.array(boundedString(MAX_SHORT_TEXT_LENGTH)).max(3).default([]),
+  estimate_id: boundedString(MAX_SHORT_TEXT_LENGTH).nullable().optional(),
+  bundle_id: boundedString(MAX_SHORT_TEXT_LENGTH).nullable().optional(),
+  status: taskOutcomeStatusSchema,
+  success: external_exports.boolean().nullable().optional(),
+  latency_ms: external_exports.number().int().min(0).max(864e5).nullable().optional(),
+  token_usage: tokenUsageSchema.nullable().optional(),
+  observed_model_revision: boundedString(MAX_SHORT_TEXT_LENGTH).nullable().optional(),
+  reasoning_effort: reasoningEffortSchema.optional(),
+  provider_response_ids: external_exports.array(boundedString(MAX_SHORT_TEXT_LENGTH)).max(8).default([]),
+  metering_reference: economicsMeteringReferenceSchema.nullable().optional(),
+  measurement_source: economicsMeasurementSourceSchema,
+  idempotency_key: boundedString(MAX_SHORT_TEXT_LENGTH),
+  attestation: economicsOutcomeAttestationSchema.nullable().optional()
+}).strict().superRefine((value, ctx) => {
+  if ((value.measurement_source === "provider_metered" || value.measurement_source === "gateway_metered") && value.provider_response_ids.length === 0 && !value.metering_reference) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "Metered outcomes require a provider response identifier",
+      path: ["provider_response_ids"]
+    });
+  }
+  if (value.metering_reference && value.provider_response_ids.length > 0 && canonicalStringArray(value.metering_reference.generation_ids) !== canonicalStringArray(value.provider_response_ids)) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "metering_reference generation_ids must match provider_response_ids when both are supplied",
+      path: ["metering_reference", "generation_ids"]
+    });
+  }
+  if (new Set(value.result_ids).size !== value.result_ids.length) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "Each result_id may appear only once",
+      path: ["result_ids"]
+    });
+  }
+});
+var economicsSessionChallengeSchema = external_exports.object({
+  action: external_exports.literal("challenge"),
+  provider: economicsSessionProviderSchema,
+  key_id: boundedString(MAX_SHORT_TEXT_LENGTH)
+}).strict();
+var economicsSessionExchangeSchema = external_exports.object({
+  action: external_exports.literal("exchange"),
+  provider: economicsSessionProviderSchema,
+  key_id: boundedString(MAX_SHORT_TEXT_LENGTH),
+  challenge_id: boundedString(MAX_SHORT_TEXT_LENGTH),
+  signature: boundedString(MAX_LONG_TEXT_LENGTH)
+}).strict();
+var economicsSessionRequestSchema = external_exports.discriminatedUnion("action", [
+  economicsSessionChallengeSchema,
+  economicsSessionExchangeSchema
+]);
+var agentPrincipalRegistrationRequestSchema = external_exports.object({
+  display_name: boundedString(MAX_SHORT_TEXT_LENGTH),
+  provider: agentProviderSchema,
+  runtime_version: boundedString(MAX_SHORT_TEXT_LENGTH).nullable().optional(),
+  parent_principal_id: boundedString(MAX_SHORT_TEXT_LENGTH).nullable().optional()
+}).strict();
+var agentPrincipalUpdateRequestSchema = external_exports.object({
+  principal_id: boundedString(MAX_SHORT_TEXT_LENGTH),
+  action: external_exports.enum(["deactivate", "reactivate"])
+}).strict();
+var agentPrincipalKeyBindingRequestSchema = external_exports.object({
+  principal_id: boundedString(MAX_SHORT_TEXT_LENGTH),
+  api_key_id: boundedString(MAX_SHORT_TEXT_LENGTH)
+}).strict();
 var remembranceTaskSchema = external_exports.object({
   domain: boundedString(MAX_SHORT_TEXT_LENGTH),
   summary: boundedString(MAX_LONG_TEXT_LENGTH),
@@ -4622,14 +4833,84 @@ var attestationKeyRegistrationRequestSchema = external_exports.object({
     });
   }
 });
-var agentFeedbackRequestSchema = external_exports.object({
+var agentFeedbackRequestBaseSchema = external_exports.object({
   skill_slug: boundedString(MAX_SHORT_TEXT_LENGTH),
+  query_id: boundedString(MAX_SHORT_TEXT_LENGTH).optional(),
+  result_id: boundedString(MAX_SHORT_TEXT_LENGTH).optional(),
   useful: external_exports.boolean(),
   lesson: external_exports.string().max(MAX_LONG_TEXT_LENGTH).nullable().optional(),
   rating: external_exports.number().int().min(1).max(5).nullable().optional(),
   agent: agentSchema.optional(),
   idempotency_key: boundedString(MAX_SHORT_TEXT_LENGTH).optional(),
   evidence: evidenceSchema.default({ artifact_hashes: [] })
+});
+var agentFeedbackRequestSchema = agentFeedbackRequestBaseSchema.superRefine((value, ctx) => {
+  if (Boolean(value.query_id) !== Boolean(value.result_id)) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "query_id and result_id must be supplied together",
+      path: value.query_id ? ["result_id"] : ["query_id"]
+    });
+  }
+});
+var queryResultFitSchema = external_exports.enum(["good", "partial", "poor"]);
+var queryFeedbackReasonSchema = external_exports.enum([
+  "wrong_domain",
+  "wrong_task",
+  "constraint_conflict",
+  "wrong_task_stage",
+  "too_generic",
+  "too_specific",
+  "duplicate",
+  "stale_metadata",
+  "missing_capability",
+  "other"
+]);
+var agentQueryFeedbackResultSchema = external_exports.object({
+  result_id: boundedString(MAX_SHORT_TEXT_LENGTH),
+  fit: queryResultFitSchema,
+  reasons: external_exports.array(queryFeedbackReasonSchema).max(8).default([]),
+  note: external_exports.string().max(1e3).transform((value) => value.trim()).nullable().optional()
+}).strict().superRefine((value, ctx) => {
+  if (value.fit === "poor" && value.reasons.length === 0) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "Poor matches require at least one reason",
+      path: ["reasons"]
+    });
+  }
+});
+var agentQueryFeedbackRequestSchema = external_exports.object({
+  query_id: boundedString(MAX_SHORT_TEXT_LENGTH),
+  overall_fit: external_exports.enum(["good", "partial", "none"]),
+  results: external_exports.array(agentQueryFeedbackResultSchema).max(20).default([]),
+  missing_capability: external_exports.string().max(2e3).transform((value) => value.trim()).nullable().optional(),
+  agent: agentSchema.optional(),
+  idempotency_key: boundedString(MAX_SHORT_TEXT_LENGTH).optional(),
+  evidence: evidenceSchema.default({ artifact_hashes: [] })
+}).strict().superRefine((value, ctx) => {
+  if (value.results.length === 0 && value.overall_fit !== "none") {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "At least one result verdict is required unless nothing fit",
+      path: ["results"]
+    });
+  }
+  const resultIds = value.results.map((result) => result.result_id);
+  if (new Set(resultIds).size !== resultIds.length) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "Each result_id may appear only once",
+      path: ["results"]
+    });
+  }
+  if (value.overall_fit === "none" && value.results.some((result) => result.fit !== "poor")) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "When nothing fit, every rated result must be marked poor",
+      path: ["results"]
+    });
+  }
 });
 var adminReviewActionValueSchema = external_exports.enum([
   ...verifierActionSchema.options,
@@ -4644,6 +4925,183 @@ var adminReviewActionSchema = external_exports.object({
 // ../core/src/seed.ts
 var siteUrl = "https://remembrance.dev";
 var feedbackUrl = `${siteUrl}/api/v1/agent/remembrances`;
+
+// ../core/src/skill-value.ts
+import {
+  createPublicKey,
+  verify
+} from "node:crypto";
+var tokenSavingsRangeSchema = external_exports.object({
+  low: external_exports.number().int(),
+  median: external_exports.number().int(),
+  high: external_exports.number().int()
+}).strict();
+var valueProofScopeSchema = external_exports.object({
+  file_count: external_exports.number().int().min(0).max(1e5).optional(),
+  service_count: external_exports.number().int().min(0).max(1e5).optional(),
+  artifact_count: external_exports.number().int().min(0).max(1e5).optional(),
+  expected_step_count: external_exports.number().int().min(0).max(1e5).optional()
+}).strict();
+var valueProofKeyIdSchema = external_exports.string().min(1).max(512);
+var VALUE_PROOF_ISSUED_AT_CLOCK_SKEW_MS = 5 * 60 * 1e3;
+var publicValueProofPayloadSchema = external_exports.object({
+  proof_id: external_exports.string().min(1).max(512),
+  proof_scope: external_exports.enum(["public", "organization"]),
+  target_version_ids: external_exports.array(external_exports.string().min(1).max(512)).min(1).max(3),
+  target_slugs: external_exports.array(external_exports.string().min(1).max(512)).min(1).max(3),
+  runtime: external_exports.string().min(1).max(512),
+  runtime_version: external_exports.string().min(1).max(512),
+  requested_model: external_exports.string().min(1).max(512),
+  model_revision: external_exports.string().min(1).max(512),
+  reasoning_effort: external_exports.string().min(1).max(128),
+  task_domain: external_exports.string().min(1).max(512),
+  task_stage: economicsTaskStageSchema,
+  complexity: economicsTaskComplexitySchema,
+  scope: valueProofScopeSchema,
+  context_tokens: external_exports.number().int().nonnegative(),
+  estimated_saved: tokenSavingsRangeSchema,
+  confidence_interval_90: external_exports.object({ lower: external_exports.number().int(), upper: external_exports.number().int() }).strict(),
+  success_rate_delta: external_exports.number().finite().nullable(),
+  latency_delta_ms: external_exports.number().finite().nullable(),
+  evidence_count: external_exports.number().int().nonnegative(),
+  scenario_count: external_exports.number().int().nonnegative(),
+  proof_grade: external_exports.enum(["A", "B"]),
+  estimator_version: external_exports.string().min(1).max(512),
+  methodology: external_exports.enum(["paired_metered", "observed_metered"]),
+  evidence_digest: external_exports.string().min(1).max(512),
+  issued_at: external_exports.string().datetime(),
+  calibrated_at: external_exports.string().datetime(),
+  expires_at: external_exports.string().datetime()
+}).strict().superRefine((payload, context) => {
+  if (payload.target_version_ids.length !== payload.target_slugs.length) {
+    context.addIssue({
+      code: "custom",
+      message: "Value proof targets are inconsistent.",
+      path: ["target_slugs"]
+    });
+  }
+  if (payload.estimated_saved.low > payload.estimated_saved.median || payload.estimated_saved.median > payload.estimated_saved.high) {
+    context.addIssue({
+      code: "custom",
+      message: "Value proof savings range is not ordered.",
+      path: ["estimated_saved"]
+    });
+  }
+  if (payload.confidence_interval_90.lower > payload.confidence_interval_90.upper) {
+    context.addIssue({
+      code: "custom",
+      message: "Value proof confidence interval is not ordered.",
+      path: ["confidence_interval_90"]
+    });
+  }
+  const calibratedAt = Date.parse(payload.calibrated_at);
+  const issuedAt = Date.parse(payload.issued_at);
+  const expiresAt = Date.parse(payload.expires_at);
+  if (calibratedAt > issuedAt || issuedAt >= expiresAt) {
+    context.addIssue({
+      code: "custom",
+      message: "Value proof timestamps are inconsistent.",
+      path: ["issued_at"]
+    });
+  }
+});
+var signedValueProofResponseSchema = external_exports.object({
+  payload: publicValueProofPayloadSchema,
+  signature: external_exports.string().regex(/^[A-Za-z0-9_-]+$/).max(512),
+  key_id: valueProofKeyIdSchema,
+  algorithm: external_exports.literal("Ed25519")
+}).strict();
+var valueProofPublicKeySchema = external_exports.object({
+  kid: valueProofKeyIdSchema,
+  kty: external_exports.literal("OKP"),
+  crv: external_exports.literal("Ed25519"),
+  x: external_exports.string().min(1).max(512),
+  alg: external_exports.literal("EdDSA").optional(),
+  use: external_exports.literal("sig").optional()
+}).passthrough();
+var valueProofPublicKeySetSchema = external_exports.object({
+  keys: external_exports.array(valueProofPublicKeySchema).max(32)
+}).strict();
+var ValueProofVerificationError = class extends Error {
+  constructor(message, code) {
+    super(message);
+    this.code = code;
+    this.name = "ValueProofVerificationError";
+  }
+  code;
+};
+function verifySignedValueProof(proofInput, keySetInput, now = /* @__PURE__ */ new Date()) {
+  let proof;
+  let keySet;
+  try {
+    proof = signedValueProofResponseSchema.parse(proofInput);
+    keySet = valueProofPublicKeySetSchema.parse(keySetInput);
+  } catch {
+    throw new ValueProofVerificationError(
+      "Value proof or verification key set is malformed.",
+      "malformed"
+    );
+  }
+  const issuedAt = Date.parse(proof.payload.issued_at);
+  const expiresAt = Date.parse(proof.payload.expires_at);
+  if (issuedAt > now.getTime() + VALUE_PROOF_ISSUED_AT_CLOCK_SKEW_MS || expiresAt <= now.getTime()) {
+    throw new ValueProofVerificationError(
+      "Value proof is expired or not yet valid.",
+      "not_current"
+    );
+  }
+  const jwk = keySet.keys.find((candidate) => candidate.kid === proof.key_id);
+  if (!jwk) {
+    throw new ValueProofVerificationError(
+      `Value proof verification key is unavailable: ${proof.key_id}`,
+      "key_unavailable"
+    );
+  }
+  if (Buffer.from(jwk.x, "base64url").byteLength !== 32) {
+    throw new ValueProofVerificationError(
+      "Value proof verification key is invalid.",
+      "invalid_key"
+    );
+  }
+  const signature = Buffer.from(proof.signature, "base64url");
+  if (signature.byteLength !== 64) {
+    throw new ValueProofVerificationError(
+      "Value proof signature is malformed.",
+      "malformed"
+    );
+  }
+  const verified = verify(
+    null,
+    Buffer.from(canonicalJson(proof.payload)),
+    createPublicKey({
+      key: { kty: "OKP", crv: "Ed25519", x: jwk.x },
+      format: "jwk"
+    }),
+    signature
+  );
+  if (!verified) {
+    throw new ValueProofVerificationError(
+      "Value proof signature verification failed.",
+      "invalid_signature"
+    );
+  }
+  return {
+    ...proof,
+    signature_verified: true,
+    verification_key_id: proof.key_id
+  };
+}
+async function verifySignedValueProofWithKeyRefresh(proofInput, loadKeySet) {
+  const keySet = await loadKeySet(false);
+  try {
+    return verifySignedValueProof(proofInput, keySet);
+  } catch (error) {
+    if (error.code !== "key_unavailable") {
+      throw error;
+    }
+  }
+  return verifySignedValueProof(proofInput, await loadKeySet(true));
+}
 
 // ../core/src/verifier.ts
 var duplicateCandidateSchema = external_exports.object({
@@ -6053,7 +6511,12 @@ var zodToJsonSchema = (schema, options) => {
 
 // src/tool-definitions.ts
 var getBySlugSchema = external_exports.object({
-  slug: external_exports.string().min(1).describe("Public skill or resource slug.")
+  slug: external_exports.string().min(1).describe("Public skill or resource slug."),
+  query_id: external_exports.string().min(1).optional().describe("Originating query_id, when this result came from query_skills."),
+  result_id: external_exports.string().min(1).optional().describe("Originating result_id, when available.")
+});
+var getValueProofSchema = external_exports.object({
+  id: external_exports.string().min(1).describe("Value proof id returned with potential_savings.")
 });
 var bootstrapAgentIdentitySchema = external_exports.object({
   subject: external_exports.string().min(1).describe("Stable agent identity, for example codex:user@example.com."),
@@ -6064,10 +6527,18 @@ var bootstrapAgentIdentitySchema = external_exports.object({
   key_path: external_exports.string().min(1).optional().describe("Override key file path. Defaults to XDG config."),
   force_rotate: external_exports.boolean().default(false).describe("Generate and register a new key even when one exists.")
 });
-var feedbackToolSchema = agentFeedbackRequestSchema.extend({
+var feedbackToolSchema = agentFeedbackRequestBaseSchema.extend({
   verified_attestation: external_exports.boolean().default(false).describe(
     "When true, sign the feedback with the local TOFU key if present."
   )
+}).superRefine((value, ctx) => {
+  if (Boolean(value.query_id) !== Boolean(value.result_id)) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "query_id and result_id must be supplied together",
+      path: value.query_id ? ["result_id"] : ["query_id"]
+    });
+  }
 });
 var remembranceToolSchema = remembrancePayloadSchema.extend({
   verified_attestation: external_exports.boolean().default(false).describe(
@@ -6077,20 +6548,20 @@ var remembranceToolSchema = remembrancePayloadSchema.extend({
 var toolDefinitions = [
   tool(
     "query_skills",
-    "Find relevant Remembrance skills and resources for a task. Do not use for broad web search.",
+    REMEMBRANCE_QUERY_TOOL_DESCRIPTION,
     "/api/v1/agent/query",
     agentQueryRequestSchema
   ),
   tool(
     "get_skill",
-    "Fetch a known public skill by slug after query_skills returns it. Do not guess private or inactive slugs.",
+    "Fetch a known skill by slug after query_skills returns it. Pass query_id and result_id from that response so Remembrance can measure whether surfaced guidance was opened. Do not guess private or inactive slugs.",
     "/api/v1/skills/{slug}",
     getBySlugSchema,
     "GET"
   ),
   tool(
     "get_resource",
-    "Fetch a known public resource by slug after query_skills returns it. Do not use for arbitrary URL fetching.",
+    "Fetch a known resource by slug after query_skills returns it. Pass query_id and result_id from that response so Remembrance can measure whether surfaced guidance was opened. Do not use for arbitrary URL fetching.",
     "/api/v1/resources/{slug}",
     getBySlugSchema,
     "GET"
@@ -6103,9 +6574,28 @@ var toolDefinitions = [
   ),
   tool(
     "submit_feedback",
-    "Submit minimal skill feedback. If the response includes next_step.submit_remembrance_payload, call submit_remembrance to promote substantive feedback to rich evidence. For self-corrections or CI/deploy/release misses, use submit_remembrance with type failure_report.",
+    "Submit minimal post-use skill feedback. When the skill came from query_skills, pass its query_id and result_id to close the surfaced-to-use funnel. If the response includes next_step.submit_remembrance_payload, call submit_remembrance to promote substantive feedback to rich evidence. For self-corrections or CI/deploy/release misses, use submit_remembrance with type failure_report.",
     "/api/v1/agent/feedback",
     feedbackToolSchema
+  ),
+  tool(
+    "submit_query_feedback",
+    "Submit one complete set of explicit good, partial, or poor judgments for result_id values from one query_skills call, using the same auth scope as that query. Unrated results stay neutral. An identical retry is safe, but changed later judgments conflict. Same-query better/worse labels can train retrieval without changing global skill usefulness; use submit_feedback only after actually using a skill.",
+    "/api/v1/agent/query-feedback",
+    agentQueryFeedbackRequestSchema
+  ),
+  tool(
+    "report_task_outcome",
+    "Report completion or abandonment for a query. Remembrance accepts one terminal outcome per query; retry the same report with the same idempotency_key, and do not submit a different later outcome. Include only result_ids listed in task_outcome.eligible_result_ids; each result and bundle also carries task_outcome_eligible. When two or three selected skills exactly match a returned skill_bundles entry, include its bundle_id for value attribution; other combinations are accepted as funnel telemetry but do not train a skill or bundle cohort. Include bounded token totals only when the runtime exposes them. For Vercel AI Gateway work, include metering_reference.adapter=vercel_ai_gateway and every gen_ generation ID used by the task (maximum eight); Remembrance retrieves authoritative usage asynchronously, and caller totals never establish proof trust. Never send prompts, outputs, source paths, private URLs, transcripts, or proprietary task content. Completion without token counts still closes the funnel but cannot establish metered savings proof.",
+    "/api/v1/agent/task-outcomes",
+    agentTaskOutcomeRequestSchema
+  ),
+  tool(
+    "get_value_proof",
+    "Fetch and cryptographically verify the token-only signed proof referenced by a qualified potential_savings estimate. Successful results include signature_verified=true. Public-skill proofs are anonymous reads; organization-skill proofs require an active query-capable API key from the same organization, but not necessarily the key used for the original query. Proof payloads contain no organization identity, task identity, price, credit, subscription, or payment data.",
+    "/api/v1/value-proofs/{id}",
+    getValueProofSchema,
+    "GET"
   ),
   tool(
     "submit_remembrance",
@@ -6205,10 +6695,12 @@ function resolveApiKey() {
   return fromFile ? String(fromFile) : "";
 }
 var apiBase = (process.env.REMEMBRANCE_API_URL || readRemembranceConfig().apiUrl || "https://remembrance.dev").replace(/\/$/, "");
-var SERVER_VERSION = true ? "0.1.13" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.27" : "0.0.0-dev";
 var tools = toolDefinitions;
 var inputBuffer = Buffer.alloc(0);
 var clientFraming = "ndjson";
+var cachedEconomicsSession = null;
+var cachedValueProofKeys = null;
 process.stdin.on("data", (chunk) => {
   inputBuffer = Buffer.concat([inputBuffer, chunk]);
   processMessages().catch((error) => {
@@ -6294,7 +6786,6 @@ async function handleRequest(request) {
   }
   writeResponse(response.id, response.result, response.error);
 }
-var SERVER_INSTRUCTIONS = "Remembrance is shared operational memory for agents. BEFORE non-trivial service/API/tool/library/deployment work, call query_skills to reuse proven skills and resources instead of rediscovering them. AFTER you use a skill or resource, close the loop so the next agent inherits what you learned: call submit_feedback (useful true/false + a one-line lesson \u2014 it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable, or propose_skill_idea only if nothing fit and you built a new workflow. If you catch your own mistake, the user catches one, CI/deploy fails, or you fix a release/versioning miss, submit a failure_report remembrance even if no skill was used; raw MCP clients have no plugin Stop hook to remind you later. Attach evidence (reproduction detail, artifact hashes, or an attestation) \u2014 evidence-less public reports wait in unverified intake until corroborated. Redact secrets, private URLs, credentials, and proprietary content; submit summaries and hashes, not raw traces.";
 async function dispatchJsonRpcRequest(request) {
   if (request.method === "initialize") {
     return {
@@ -6306,7 +6797,7 @@ async function dispatchJsonRpcRequest(request) {
           name: "@remembrance-ai/mcp-server",
           version: SERVER_VERSION
         },
-        instructions: SERVER_INSTRUCTIONS
+        instructions: REMEMBRANCE_MCP_SERVER_INSTRUCTIONS
       }
     };
   }
@@ -6596,13 +7087,28 @@ async function readIdentity(path = identityPath()) {
   return JSON.parse(await readFile(path, "utf8"));
 }
 async function callRemembrance(definition, rawArguments) {
-  const payload = definition.schema.parse(rawArguments ?? {});
+  const parsed = definition.schema.parse(rawArguments ?? {});
+  const payload = definition.name === "query_skills" ? {
+    ...parsed,
+    client_context: {
+      ...parsed.client_context ?? {},
+      surface: "mcp"
+    }
+  } : parsed;
   const headers = {
     "content-type": "application/json"
   };
   const apiKey = resolveApiKey();
   if (apiKey) {
     headers["x-remembrance-api-key"] = apiKey;
+  }
+  if (definition.name !== "bootstrap_agent_identity") {
+    const economicsSession = await ensureEconomicsSessionToken().catch(
+      () => null
+    );
+    if (economicsSession) {
+      headers["x-remembrance-economics-session"] = economicsSession;
+    }
   }
   const endpoint = endpointFor(definition, payload);
   const controller = new AbortController();
@@ -6627,14 +7133,53 @@ async function callRemembrance(definition, rawArguments) {
   const body = await response.json().catch(async () => ({
     text: await response.text().catch(() => "")
   }));
+  const verifiedBody = definition.name === "get_value_proof" && response.ok ? await verifySignedValueProofWithKeyRefresh(body, fetchValueProofKeySet) : body;
   return {
     ok: response.ok,
     status: response.status,
     idempotency_status: response.headers.get("idempotency-status"),
     rate_limit_remaining: response.headers.get("x-ratelimit-remaining"),
     etag: response.headers.get("etag"),
-    body
+    body: verifiedBody
   };
+}
+async function fetchValueProofKeySet(forceRefresh) {
+  const now = Date.now();
+  if (!forceRefresh && cachedValueProofKeys && cachedValueProofKeys.expiresAt > now) {
+    return cachedValueProofKeys.value;
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), apiTimeoutMs());
+  try {
+    const response = await fetch(
+      `${apiBase}/.well-known/remembrance-value-proof-keys.json`,
+      {
+        headers: { accept: "application/json" },
+        signal: controller.signal
+      }
+    );
+    if (!response.ok) {
+      throw new Error(
+        `Value proof verification keys are unavailable (${response.status}).`
+      );
+    }
+    const value = await response.json();
+    cachedValueProofKeys = {
+      value,
+      expiresAt: now + valueProofKeyCacheTtlMs(response.headers)
+    };
+    return value;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+function valueProofKeyCacheTtlMs(headers) {
+  const maxAge = headers.get("cache-control")?.match(/(?:^|,)\s*max-age=(\d+)/i)?.[1];
+  const seconds = Number(maxAge);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.min(300, Math.trunc(seconds)) * 1e3 : 3e5;
+}
+function resetValueProofKeyCacheForTests() {
+  cachedValueProofKeys = null;
 }
 function apiTimeoutMs() {
   const parsed = Number.parseInt(
@@ -6647,10 +7192,67 @@ function endpointFor(definition, payload) {
   if (!definition.endpoint) {
     throw new Error(`Tool ${definition.name} has no HTTP endpoint.`);
   }
-  return definition.endpoint.replaceAll(
-    "{slug}",
-    encodeURIComponent(String(payload.slug ?? ""))
-  );
+  const endpoint = definition.endpoint.replaceAll("{slug}", encodeURIComponent(String(payload.slug ?? ""))).replaceAll("{id}", encodeURIComponent(String(payload.id ?? "")));
+  if (definition.method !== "GET") return endpoint;
+  const params = new URLSearchParams();
+  for (const key of ["query_id", "result_id"]) {
+    if (typeof payload[key] === "string" && payload[key]) {
+      params.set(key, payload[key]);
+    }
+  }
+  const query = params.toString();
+  return query ? `${endpoint}?${query}` : endpoint;
+}
+async function ensureEconomicsSessionToken() {
+  const identity = await readIdentity();
+  if (!identity) return null;
+  const identityKey = `${identity.provider}:${identity.key_id}`;
+  if (cachedEconomicsSession && cachedEconomicsSession.identityKey === identityKey && cachedEconomicsSession.expiresAt > Date.now() + 6e4) {
+    return cachedEconomicsSession.token;
+  }
+  const challengeResponse = await directEconomicsSessionRequest({
+    action: "challenge",
+    provider: identity.provider,
+    key_id: identity.key_id
+  });
+  const challenge = challengeResponse;
+  if (!challenge.challenge_id || !challenge.signing_payload) return null;
+  const signature = signPayload(
+    null,
+    Buffer.from(challenge.signing_payload),
+    createPrivateKey(identity.private_key)
+  ).toString("base64url");
+  const exchangeResponse = await directEconomicsSessionRequest({
+    action: "exchange",
+    provider: identity.provider,
+    key_id: identity.key_id,
+    challenge_id: challenge.challenge_id,
+    signature
+  });
+  const exchange = exchangeResponse;
+  if (!exchange.session_token || !exchange.expires_at) return null;
+  cachedEconomicsSession = {
+    token: exchange.session_token,
+    expiresAt: new Date(exchange.expires_at).getTime(),
+    identityKey
+  };
+  return cachedEconomicsSession.token;
+}
+async function directEconomicsSessionRequest(payload) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), apiTimeoutMs());
+  try {
+    const response = await fetch(`${apiBase}/api/v1/agent/economics/session`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    if (!response.ok) return null;
+    return response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 function mustFindTool(name) {
   const tool2 = tools.find((item) => item.name === name);
@@ -6702,5 +7304,6 @@ export {
   callTool,
   dispatchJsonRpcRequest,
   formatJsonRpcResponse,
-  readJsonRpcMessages
+  readJsonRpcMessages,
+  resetValueProofKeyCacheForTests
 };

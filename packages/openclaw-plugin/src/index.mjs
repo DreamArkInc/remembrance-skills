@@ -8,21 +8,28 @@
 // priority order; `event.context` (aka ctx) carries sessionId/runId/pluginConfig.
 // (See docs.openclaw.ai/plugins/hooks and /plugins/sdk-entrypoints.)
 //
-// This entrypoint ports the two Remembrance hooks the Claude/Codex plugins ship:
+// This entrypoint ports the Remembrance prompt/completion loop and observes
+// correlated detail opens:
 //
 //   PRE-prompt  (before_prompt_build): matches the user's prompt via the shared
 //     heuristic, queries Remembrance, and injects the matching skills/resources
-//     as extra system context (appendSystemContext). On a real hit it records a
-//     per-session usage marker so the completion hook can tell the registry was
-//     used. Respects REMEMBRANCE_AUTO_QUERY=0. Fail-open: any error injects
-//     nothing.
+//     as extra system context (appendSystemContext). It records task eligibility
+//     independently from completed query use, so a contextual follow-up or
+//     failed query can be recovered at completion. Respects
+//     REMEMBRANCE_AUTO_QUERY=0. Fail-open: query errors inject bounded recovery
+//     context and never block the prompt.
 //
-//   COMPLETION  (before_agent_finalize): when the session actually used
-//     Remembrance and hasn't been nudged for this use yet, it asks the agent to
-//     revise once and contribute what it learned (a remembrance / feedback /
-//     skill idea). Records the prompted count so it fires at most once per
-//     distinct use. Respects REMEMBRANCE_AUTO_CONTRIBUTE=0. Loop-safe and
+//   COMPLETION  (before_agent_finalize): when the session used Remembrance or
+//     contained eligible reusable work, it asks the agent to revise once. The
+//     revision either recovers a missed full-context query or contributes what
+//     it learned. Records the prompted count so it fires at most once per
+//     engagement. Respects REMEMBRANCE_AUTO_CONTRIBUTE=0. Loop-safe and
 //     fail-open: any error finalizes normally.
+//
+//   TOOL OBSERVER  (after_tool_call): correlates query_skills with the active
+//     directive and clears a high-match completion marker only after the
+//     matching get_skill/get_resource call succeeds with the same slug and
+//     query/result IDs.
 //
 // All decision/query/format logic lives in hook-core.mjs (Node-builtins-only,
 // runtime-agnostic, copied verbatim from packages/codex-plugin). This module is
@@ -41,14 +48,23 @@
 
 import process from "node:process";
 import {
+  clearHighMatchSurfaceIfOpened,
   contributionReason,
   debugLog,
   decideStop,
   readRegistryUseCount,
+  readTaskEligibilityCount,
+  recordDirectiveFollowThroughForTool,
+  recordDirectiveSurface,
+  recordHighMatchSurface,
   recordRegistryUse,
-  runQuery,
+  recordTaskEligibility,
+  recordValueEpisodeSurface,
+  reportTaskOutcomesOnStop,
+  runPromptHook,
   sessionIdFor,
   writePromptedCount,
+  valueEpisodeFromResponse,
 } from "./hook-core.mjs";
 
 // --- definePluginEntry shim --------------------------------------------------
@@ -98,7 +114,9 @@ export function promptFromEvent(event) {
         }
         if (Array.isArray(message.content)) {
           return message.content
-            .map((part) => (typeof part === "string" ? part : (part?.text ?? "")))
+            .map((part) =>
+              typeof part === "string" ? part : (part?.text ?? ""),
+            )
             .join("\n");
         }
       }
@@ -128,7 +146,7 @@ export async function handlePrePrompt(event, options = {}) {
   const env = options.env ?? process.env;
   try {
     const prompt = promptFromEvent(event);
-    const context = await runQuery(prompt, {
+    const result = await runPromptHook(prompt, {
       env,
       fetchImpl: options.fetchImpl ?? fetch,
       stderr: options.stderr,
@@ -137,20 +155,96 @@ export async function handlePrePrompt(event, options = {}) {
       identity: { provider: "openclaw", model: "openclaw" },
       userAgent: "@remembrance/openclaw-plugin",
     });
-    if (!context) {
+    if (!result) {
       return undefined;
     }
-    // A real injection happened — record it so the completion hook can detect
-    // that this session consumed the registry.
-    const record = options.recordUse ?? recordRegistryUse;
-    record(sessionIdFromEvent(event), env);
+    const sessionId = sessionIdFromEvent(event);
+    if (result.eligible) {
+      const recordEligibility =
+        options.recordEligibility ?? recordTaskEligibility;
+      recordEligibility(sessionId, env);
+    }
+    const recordDirective = options.recordDirective ?? recordDirectiveSurface;
+    recordDirective(sessionId, result.directive ?? null, env);
+    if (result.consumed) {
+      const record = options.recordUse ?? recordRegistryUse;
+      record(sessionId, env);
+      const recordHighMatch = options.recordHighMatch ?? recordHighMatchSurface;
+      recordHighMatch(sessionId, result.highMatch ?? null, env);
+      const recordValueEpisode =
+        options.recordValueEpisode ?? recordValueEpisodeSurface;
+      recordValueEpisode(sessionId, result.valueEpisode ?? null, env);
+    }
     // OpenClaw injects extra system context via appendSystemContext on the
     // before_prompt_build / before_model_resolve result.
-    return { appendSystemContext: context };
+    return { appendSystemContext: result.context };
   } catch (error) {
     debugLog(env, "pre_prompt_error", { error: errorName(error) }, options);
     return undefined;
   }
+}
+
+// OpenClaw exposes completed tool calls through the observation-only
+// after_tool_call hook. Correlate successful queries with task directives, and
+// clear the completion nudge only when the exact high match was opened.
+export async function handleAfterToolCall(event, options = {}) {
+  if (event?.error ?? event?.isError ?? event?.result?.isError) {
+    return { cleared: false, why: "tool_failed" };
+  }
+  const env = options.env ?? process.env;
+  const toolName = event?.toolName ?? event?.tool_name ?? "";
+  if (String(toolName).toLowerCase().endsWith("query_skills")) {
+    const recordFollowThrough =
+      options.recordDirectiveFollowThrough ??
+      recordDirectiveFollowThroughForTool;
+    const followed = await recordFollowThrough(
+      sessionIdFromEvent(event),
+      toolName,
+      event?.result ?? event?.output ?? event?.response ?? null,
+      {
+        env,
+        fetchImpl: options.fetchImpl ?? fetch,
+        userAgent: "@remembrance/openclaw-plugin",
+      },
+    );
+    const recordValueEpisode =
+      options.recordValueEpisode ?? recordValueEpisodeSurface;
+    recordValueEpisode(
+      sessionIdFromEvent(event),
+      valueEpisodeFromResponse(
+        event?.result ?? event?.output ?? event?.response ?? null,
+      ),
+      env,
+    );
+    return {
+      cleared: false,
+      directive_followed: followed,
+      why: followed ? "directive_followed" : "no_current_directive",
+    };
+  }
+  const clear =
+    options.clearHighMatchSurfaceIfOpened ?? clearHighMatchSurfaceIfOpened;
+  const cleared = clear(
+    sessionIdFromEvent(event),
+    toolName,
+    event?.params ?? event?.arguments ?? event?.tool_input ?? {},
+    env,
+  );
+  return {
+    cleared,
+    why: cleared ? "matched_detail_open" : "not_current_match",
+  };
+}
+
+export async function handleFinalize(event, options = {}) {
+  const env = options.env ?? process.env;
+  const report = options.reportTaskOutcomes ?? reportTaskOutcomesOnStop;
+  await report(sessionIdFromEvent(event), event, {
+    env,
+    fetchImpl: options.fetchImpl ?? fetch,
+    userAgent: "@remembrance/openclaw-plugin",
+  });
+  return handleCompletion(event, options);
 }
 
 // --- COMPLETION hook: before_agent_finalize ----------------------------------
@@ -177,7 +271,10 @@ export function handleCompletion(event, options = {}) {
       {
         env,
         readUseCount: options.readUseCount ?? readRegistryUseCount,
+        readEligibilityCount:
+          options.readEligibilityCount ?? readTaskEligibilityCount,
         readPromptedCount: options.readPromptedCount,
+        readHighMatch: options.readHighMatch,
       },
     );
     if (decision.allow) {
@@ -191,7 +288,10 @@ export function handleCompletion(event, options = {}) {
     return {
       action: "revise",
       reason: decision.reason ?? contributionReason(),
-      retry: { instruction: decision.reason ?? contributionReason(), maxAttempts: 1 },
+      retry: {
+        instruction: decision.reason ?? contributionReason(),
+        maxAttempts: 1,
+      },
       why: decision.why,
     };
   } catch (error) {
@@ -226,17 +326,16 @@ const plugin = definePluginEntry({
     "Auto-query Remembrance before relevant tasks and nudge contribution at completion.",
   register(api) {
     // PRE-prompt: inject matching skills/resources before the model turn.
-    api.on(
-      "before_prompt_build",
-      async (event) => handlePrePrompt(event),
-      { priority: 50 },
-    );
+    api.on("before_prompt_build", async (event) => handlePrePrompt(event), {
+      priority: 50,
+    });
+    api.on("after_tool_call", async (event) => handleAfterToolCall(event), {
+      priority: 50,
+    });
     // COMPLETION: nudge the agent to contribute what it learned, once.
-    api.on(
-      "before_agent_finalize",
-      async (event) => handleCompletion(event),
-      { priority: 50 },
-    );
+    api.on("before_agent_finalize", async (event) => handleFinalize(event), {
+      priority: 50,
+    });
   },
 });
 

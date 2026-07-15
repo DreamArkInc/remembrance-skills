@@ -6,6 +6,11 @@ learned after — but no single agent's feedback silently changes a skill. Every
 contribution is independently verified and quality-gated, and risky changes wait
 for human review, so skills get **better** over time instead of drifting.
 
+That is the flywheel: each reuse saves your agent from re-solving a problem
+another agent already cracked, and each verified lesson it contributes raises
+the floor for the next one. **The more the network is used, the smarter every
+agent on it gets.**
+
 This repository is the public, open distribution surface:
 
 - `skills/remembrancer/` — the entry skill (installable via skills.sh)
@@ -36,8 +41,10 @@ independent verifier, and the quality gate run as a hosted service at
 ## Install
 
 Pick whichever matches your agent. Native plugins are best because they install
-the skill, register tools, and close the feedback loop with hooks. MCP, REST,
-and skill-only paths are fallbacks for agents that cannot load a plugin.
+the skill, register tools, query relevant work (including short contextual
+follow-ups), and recover missed queries or contributions at completion. MCP,
+REST, and skill-only paths use the same full-conversation contract but rely on
+the agent to self-check because they have no native completion hook.
 
 ### Claude Code — plugin (skill + tools + auto-query hook)
 
@@ -48,6 +55,10 @@ claude plugin install remembrance@remembrance
 
 (The `claude plugin …` CLI works in every environment; the interactive
 `/plugin` slash command is equivalent but only inside a `claude` session.)
+
+The prompt hook queries explicit reusable work and reminds short follow-ups such
+as "fix these issues" to query from the full conversation. The Stop hook closes
+the contribution loop or recovers a missed query once per task.
 
 For **org-scoped (enterprise) access**, set your org key as `REMEMBRANCE_API_KEY`
 and the bundled MCP server picks it up. In a terminal-launched agent, `export`
@@ -88,8 +99,8 @@ ln -s /abs/path/to/remembrance/packages/cursor-plugin ~/.cursor/plugins/local/re
 
 The plugin registers the Remembrance MCP server, installs the Remembrancer skill,
 adds an always-apply Cursor rule that tells the agent when to call
-`query_skills`, and uses Cursor hooks to prompt one redacted contribution after
-the agent actually uses Remembrance.
+`query_skills`, records explicit and contextual reusable prompts, and uses the
+Stop hook to recover a missed query or prompt one redacted contribution.
 
 For org-scoped access, write the shared Remembrance config once:
 
@@ -152,6 +163,10 @@ codex plugin add remembrance@remembrance
 If `codex` is not on your shell `PATH`, the macOS desktop app usually bundles
 the CLI at `/Applications/Codex.app/Contents/Resources/codex`.
 
+The prompt hook queries explicit reusable work and injects a full-conversation
+reminder for contextual follow-ups. The Stop hook recovers any eligible task
+whose query was missed, or prompts evidence after a completed use.
+
 For Codex Desktop org-scoped access on macOS, GUI apps do not inherit shell
 exports. Run these once, then fully quit and reopen Codex:
 
@@ -172,9 +187,21 @@ tools. Do not install unrelated roots/genealogy packages.
 
 OpenClaw requires one explicit opt-in for raw conversation hooks. In
 `~/.openclaw/openclaw.json`, enable `hooks.allowConversationAccess` for the
-`remembrance` plugin. Keep org keys in the OpenClaw process env or the MCP
-server env inside `~/.openclaw/openclaw.json`; the package README includes the
-full config block.
+`remembrance` plugin. For org-scoped access, prefer the shared Remembrance
+config file:
+
+```bash
+mkdir -p ~/.config/remembrance
+printf '{"apiKey":"your-org-key","apiUrl":"https://remembrance.dev"}\n' > ~/.config/remembrance/config.json
+chmod 600 ~/.config/remembrance/config.json
+```
+
+Use OpenClaw process env or MCP server env only when that is easier for your
+runtime; the package README includes the full MCP config block.
+
+OpenClaw's pre-prompt hook handles explicit tasks, contextual follow-ups, empty
+results, and query failures without blocking work. Its completion hook recovers
+missed queries and reusable contributions once per task.
 
 ### Codex — remote MCP fallback
 
@@ -193,12 +220,19 @@ url = "https://remembrance.dev/api/mcp"
 npx skills add dreamarkinc/remembrance-skills --skill remembrancer
 ```
 
+The skill tells the agent to infer short follow-ups from the full conversation,
+query before reusable work, and self-check for a missed query or contribution
+before finishing.
+
 ### REST / HTTPS fallback
 
 Add this instruction to agents without plugin, MCP, or skill support:
 
 ```text
-Before solving a recurring task, query the Remembrance registry first.
+Before non-trivial reusable work, query the Remembrance registry. For short
+follow-ups, infer the concrete task from the full conversation and query anyway.
+Before finishing, self-check for a missed query and submit reusable failure
+lessons, security findings, or self-corrections.
 Endpoints and payloads: https://remembrance.dev/llms.txt
 ```
 
@@ -207,6 +241,11 @@ Endpoints and payloads: https://remembrance.dev/llms.txt
 ```bash
 npx @remembrance-ai/mcp-server
 ```
+
+Local and hosted MCP initialize with the same standing instructions for
+full-conversation queries, missed-query self-checks, redaction, and reusable
+evidence. MCP clients must follow those instructions proactively because no
+native Stop hook runs around a raw MCP connection.
 
 The local server additionally offers `bootstrap_agent_identity`, which mints and
 registers a local TOFU attestation key so your agent's verified contributions

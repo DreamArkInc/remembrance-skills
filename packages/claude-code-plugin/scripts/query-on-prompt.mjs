@@ -14,7 +14,8 @@
 //   • a Claude-branded query wrapper (its own user-agent) that layers the shared
 //     apiUrl / resolveApiKey / timeout logic;
 //   • Claude's stdin/stdout shape.
-// Fail-open: any no-match, disabled flag, or error prints nothing and exits 0.
+// Fail-open: true no-matches and disabled hooks print nothing. Query failures
+// inject a bounded direct-query recovery instruction and still exit 0.
 
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
@@ -23,21 +24,34 @@ import { dirname, join } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
+  autoQueryTimeoutMs,
   buildQueryPayload as buildSharedQueryPayload,
+  createContinuationDirective,
   debugLog,
   disabled,
+  emptyQueryContext,
   formatContext,
+  highMatchFromResponse,
+  isContextualContinuationPrompt,
   readRemembranceConfig,
   redactPrompt,
+  recordRegistryUse,
+  recordDirectiveSurface,
+  recordHighMatchSurface,
+  recordTaskEligibility,
+  recordValueEpisodeSurface,
   resolveApiKey,
+  sessionIdFor,
   shouldQueryPrompt,
+  continuationQueryContext,
+  unavailableQueryContext,
+  valueEpisodeFromResponse,
 } from "./hook-core.mjs";
 
 const CACHE_TTL_MS = 60_000;
 const CACHE_MAX_ENTRIES = 64;
 const DEFAULT_API_URL = "https://remembrance.dev";
 const DEFAULT_LIMIT = 3;
-const DEFAULT_TIMEOUT_MS = 2000;
 
 // Small env-scoped helpers. These mirror the (non-exported) internals of the
 // shared hook-core verbatim; they live here so the adapter can layer its cache
@@ -52,20 +66,13 @@ function apiUrl(env) {
 }
 
 function limitFromEnv(env) {
-  const parsed = Number.parseInt(String(env.REMEMBRANCE_AUTO_QUERY_LIMIT ?? ""), 10);
+  const parsed = Number.parseInt(
+    String(env.REMEMBRANCE_AUTO_QUERY_LIMIT ?? ""),
+    10,
+  );
   return Number.isFinite(parsed) && parsed > 0 && parsed <= 10
     ? parsed
     : DEFAULT_LIMIT;
-}
-
-function timeoutMsFromEnv(env) {
-  const parsed = Number.parseInt(
-    String(env.REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS ?? ""),
-    10,
-  );
-  return Number.isFinite(parsed) && parsed >= 100 && parsed <= 10_000
-    ? parsed
-    : DEFAULT_TIMEOUT_MS;
 }
 
 function errorName(error) {
@@ -82,8 +89,21 @@ export const formatAdditionalContext = formatContext;
 // else (redaction, summary truncation, domain/constraint inference, limit) comes
 // straight from the shared core. Exported because the plugin test and any
 // importer expect this module's payload to carry the Claude identity.
-export function buildQueryPayload(prompt, env = process.env) {
-  const payload = buildSharedQueryPayload(prompt, env);
+export function buildQueryPayload(
+  prompt,
+  env = process.env,
+  triggerReason = "trigger_match",
+) {
+  const payload = buildSharedQueryPayload(
+    prompt,
+    env,
+    { provider: "claude", model: "claude-code" },
+    {
+      surface: "plugin_hook",
+      runtime: "claude_code",
+      trigger_reason: triggerReason,
+    },
+  );
   payload.agent = { provider: "claude", model: "claude-code" };
   return payload;
 }
@@ -98,9 +118,23 @@ export async function handleHookInput(input, options = {}) {
   const redacted = redactPrompt(prompt);
   const decision = shouldQueryPrompt(redacted);
   if (!decision.likely_match) {
+    if (isContextualContinuationPrompt(redacted)) {
+      const directive = await createContinuationDirective({
+        env,
+        fetchImpl: options.fetchImpl ?? fetch,
+        runtime: "claude_code",
+        stderr: options.stderr,
+        userAgent: "@remembrance/claude-code-plugin",
+      });
+      recordEligibility(input, env, options);
+      recordDirective(input, directive, env, options);
+      return outputForContext(continuationQueryContext(directive));
+    }
     debugLog(env, "skip", { reason: decision.reason }, options);
     return null;
   }
+  recordEligibility(input, env, options);
+  recordDirective(input, null, env, options);
 
   const cacheKey = cacheKeyForPrompt(redacted, env);
   const cached = await readCachedOutput(cacheKey, env, options);
@@ -108,40 +142,77 @@ export async function handleHookInput(input, options = {}) {
     debugLog(
       env,
       "cache_hit",
-      { key: shortCacheKey(cacheKey), output: cached.output ? "context" : "none" },
+      {
+        key: shortCacheKey(cacheKey),
+        output: cached.output ? "context" : "none",
+      },
       options,
     );
-    return cached.output;
+    const output =
+      cached.output ?? outputForContext(emptyQueryContext(decision.reason));
+    recordUse(input, env, options, cached.highMatch ?? null);
+    return output;
   }
   debugLog(env, "cache_miss", { key: shortCacheKey(cacheKey) }, options);
 
-  const response = await queryRemembrance(buildQueryPayload(redacted, env), {
-    env,
-    fetchImpl: options.fetchImpl ?? fetch,
-    stderr: options.stderr,
-  });
+  const response = await queryRemembrance(
+    buildQueryPayload(redacted, env, decision.reason),
+    {
+      env,
+      fetchImpl: options.fetchImpl ?? fetch,
+      stderr: options.stderr,
+    },
+  );
   if (!response) {
-    return null;
+    return outputForContext(unavailableQueryContext(env));
   }
-  const context = formatContext(response, decision.reason, limitFromEnv(env));
-  if (!context) {
-    await writeCachedOutput(cacheKey, null, env, options);
-    return null;
-  }
-  const output = {
+  const context =
+    formatContext(response, decision.reason, limitFromEnv(env)) ??
+    emptyQueryContext(decision.reason);
+  const output = outputForContext(context);
+  const highMatch = highMatchFromResponse(response);
+  await writeCachedOutput(cacheKey, output, highMatch, env, options);
+  recordUse(input, env, options, highMatch, response);
+  return output;
+}
+
+function outputForContext(context) {
+  return {
     hookSpecificOutput: {
       hookEventName: "UserPromptSubmit",
       additionalContext: context,
     },
   };
-  await writeCachedOutput(cacheKey, output, env, options);
-  return output;
+}
+
+function recordEligibility(input, env, options) {
+  const record = options.recordEligibility ?? recordTaskEligibility;
+  record(sessionIdFor(input), env);
+}
+
+function recordDirective(input, directive, env, options) {
+  const record = options.recordDirective ?? recordDirectiveSurface;
+  record(sessionIdFor(input), directive, env);
+}
+
+function recordUse(input, env, options, highMatch = null, response = null) {
+  const record = options.recordUse ?? recordRegistryUse;
+  const sessionId = sessionIdFor(input);
+  record(sessionId, env);
+  const recordHighMatch = options.recordHighMatch ?? recordHighMatchSurface;
+  recordHighMatch(sessionId, highMatch, env);
+  if (response) {
+    const recordValueEpisode =
+      options.recordValueEpisode ?? recordValueEpisodeSurface;
+    const valueEpisode = valueEpisodeFromResponse(response);
+    recordValueEpisode(sessionId, valueEpisode, env);
+  }
 }
 
 async function queryRemembrance(payload, options) {
   const env = options.env;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMsFromEnv(env));
+  const timeout = setTimeout(() => controller.abort(), autoQueryTimeoutMs(env));
   try {
     const headers = {
       "content-type": "application/json",
@@ -203,18 +274,28 @@ async function readCachedOutput(cacheKey, env, options = {}) {
       if (freshEntries.length !== cache.entries.length) {
         await writeCacheFile({ entries: freshEntries }, env);
       }
-      return { hit: false, output: null };
+      return { hit: false, output: null, highMatch: null };
     }
     entry.touched_at = now;
     await writeCacheFile({ entries: freshEntries }, env);
-    return { hit: true, output: entry.output };
+    return {
+      hit: true,
+      output: entry.output,
+      highMatch: entry.high_match ?? null,
+    };
   } catch (error) {
     debugLog(env, "cache_read_error", { error: errorName(error) }, options);
-    return { hit: false, output: null };
+    return { hit: false, output: null, highMatch: null };
   }
 }
 
-async function writeCachedOutput(cacheKey, output, env, options = {}) {
+async function writeCachedOutput(
+  cacheKey,
+  output,
+  highMatch,
+  env,
+  options = {},
+) {
   try {
     const cache = await readCacheFile(env);
     const now = nowMs(options);
@@ -224,6 +305,7 @@ async function writeCachedOutput(cacheKey, output, env, options = {}) {
     entries.unshift({
       key: cacheKey,
       output,
+      high_match: highMatch,
       touched_at: now,
       expires_at: now + CACHE_TTL_MS,
     });
@@ -275,7 +357,10 @@ function cacheKeyForPrompt(prompt, env) {
 }
 
 function normalizeForCache(prompt) {
-  return String(prompt ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  return String(prompt ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
 }
 
 function cachePath(env) {
@@ -314,7 +399,9 @@ export async function main() {
   try {
     input = raw.trim() ? JSON.parse(raw) : {};
   } catch (error) {
-    debugLog(process.env, "hook_input_parse_error", { error: errorName(error) });
+    debugLog(process.env, "hook_input_parse_error", {
+      error: errorName(error),
+    });
     return;
   }
   const output = await handleHookInput(input);

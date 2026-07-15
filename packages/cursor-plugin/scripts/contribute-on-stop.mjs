@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 // Cursor stop adapter.
 //
-// If this Cursor session consumed Remembrance through MCP and has not already
-// contributed feedback/evidence for that use, return followup_message once.
+// If this Cursor session consumed Remembrance through MCP, or an eligible task
+// reached Stop without a query, return followup_message once. The shared core
+// chooses contribution or full-context query recovery accordingly.
 
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { decideStop, sessionIdFor, writePromptedCount } from "./hook-core.mjs";
+import {
+  decideStop,
+  reportTaskOutcomesOnStop,
+  sessionIdFor,
+  writePromptedCount,
+} from "./hook-core.mjs";
 import { cursorSessionId } from "./record-mcp-use.mjs";
 
 export function handleStop(input, options = {}) {
@@ -37,6 +43,17 @@ export function handleStop(input, options = {}) {
   };
 }
 
+export async function handleStopHook(input, options = {}) {
+  const env = options.env ?? process.env;
+  const report = options.reportTaskOutcomes ?? reportTaskOutcomesOnStop;
+  await report(cursorSessionId(input, env), input, {
+    env,
+    fetchImpl: options.fetchImpl ?? fetch,
+    userAgent: "@remembrance/cursor-plugin",
+  });
+  return handleStop(input, options);
+}
+
 async function readStdin() {
   const chunks = [];
   for await (const chunk of process.stdin) {
@@ -55,7 +72,7 @@ async function main() {
   }
   let result;
   try {
-    result = handleStop(input);
+    result = await handleStopHook(input);
   } catch {
     return;
   }
@@ -64,7 +81,10 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   main().catch(() => {
     // Never block stop on hook errors.
   });

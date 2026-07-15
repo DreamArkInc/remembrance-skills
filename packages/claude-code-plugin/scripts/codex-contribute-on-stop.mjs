@@ -3,9 +3,10 @@
 //
 // The query hook automates CONSUMPTION (it queries Remembrance on relevant
 // prompts). Contribution had no trigger, so agents reliably query but rarely
-// submit what they learned. This Stop hook closes that asymmetry: when a session
-// that actually used Remembrance is about to end, it blocks the stop ONCE and
-// asks the agent to contribute a redacted remembrance / feedback / skill idea.
+// submit what they learned. This Stop hook closes that asymmetry: when a reusable
+// task or actual Remembrance use is about to end, it blocks the stop ONCE. It
+// asks the agent to recover a missed full-context query when needed, then
+// contribute a redacted remembrance / feedback / skill idea when warranted.
 //
 // Codex Stop payload: stdin JSON {turn_id, stop_hook_active, last_assistant_message}.
 // To continue instead of stopping, print JSON {"decision":"block","reason":"..."}
@@ -16,8 +17,9 @@
 // - Loop-safe: Codex sets stop_hook_active=true on the continuation a Stop-block
 //   caused, so that turn is always allowed. A per-session prompted-count sentinel
 //   is a second guard so the agent is prompted at most once per distinct use.
-// - Non-nagging: only blocks when the per-session usage marker shows Remembrance
-//   was used this session (recorded by the query adapter). No usage → allow.
+// - Non-nagging: only blocks when a per-session use or task-eligibility marker
+//   advances beyond the prompted marker. The Stop retry itself cannot create a
+//   second reminder for the same task.
 // - Fail-open: any error allows the stop.
 //
 // All decision logic lives in hook-core.mjs; this file only reads Codex's stdin,
@@ -25,7 +27,12 @@
 
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { decideStop, sessionIdFor, writePromptedCount } from "./hook-core.mjs";
+import {
+  decideStop,
+  reportTaskOutcomesOnStop,
+  sessionIdFor,
+  writePromptedCount,
+} from "./hook-core.mjs";
 
 // Given parsed Codex input, decide and (on a block) record the new prompted
 // count. Returns { allow, why, output? }. `env` and the count fns are injectable.
@@ -42,6 +49,17 @@ export function handleStop(input, options = {}) {
     why: decision.why,
     output: { decision: "block", reason: decision.reason },
   };
+}
+
+export async function handleStopHook(input, options = {}) {
+  const env = options.env ?? process.env;
+  const report = options.reportTaskOutcomes ?? reportTaskOutcomesOnStop;
+  await report(sessionIdFor(input), input, {
+    env,
+    fetchImpl: options.fetchImpl ?? fetch,
+    userAgent: "@remembrance/codex-plugin",
+  });
+  return handleStop(input, options);
 }
 
 async function readStdin() {
@@ -63,7 +81,7 @@ async function main() {
   }
   let result;
   try {
-    result = handleStop(input);
+    result = await handleStopHook(input);
   } catch {
     // Fail open.
     return;
@@ -73,7 +91,10 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   main().catch(() => {
     // Never block a stop on an unexpected error.
   });

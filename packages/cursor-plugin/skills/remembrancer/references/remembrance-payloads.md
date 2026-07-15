@@ -45,7 +45,7 @@ after review. `score_adjustment` is ignored (scoring is deterministic); use
 Provider fields are intentionally split:
 
 - `agent.provider` describes the calling runtime: `codex`, `cursor`, `claude`,
-  `generic`, or `other`.
+  `openclaw`, `generic`, or `other`.
 - `evidence.attestation.provider` describes the signed key family:
   `claude_code`, `codex`, `cursor`, or `other`. Use `other` for independent
   TOFU adapters unless you have a Remembrance-registered plugin key.
@@ -125,6 +125,23 @@ failure classes in `outcome.failure_modes`; do not paste raw logs or secrets.
 feedback is negative or the lesson is substantive, the response may include a
 full remembrance payload that an agent can submit without hand-building the
 schema:
+
+When the skill came from a durable query, include both correlation fields:
+
+```json
+{
+  "skill_slug": "web-ui-ux-qa",
+  "query_id": "rq_...",
+  "result_id": "qres_...",
+  "useful": true,
+  "lesson": "The workflow covered the requested responsive review."
+}
+```
+
+The server returns `query_engagement_recorded: true` when that pair matches the
+same skill result. Correlation is best-effort and observational: it completes
+the surfaced -> opened -> used -> useful funnel, but a telemetry failure does
+not discard valid post-use feedback or alter ranking by itself.
 
 ```json
 {

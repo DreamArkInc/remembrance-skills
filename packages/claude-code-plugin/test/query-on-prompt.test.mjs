@@ -44,7 +44,11 @@ afterAll(() => {
 function testEnv(env = {}) {
   cacheCounter += 1;
   return {
-    REMEMBRANCE_HOOK_CACHE_PATH: resolve(tempRoot, `cache-${cacheCounter}.json`),
+    REMEMBRANCE_HOOK_CACHE_PATH: resolve(
+      tempRoot,
+      `cache-${cacheCounter}.json`,
+    ),
+    REMEMBRANCE_USAGE_DIR: resolve(tempRoot, `usage-${cacheCounter}`),
     ...env,
   };
 }
@@ -116,19 +120,44 @@ describe("Remembrance Claude Code prompt hook", () => {
     );
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe(
-      "https://remembrance.dev/api/v1/agent/query",
-    );
+    expect(calls[0].url).toBe("https://remembrance.dev/api/v1/agent/query");
     expect(calls[0].body).toMatchObject({
       task: {
         domain: "deployment",
         constraints: expect.arrayContaining(["ci", "deployment"]),
       },
       limit: 2,
+      client_context: {
+        surface: "plugin_hook",
+        runtime: "claude_code",
+        trigger_reason: "external_service",
+      },
     });
-    expect(
-      output?.hookSpecificOutput.additionalContext,
-    ).toContain("vercel-build-debug");
+    expect(output?.hookSpecificOutput.additionalContext).toContain(
+      "vercel-build-debug",
+    );
+  });
+
+  it("uses the shared bounded timeout override", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await handleHookInput(
+        {
+          hook_event_name: "UserPromptSubmit",
+          prompt: "Fix this Vercel deployment timeout.",
+        },
+        {
+          env: testEnv({ REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS: "30000" }),
+          fetchImpl: vi.fn(async () =>
+            Response.json({ skills: [], resources: [] }),
+          ),
+        },
+      );
+
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 30_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it("does not query for generic one-off fact prompts", async () => {
@@ -140,6 +169,45 @@ describe("Remembrance Claude Code prompt hook", () => {
 
     expect(output).toBeNull();
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("injects a full-thread query reminder for contextual follow-ups", async () => {
+    const fetchImpl = vi.fn(async (url) => {
+      expect(String(url)).toContain("/api/v1/agent/directive-events");
+      return Response.json({ recorded: true }, { status: 201 });
+    });
+    const directives = [];
+    const output = await handleHookInput(
+      { prompt: "fix these issues", session_id: "claude-followup" },
+      {
+        env: testEnv(),
+        fetchImpl,
+        recordDirective: (id, directive) => directives.push({ id, directive }),
+      },
+    );
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "task-continuation reminder",
+    );
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "full thread",
+    );
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "query_skills",
+    );
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "directive_id",
+    );
+    expect(directives).toEqual([
+      {
+        id: "claude-followup",
+        directive: expect.objectContaining({
+          directive_id: expect.stringMatching(/^dir_/),
+          runtime: "claude_code",
+        }),
+      },
+    ]);
   });
 
   it("redacts secrets and private URLs before sending query text", async () => {
@@ -238,7 +306,9 @@ describe("Remembrance Claude Code prompt hook", () => {
       },
     );
 
-    const parsed = JSON.parse(readFileSync(env.REMEMBRANCE_HOOK_CACHE_PATH, "utf8"));
+    const parsed = JSON.parse(
+      readFileSync(env.REMEMBRANCE_HOOK_CACHE_PATH, "utf8"),
+    );
     expect(parsed.entries).toHaveLength(1);
     expect(JSON.stringify(parsed)).toContain("atomic-cache-skill");
     expect(JSON.stringify(parsed)).not.toContain("Vercel Next.js");
@@ -272,14 +342,16 @@ describe("Remembrance Claude Code prompt hook", () => {
       },
     );
 
-    expect(output).toBeNull();
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "query-unavailable context",
+    );
     expect(stderr).toContain("cache_miss");
     expect(stderr).toContain("http_error");
     expect(stderr).not.toContain("sk_live_");
     expect(stderr).not.toContain("payment integration");
   });
 
-  it("fails open on timeouts, server errors, and malformed responses", async () => {
+  it("fails open with recovery context on query failures", async () => {
     const timeout = await handleHookInput(
       { prompt: "Set up Vercel deployment." },
       {
@@ -314,9 +386,14 @@ describe("Remembrance Claude Code prompt hook", () => {
       },
     );
 
-    expect(timeout).toBeNull();
-    expect(serverError).toBeNull();
-    expect(malformed).toBeNull();
+    for (const output of [timeout, serverError, malformed]) {
+      expect(output.hookSpecificOutput.additionalContext).toContain(
+        "query-unavailable context",
+      );
+      expect(output.hookSpecificOutput.additionalContext).toContain(
+        "query_skills",
+      );
+    }
   });
 
   it("validates plugin, hook, mcp, and marketplace manifests", () => {
@@ -356,7 +433,10 @@ describe("Remembrance Claude Code prompt hook", () => {
       "utf8",
     );
     const marketplace = JSON.parse(
-      readFileSync(resolve(repoRoot, ".claude-plugin/marketplace.json"), "utf8"),
+      readFileSync(
+        resolve(repoRoot, ".claude-plugin/marketplace.json"),
+        "utf8",
+      ),
     );
 
     expect(plugin).toMatchObject({
@@ -380,11 +460,18 @@ describe("Remembrance Claude Code prompt hook", () => {
     expect(hooks.hooks.Stop[0].hooks[0].command).toContain(
       "contribute-on-stop.mjs",
     );
+    expect(hooks.hooks.PostToolUse[0].hooks[0].command).toContain(
+      "record-detail-open.mjs",
+    );
+    expect(hooks.hooks.PostToolUse[0].matcher).toContain("query_skills");
     expect(codexHooks.hooks.UserPromptSubmit[0].hooks[0].command).toBe(
       'node "${PLUGIN_ROOT}/scripts/codex-query-on-prompt.mjs"',
     );
     expect(codexHooks.hooks.Stop[0].hooks[0].command).toBe(
       'node "${PLUGIN_ROOT}/scripts/codex-contribute-on-stop.mjs"',
+    );
+    expect(codexHooks.hooks.PostToolUse[0].hooks[0].command).toBe(
+      'node "${PLUGIN_ROOT}/scripts/codex-record-detail-open.mjs"',
     );
     expect(plugin.mcpServers).toBe("./.mcp.json");
     expect(mcp.mcpServers.remembrance).toMatchObject({
@@ -421,9 +508,9 @@ describe("Remembrance Claude Code prompt hook", () => {
     expect(packageJson.version).toBe(plugin.version);
     expect(packageJson.version).toBe(codexPlugin.version);
     expect(marketplace.metadata.version).toBe(plugin.version);
-    expect(
-      existsSync(resolve(root, "scripts/codex-query-on-prompt.mjs")),
-    ).toBe(true);
+    expect(existsSync(resolve(root, "scripts/codex-query-on-prompt.mjs"))).toBe(
+      true,
+    );
     expect(
       existsSync(resolve(root, "scripts/codex-contribute-on-stop.mjs")),
     ).toBe(true);
@@ -476,9 +563,7 @@ describe("Remembrance Claude Code prompt hook", () => {
       child.stdin.write(
         frame({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
       );
-      child.stdin.write(
-        frame({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
-      );
+      child.stdin.write(frame({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
 
       const startedAt = Date.now();
       while (Date.now() - startedAt < 5_000) {
@@ -537,19 +622,19 @@ describe("Remembrance Claude Code prompt hook", () => {
     // The bug this guards: frontend/dashboard work said none of the old narrow
     // web-ui keywords, so it fell through to a non-seeded catch-all and surfaced
     // the wrong skills. These must resolve to real seeded domains.
-    expect(domainFor("Redesign the dashboard and declutter the review card")).toBe(
-      "web-ui-qa",
-    );
-    expect(domainFor("Add a left nav side panel and fix the settings layout")).toBe(
-      "web-ui-qa",
-    );
+    expect(
+      domainFor("Redesign the dashboard and declutter the review card"),
+    ).toBe("web-ui-qa");
+    expect(
+      domainFor("Add a left nav side panel and fix the settings layout"),
+    ).toBe("web-ui-qa");
     expect(domainFor("Build a Tailwind modal component with a tooltip")).toBe(
       "web-ui-qa",
     );
     // Framework name alone in a build/deploy context is NOT web-ui.
-    expect(domainFor("Fix the Vercel Next.js build error in GitHub Actions")).toBe(
-      "deployment",
-    );
+    expect(
+      domainFor("Fix the Vercel Next.js build error in GitHub Actions"),
+    ).toBe("deployment");
     expect(domainFor("Submit a skill idea and review the queue")).toBe(
       "agent-skills",
     );

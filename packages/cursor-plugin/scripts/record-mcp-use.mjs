@@ -8,13 +8,25 @@
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
+  clearHighMatchSurfaceIfOpened,
+  highMatchFromResponse,
   readRegistryUseCount,
+  readTaskEligibilityCount,
+  recordDirectiveFollowThroughForTool,
+  recordHighMatchSurface,
   recordRegistryUse,
+  recordValueEpisodeSurface,
+  valueEpisodeFromResponse,
   writePromptedCount,
 } from "./hook-core.mjs";
 
-const CONSUMPTION_TOOLS = new Set(["query_skills", "get_skill", "get_resource"]);
+const CONSUMPTION_TOOLS = new Set([
+  "query_skills",
+  "get_skill",
+  "get_resource",
+]);
 const CONTRIBUTION_TOOLS = new Set([
+  "submit_query_feedback",
   "submit_feedback",
   "submit_remembrance",
   "propose_skill_idea",
@@ -52,25 +64,117 @@ function toolName(input) {
   return pieces[pieces.length - 1] ?? value;
 }
 
-export function handleMcpUse(input, options = {}) {
+export async function handleMcpUse(input, options = {}) {
   const env = options.env ?? process.env;
   const sessionId = cursorSessionId(input, env);
   const tool = toolName(input);
   if (CONSUMPTION_TOOLS.has(tool)) {
     const record = options.recordRegistryUse ?? recordRegistryUse;
     const count = record(sessionId, env);
+    if (tool === "query_skills") {
+      const recordFollowThrough =
+        options.recordDirectiveFollowThrough ??
+        recordDirectiveFollowThroughForTool;
+      await recordFollowThrough(sessionId, tool, mcpResponseFromHook(input), {
+        env,
+        fetchImpl: options.fetchImpl ?? fetch,
+        userAgent: "@remembrance/cursor-plugin",
+      });
+      const recordHighMatch = options.recordHighMatch ?? recordHighMatchSurface;
+      recordHighMatch(
+        sessionId,
+        highMatchFromResponse(mcpResponseFromHook(input)),
+        env,
+      );
+      const recordValueEpisode =
+        options.recordValueEpisode ?? recordValueEpisodeSurface;
+      recordValueEpisode(
+        sessionId,
+        valueEpisodeFromResponse(mcpResponseFromHook(input)),
+        env,
+      );
+    } else {
+      const clearHighMatch =
+        options.clearHighMatch ?? clearHighMatchSurfaceIfOpened;
+      clearHighMatch(
+        sessionId,
+        `remembrance.${tool}`,
+        toolArguments(input),
+        env,
+      );
+    }
     return { recorded: true, kind: "consumption", tool, count };
   }
   if (CONTRIBUTION_TOOLS.has(tool)) {
     const readUse = options.readRegistryUseCount ?? readRegistryUseCount;
+    const readEligibility =
+      options.readTaskEligibilityCount ?? readTaskEligibilityCount;
     const writePrompted = options.writePromptedCount ?? writePromptedCount;
-    const count = readUse(sessionId, env);
+    const count = Math.max(
+      readUse(sessionId, env),
+      readEligibility(sessionId, env),
+    );
     if (count > 0) {
       writePrompted(sessionId, count, env);
     }
     return { recorded: count > 0, kind: "contribution", tool, count };
   }
   return { recorded: false, kind: "ignored", tool };
+}
+
+function toolArguments(input) {
+  const value =
+    input?.arguments ??
+    input?.args ??
+    input?.tool_input ??
+    input?.toolInput ??
+    input?.params ??
+    input?.tool?.input ??
+    {};
+  if (value && typeof value === "object") return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+function mcpResponseFromHook(input) {
+  for (const value of [
+    input?.result,
+    input?.output,
+    input?.tool_result,
+    input?.toolResult,
+    input?.response,
+  ]) {
+    if (!value) continue;
+    if (typeof value === "object") {
+      if (value.body) return value;
+      const text = Array.isArray(value.content)
+        ? value.content.find((item) => item?.type === "text")?.text
+        : null;
+      if (typeof text === "string") {
+        try {
+          return JSON.parse(text);
+        } catch {
+          continue;
+        }
+      }
+      return value;
+    }
+    if (typeof value === "string") {
+      try {
+        return JSON.parse(value);
+      } catch {
+        continue;
+      }
+    }
+  }
+  return null;
 }
 
 async function readStdin() {
@@ -86,13 +190,16 @@ async function main() {
   try {
     const raw = await readStdin();
     input = raw.trim() ? JSON.parse(raw) : {};
-    handleMcpUse(input);
+    await handleMcpUse(input);
   } catch {
     // Fail open; afterMCPExecution is observational.
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   main().catch(() => {
     // Never fail an MCP call because the recorder failed.
   });

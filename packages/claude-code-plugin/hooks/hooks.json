@@ -11,6 +11,17 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__.*remembrance.*__(query_skills|get_skill|get_resource)|remembrance[._](query_skills|get_skill|get_resource)|query_skills|get_skill|get_resource",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/record-detail-open.mjs\""
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "",

@@ -18,6 +18,8 @@ const twoUsesTranscript = `${usedTranscript}{"tool":"mcp__plugin_remembrance_rem
 const base = {
   env: {},
   readCount: () => 0,
+  readUseCount: () => 0,
+  readEligibilityCount: () => 0,
   readTranscript: () => usedTranscript,
   writeCount: () => {},
 };
@@ -28,6 +30,11 @@ describe("Remembrance contribute-on-stop hook", () => {
     expect(
       sessionUsedRemembrance(
         "call mcp__plugin_remembrance_remembrance__submit_remembrance",
+      ),
+    ).toBe(true);
+    expect(
+      sessionUsedRemembrance(
+        "call mcp__plugin_remembrance_remembrance__submit_query_feedback",
       ),
     ).toBe(true);
     expect(sessionUsedRemembrance(unusedTranscript)).toBe(false);
@@ -45,7 +52,7 @@ describe("Remembrance contribute-on-stop hook", () => {
     // A submission does not count as consumption (so contributing never re-prompts).
     expect(
       countRegistryConsumption(
-        "POST /api/v1/agent/remembrances and mcp__x_remembrance__submit_feedback",
+        "POST /api/v1/agent/query-feedback and mcp__x_remembrance__submit_query_feedback",
       ),
     ).toBe(0);
   });
@@ -72,9 +79,17 @@ describe("Remembrance contribute-on-stop hook", () => {
     expect(
       decideContribution(
         { session_id: "s1", stop_hook_active: false },
-        { ...base, readCount: () => 1, readTranscript: () => twoUsesTranscript },
+        {
+          ...base,
+          readCount: () => 1,
+          readTranscript: () => twoUsesTranscript,
+        },
       ),
-    ).toMatchObject({ allow: false, why: "prompt_contribution", consumption: 2 });
+    ).toMatchObject({
+      allow: false,
+      why: "prompt_contribution",
+      consumption: 2,
+    });
   });
 
   it("does not re-prompt after a decline when only free-text remembrancer is mentioned", () => {
@@ -106,10 +121,7 @@ describe("Remembrance contribute-on-stop hook", () => {
 
   it("never loops: allows the stop when stop_hook_active is set", () => {
     expect(
-      decideContribution(
-        { session_id: "s1", stop_hook_active: true },
-        base,
-      ),
+      decideContribution({ session_id: "s1", stop_hook_active: true }, base),
     ).toMatchObject({ allow: true, why: "stop_hook_active" });
   });
 
@@ -120,6 +132,40 @@ describe("Remembrance contribute-on-stop hook", () => {
         { ...base, readTranscript: () => unusedTranscript },
       ),
     ).toMatchObject({ allow: true, why: "registry_not_used" });
+  });
+
+  it("recovers a contextual task even when no query completed", () => {
+    const transcript =
+      '{"content":"Remembrance task-continuation reminder: infer the task from the full thread."}\n';
+    expect(
+      decideContribution(
+        { session_id: "s-context", stop_hook_active: false },
+        { ...base, readTranscript: () => transcript },
+      ),
+    ).toMatchObject({
+      allow: false,
+      why: "prompt_task_closure",
+      consumption: 1,
+    });
+  });
+
+  it("recovers a later contextual task in a session with an earlier handled query", () => {
+    expect(
+      decideContribution(
+        { session_id: "s-later-context", stop_hook_active: false },
+        {
+          ...base,
+          readTranscript: () => unusedTranscript,
+          readUseCount: () => 1,
+          readEligibilityCount: () => 2,
+          readCount: () => 1,
+        },
+      ),
+    ).toMatchObject({
+      allow: false,
+      why: "prompt_task_closure",
+      consumption: 2,
+    });
   });
 
   it("prompts on high-value self-corrections even without registry consumption", () => {

@@ -7,6 +7,12 @@
         "timeout": 5
       }
     ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "node ./scripts/record-task-eligibility.mjs",
+        "timeout": 5
+      }
+    ],
     "afterMCPExecution": [
       {
         "command": "node ./scripts/record-mcp-use.mjs",

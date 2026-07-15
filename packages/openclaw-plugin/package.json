@@ -1,6 +1,6 @@
 {
   "name": "@remembrance/openclaw-plugin",
-  "version": "0.1.13",
+  "version": "0.1.27",
   "private": true,
   "license": "Apache-2.0",
   "description": "OpenClaw plugin for Remembrance auto-query conversation hooks, skill docs, and MCP server configuration.",

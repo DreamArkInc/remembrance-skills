@@ -2,11 +2,12 @@
 
 // Claude Code Stop adapter — the contribution mirror of query-on-prompt.mjs.
 //
-// The query hook automates CONSUMPTION (it queries Remembrance on every prompt).
+// The query hook automates CONSUMPTION for explicit prompts and records task
+// ELIGIBILITY for explicit or context-dependent prompts.
 // Contribution had no trigger, so agents reliably query but rarely submit what
-// they learned. This Stop hook closes that asymmetry: when a session that
-// actually used Remembrance is about to end, it blocks the stop ONCE and asks
-// the agent to contribute a redacted remembrance / feedback / skill idea.
+// they learned. This Stop hook closes that asymmetry: when reusable work or an
+// actual Remembrance use is about to end, it blocks the stop ONCE. It can first
+// recover a missed full-context query, then request a redacted contribution.
 //
 // Shared vs Claude-specific:
 // - The runtime-agnostic pieces (contributeDisabled, countRegistryConsumption,
@@ -24,8 +25,9 @@
 // - Loop-safe: Claude Code sets stop_hook_active=true on the continuation a
 //   Stop-block causes, so the second stop is always allowed. A per-session
 //   sentinel is a second guard so the agent is prompted at most once per session.
-// - Non-nagging: only blocks when the transcript shows Remembrance was used this
-//   session. If usage can't be determined, it allows the stop.
+// - Non-nagging: only blocks when transcript/marker evidence shows registry use
+//   or an eligible reusable task. If engagement can't be determined, it allows
+//   the stop.
 // - Fail-open: any error allows the stop.
 // - The agent can satisfy it by contributing OR by briefly declining; either way
 //   it is not asked again.
@@ -39,7 +41,11 @@ import {
   contributeDisabled,
   contributionReason,
   countRegistryConsumption,
-  detectHighValueLessonSignalInText,
+  countTaskEligibility,
+  decideStop,
+  readRegistryUseCount,
+  readTaskEligibilityCount,
+  reportTaskOutcomesOnStop,
 } from "./hook-core.mjs";
 
 const MAX_TRANSCRIPT_BYTES = 4 * 1024 * 1024;
@@ -59,10 +65,10 @@ export function sessionUsedRemembrance(transcript) {
   }
   return (
     /Remembrance auto-query context/i.test(text) ||
-    /mcp__[a-z0-9_]*remembrance[a-z0-9_]*__(query_skills|get_skill|get_resource|submit_remembrance|submit_feedback|submit_suggestion|submit_resource|propose_skill_idea)/i.test(
+    /mcp__[a-z0-9_]*remembrance[a-z0-9_]*__(query_skills|get_skill|get_resource|submit_remembrance|submit_query_feedback|submit_feedback|submit_suggestion|submit_resource|propose_skill_idea)/i.test(
       text,
     ) ||
-    /\/api\/v1\/agent\/(query|remembrances|skill-ideas|suggestions|feedback)\b/i.test(
+    /\/api\/v1\/agent\/(query|query-feedback|remembrances|skill-ideas|suggestions|feedback)\b/i.test(
       text,
     ) ||
     /\bremembrancer\b/i.test(text)
@@ -122,41 +128,51 @@ function readTranscriptSafe(path) {
 // `readTranscript` / `readCount` are injectable so tests don't touch the FS.
 export function decideContribution(input, options = {}) {
   const env = options.env ?? process.env;
-  if (contributeDisabled(env.REMEMBRANCE_AUTO_CONTRIBUTE)) {
-    return { allow: true, why: "disabled" };
-  }
-  if (input?.stop_hook_active) {
-    return { allow: true, why: "stop_hook_active" };
-  }
   const sessionId = input?.session_id ?? "unknown";
   const read = options.readTranscript ?? readTranscriptSafe;
   const transcript = read(input?.transcript_path);
-  const consumption = countRegistryConsumption(transcript);
-  const highValueSignal = detectHighValueLessonSignalInText(transcript);
+  const transcriptConsumption = countRegistryConsumption(transcript);
+  const transcriptEligibility = countTaskEligibility(transcript);
+  const readUse = options.readUseCount ?? readRegistryUseCount;
+  const readEligibility =
+    options.readEligibilityCount ?? readTaskEligibilityCount;
   const readCount = options.readCount ?? readPromptedCount;
-  const promptedCount = readCount(sessionId);
-  if (consumption === 0 && !highValueSignal) {
-    return { allow: true, why: "registry_not_used" };
-  }
-  if (consumption <= promptedCount && !highValueSignal) {
-    return { allow: true, why: "no_new_usage" };
-  }
-  if (highValueSignal && promptedCount > 0 && consumption <= promptedCount) {
-    return { allow: true, why: "high_value_lesson_already_prompted" };
-  }
-  return {
-    allow: false,
-    why: highValueSignal
-      ? "prompt_high_value_lesson_contribution"
-      : "prompt_contribution",
-    reason: contributionReason(highValueSignal),
-    consumption: highValueSignal
-      ? Math.max(consumption, promptedCount + 1, 1)
-      : consumption,
-  };
+  const decision = decideStop(
+    {
+      session_id: sessionId,
+      stop_hook_active: input?.stop_hook_active,
+      last_assistant_message: transcript,
+    },
+    {
+      env,
+      readUseCount: () =>
+        Math.max(transcriptConsumption, readUse(sessionId, env)),
+      readEligibilityCount: () =>
+        Math.max(transcriptEligibility, readEligibility(sessionId, env)),
+      readPromptedCount: () => readCount(sessionId),
+      readHighMatch: options.readHighMatch,
+    },
+  );
+  return decision.allow
+    ? { allow: true, why: decision.why }
+    : {
+        allow: false,
+        why: decision.why,
+        reason: decision.reason,
+        consumption: decision.useCount,
+      };
 }
 
 export async function handleStopHook(input, options = {}) {
+  await (options.reportTaskOutcomes ?? reportTaskOutcomesOnStop)(
+    input?.session_id ?? "unknown",
+    input,
+    {
+      env: options.env ?? process.env,
+      fetchImpl: options.fetchImpl ?? fetch,
+      userAgent: "@remembrance/claude-code-plugin",
+    },
+  );
   const decision = decideContribution(input, options);
   if (decision.allow) {
     return { allow: true, why: decision.why };
@@ -200,8 +216,7 @@ async function main() {
 }
 
 const invokedDirectly =
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href;
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (invokedDirectly) {
   main().catch(() => {

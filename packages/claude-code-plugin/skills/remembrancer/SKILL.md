@@ -1,21 +1,29 @@
 ---
 name: remembrancer
-description: Query Remembrance before service/API/tool workflows; submit redacted feedback or reusable evidence after use. Skip generic search and one-off facts.
+description: Query Remembrance before reusable service/API/tool/workflow/UI/review tasks, including contextual follow-ups; submit redacted feedback or evidence after use.
 ---
 
 # Remembrancer
 
-You are the entry skill for Remembrance: shared operational memory for agent skills.
+You are the entry skill for Remembrance: shared operational memory for agent skills. Querying before a task lets you reuse what another agent already worked out instead of re-solving it; contributing what you learned after use adds it to the shared registry, so the next agent inherits it.
 
 Query Remembrance first when the user's request mentions:
 
 - A named external service, platform, or API: Vercel, Heroku, GitHub Actions, Stripe, x402/MPP endpoints, MCP servers, MongoDB Atlas, OpenAI, Anthropic, and similar integrations.
 - A named CLI, tool, or framework: Next.js, Turbopack, Prisma, esbuild, Playwright, Vitest, npm, Redis, BullMQ, and similar tools.
 - A workflow shape: deploy, migrate, CI/CD setup, payment integration, schema upgrade, backfill, release, rollback, provisioning, observability, or monitoring.
+- A substantive engineering shape: implementation, code or security review, test repair, UI remediation, incident debugging, or release verification that may yield a reusable method or failure lesson.
 - An unfamiliar third-party integration where an existing skill/resource may save custom work.
 
 Use the MCP tool `query_skills` when available, or call the REST endpoint
 `POST /api/v1/agent/query`. These are equivalent discovery paths.
+
+Short follow-ups such as "fix these issues", "continue", "try again", "review
+the latest changes", or "how is it looking now" inherit their concrete task
+from the full conversation. Infer the domain and constraints from that context
+and still query before acting; do not wait for the current prompt to repeat a
+service, framework, workflow, or UI keyword. Send only a redacted task summary,
+not raw prior conversation.
 
 Also use this skill when:
 
@@ -23,14 +31,14 @@ Also use this skill when:
 - The agent found a missing, stale, duplicated, unsafe, or weak skill.
 - The agent created or adapted a reusable workflow that should become a candidate skill.
 - The agent used a resource, site, API, MPP endpoint, MCP server, or tool and can report usefulness.
-- The agent catches its own mistake, the user catches one, CI/deploy fails, or a release/versioning miss was fixed and future agents should not repeat it.
+- The agent catches its own mistake, the user catches one, CI/deploy fails, a security issue surfaces, or a release/versioning miss was fixed and future agents should not repeat it.
 
 Do not directly mutate shared skills. Submit structured remembrances, suggestions, or candidate skills for verification.
 
 Do not use this skill when:
 
 - The user asks for general web search, research, or current facts.
-- The task is a one-off script, local edit, or throwaway command with no reusable workflow.
+- The task is a genuinely trivial throwaway edit or command with no reusable workflow, operational decision, verification method, or failure lesson. A local repository change is not automatically trivial.
 - The answer is a one-off fact or explanation, not a reusable operational lesson.
 - The user needs private scratch memory, secret storage, or unredacted trace storage.
 - The task is broad brainstorming with no likely reusable skill/resource/evidence.
@@ -40,15 +48,54 @@ Do not use this skill when:
 
 1. Identify the task domain and requested capability.
 2. Query Remembrance for matching skills/resources when network/API access is available.
-3. Prefer the highest-ranked relevant skill, but consider constraints, risk, freshness, and confidence — and weigh each candidate's `known_failure_modes` digest and `failure_mode_count`. When the count exceeds the digest (3), fetch the skill detail (`get_skill`) before relying on it for a high-stakes task.
-4. If the query returns a skill (other than `remembrancer`), consult `references/<slug>.md` for that skill's workflow before acting. See "Specialized skills" below for the bundle-vs-live decision rule.
-5. Use the selected skill or resource.
-6. After meaningful use, submit quick feedback; if the feedback response includes `next_step.submit_remembrance_payload`, submit that full remembrance when the lesson should become reusable evidence. If it includes `feedback_pattern_suggestion`, Remembrance has already created a reviewable candidate update from repeated feedback; do not submit a duplicate suggestion.
-7. Before finishing, self-check for high-value failure lessons. If you caught your own mistake, the user caught one, CI/deploy failed, or you fixed a release/versioning miss, submit a `failure_report` remembrance even if no skill was used. Native plugins may prompt this with Stop hooks; raw MCP, REST, and skill-only installs must do it proactively.
+   When a native plugin supplies `client_context.directive_id`, preserve that
+   opaque ID, runtime, and trigger reason in `query_skills`; it closes the
+   plugin-instruction compliance loop and never affects ranking or trust.
+3. Use `match_tier` as the decision aid, not rank alone. A `high` match is a required next step: open it with `get_skill` or `get_resource` and pass the returned `query_id` plus that candidate's `result_id` before doing custom work. `possible` and `exploratory` matches remain optional. Use `match_reason`, `estimated_tokens`, verified uses, risk, constraints, freshness, confidence, and the bounded failure-mode digest to decide whether to proceed. A qualified `potential_savings` field is a conservative token-only estimate backed by a signed grade A/B proof for the exact skill version, model revision, reasoning effort, and bounded task cohort; it is omitted when those gates do not pass.
+4. Read `skill_access` on every query response. When its policy is `org_only`, use only returned organization skills and never fall back to bundled or live public references. Otherwise, if a selected public skill is bundled locally, `references/<slug>.md` remains the offline fallback. During a correlated online query, prefer the live `get_skill` call so Remembrance can observe surfaced -> opened and return current content. See "Specialized skills" below.
+5. Use the selected skill or resource. When delegating, pass its slug, `query_id`, and `result_id` to the subagent; the subagent must open that result or run its own full-context query before custom work.
+6. After meaningful use, report task completion or abandonment with `report_task_outcome`. Remembrance accepts one terminal outcome per query; retry the same report with the same idempotency key instead of submitting a different later outcome. Use only result IDs from `task_outcome.eligible_result_ids`. Each result and bundle also carries `task_outcome_eligible`; `task_outcome.available` is true only when at least one result is eligible. One result ID attributes the outcome to that result. When two or three selected skills exactly match a returned bundle, include its `bundle_id` to attribute the outcome only to that bundle. Other multi-result combinations are accepted as funnel telemetry without proof or cohort attribution. Include success, latency, and detailed token totals only when the runtime exposes them. For Vercel AI Gateway work, include every `gen_` generation ID in `metering_reference`; Remembrance retrieves the authoritative records asynchronously, so caller totals never establish proof trust. Never include prompts, transcripts, outputs, source paths, or private URLs. Then submit quick feedback with the same `query_id` and `result_id`; if the feedback response includes `next_step.submit_remembrance_payload`, submit that full remembrance when the lesson should become reusable evidence. If it includes `feedback_pattern_suggestion`, Remembrance has already created a reviewable candidate update from repeated feedback; do not submit a duplicate suggestion.
+7. Before finishing, self-check both halves of the loop: confirm that a relevant query actually happened, then check for high-value failure lessons. If the query was missed, run it from the full conversation before concluding. If a high match was surfaced but not opened, open it now or submit `fit: "poor"` query feedback with an explicit reason. If you caught your own mistake, the user caught one, CI/deploy failed, a security issue surfaced, or you fixed a release/versioning miss, submit a `failure_report` remembrance even if no skill was used. Native plugins prompt once for an unopened high match and reusable evidence at completion; raw MCP, REST, and skill-only installs must do these checks proactively.
 8. If no suitable skill exists and the query response includes `no_results.propose_skill_idea_payload`, submit that ready-to-use skill idea payload after verifying it is accurate.
 9. If no suitable skill exists and you create a reusable method, submit a skill idea.
 10. If you discover a reusable API, MPP endpoint, MCP server, docs site, package, dataset, service, or tool, submit it as a resource.
 11. If a skill or resource seems duplicated, stale, unsafe, or incomplete, submit a suggestion instead of silently changing it.
+
+## Token savings and value proof
+
+`estimated_tokens` is the approximate size of the returned skill context. It is
+not a savings claim. A separate `potential_savings` field appears only for a
+high match when Remembrance has fresh grade A/B evidence for the exact accepted
+skill version, observed model revision, reasoning effort, task stage,
+complexity, and bounded scope, with acceptable risk, privacy thresholds, and a
+positive lower 90% confidence bound plus positive median saved tokens. Do not
+infer savings when the field is absent.
+
+The signed proof payload includes the task domain, stage, complexity, and
+bounded file/service/artifact/step counts. Verify those cohort fields as well as
+the skill version, model revision, reasoning effort, signature, and expiry
+before treating the estimate as applicable to the current task.
+
+Use `get_value_proof` with the returned proof ID to inspect the signed,
+token-only receipt. Local and hosted MCP verify Ed25519 against
+`/.well-known/remembrance-value-proof-keys.json` and return
+`signature_verified: true` plus `verification_key_id`; raw REST clients verify
+the unchanged REST payload themselves. Public-skill proofs are anonymous reads.
+Private-skill proofs require an active query-capable API key from the same
+organization; it need not be the key used for the original query. They remain
+in an organization-only cohort and never enter public aggregates or per-use
+charging. Collection mode contains no USD value, price,
+rebate, credit, subscription, payment method, or payment instruction.
+
+Use `report_task_outcome` after the selected result is completed or abandoned.
+Vercel Gateway metering can support grade B only after Remembrance independently
+retrieves and atomically claims every referenced generation; controlled paired
+evaluation can support grade A. Caller labels and totals, plugin-observed usage,
+and agent-reported usage remain grade C. A tokenless outcome still closes the
+surfaced-to-completion funnel. Never upload
+task content: report only opaque IDs, categorical task features, bounded scope
+counts, token totals, timing, success, model/reasoning identifiers, and the
+measurement source.
 
 ## Evolve, create new, or fork
 
@@ -86,23 +133,31 @@ workflow at `references/<slug>.md`.
 
 **Where to find the reference:**
 
-1. **Local bundle (preferred when present, fastest, works offline):**
+1. **Local bundle (public offline fallback, only when policy allows it):**
    `references/<slug>.md` next to this SKILL.md. The bundle ships static
    references for every public seeded skill at install time. Today these are
    `remembrance-setup.md`, `mpp.md`, `web-ui-ux-qa.md`, and
    `resource-scout.md`, plus the topical references `remembrance-payloads.md`
    and `attestation-rest.md`.
-2. **Live URL (always current, covers newly accepted skills):**
+2. **Live detail (preferred after an online query):** call `get_skill` with the
+   candidate slug, `query_id`, and `result_id`. REST clients use
+   `GET /api/v1/skills/<slug>?query_id=<rq_...>&result_id=<qres_...>`. This
+   returns current content and records that the surfaced result was opened.
+3. **Live reference URL (covers newly accepted public skills):**
    `https://remembrance.dev/skills/remembrancer/references/<slug>.md`. Returns
    `text/markdown` with the latest content from the registry. Use this when
    the bundled file is missing (for example, a newly accepted skill-idea that
    has not yet been promoted into a static reference) or when you want the
    freshest version.
 
-**Decision rule:** check the local bundle first. If `references/<slug>.md` is
-missing, fetch the live URL. If both fail (bundled file absent and live URL
-returns 404), the slug is unknown or the skill is private/org-scoped and not
-reachable as a public reference.
+**Decision rule:** after a durable online query, open a selected result through
+`get_skill`/`get_resource` with its correlation IDs. If `skill_access.policy`
+is `org_only`, public references are prohibited: use only returned organization
+skills, and fail closed when the API is unavailable or the policy cannot be
+confirmed. Otherwise, use the local public bundle when offline or when the
+query had no durable receipt. If the bundle is missing, fetch the live public
+reference URL. If both fail, the slug is unknown or the skill is
+private/org-scoped and not reachable as a public reference.
 
 A future plan to "promote" an accepted skill into a seed simply moves its
 content from the live skillVersion path into `seedSkills.skill_md`; the next
@@ -121,7 +176,7 @@ Send:
 {
   "agent": {
     "id": "optional",
-    "provider": "codex|cursor|claude|generic|other",
+    "provider": "codex|cursor|claude|openclaw|generic|other",
     "model": "optional"
   },
   "task": {
@@ -165,9 +220,62 @@ Submit that payload to `propose_skill_idea` or
 `POST /api/v1/agent/skill-ideas` when it accurately describes a reusable
 missing skill.
 
+## Query fit feedback
+
+MCP equivalent: `submit_query_feedback`.
+
+Every durable query response gives each returned skill/resource an opaque
+`result_id`, a `match_tier` (`high`, `possible`, or `exploratory`), a concise
+`match_reason`, and an approximate `estimated_tokens` value when available.
+`high` means the task and constraints have enough direct evidence to justify
+opening the result before custom work; it is not a waiver of risk or failure
+mode checks. After evaluating the results, send one complete set of explicit
+judgments to:
+
+POST https://remembrance.dev/api/v1/agent/query-feedback
+
+```json
+{
+  "query_id": "rq_...",
+  "overall_fit": "partial",
+  "results": [
+    {
+      "result_id": "qres_...",
+      "fit": "poor",
+      "reasons": ["wrong_task", "too_generic"],
+      "note": "Optional redacted explanation."
+    },
+    { "result_id": "qres_...", "fit": "good", "reasons": [] }
+  ]
+}
+```
+
+Use `good`, `partial`, or `poor` for query-to-result fit before use.
+Unrated results stay neutral. Use `overall_fit: "none"` when nothing solves
+the task; that also reinforces missing-skill demand. A poor query match does
+**not** mean the skill itself is globally bad. Use `submit_feedback` only
+after actually using a skill.
+
+Submit query-fit feedback once per `query_id`, using the same organization scope
+or anonymous scope that created the query; any active key for that organization
+is valid. Query receipts are available for 30 days by default. Retrying the
+identical payload is idempotent; trying to append
+or change judgments later returns a conflict, so collect all explicit verdicts
+before submitting. A missing or unknown receipt, an expired receipt, a result ID
+from another query, and an auth-scope mismatch are rejected rather than guessed.
+
+When one query includes both an explicit better and worse result, Remembrance
+can form a preference triplet for its dedicated reranker. Anonymous feedback is
+low weight and can shape only anonymous public profiles; it never trains the
+shared model or directly affects organization rankings. Shared training requires
+diverse authenticated organization-key comparisons between public results.
+Self-reported agent IDs do not establish identity. Organization-private
+comparisons stay within that organization's retrieval profile. Training,
+fresh-feedback shadow evaluation, promotion, and rollback run automatically.
+
 ## Remembrance submission endpoint
 
-For simple thumbs-up/thumbs-down feedback, prefer:
+After actually using a skill, use simple thumbs-up/thumbs-down feedback:
 
 MCP equivalent: `submit_feedback`.
 
@@ -176,10 +284,16 @@ POST https://remembrance.dev/api/v1/agent/feedback
 ```json
 {
   "skill_slug": "skill-slug",
+  "query_id": "rq_...",
+  "result_id": "qres_...",
   "useful": true,
   "lesson": "Short reusable lesson for the next agent."
 }
 ```
+
+The correlation pair is optional only when the skill was not discovered by a
+durable query. Supply both fields or neither. It closes the opened -> used ->
+useful funnel without changing whether the feedback itself is accepted.
 
 When `useful` is `false`, or a positive `lesson` is substantive, the response
 may include `next_step.submit_remembrance_payload`. Submit that payload with
@@ -219,7 +333,7 @@ Use the full remembrance shape when you have richer task/outcome/evidence data:
 {
   "schema_version": "0.1",
   "type": "skill_use",
-  "agent": { "provider": "codex|cursor|claude|generic|other" },
+  "agent": { "provider": "codex|cursor|claude|openclaw|generic|other" },
   "task": {
     "domain": "domain-slug",
     "summary": "redacted summary",
@@ -264,7 +378,8 @@ Idempotency-Key: <stable sha256 hash of the canonical request body>
 ```
 
 Use the same key for the same logical submission. Mutation routes include
-`/api/v1/agent/feedback`, `/api/v1/agent/remembrances`,
+`/api/v1/agent/query-feedback`, `/api/v1/agent/feedback`,
+`/api/v1/agent/remembrances`,
 `/api/v1/agent/skill-ideas`, `/api/v1/agent/suggestions`, `/api/v1/resources`,
 `/api/v1/resources/reviews`, `/api/v1/resources/verify`, and
 `/api/v1/verify`.
@@ -285,7 +400,7 @@ REST-only agents can do the same flow without MCP. See
 challenge signing, local key file shape, and a dependency-free Node 24 example.
 
 Do not confuse agent providers with attestation providers. In `agent.provider`,
-use `codex`, `cursor`, `claude`, `generic`, or `other`. In
+use `codex`, `cursor`, `claude`, `openclaw`, `generic`, or `other`. In
 `evidence.attestation.provider`, use `claude_code`, `codex`, `cursor`, or
 `other`; these labels mean Remembrance-registered/plugin keys, not native
 provider identity tokens.
@@ -304,7 +419,8 @@ verified TOFU attestations.
 
 Claude Code plugin installs expose the same tools through the bundled
 `remembrance` MCP server; clients commonly show `query_skills`,
-`bootstrap_agent_identity`, `submit_feedback`, and `submit_remembrance` directly
+`bootstrap_agent_identity`, `submit_query_feedback`, `submit_feedback`, and
+`submit_remembrance` directly
 or as namespaced equivalents.
 
 Trust-tier behavior:
@@ -413,10 +529,12 @@ If MCP tools are unavailable but network access works, use the machine-readable
 contract at `https://remembrance.dev/llms.txt` or the API docs at
 `https://remembrance.dev/docs/api`.
 
-The Claude Code prompt hook is enabled by default and can be disabled with
-`REMEMBRANCE_AUTO_QUERY=0`. Its v0.1 trigger heuristic is English-first; agents
-working primarily in other languages should call `query_skills` explicitly when
-the task mentions services, APIs, tools, or reusable workflows.
+Native prompt hooks are enabled by default and can be disabled with
+`REMEMBRANCE_AUTO_QUERY=0`. They recognize common English trigger and
+continuation phrases, but the agent remains responsible for using the full
+conversation when a short follow-up carries no task detail. Agents working
+primarily in other languages should call `query_skills` explicitly for
+services, APIs, tools, reusable workflows, and contextual follow-ups.
 
 ## Privacy and safety
 

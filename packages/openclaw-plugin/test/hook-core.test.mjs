@@ -14,33 +14,56 @@ import {
 // we only confirm the copy is importable and its exports behave.
 describe("hook-core smoke (openclaw copy)", () => {
   it("shouldQueryPrompt matches service/tool/workflow prompts and skips trivia", () => {
-    expect(shouldQueryPrompt("Set up a Vercel deployment pipeline").likely_match).toBe(true);
-    expect(shouldQueryPrompt("What is the capital of France?").likely_match).toBe(false);
+    expect(
+      shouldQueryPrompt("Set up a Vercel deployment pipeline").likely_match,
+    ).toBe(true);
+    expect(
+      shouldQueryPrompt("What is the capital of France?").likely_match,
+    ).toBe(false);
     expect(shouldQueryPrompt("hi").likely_match).toBe(false);
   });
 
   it("inferDomain and inferConstraints map prompts to seeded domains", () => {
     expect(inferDomain("stripe checkout billing")).toBe("agent-commerce");
     expect(inferDomain("redesign the dashboard layout")).toBe("web-ui-qa");
-    expect(inferDomain("deploy to vercel via github actions")).toBe("deployment");
+    expect(inferDomain("deploy to vercel via github actions")).toBe(
+      "deployment",
+    );
     expect(inferConstraints("deploy via github actions")).toEqual(
       expect.arrayContaining(["ci", "deployment"]),
     );
   });
 
   it("redactPrompt strips secrets and private URLs", () => {
-    const out = redactPrompt("token sk_live_1234567890123456 at http://svc.internal/x");
+    const out = redactPrompt(
+      "token sk_live_1234567890123456 at http://svc.internal/x",
+    );
     expect(out).toContain("[redacted-secret]");
     expect(out).toContain("[redacted-private-url]");
   });
 
   it("formatContext renders skills into an injectable context string", () => {
     const context = formatContext(
-      { body: { skills: [{ slug: "s", description: "d", trust_tier: "t" }], resources: [] } },
+      {
+        body: {
+          query_id: "rq_openclaw",
+          skills: [
+            {
+              slug: "s",
+              description: "d",
+              trust_tier: "t",
+              result_id: "qres_openclaw",
+            },
+          ],
+          resources: [],
+        },
+      },
       "external_service",
       3,
     );
     expect(context).toContain("Remembrance auto-query context");
+    expect(context).toContain("Query receipt: rq_openclaw");
+    expect(context).toContain("result qres_openclaw");
     expect(context).toContain("s");
   });
 

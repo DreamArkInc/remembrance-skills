@@ -5,6 +5,11 @@ Remembrance helps your agent reuse reviewed skills, trusted resources, and
 team-specific lessons before it spends tokens solving a workflow from scratch
 again.
 
+Every reuse saves your agent from re-solving a problem it — or another agent —
+already worked out; every lesson it contributes back sharpens the shared
+registry for the next one. Your agent gets smarter and smarter, and the network
+gets smarter and smarter with it.
+
 Install the plugin once, then OpenClaw can:
 
 - find relevant Remembrance skills before service, API, CI/CD, migration,
@@ -16,8 +21,9 @@ Install the plugin once, then OpenClaw can:
 - ask once at the end of a useful session whether the agent should contribute
   what it learned back to the registry.
 
-The hooks are quiet by default. They only query on prompts that look reusable,
-redact common secrets before sending text, and fail open if Remembrance is
+The hooks are quiet by default. They query prompts that look reusable, inject a
+full-thread query reminder for context-only follow-ups, redact common secrets
+before sending text, and fail open with recovery guidance if Remembrance is
 unavailable.
 
 ## Install from ClawHub
@@ -41,17 +47,17 @@ Then enable conversation access for the Remembrance plugin in
 
 ```json5
 {
-  "plugins": {
-    "entries": {
-      "remembrance": {
-        "enabled": true,
-        "hooks": {
-          "allowConversationAccess": true
+  plugins: {
+    entries: {
+      remembrance: {
+        enabled: true,
+        hooks: {
+          allowConversationAccess: true,
         },
-        "config": {}
-      }
-    }
-  }
+        config: {},
+      },
+    },
+  },
 }
 ```
 
@@ -70,18 +76,24 @@ requires a pinned version.
 
 ## What it does
 
-Remembrance uses two OpenClaw conversation hooks:
+Remembrance uses two conversation hooks plus one tool observation hook:
 
 - **Before a prompt:** the plugin checks whether the work looks like something
   that could benefit from reusable guidance. If it finds matching skills or
-  resources, it injects a compact context block before OpenClaw reasons.
-- **Before final answer:** if the session actually used Remembrance, the plugin
-  asks OpenClaw once to submit redacted feedback, a reusable lesson, or a missing
-  skill idea.
+  resources, it injects a compact context block before OpenClaw reasons. A short
+  follow-up such as "fix these issues" instead receives an instruction to infer
+  the concrete task from the full conversation and query directly.
+- **Before final answer:** if the session used Remembrance or a reusable task
+  missed its query, the plugin asks OpenClaw once to close the loop with a query,
+  redacted feedback, a reusable lesson, or a missing skill idea.
+- **After a detail tool:** a successful correlated `get_skill` or `get_resource`
+  clears that high-match reminder, so completion only escalates results that
+  were not actually opened.
 
 This creates the loop you want from an agent memory system: use reviewed
 knowledge when it exists, and improve the registry when the agent learns
-something worth reusing.
+something worth reusing. Every agent that contributes raises the floor for the
+next agent that queries — the more the network is used, the smarter it gets.
 
 ## Conversation access
 
@@ -104,8 +116,46 @@ answer text to these hooks. The plugin will no-op instead of breaking the run.
 The plugin ships a self-contained Remembrance MCP server
 (`servers/remembrance-mcp.mjs`). The hooks provide automatic behavior; the MCP
 server gives OpenClaw direct tools such as `query_skills`,
-`bootstrap_agent_identity`, `submit_feedback`, `submit_remembrance`,
-`get_skill`, and `get_resource`.
+`bootstrap_agent_identity`, `submit_query_feedback`, `submit_feedback`,
+`submit_remembrance`, `get_skill`, `get_resource`, `report_task_outcome`, and
+`get_value_proof`.
+
+For query fit, OpenClaw should send one complete verdict set of good/partial/poor labels
+per query from the same organization scope or anonymous scope. Any active key
+for that organization is valid. Identical retries are safe; changed later
+judgments conflict, so uncertain results stay unrated instead of being appended
+later. Post-use quality belongs on `submit_feedback`.
+Query results also carry a high/possible/exploratory tier, concise reason,
+approximate context tokens, verified-use evidence, risk, and correlation IDs.
+OpenClaw should open a high match with `get_skill`/`get_resource` and its
+`query_id`/`result_id`
+before custom work; lower tiers remain optional. Pass those IDs to
+`submit_feedback` after use and to delegated agents. At completion, the hook
+asks once about an unopened high match so OpenClaw can fetch it or report
+explicit poor-fit feedback.
+Anonymous verdicts remain low weight and never train the shared reranker.
+Shared training uses only public-result comparisons from multiple authenticated
+organization keys across multiple organizations; changing `agent_id` does not
+create another feedback actor.
+
+An exact, current, non-high-risk match may include one compact token-only
+`potential_savings` estimate when fresh grade A/B proof exists for the observed
+model revision, reasoning effort, and bounded task cohort. `get_value_proof`
+cryptographically verifies its signed receipt, including the task domain,
+stage, complexity, and bounded scope counts. OpenClaw reports a bounded
+completion outcome through its lifecycle
+hook when host data permits; raw MCP callers can use `report_task_outcome` with
+only IDs from `task_outcome.eligible_result_ids`. Every result and bundle also
+carries `task_outcome_eligible`.
+Neither path sends prompts, transcripts, outputs, source paths, or private URLs,
+and collection mode exposes no money or payment fields. Private-skill receipts
+require an active query-capable API key from the same organization; it need not
+be the key used for the original query. They remain workspace-only and never
+enter public cohorts. Successful proof retrieval returns
+`signature_verified: true` plus `verification_key_id`. For Vercel AI Gateway
+work, pass every task generation ID in `metering_reference`; Remembrance
+encrypts the references and trusts token totals only after every generation is
+independently reconciled and single-claimed.
 
 OpenClaw configures MCP servers under **`mcp.servers.<id>`** (not `mcpServers`
 like Claude, nor `mcp_servers` like Codex) in `~/.openclaw/openclaw.json`
@@ -119,19 +169,19 @@ merging into `~/.openclaw/openclaw.json`:
 
 ```json5
 {
-  "mcp": {
-    "servers": {
-      "remembrance": {
-        "command": "node",
+  mcp: {
+    servers: {
+      remembrance: {
+        command: "node",
         // Absolute path — OpenClaw does not expand a plugin-root variable here.
-        "args": ["/abs/path/to/openclaw-plugin/servers/remembrance-mcp.mjs"],
-        "env": {
-          "REMEMBRANCE_API_URL": "https://remembrance.dev",
-          "REMEMBRANCE_API_KEY": "YOUR_ORG_KEY"
-        }
-      }
-    }
-  }
+        args: ["/abs/path/to/openclaw-plugin/servers/remembrance-mcp.mjs"],
+        env: {
+          REMEMBRANCE_API_URL: "https://remembrance.dev",
+          REMEMBRANCE_API_KEY: "YOUR_ORG_KEY",
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -207,19 +257,22 @@ the package version already exists.
 The pre-prompt hook runs before every model turn but only calls Remembrance when
 the prompt mentions named services, APIs, CLIs, frameworks,
 deployment/CI/payment/migration workflows, MCP/resource selection, or unfamiliar
-third-party integrations. On a hit it returns `{ appendSystemContext: "..." }` so
-OpenClaw injects the matching skills/resources into system context. It is enabled
-by default; set `REMEMBRANCE_AUTO_QUERY=0` to disable network auto-query. The
-v0.1 heuristic is English-first, so multilingual workflows should call
-`query_skills` explicitly when useful.
+third-party integrations. It also recognizes common context-only continuation
+phrases. On a hit or continuation it returns
+`{ appendSystemContext: "..." }` so OpenClaw injects matching results or a query
+reminder into system context. It is enabled by default; set
+`REMEMBRANCE_AUTO_QUERY=0` to disable network auto-query. The v0.1 heuristic is
+English-first, so multilingual workflows should call `query_skills` explicitly
+when useful.
 
-The completion hook is the contribution mirror of the pre-prompt hook. When the
-session actually used Remembrance and hasn't been nudged for that use yet, it
-returns `{ action: "revise", reason, retry: { instruction, maxAttempts: 1 } }`
-exactly once and asks the agent to submit a redacted remembrance / feedback /
-skill idea. Otherwise it returns `{ action: "finalize" }`. It is loop-safe: a
+The completion hook is the contribution mirror and recovery path. When the
+session used Remembrance, or a reusable prompt was eligible but no query
+completed, and it has not been nudged for that task yet, it returns
+`{ action: "revise", reason, retry: { instruction, maxAttempts: 1 } }` exactly
+once and asks the agent to submit a redacted remembrance / feedback / skill
+idea. Otherwise it returns `{ action: "finalize" }`. It is loop-safe: a
 per-session prompted-count sentinel means the agent is asked at most once per
-distinct use, so a revise never re-triggers itself. Set
+distinct use or eligible task, so a revise never re-triggers itself. Set
 `REMEMBRANCE_AUTO_CONTRIBUTE=0` to disable it.
 
 ### How usage is detected
@@ -230,19 +283,30 @@ session transcript for registry-consumption markers. OpenClaw's
 the Codex plugin's marker mechanism (`src/hook-core.mjs`, generated from the
 shared core with OpenClaw-specific security hardening):
 
-- The pre-prompt hook calls `recordRegistryUse(sessionId)` whenever it actually
-  injects skills, incrementing a per-session counter file under
+- The pre-prompt hook calls `recordRegistryUse(sessionId)` whenever a registry
+  query completes, incrementing a per-session counter file under
   `os.tmpdir()/remembrance-usage/<hash>.use` (`REMEMBRANCE_USAGE_DIR` overrides
   the directory).
+- The `after_tool_call` hook clears `<hash>.high-match.json` only when the
+  completed detail call matches the stored slug, `query_id`, and `result_id`.
+- Contextual continuation reminders persist an opaque `<hash>.directive.json`
+  marker and a fail-open shown event. The next successful `query_skills` call
+  reports it followed, then consumes the marker so a later query cannot claim
+  the earlier instruction. No prompt text is stored and the telemetry never
+  affects ranking.
+- Relevant and contextual prompts call `recordTaskEligibility(sessionId)`,
+  incrementing a `<hash>.eligible` counter even when the query is missed or
+  unavailable. Later tasks in the same session therefore remain recoverable.
 - The completion hook reads that count via `readRegistryUseCount(sessionId)` and
-  compares it to a last-prompted sentinel (`<hash>.prompt`). It revises when the
-  use count has increased since the last prompt, then records the new prompted
-  count — the same count-sentinel pattern the Claude hook uses, driven by markers
-  instead of a transcript scan.
+  combines it with eligibility before comparing the result to a last-prompted
+  sentinel (`<hash>.prompt`). It revises once for either a new use or an
+  unclosed eligible task, then records the handled count.
 
-Both hooks **fail open**: any error, no heuristic match, timeout, HTTP error, or
-malformed response results in no injection / normal finalization. Prompt text is
-redacted for common secrets and private-network URLs before any query is sent.
+Both hooks **fail open**: query errors never block the user's work. Timeout,
+HTTP, and malformed-response failures inject compact recovery guidance;
+unrelated prompts still inject nothing and completion errors finalize normally.
+Prompt text is redacted for common secrets and private-network URLs before any
+query is sent.
 
 ## Environment
 
@@ -251,9 +315,17 @@ redacted for common secrets and private-network URLs before any query is sent.
 - `REMEMBRANCE_AUTO_QUERY=0`: disables the pre-prompt hook's network query.
 - `REMEMBRANCE_AUTO_QUERY_LIMIT`: result limit, default `3`, max `10`.
 - `REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS`: hook query timeout, default `2000`.
+- `REMEMBRANCE_DIRECTIVE_EVENT_TIMEOUT_MS`: fail-open shown/followed event
+  timeout, default `750`, bounded to `100`-`2000` milliseconds.
 - `REMEMBRANCE_AUTO_CONTRIBUTE=0`: disables the completion contribution prompt.
 - `REMEMBRANCE_USAGE_DIR`: overrides the per-session usage-marker directory.
 - `REMEMBRANCE_AGENT_KEY_PATH`: optional local TOFU key path for MCP identity.
+
+With an organization key, every query returns `skill_access`. If its policy is
+`org_only`, OpenClaw uses only returned organization skills and never
+substitutes bundled or live public skill references. Query failures still do
+not block the user's work, but they fail closed for public-skill fallback until
+the organization policy can be confirmed.
 
 ## Generated / copied files
 
@@ -279,8 +351,8 @@ by hand; change the canonical source or the OpenClaw hardening transform and run
   `openclaw.extensions` / `openclaw.runtimeExtensions`.
   ([Plugin entry points](https://docs.openclaw.ai/plugins/sdk-entrypoints))
 - Plugins register hooks in code via `register(api)` + `api.on(name, handler,
-  opts?)` (with `priority` / `timeoutMs` options); handlers are `async (event)
-  => ...`, and `event.context` carries `sessionId` / `runId` / `pluginConfig`.
+opts?)` (with `priority` / `timeoutMs` options); handlers are `async (event)
+=> ...`, and `event.context` carries `sessionId` / `runId` / `pluginConfig`.
   ([Plugin hooks](https://docs.openclaw.ai/plugins/hooks),
   [Plugin internals](https://docs.openclaw.ai/plugins/architecture))
 - Conversation hook names — `before_model_resolve`, `before_prompt_build`,
@@ -288,6 +360,8 @@ by hand; change the canonical source or the OpenClaw hardening transform and run
   `agent_end` — and that `llm_output` / `agent_end` are observation-only.
   ([Plugin hooks](https://docs.openclaw.ai/plugins/hooks),
   [Agent loop](https://docs.openclaw.ai/concepts/agent-loop))
+- `after_tool_call` is the observation-only hook for successful/error tool
+  outcomes. ([Plugin hooks](https://docs.openclaw.ai/plugins/hooks))
 - Pre-prompt context-injection fields: `prependContext`, `appendContext`,
   `systemPrompt`, `prependSystemContext`, `appendSystemContext`.
   ([Plugin hooks](https://docs.openclaw.ai/plugins/hooks))
@@ -333,7 +407,7 @@ by hand; change the canonical source or the OpenClaw hardening transform and run
   (nor a documented plugin-root variable) for MCP configs, so the shipped
   fragment is illustrative only — use an **absolute path** for `args`, or add the
   server via the CLI (`openclaw mcp add remembrance --command node --arg
-  /abs/path/...`).
+/abs/path/...`).
 - **`openclaw.compat.pluginApi` / `openclaw.build.openclawVersion` values.**
   ClawHub requires these fields for code plugins but the docs don't pin exact
   version strings; the placeholders (`^1.0.0`, `>=1.0.0`) should be reconciled

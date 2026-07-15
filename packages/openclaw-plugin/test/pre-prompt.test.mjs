@@ -1,11 +1,5 @@
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
@@ -13,6 +7,7 @@ import {
   promptFromEvent,
   sessionIdFromEvent,
 } from "../src/index.mjs";
+import { remembranceConfigPath } from "../src/hook-core.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const tempRoot = mkdtempSync(join(tmpdir(), "remembrance-openclaw-pre-"));
@@ -40,11 +35,15 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
   it("injects appendSystemContext for a relevant prompt and records a use marker", async () => {
     const calls = [];
     const recorded = [];
+    const eligible = [];
+    const highMatches = [];
     const result = await handlePrePrompt(
       event("Fix this Vercel Next.js build error in GitHub Actions."),
       {
         env: testEnv({ REMEMBRANCE_AUTO_QUERY_LIMIT: "2" }),
         recordUse: (id) => recorded.push(id),
+        recordEligibility: (id) => eligible.push(id),
+        recordHighMatch: (id, match) => highMatches.push({ id, match }),
         fetchImpl: vi.fn(async (url, init) => {
           calls.push({
             url,
@@ -52,6 +51,7 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
             headers: init.headers,
           });
           return Response.json({
+            query_id: "rq_openclaw",
             skills: [
               {
                 slug: "vercel-build-debug",
@@ -59,6 +59,11 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
                 trust_tier: "tofu_verified",
                 verified_uses: 7,
                 total_uses: 9,
+                result_id: "qres_openclaw",
+                match_tier: "high",
+                match_reason: "Strong task coverage",
+                estimated_tokens: 360,
+                risk_level: "low",
               },
             ],
             resources: [],
@@ -78,6 +83,11 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
         constraints: expect.arrayContaining(["ci", "deployment"]),
       },
       limit: 2,
+      client_context: {
+        surface: "plugin_hook",
+        runtime: "openclaw",
+        trigger_reason: "external_service",
+      },
     });
     expect(calls[0].headers["user-agent"]).toBe("@remembrance/openclaw-plugin");
     expect(result.appendSystemContext).toContain(
@@ -86,6 +96,50 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
     expect(result.appendSystemContext).toContain("vercel-build-debug");
     // A real injection must record the per-session use marker (from ctx.runId).
     expect(recorded).toEqual(["r1"]);
+    expect(eligible).toEqual(["r1"]);
+    expect(highMatches).toEqual([
+      {
+        id: "r1",
+        match: expect.objectContaining({
+          query_id: "rq_openclaw",
+          slug: "vercel-build-debug",
+        }),
+      },
+    ]);
+  });
+
+  it("injects a full-conversation reminder for contextual follow-ups", async () => {
+    const fetchImpl = vi.fn(async (url) => {
+      expect(String(url)).toContain("/api/v1/agent/directive-events");
+      return Response.json({ recorded: true }, { status: 201 });
+    });
+    const recorded = [];
+    const eligible = [];
+    const directives = [];
+    const result = await handlePrePrompt(event("fix these issues"), {
+      env: testEnv(),
+      fetchImpl,
+      recordUse: (id) => recorded.push(id),
+      recordEligibility: (id) => eligible.push(id),
+      recordDirective: (id, directive) => directives.push({ id, directive }),
+    });
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(recorded).toEqual([]);
+    expect(eligible).toEqual(["r1"]);
+    expect(result.appendSystemContext).toContain("task-continuation reminder");
+    expect(result.appendSystemContext).toContain("full thread");
+    expect(result.appendSystemContext).toContain("query_skills");
+    expect(result.appendSystemContext).toContain("directive_id");
+    expect(directives).toEqual([
+      {
+        id: "r1",
+        directive: expect.objectContaining({
+          directive_id: expect.stringMatching(/^dir_/),
+          runtime: "openclaw",
+        }),
+      },
+    ]);
   });
 
   it("really increments the on-disk use marker on a hit", async () => {
@@ -140,46 +194,15 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
     expect(headers[0]["x-remembrance-api-key"]).toBe("env-key-123");
   });
 
-  it("falls back to the config-file apiKey when the env key is empty", async () => {
-    const home = join(tempRoot, `home-${(counter += 1)}`);
-    mkdirSync(join(home, ".config", "remembrance"), { recursive: true });
-    writeFileSync(
-      join(home, ".config", "remembrance", "config.json"),
-      JSON.stringify({ apiKey: "file-key-456" }),
-    );
-    const headers = [];
-    await handlePrePrompt(
-      event("Set up Vercel deployment.", { runId: "r-key-file" }),
-      {
-        env: testEnv({ REMEMBRANCE_API_KEY: "", HOME: home }),
-        recordUse: () => {},
-        fetchImpl: vi.fn(async (_url, init) => {
-          headers.push(init.headers);
-          return Response.json({ skills: [], resources: [] });
-        }),
-      },
-    );
-    expect(headers).toHaveLength(1);
-    expect(headers[0]["x-remembrance-api-key"]).toBe("file-key-456");
-  });
+  it("uses the fixed user-home config path instead of env-controlled HOME", () => {
+    const injectedHome = join(tempRoot, `home-${(counter += 1)}`);
+    const path = remembranceConfigPath({
+      HOME: injectedHome,
+      XDG_CONFIG_HOME: join(injectedHome, "xdg"),
+    });
 
-  it("omits the x-remembrance-api-key header when neither env nor config sets it", async () => {
-    const home = join(tempRoot, `home-empty-${(counter += 1)}`);
-    mkdirSync(home, { recursive: true });
-    const headers = [];
-    await handlePrePrompt(
-      event("Set up Vercel deployment.", { runId: "r-key-none" }),
-      {
-        env: testEnv({ HOME: home }),
-        recordUse: () => {},
-        fetchImpl: vi.fn(async (_url, init) => {
-          headers.push(init.headers);
-          return Response.json({ skills: [], resources: [] });
-        }),
-      },
-    );
-    expect(headers).toHaveLength(1);
-    expect(headers[0]["x-remembrance-api-key"]).toBeUndefined();
+    expect(path).toBe(join(homedir(), ".config", "remembrance", "config.json"));
+    expect(path).not.toContain(injectedHome);
   });
 
   it("redacts a fake secret before sending the query text", async () => {
@@ -214,7 +237,7 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("fails open on bad input, timeouts, server errors, and malformed responses", async () => {
+  it("fails open on bad input and injects recovery context for query failures", async () => {
     expect(await handlePrePrompt({}, { env: testEnv() })).toBeUndefined();
     expect(await handlePrePrompt(null, { env: testEnv() })).toBeUndefined();
 
@@ -248,9 +271,10 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
         })),
       },
     );
-    expect(timeout).toBeUndefined();
-    expect(serverError).toBeUndefined();
-    expect(malformed).toBeUndefined();
+    for (const result of [timeout, serverError, malformed]) {
+      expect(result.appendSystemContext).toContain("query-unavailable context");
+      expect(result.appendSystemContext).toContain("query_skills");
+    }
   });
 
   it("promptFromEvent reads prompt, userPrompt, input.prompt, and messages shapes", () => {

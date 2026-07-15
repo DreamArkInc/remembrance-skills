@@ -1,6 +1,6 @@
 {
   "name": "remembrance",
-  "version": "0.1.13",
+  "version": "0.1.27",
   "description": "Query proven Remembrance skills/resources from Cursor, then nudge redacted feedback when the agent used them.",
   "author": {
     "name": "Remembrance",
