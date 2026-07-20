@@ -4,24 +4,51 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
   clearHighMatchSurfaceIfOpened,
+  clearHighMatchSurfaceForExplicitSelection,
+  directSelectionFromResponse,
+  highMatchFromResponse,
+  markCurrentEngagementHandled,
   recordDirectiveFollowThroughForTool,
+  recordDirectSelectionSurface,
+  recordHighMatchSurface,
+  recordRegistryUse,
   recordValueEpisodeSurface,
+  responseRequestsRemembranceFollowup,
   sessionIdFor,
+  toolResponseIndicatesFailure,
   valueEpisodeFromResponse,
 } from "./hook-core.mjs";
+
+const CONTRIBUTION_TOOLS = [
+  "submit_query_feedback",
+  "submit_feedback",
+  "submit_remembrance",
+  "propose_skill_idea",
+  "submit_suggestion",
+  "submit_resource",
+  "submit_resource_review",
+];
 
 export async function handlePostToolUse(input, options = {}) {
   if (toolFailed(input)) return { cleared: false, why: "tool_failed" };
   const env = options.env ?? process.env;
   const name = toolName(input);
-  if (String(name).toLowerCase().endsWith("query_skills")) {
+  const normalizedName = String(name).toLowerCase();
+  const sessionId = sessionIdFor(input);
+  if (normalizedName.endsWith("query_skills")) {
+    const response = toolResponse(input);
+    const recordUse = options.recordRegistryUse ?? recordRegistryUse;
+    recordUse(sessionId, env);
+    const recordHighMatch =
+      options.recordHighMatch ?? recordHighMatchSurface;
+    recordHighMatch(sessionId, highMatchFromResponse(response), env);
     const recordFollowThrough =
       options.recordDirectiveFollowThrough ??
       recordDirectiveFollowThroughForTool;
     const followed = await recordFollowThrough(
-      sessionIdFor(input),
+      sessionId,
       name,
-      toolResponse(input),
+      response,
       {
         env,
         fetchImpl: options.fetchImpl ?? fetch,
@@ -31,8 +58,8 @@ export async function handlePostToolUse(input, options = {}) {
     const recordValueEpisode =
       options.recordValueEpisode ?? recordValueEpisodeSurface;
     recordValueEpisode(
-      sessionIdFor(input),
-      valueEpisodeFromResponse(toolResponse(input)),
+      sessionId,
+      valueEpisodeFromResponse(response),
       env,
     );
     return {
@@ -41,9 +68,58 @@ export async function handlePostToolUse(input, options = {}) {
       why: followed ? "directive_followed" : "no_current_directive",
     };
   }
+  if (normalizedName.endsWith("invoke_skill")) {
+    const selection = directSelectionFromResponse(toolResponse(input));
+    if (!selection) {
+      return { recorded: false, cleared: false, why: "invocation_not_loaded" };
+    }
+    const recordUse = options.recordRegistryUse ?? recordRegistryUse;
+    const useCount = recordUse(sessionId, env);
+    const recordSelection =
+      options.recordDirectSelection ?? recordDirectSelectionSurface;
+    recordSelection(sessionId, { ...selection, use_count: useCount }, env);
+    const recordValueEpisode =
+      options.recordValueEpisode ?? recordValueEpisodeSurface;
+    recordValueEpisode(
+      sessionId,
+      valueEpisodeFromResponse(toolResponse(input)),
+      env,
+    );
+    const clearExplicit =
+      options.clearHighMatchSurfaceForExplicitSelection ??
+      clearHighMatchSurfaceForExplicitSelection;
+    const cleared = clearExplicit(sessionId, selection.slug, env);
+    return {
+      recorded: true,
+      cleared,
+      why: "direct_skill_invoked",
+      count: useCount,
+    };
+  }
+  if (CONTRIBUTION_TOOLS.some((tool) => normalizedName.endsWith(tool))) {
+    if (
+      normalizedName.endsWith("submit_feedback") &&
+      responseRequestsRemembranceFollowup(toolResponse(input))
+    ) {
+      return {
+        recorded: false,
+        cleared: false,
+        why: "remembrance_followup_pending",
+      };
+    }
+    const markHandled =
+      options.markCurrentEngagementHandled ?? markCurrentEngagementHandled;
+    const count = markHandled(sessionId, env);
+    return {
+      recorded: count > 0,
+      cleared: false,
+      why: "contribution_handled",
+      count,
+    };
+  }
   const clear =
     options.clearHighMatchSurfaceIfOpened ?? clearHighMatchSurfaceIfOpened;
-  const cleared = clear(sessionIdFor(input), name, toolArguments(input), env);
+  const cleared = clear(sessionId, name, toolArguments(input), env);
   return {
     cleared,
     why: cleared ? "matched_detail_open" : "not_current_match",
@@ -94,11 +170,12 @@ function toolArguments(input) {
 
 function toolFailed(input) {
   return Boolean(
-    input?.error ??
-    input?.is_error ??
-    input?.isError ??
-    input?.tool_response?.isError ??
-    input?.toolResponse?.isError,
+    input?.error ||
+      input?.is_error ||
+      input?.isError ||
+      input?.tool_response?.isError ||
+      input?.toolResponse?.isError ||
+      toolResponseIndicatesFailure(toolResponse(input)),
   );
 }
 

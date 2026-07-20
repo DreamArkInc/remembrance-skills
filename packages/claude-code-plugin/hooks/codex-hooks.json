@@ -12,7 +12,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__.*remembrance.*__(query_skills|get_skill|get_resource)|remembrance[._](query_skills|get_skill|get_resource)|query_skills|get_skill|get_resource",
+        "matcher": "mcp__.*remembrance.*__(query_skills|get_skill|get_resource|invoke_skill|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|submit_suggestion|submit_resource|submit_resource_review)|remembrance[._](query_skills|get_skill|get_resource|invoke_skill|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|submit_suggestion|submit_resource|submit_resource_review)|query_skills|get_skill|get_resource|invoke_skill|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|submit_suggestion|submit_resource|submit_resource_review",
         "hooks": [
           {
             "type": "command",

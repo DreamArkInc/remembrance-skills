@@ -9,13 +9,18 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
   clearHighMatchSurfaceIfOpened,
+  clearHighMatchSurfaceForExplicitSelection,
+  directSelectionFromResponse,
   highMatchFromResponse,
   readRegistryUseCount,
   readTaskEligibilityCount,
   recordDirectiveFollowThroughForTool,
+  recordDirectSelectionSurface,
   recordHighMatchSurface,
   recordRegistryUse,
   recordValueEpisodeSurface,
+  responseRequestsRemembranceFollowup,
+  toolResponseIndicatesFailure,
   valueEpisodeFromResponse,
   writePromptedCount,
 } from "./hook-core.mjs";
@@ -68,6 +73,29 @@ export async function handleMcpUse(input, options = {}) {
   const env = options.env ?? process.env;
   const sessionId = cursorSessionId(input, env);
   const tool = toolName(input);
+  if (toolFailed(input)) {
+    return { recorded: false, kind: "failed", tool };
+  }
+  if (tool === "invoke_skill") {
+    const response = mcpResponseFromHook(input);
+    const selection = directSelectionFromResponse(response);
+    if (!selection) {
+      return { recorded: false, kind: "failed", tool };
+    }
+    const record = options.recordRegistryUse ?? recordRegistryUse;
+    const count = record(sessionId, env);
+    const recordSelection =
+      options.recordDirectSelection ?? recordDirectSelectionSurface;
+    recordSelection(sessionId, { ...selection, use_count: count }, env);
+    const recordValueEpisode =
+      options.recordValueEpisode ?? recordValueEpisodeSurface;
+    recordValueEpisode(sessionId, valueEpisodeFromResponse(response), env);
+    const clearHighMatch =
+      options.clearHighMatchSurfaceForExplicitSelection ??
+      clearHighMatchSurfaceForExplicitSelection;
+    clearHighMatch(sessionId, selection.slug, env);
+    return { recorded: true, kind: "direct_selection", tool, count };
+  }
   if (CONSUMPTION_TOOLS.has(tool)) {
     const record = options.recordRegistryUse ?? recordRegistryUse;
     const count = record(sessionId, env);
@@ -106,6 +134,16 @@ export async function handleMcpUse(input, options = {}) {
     return { recorded: true, kind: "consumption", tool, count };
   }
   if (CONTRIBUTION_TOOLS.has(tool)) {
+    if (
+      tool === "submit_feedback" &&
+      responseRequestsRemembranceFollowup(mcpResponseFromHook(input))
+    ) {
+      return {
+        recorded: false,
+        kind: "remembrance_followup_pending",
+        tool,
+      };
+    }
     const readUse = options.readRegistryUseCount ?? readRegistryUseCount;
     const readEligibility =
       options.readTaskEligibilityCount ?? readTaskEligibilityCount;
@@ -175,6 +213,19 @@ function mcpResponseFromHook(input) {
     }
   }
   return null;
+}
+
+function toolFailed(input) {
+  return Boolean(
+    input?.error ||
+      input?.is_error ||
+      input?.isError ||
+      input?.result?.isError ||
+      input?.output?.isError ||
+      input?.tool_result?.isError ||
+      input?.toolResult?.isError ||
+      toolResponseIndicatesFailure(mcpResponseFromHook(input)),
+  );
 }
 
 async function readStdin() {

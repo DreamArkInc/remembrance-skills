@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Remembrance agent skills, MCP tools, and prompt hooks.",
-    "version": "0.1.27"
+    "version": "0.1.33"
   },
   "plugins": [
     {

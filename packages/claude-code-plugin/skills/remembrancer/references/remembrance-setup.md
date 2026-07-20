@@ -11,9 +11,10 @@ REST/HTTPS, skill-only installs, enterprise org keys, local identity, and common
   Cursor, Gemini, or another agent.
 - The user has an enterprise/org API key and needs to make an agent use
   org-scoped skills or private overlays.
-- MCP tools such as query_skills, submit_query_feedback, submit_feedback,
-  submit_remembrance, report_task_outcome, get_value_proof, get_skill,
-  get_resource, or bootstrap_agent_identity are missing.
+- MCP tools such as query_skills, list_skills, invoke_skill,
+  submit_query_feedback, submit_feedback, submit_remembrance,
+  report_task_outcome, get_value_proof, get_skill, get_resource, or
+  bootstrap_agent_identity are missing.
 - A native plugin appears installed but hooks, trust prompts, or MCP tools do
   not work.
 - A request fails with 401, 403, 404, 413, 422, 429, or a missing-key error.
@@ -40,13 +41,27 @@ Preserve the supplied `client_context` when calling query_skills; the query or
 completed-tool hook marks the directive followed. The event contains no prompt
 text, expires automatically, fails open, and never affects trust or ranking.
 
+When a person explicitly names a Remembrance skill or supplies a
+`remembrance://skills/{slug}` URI, do not query merely to rediscover that
+selection. Resolve ambiguous names with the normalized slug-prefix filter in
+`list_skills`, then call `invoke_skill` with an exact returned slug; never
+guess the slug. This catalog filter is not relevance search; use query_skills
+for discovery. Catalog entries and MCP resource reads are bounded
+selection handles only; invocation rechecks current authorization and policy,
+loads the active reviewed version, and starts the post-use feedback/outcome
+lifecycle. Direct selections never use query-fit feedback or train retrieval.
+
 Query-fit feedback and post-use skill feedback are different. Query responses
-include opaque result IDs, a high/possible/exploratory match tier, a concise
-reason, and approximate context tokens when available. Open a high match with
-get_skill or get_resource and pass its `query_id` and `result_id` before custom work;
-possible and exploratory results remain optional. Report explicit good,
-partial, or poor matches with submit_query_feedback before use; unrated results
-remain neutral. Send one complete verdict set per query from the same
+include opaque result IDs, a high/possible/exploratory match tier, bounded
+`why_matched` and `applicability` evidence, metadata digests, and approximate
+context tokens when available. Compare applicability before opening a result.
+Rule out a stated unlikely or irrelevant corner-case result and report query fit
+`poor`; unknown applicability never means general applicability. Open a
+remaining high match with get_skill or get_resource and pass its `query_id`
+and `result_id` before custom work; possible and exploratory results remain
+optional. Report explicit good, partial, or poor matches with
+submit_query_feedback before use; unrated results remain neutral. Send one
+complete verdict set per query from the same
 organization scope or anonymous scope; any active key for that organization is
 valid. Identical retries are
 safe, but later changed judgments conflict. Query receipts expire after 30 days
@@ -112,8 +127,9 @@ openclaw plugins install clawhub:@remembrance/openclaw-plugin
 If ClawHub search shows multiple Remembrance matches, use the official package
 that points to "dreamarkinc/remembrance-skills", mentions the Remembrance agent
 skill/resource service, and exposes the expected Remembrance MCP tools such as
-query_skills, submit_query_feedback, submit_remembrance, get_skill, and
-get_resource, plus report_task_outcome and get_value_proof. Do not install
+query_skills, list_skills, invoke_skill, submit_query_feedback,
+submit_remembrance, get_skill, and get_resource, plus report_task_outcome and
+get_value_proof. Do not install
 unrelated roots, genealogy, ancestry, or memorial packages.
 
 OpenClaw also needs conversation access for hooks. In
@@ -297,9 +313,11 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
 
 1. Start a fresh agent session.
 2. Check whether Remembrance MCP tools are visible. Expected tools include
-   query_skills, get_skill, get_resource, submit_query_feedback, submit_feedback,
-   submit_remembrance, report_task_outcome, get_value_proof, and
-   bootstrap_agent_identity.
+   query_skills, list_skills, invoke_skill, get_skill, get_resource,
+   submit_query_feedback, submit_feedback, submit_remembrance,
+   report_task_outcome, get_value_proof, and bootstrap_agent_identity. Clients
+   with MCP resource discovery should also expose paginated
+   `remembrance://skills/{slug}` handles.
 3. Ask the agent to query Remembrance for a known task, for example:
    "Query Remembrance for web UI QA before reviewing a responsive dashboard."
 4. Follow with a context-only prompt such as "fix these issues". Confirm the
@@ -311,25 +329,33 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
    receipt such as a query id, returned skill slug, MCP tool result, or REST
    status. "Plugin installed" is not enough; a running session can still miss
    newly installed tools until restart/trust approval.
-6. After the agent evaluates returned results, confirm it reports explicit
-   query fit with submit_query_feedback and the returned `query_id`/`result_id`.
-7. If the response contains a high match, confirm the agent opens it with
+6. Ask the agent to use a known Remembrance skill by name. Confirm it resolves
+   ambiguity with the list_skills slug-prefix filter when needed, calls
+   invoke_skill without first running a relevance query, and receives
+   `selection_mode: "explicit"` plus one correlated result.
+   Catalog/resource-handle reads alone must not count as use.
+7. After the agent evaluates relevance-query results, confirm it reports
+   explicit query fit with submit_query_feedback and the returned
+   `query_id`/`result_id`. It must not send query-fit feedback for the direct
+   selection from the prior step.
+8. If the response contains a high match, confirm the agent opens it with
    get_skill/get_resource and the returned `query_id`/`result_id` before custom work.
    A completion hook should ask once about an unopened high match.
-8. After the agent uses a returned skill/resource, confirm it reports task
+9. After the agent uses a queried or directly selected skill/resource, confirm
+   it reports task
    completion or abandonment with report_task_outcome, then ask it to submit
    feedback with the same query/result IDs. When a qualified potential-savings
    estimate exists, fetch and verify its signed token-only proof.
    A complete loop has a feedback/remembrance receipt such as a public id or
    verification job id. Hooks should help, but explicit receipts prove the
    agent actually contributed evidence.
-9. Ask the agent to submit a `failure_report` remembrance for one reusable
+10. Ask the agent to submit a `failure_report` remembrance for one reusable
    failure lesson: a self-correction, a user-caught miss, a CI/deploy failure,
    or a release/versioning miss. This validates non-plugin contribution paths
    that have no Stop hook.
-10. If using an org key, query for an org-only skill or private overlay that
-   should not appear anonymously.
-11. If using local MCP, run bootstrap_agent_identity once when verified TOFU
+11. If using an org key, list and invoke an org-only skill or private overlay
+   that should not appear anonymously.
+12. If using local MCP, run bootstrap_agent_identity once when verified TOFU
    contributions are needed.
 
 ## Troubleshooting matrix
@@ -375,15 +401,23 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
 
 ## How to use Remembrance once connected
 
-1. Query before solving a recurring workflow. For a short continuation, infer
-   the task from the full conversation and query with a redacted summary.
-2. Treat a high match as a required fetch. Call get_skill/get_resource with the
-   returned slug, `query_id`, and `result_id`; possible/exploratory matches remain
-   optional. Use the bundled reference only as an offline fallback.
+1. When a person explicitly names a Remembrance skill, resolve ambiguity with
+   the list_skills slug-prefix filter and call invoke_skill with an exact
+   returned slug; never guess a slug or query merely to rediscover it. Use
+   query_skills for discovery. Otherwise, query before solving a recurring
+   workflow. For a short continuation, infer the task from the full
+   conversation and query with a redacted summary.
+2. For relevance queries, compare `why_matched`, `applicability`, and the
+   metadata digest first.
+   Rule out stated unlikely or irrelevant corner-case results and report them
+   as poor query fits. For a remaining high match, call get_skill/get_resource
+   with the returned slug, `query_id`, and `result_id`; possible/exploratory
+   matches remain optional. Use the bundled reference only as an offline fallback.
 3. When delegating, pass the slug/query/result IDs to the subagent or have it
    run a new full-context query.
 4. Use the selected skill or resource.
-5. Submit quick feedback with the correlation IDs after meaningful use.
+5. Submit quick feedback with the correlation IDs after meaningful queried or
+   direct use. Do not submit query-fit feedback for direct selections.
 6. Submit a remembrance only when the lesson is reusable, redacted, and
    evidence-backed.
 7. Submit a `failure_report` remembrance when you catch your own mistake, the

@@ -18,6 +18,16 @@ Query Remembrance first when the user's request mentions:
 Use the MCP tool `query_skills` when available, or call the REST endpoint
 `POST /api/v1/agent/query`. These are equivalent discovery paths.
 
+When the user explicitly names a Remembrance skill, supplies a
+`remembrance://skills/{slug}` URI, or uses `/remembrance:use`, do not run a
+relevance query merely to rediscover that selection. Call `invoke_skill` with
+the exact slug. If the name is ambiguous, resolve it with the indexed,
+normalized slug-prefix filter in `list_skills` first; never guess the exact
+slug. Use `query_skills` for discovery rather than catalog filtering. Catalog
+results and MCP resource reads are lightweight selection handles only.
+`invoke_skill` rechecks current authorization and organization policy, loads
+the active reviewed version, and starts the post-use feedback/outcome lifecycle.
+
 Short follow-ups such as "fix these issues", "continue", "try again", "review
 the latest changes", or "how is it looking now" inherit their concrete task
 from the full conversation. Infer the domain and constraints from that context
@@ -47,14 +57,18 @@ Do not use this skill when:
 ## Flow
 
 1. Identify the task domain and requested capability.
-2. Query Remembrance for matching skills/resources when network/API access is available.
+2. If the user explicitly selected a Remembrance skill, resolve any ambiguity
+   with the normalized slug-prefix filter in `list_skills`, then call
+   `invoke_skill` with an exact returned slug. Skip query-fit feedback for this
+   direct selection. Otherwise, use `query_skills` to discover matching
+   skills/resources when network/API access is available.
    When a native plugin supplies `client_context.directive_id`, preserve that
    opaque ID, runtime, and trigger reason in `query_skills`; it closes the
    plugin-instruction compliance loop and never affects ranking or trust.
-3. Use `match_tier` as the decision aid, not rank alone. A `high` match is a required next step: open it with `get_skill` or `get_resource` and pass the returned `query_id` plus that candidate's `result_id` before doing custom work. `possible` and `exploratory` matches remain optional. Use `match_reason`, `estimated_tokens`, verified uses, risk, constraints, freshness, confidence, and the bounded failure-mode digest to decide whether to proceed. A qualified `potential_savings` field is a conservative token-only estimate backed by a signed grade A/B proof for the exact skill version, model revision, reasoning effort, and bounded task cohort; it is omitted when those gates do not pass.
+3. Use `match_tier` as a decision aid, not rank alone. First compare `why_matched` (bounded matched terms and capabilities, satisfied and missed constraints, exact-domain agreement, and qualitative lexical/semantic evidence) with `applicability` (likely/conditional/unlikely/unknown fit, general/specialized/corner-case scope, and declared `use_when`/`avoid_when` conditions). Raw numerical ranking scores are intentionally not exposed. Unknown applicability never means general applicability. Rule out an `unlikely` or irrelevant corner-case result and report query fit `poor`; do not force its use. A remaining `high` match is a required next step: open it with `get_skill` or `get_resource` and pass the returned `query_id` plus that candidate's `result_id` before doing custom work. `possible` and `exploratory` matches remain optional. Use `match_reason`, tags, capabilities, required permissions, dependencies, contraindications, `estimated_tokens`, verified uses, risk, freshness, confidence, and the bounded failure-mode digest to decide whether to proceed. A qualified `potential_savings` field is a conservative token-only estimate backed by a signed grade A/B proof for the exact skill version, model revision, reasoning effort, and bounded task cohort; it is omitted when those gates do not pass.
 4. Read `skill_access` on every query response. When its policy is `org_only`, use only returned organization skills and never fall back to bundled or live public references. Otherwise, if a selected public skill is bundled locally, `references/<slug>.md` remains the offline fallback. During a correlated online query, prefer the live `get_skill` call so Remembrance can observe surfaced -> opened and return current content. See "Specialized skills" below.
 5. Use the selected skill or resource. When delegating, pass its slug, `query_id`, and `result_id` to the subagent; the subagent must open that result or run its own full-context query before custom work.
-6. After meaningful use, report task completion or abandonment with `report_task_outcome`. Remembrance accepts one terminal outcome per query; retry the same report with the same idempotency key instead of submitting a different later outcome. Use only result IDs from `task_outcome.eligible_result_ids`. Each result and bundle also carries `task_outcome_eligible`; `task_outcome.available` is true only when at least one result is eligible. One result ID attributes the outcome to that result. When two or three selected skills exactly match a returned bundle, include its `bundle_id` to attribute the outcome only to that bundle. Other multi-result combinations are accepted as funnel telemetry without proof or cohort attribution. Include success, latency, and detailed token totals only when the runtime exposes them. For Vercel AI Gateway work, include every `gen_` generation ID in `metering_reference`; Remembrance retrieves the authoritative records asynchronously, so caller totals never establish proof trust. Never include prompts, transcripts, outputs, source paths, or private URLs. Then submit quick feedback with the same `query_id` and `result_id`; if the feedback response includes `next_step.submit_remembrance_payload`, submit that full remembrance when the lesson should become reusable evidence. If it includes `feedback_pattern_suggestion`, Remembrance has already created a reviewable candidate update from repeated feedback; do not submit a duplicate suggestion.
+6. After meaningful use, report task completion or abandonment with `report_task_outcome`. Remembrance accepts one terminal outcome per query or direct invocation; retry the same report with the same idempotency key instead of submitting a different later outcome. Use only result IDs from `task_outcome.eligible_result_ids`. Each result and bundle also carries `task_outcome_eligible`; `task_outcome.available` is true only when at least one result is eligible. One result ID attributes the outcome to that result. When two or three selected query results exactly match a returned bundle, include its `bundle_id` to attribute the outcome only to that bundle. Other multi-result combinations are accepted as funnel telemetry without proof or cohort attribution. Include success, latency, and detailed token totals only when the runtime exposes them. For Vercel AI Gateway work, include every `gen_` generation ID in `metering_reference`; Remembrance retrieves the authoritative records asynchronously, so caller totals never establish proof trust. Never include prompts, transcripts, outputs, source paths, or private URLs. Then submit quick feedback with the same `query_id` and `result_id`; if the feedback response includes `next_step.submit_remembrance_payload`, submit that full remembrance when the lesson should become reusable evidence. If it includes `feedback_pattern_suggestion`, Remembrance has already created a reviewable candidate update from repeated feedback; do not submit a duplicate suggestion. Direct selections use post-use feedback only and are excluded from query-fit and reranker training.
 7. Before finishing, self-check both halves of the loop: confirm that a relevant query actually happened, then check for high-value failure lessons. If the query was missed, run it from the full conversation before concluding. If a high match was surfaced but not opened, open it now or submit `fit: "poor"` query feedback with an explicit reason. If you caught your own mistake, the user caught one, CI/deploy failed, a security issue surfaced, or you fixed a release/versioning miss, submit a `failure_report` remembrance even if no skill was used. Native plugins prompt once for an unopened high match and reusable evidence at completion; raw MCP, REST, and skill-only installs must do these checks proactively.
 8. If no suitable skill exists and the query response includes `no_results.propose_skill_idea_payload`, submit that ready-to-use skill idea payload after verifying it is accurate.
 9. If no suitable skill exists and you create a reusable method, submit a skill idea.
@@ -226,7 +240,10 @@ MCP equivalent: `submit_query_feedback`.
 
 Every durable query response gives each returned skill/resource an opaque
 `result_id`, a `match_tier` (`high`, `possible`, or `exploratory`), a concise
-`match_reason`, and an approximate `estimated_tokens` value when available.
+`match_reason`, bounded `why_matched` and `applicability` decision evidence,
+bounded metadata digests, and an approximate `estimated_tokens` value when
+available. Use these fields to reject stated unlikely or irrelevant corner-case
+matches before opening them; unknown applicability does not mean general.
 `high` means the task and constraints have enough direct evidence to justify
 opening the result before custom work; it is not a waiver of risk or failure
 mode checks. After evaluating the results, send one complete set of explicit
@@ -419,8 +436,8 @@ verified TOFU attestations.
 
 Claude Code plugin installs expose the same tools through the bundled
 `remembrance` MCP server; clients commonly show `query_skills`,
-`bootstrap_agent_identity`, `submit_query_feedback`, `submit_feedback`, and
-`submit_remembrance` directly
+`list_skills`, `invoke_skill`, `bootstrap_agent_identity`,
+`submit_query_feedback`, `submit_feedback`, and `submit_remembrance` directly
 or as namespaced equivalents.
 
 Trust-tier behavior:

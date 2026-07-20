@@ -1,7 +1,7 @@
 {
   "name": "remembrance",
-  "version": "0.1.27",
-  "description": "Query proven Remembrance skills/resources from Cursor, then nudge redacted feedback when the agent used them.",
+  "version": "0.1.33",
+  "description": "Discover or directly invoke authorized Remembrance skills in Cursor, then close the outcome and feedback loop.",
   "author": {
     "name": "Remembrance",
     "email": "noreply@remembrance.dev"

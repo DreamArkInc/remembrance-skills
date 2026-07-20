@@ -38,6 +38,8 @@ const MAX_CONTEXT_FIELD_CHARS = 280;
 const MAX_DIRECTIVE_CHARS = 900;
 const VALUE_EPISODE_MARKER_LIMIT = 20;
 const VALUE_EPISODE_MARKER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const DIRECT_SELECTION_MARKER_LIMIT = 20;
+const DIRECT_SELECTION_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
 
 const SERVICE_PATTERNS = [
   /\b(vercel|heroku|netlify|cloudflare|aws|gcp|azure)\b/i,
@@ -78,6 +80,14 @@ const CONTEXTUAL_CONTINUATION_PATTERNS = [
   /^\s*(?:run|rerun)\s+(?:it|that|the tests?|the checks?)\b/i,
 ];
 
+const EXPLICIT_SKILL_REFERENCE_PATTERNS = [
+  /\bremembrance:\/\/skills\/[^\s"'<>]+/i,
+  /\/remembrance:use\b/i,
+  /\binvoke_skill\b/i,
+  /\b(?:use|invoke|open|load|select)\s+(?:the\s+)?remembrance\s+skill(?:\s+(?:named|called))?\s+[`"']?[a-z0-9][a-z0-9._-]*[`"']?/i,
+  /\b(?:use|invoke|open|load|select)\s+(?:the\s+)?skill\s+(?:named|called)\s+[`"']?[a-z0-9][a-z0-9._-]*[`"']?\s+(?:from|in)\s+remembrance\b/i,
+];
+
 const SKIP_PATTERNS = [
   /\b(general web search|search the web|google this|look up current facts?)\b/i,
   /^\s*(what|who|when|where)\s+(is|are|was|were)\b/i,
@@ -110,6 +120,13 @@ export function shouldQueryPrompt(prompt) {
   if (!normalized || normalized.length < 8) {
     return { likely_match: false, reason: "empty_or_too_short" };
   }
+  if (
+    EXPLICIT_SKILL_REFERENCE_PATTERNS.some((pattern) =>
+      pattern.test(normalized),
+    )
+  ) {
+    return { likely_match: false, reason: "explicit_skill_reference" };
+  }
   if (SKIP_PATTERNS.some((pattern) => pattern.test(normalized))) {
     return { likely_match: false, reason: "skip_pattern" };
   }
@@ -134,7 +151,10 @@ export function isContextualContinuationPrompt(prompt) {
   const normalized = String(prompt ?? "").trim();
   if (
     !normalized ||
-    SKIP_PATTERNS.some((pattern) => pattern.test(normalized))
+    SKIP_PATTERNS.some((pattern) => pattern.test(normalized)) ||
+    EXPLICIT_SKILL_REFERENCE_PATTERNS.some((pattern) =>
+      pattern.test(normalized),
+    )
   ) {
     return false;
   }
@@ -210,7 +230,9 @@ export function buildEconomicsContext(summary, env, identity) {
     ...(stringOrNull(env.REMEMBRANCE_RUNTIME_VERSION)
       ? { runtime_version: safeText(env.REMEMBRANCE_RUNTIME_VERSION, 120) }
       : {}),
-    ...(requestedModel ? { requested_model: safeText(requestedModel, 160) } : {}),
+    ...(requestedModel
+      ? { requested_model: safeText(requestedModel, 160) }
+      : {}),
     ...(observedModel
       ? { observed_model_revision: safeText(observedModel, 160) }
       : {}),
@@ -227,10 +249,12 @@ export function buildEconomicsContext(summary, env, identity) {
 function inferTaskStage(summary) {
   if (/\b(review|audit|inspect)\b/i.test(summary)) return "review";
   if (/\b(test|verify|e2e|qa)\b/i.test(summary)) return "testing";
-  if (/\b(deploy|release|publish|rollout)\b/i.test(summary)) return "deployment";
+  if (/\b(deploy|release|publish|rollout)\b/i.test(summary))
+    return "deployment";
   if (/\b(debug|fix|failure|error|broken)\b/i.test(summary)) return "debugging";
   if (/\b(plan|design|architect|approach)\b/i.test(summary)) return "planning";
-  if (/\b(research|evaluate|compare|investigate)\b/i.test(summary)) return "research";
+  if (/\b(research|evaluate|compare|investigate)\b/i.test(summary))
+    return "research";
   if (/\b(build|implement|add|create|update|change)\b/i.test(summary)) {
     return "implementation";
   }
@@ -239,7 +263,11 @@ function inferTaskStage(summary) {
 
 function inferTaskComplexity(summary) {
   const text = String(summary ?? "");
-  if (/\b(full|complete|end[- ]to[- ]end|architecture|migration|security)\b/i.test(text)) {
+  if (
+    /\b(full|complete|end[- ]to[- ]end|architecture|migration|security)\b/i.test(
+      text,
+    )
+  ) {
     return "high";
   }
   if (text.length > 400 || inferConstraints(text).length >= 2) return "medium";
@@ -330,10 +358,7 @@ export async function queryRemembrance(payload, options = {}) {
   const env = options.env ?? process.env;
   const fetchImpl = options.fetchImpl ?? fetch;
   const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    autoQueryTimeoutMs(env),
-  );
+  const timeout = setTimeout(() => controller.abort(), autoQueryTimeoutMs(env));
   try {
     const headers = {
       "content-type": "application/json",
@@ -474,7 +499,7 @@ function publicSkillCandidateAllowed(body, candidate) {
 }
 
 export function highMatchFromResponse(response) {
-  const body = response?.body ?? response;
+  const body = responseBodyFromToolResponse(response);
   const queryId = body?.query_feedback?.query_id ?? body?.query_id ?? null;
   const candidates = [
     ...(Array.isArray(body?.skills)
@@ -502,6 +527,8 @@ export function highMatchFromResponse(response) {
       : null,
     verified_uses: numberValue(candidate.verified_uses),
     risk_level: safeText(candidate.risk_level ?? "unknown", 24),
+    why_matched: sanitizeWhyMatched(candidate.why_matched),
+    applicability: sanitizeApplicability(candidate.applicability),
     value_estimate_id: candidate.value_estimate_id
       ? safeText(candidate.value_estimate_id, 80)
       : null,
@@ -516,7 +543,7 @@ export function formatContext(
   reason = "trigger_match",
   limit = DEFAULT_LIMIT,
 ) {
-  const body = response?.body ?? response;
+  const body = responseBodyFromToolResponse(response);
   const itemLimit = Math.min(Math.max(Number(limit) || DEFAULT_LIMIT, 1), 10);
   const skills = Array.isArray(body?.skills)
     ? body.skills
@@ -559,50 +586,116 @@ export function formatContext(
       `HIGH MATCH — required next step: call ${tool} with ${JSON.stringify(args)} before proceeding. ${highMatch.match_reason}; ${matchEvidenceLabel(highMatch)}. If it does not actually fit, do not force its use: submit query feedback with fit poor and a concrete reason.`,
     );
   }
-  if (skills.length > 0) {
-    lines.push("Skills:");
-    for (const skill of skills) {
-      const resultId = skill.result_id
-        ? `, result ${safeText(skill.result_id, 80)}`
-        : "";
-      lines.push(
-        `- [${matchTierLabel(skill.match_tier)}] ${safeText(skill.slug, 80)} (${candidateEvidenceLabel(skill)}${resultId}): ${safeText(skill.description, MAX_CONTEXT_FIELD_CHARS)}`,
-      );
-    }
-  }
-  if (resources.length > 0) {
-    lines.push("Resources:");
-    for (const resource of resources) {
-      const resultId = resource.result_id
-        ? `, result ${safeText(resource.result_id, 80)}`
-        : "";
-      lines.push(
-        `- [${matchTierLabel(resource.match_tier)}] ${safeText(resource.slug, 80)} [${safeText(resource.kind, 40)}, ${candidateEvidenceLabel(resource)}${resultId}]: ${safeText(resource.description, MAX_CONTEXT_FIELD_CHARS)}`,
-      );
-    }
-  }
+  // Tail lines (the no-results payload, the contribution directive, and the
+  // delegation instruction) are the actionable part of this context. They are
+  // reserved BEFORE candidate lines fill the remaining budget — the previous
+  // append-then-truncate order let rich per-candidate decision labels push
+  // them past MAX_CONTEXT_CHARS, silently evicting the directive.
+  const tailLines = [];
   if (noResults) {
     const payload = safeText(
       JSON.stringify(noResults.propose_skill_idea_payload ?? noResults),
       1200,
     );
-    lines.push(
+    tailLines.push(
       `No matching skill/resource. Proposed skill idea payload: ${payload}`,
     );
   }
   const contributionDirective =
     body?.contribution_directive?.message ?? body?.fallback_instruction;
   if (contributionDirective) {
-    lines.push(
+    tailLines.push(
       `After using Remembrance: ${safeText(contributionDirective, MAX_DIRECTIVE_CHARS)}`,
     );
   }
   if (skills.length > 0 || resources.length > 0) {
-    lines.push(
+    tailLines.push(
       "Delegating this task? Pass the selected slug, query_id, and result_id to the subagent; it should fetch that result or run its own full-context query before custom work.",
     );
   }
+
+  const candidateSections = [];
+  if (skills.length > 0) {
+    candidateSections.push({
+      header: "Skills:",
+      lines: skills.map(
+        (skill) =>
+          `- [${matchTierLabel(skill.match_tier)}] ${safeText(skill.slug, 80)} (${candidateEvidenceLabel(skill)}${skill.result_id ? `, result ${safeText(skill.result_id, 80)}` : ""}): ${safeText(skill.description, MAX_CONTEXT_FIELD_CHARS)}${candidateDecisionLabel(skill)}`,
+      ),
+    });
+  }
+  if (resources.length > 0) {
+    candidateSections.push({
+      header: "Resources:",
+      lines: resources.map(
+        (resource) =>
+          `- [${matchTierLabel(resource.match_tier)}] ${safeText(resource.slug, 80)} [${safeText(resource.kind, 40)}, ${candidateEvidenceLabel(resource)}${resource.result_id ? `, result ${safeText(resource.result_id, 80)}` : ""}]: ${safeText(resource.description, MAX_CONTEXT_FIELD_CHARS)}${candidateDecisionLabel(resource)}`,
+      ),
+    });
+  }
+  lines.push(
+    ...budgetedCandidateLines(
+      candidateSections,
+      MAX_CONTEXT_CHARS - joinedLength([...lines, ...tailLines]),
+    ),
+  );
+  lines.push(...tailLines);
   return safeText(lines.join("\n"), MAX_CONTEXT_CHARS);
+}
+
+function joinedLength(lines) {
+  return lines.reduce(
+    (total, line) => total + line.length,
+    Math.max(0, lines.length - 1),
+  );
+}
+
+// Fit candidate lines (with their section headers) into the character budget
+// left after the head/tail lines. Dropping is explicit, never silent: when
+// candidates are omitted, a short note says how many and gives the agent the
+// explicit recovery action.
+function budgetedCandidateLines(sections, budget) {
+  const total = sections.reduce(
+    (count, section) => count + section.lines.length,
+    0,
+  );
+  const omissionNote = (count) =>
+    `(+${count} more match${count === 1 ? "" : "es"} omitted to fit this context; call query_skills with the current task context to retrieve the full list.)`;
+  // +1: inserting this block between head and tail costs one MORE newline
+  // than the block's own internal joins (joinedLength counts n-1 separators
+  // for n lines; the block itself joins to its neighbors with an nth).
+  const fits = (lines) => joinedLength(lines) + 1 <= budget;
+
+  const chosen = [];
+  let shown = 0;
+  for (const section of sections) {
+    let headerAdded = false;
+    for (const line of section.lines) {
+      const attempt = headerAdded
+        ? [...chosen, line]
+        : [...chosen, section.header, line];
+      const remainingAfter = total - (shown + 1);
+      // Every non-final line must leave room for the omission note, so that
+      // if the NEXT line does not fit, the note (for exactly that many
+      // dropped candidates) is guaranteed to fit alongside what was kept.
+      const accepted =
+        remainingAfter > 0
+          ? fits([...attempt, omissionNote(remainingAfter)])
+          : fits(attempt);
+      if (!accepted) {
+        const dropped = total - shown;
+        if (fits([...chosen, omissionNote(dropped)])) {
+          chosen.push(omissionNote(dropped));
+        }
+        return chosen;
+      }
+      chosen.length = 0;
+      chosen.push(...attempt);
+      headerAdded = true;
+      shown += 1;
+    }
+  }
+  return chosen;
 }
 
 function matchTierLabel(value) {
@@ -620,12 +713,108 @@ function candidateEvidenceLabel(candidate) {
   return `${tokens}, ${verified} verified ${verified === 1 ? "use" : "uses"}, risk ${safeText(candidate?.risk_level ?? "unknown", 24)}${savings ? `, ${savings}` : ""}`;
 }
 
+function candidateDecisionLabel(candidate) {
+  const why = sanitizeWhyMatched(candidate?.why_matched);
+  const applicability = sanitizeApplicability(candidate?.applicability);
+  const evidence = [];
+  if (why?.matched_terms.length) {
+    evidence.push(`terms ${why.matched_terms.join(", ")}`);
+  }
+  if (why?.matched_capabilities.length) {
+    evidence.push(`capabilities ${why.matched_capabilities.join(", ")}`);
+  }
+  if (why?.domain_match) evidence.push("exact domain");
+  if (why?.satisfied_constraints.length) {
+    evidence.push(`constraints met ${why.satisfied_constraints.join(", ")}`);
+  }
+  if (why?.missed_constraints.length) {
+    evidence.push(`constraints missing ${why.missed_constraints.join(", ")}`);
+  }
+  if (why) {
+    evidence.push(
+      `signals lexical ${why.lexical_signal}, semantic ${why.semantic_signal}`,
+    );
+  }
+
+  const applicabilityParts = [];
+  if (applicability) {
+    applicabilityParts.push(
+      `applicability ${applicability.fit}/${applicability.scope}: ${applicability.reason}`,
+    );
+    if (applicability.use_when.length) {
+      applicabilityParts.push(
+        `use only when ${applicability.use_when.join("; ")}`,
+      );
+    }
+    if (applicability.avoid_when.length) {
+      applicabilityParts.push(
+        `avoid when ${applicability.avoid_when.join("; ")}`,
+      );
+    }
+  }
+  const details = [...evidence, ...applicabilityParts];
+  return details.length > 0
+    ? ` Decision: ${safeText(details.join("; "), 640)}.`
+    : "";
+}
+
+function sanitizeWhyMatched(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return {
+    matched_terms: safeStringList(value.matched_terms, 4, 48),
+    matched_capabilities: safeStringList(value.matched_capabilities, 3, 80),
+    domain_match: value.domain_match === true,
+    satisfied_constraints: safeStringList(value.satisfied_constraints, 3, 100),
+    missed_constraints: safeStringList(value.missed_constraints, 3, 100),
+    lexical_signal: signalStrength(value.lexical_signal),
+    semantic_signal: signalStrength(value.semantic_signal),
+  };
+}
+
+function sanitizeApplicability(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const fit = ["likely", "conditional", "unlikely", "unknown"].includes(
+    value.fit,
+  )
+    ? value.fit
+    : "unknown";
+  const scope = ["general", "specialized", "corner_case", "unknown"].includes(
+    value.scope,
+  )
+    ? value.scope
+    : "unknown";
+  return {
+    fit,
+    scope,
+    reason: safeText(value.reason ?? "No applicability reason provided", 180),
+    use_when: safeStringList(value.use_when, 2, 120),
+    avoid_when: safeStringList(value.avoid_when, 2, 120),
+  };
+}
+
+function safeStringList(value, limit, maxChars) {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value
+        .filter((item) => typeof item === "string" && item.trim())
+        .map((item) => safeText(item, maxChars)),
+    ),
+  ].slice(0, limit);
+}
+
+function signalStrength(value) {
+  return ["none", "weak", "moderate", "strong"].includes(value)
+    ? value
+    : "none";
+}
+
 function matchEvidenceLabel(match) {
   const tokens = Number.isFinite(match.estimated_tokens)
     ? `~${match.estimated_tokens} tokens`
     : "size unknown";
   const savings = potentialSavingsLabel(match.potential_savings);
-  return `${tokens}, ${match.verified_uses} verified ${match.verified_uses === 1 ? "use" : "uses"}, risk ${match.risk_level}${savings ? `, ${savings}` : ""}`;
+  return `${tokens}, ${match.verified_uses} verified ${match.verified_uses === 1 ? "use" : "uses"}, risk ${match.risk_level}${savings ? `, ${savings}` : ""}${candidateDecisionLabel(match)}`;
 }
 
 export function continuationQueryContext(directive = null) {
@@ -743,7 +932,7 @@ export async function runQuery(prompt, options = {}) {
 // has no transcript, so the marker mechanism below is what actually drives the
 // Codex stop decision.
 const CONSUMPTION_MARKERS =
-  /Remembrance auto-query context|mcp__[a-z0-9_]*remembrance[a-z0-9_]*__(query_skills|get_skill|get_resource)|\/api\/v1\/agent\/query(?!-feedback)\b/gi;
+  /Remembrance auto-query context|mcp__[a-z0-9_]*remembrance[a-z0-9_]*__(query_skills|get_skill|get_resource|invoke_skill)|\/api\/v1\/agent\/(?:query(?!-feedback)|skill-invocations)\b/gi;
 
 const TASK_ELIGIBILITY_MARKERS =
   /Remembrance task-continuation reminder|Remembrance query-unavailable context/gi;
@@ -792,13 +981,48 @@ export function countTaskEligibility(transcript) {
   return matches ? matches.length : 0;
 }
 
-export function contributionReason(signal = null, highMatch = null) {
+export function contributionReason(
+  signal = null,
+  highMatch = null,
+  directSelection = null,
+) {
   const signalLine = signal
     ? `High-value lesson detected: ${signal}. Capture it unless you already submitted the lesson.`
     : null;
   const highMatchLine = highMatch
     ? highMatchClosureInstruction(highMatch)
     : null;
+  const directSelections = (
+    Array.isArray(directSelection)
+      ? directSelection
+      : directSelection
+        ? [directSelection]
+        : []
+  ).slice(0, DIRECT_SELECTION_MARKER_LIMIT);
+  if (directSelections.length > 0) {
+    const selectionLines = directSelections.map((selection) => {
+      const correlation =
+        selection.query_id && selection.result_id
+          ? ` Use query_id ${selection.query_id} and result_id ${selection.result_id}.`
+          : "";
+      return `- ${selection.slug}${selection.version ? ` version ${selection.version}` : ""}.${correlation}`;
+    });
+    return [
+      directSelections.length === 1
+        ? `Before you finish: you explicitly used this Remembrance skill:`
+        : `Before you finish: you explicitly used ${directSelections.length} Remembrance skills:`,
+      ...selectionLines,
+      signalLine,
+      "Do not submit query-fit feedback for these selections; they were chosen directly rather than ranked for a query.",
+      "Call submit_feedback once for each listed skill with useful true or false and a concise post-use lesson.",
+      "If submit_feedback returns next_step.submit_remembrance_payload, submit that reviewed evidence when the lesson is reusable.",
+      "Report failed attempts, corrections, security findings, and reusable workflow improvements instead of silently changing the skill.",
+      "Redact secrets, private URLs, credentials, prompts, outputs, source paths, and proprietary content.",
+      "If nothing is genuinely worth capturing, say so in one line; you will not be asked again for this use.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
   return [
     "Before you finish: you used Remembrance this session.",
     signalLine,
@@ -879,16 +1103,35 @@ export function decideStop(input, options = {}) {
   const readEligible = options.readEligibilityCount ?? readTaskEligibilityCount;
   const eligibilityCount = readEligible(sessionId, env);
   const engagementCount = Math.max(useCount, eligibilityCount);
-  const hasUnclosedEligibility = eligibilityCount > useCount;
   const readPrompted = options.readPromptedCount ?? readPromptedCount;
   const promptedCount = readPrompted(sessionId, env);
   const readHighMatch = options.readHighMatch ?? readHighMatchSurface;
   const highMatch = readHighMatch(sessionId, env);
+  const directSelections = options.readDirectSelections
+    ? options.readDirectSelections(sessionId, env)
+    : options.readDirectSelection
+      ? [options.readDirectSelection(sessionId, env)].filter(Boolean)
+      : readDirectSelectionSurfaces(sessionId, env);
+  const newDirectSelections = directSelections.filter(
+    (selection) => !selection?.prompted_at,
+  );
+  const feedbackDirectSelections = newDirectSelections.filter(
+    (selection) => selection.feedback_available !== false,
+  );
+  const hasUnclosedEligibility =
+    eligibilityCount > useCount && newDirectSelections.length === 0;
   const highValueSignal = detectHighValueLessonSignal(input);
+  if (newDirectSelections.length > 0 && feedbackDirectSelections.length === 0) {
+    return { allow: true, why: "direct_feedback_unavailable" };
+  }
   if (engagementCount === 0 && !highValueSignal) {
     return { allow: true, why: "registry_not_used" };
   }
-  if (engagementCount <= promptedCount && !highValueSignal) {
+  if (
+    engagementCount <= promptedCount &&
+    newDirectSelections.length === 0 &&
+    !highValueSignal
+  ) {
     return { allow: true, why: "no_new_usage" };
   }
   if (
@@ -907,7 +1150,11 @@ export function decideStop(input, options = {}) {
         : "prompt_contribution",
     reason: hasUnclosedEligibility
       ? taskClosureReason(highValueSignal)
-      : contributionReason(highValueSignal, highMatch),
+      : contributionReason(
+          highValueSignal,
+          highMatch,
+          feedbackDirectSelections.length > 0 ? feedbackDirectSelections : null,
+        ),
     useCount: highValueSignal
       ? Math.max(engagementCount, promptedCount + 1, 1)
       : engagementCount,
@@ -972,6 +1219,10 @@ function valueEpisodePath(sessionId, env) {
   return join(usageDir(env), `${sessionHash(sessionId)}.value-episodes.json`);
 }
 
+function directSelectionPath(sessionId, env) {
+  return join(usageDir(env), `${sessionHash(sessionId)}.direct-skill.json`);
+}
+
 function directivePath(sessionId, env) {
   return join(usageDir(env), `${sessionHash(sessionId)}.directive.json`);
 }
@@ -1006,6 +1257,17 @@ export function recordRegistryUse(sessionId, env = process.env) {
   const next = readCountFile(path) + 1;
   writeCountFile(path, next);
   return next;
+}
+
+export function markCurrentEngagementHandled(sessionId, env = process.env) {
+  const count = Math.max(
+    readRegistryUseCount(sessionId, env),
+    readTaskEligibilityCount(sessionId, env),
+  );
+  if (count > 0) {
+    writePromptedCount(sessionId, count, env);
+  }
+  return count;
 }
 
 // Read the per-session registry-use counter (0 if never recorded).
@@ -1156,6 +1418,294 @@ function queryIdFromToolResponse(value, depth = 0) {
   return null;
 }
 
+export function responseBodyFromToolResponse(value, depth = 0) {
+  if (depth > 6 || value === null || value === undefined) return null;
+  if (typeof value === "string") {
+    try {
+      return responseBodyFromToolResponse(JSON.parse(value), depth + 1);
+    } catch {
+      return null;
+    }
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const body = responseBodyFromToolResponse(item, depth + 1);
+      if (body) return body;
+    }
+    return null;
+  }
+  if (typeof value !== "object") return null;
+  if (
+    typeof value.query_id === "string" ||
+    value.selection_mode === "explicit" ||
+    (value.next_step && typeof value.next_step === "object") ||
+    Array.isArray(value.skills) ||
+    Array.isArray(value.resources)
+  ) {
+    return value;
+  }
+  if (value.type === "text" && typeof value.text === "string") {
+    const body = responseBodyFromToolResponse(value.text, depth + 1);
+    if (body) return body;
+  }
+  for (const key of [
+    "body",
+    "result",
+    "output",
+    "response",
+    "tool_response",
+    "toolResponse",
+    "content",
+  ]) {
+    const body = responseBodyFromToolResponse(value[key], depth + 1);
+    if (body) return body;
+  }
+  return null;
+}
+
+export function responseRequestsRemembranceFollowup(response) {
+  const payload =
+    responseBodyFromToolResponse(response)?.next_step
+      ?.submit_remembrance_payload;
+  return Boolean(
+    payload && typeof payload === "object" && !Array.isArray(payload),
+  );
+}
+
+export function toolResponseIndicatesFailure(value, depth = 0) {
+  if (depth > 6 || value === null || value === undefined) return false;
+  if (typeof value === "string") {
+    try {
+      return toolResponseIndicatesFailure(JSON.parse(value), depth + 1);
+    } catch {
+      return false;
+    }
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => toolResponseIndicatesFailure(item, depth + 1));
+  }
+  if (typeof value !== "object") return false;
+  if (
+    value.ok === false ||
+    value.isError === true ||
+    value.is_error === true ||
+    (typeof value.status === "number" && value.status >= 400)
+  ) {
+    return true;
+  }
+  if (value.type === "text" && typeof value.text === "string") {
+    return toolResponseIndicatesFailure(value.text, depth + 1);
+  }
+  for (const key of [
+    "result",
+    "output",
+    "response",
+    "tool_response",
+    "toolResponse",
+    "content",
+  ]) {
+    if (toolResponseIndicatesFailure(value[key], depth + 1)) return true;
+  }
+  return false;
+}
+
+export function directSelectionFromResponse(response) {
+  const body = responseBodyFromToolResponse(response);
+  const skill = body?.skill;
+  if (
+    body?.selection_mode !== "explicit" ||
+    !skill ||
+    typeof skill.slug !== "string" ||
+    !skill.slug.trim() ||
+    typeof skill.skill_md !== "string" ||
+    !skill.skill_md.trim()
+  ) {
+    return null;
+  }
+  return {
+    invocation_id:
+      typeof body.invocation_id === "string"
+        ? safeText(body.invocation_id, 80)
+        : null,
+    query_id:
+      typeof body.query_id === "string" ? safeText(body.query_id, 80) : null,
+    result_id:
+      typeof body.result_id === "string" ? safeText(body.result_id, 80) : null,
+    slug: safeText(skill.slug, 120),
+    version:
+      skill.version === null || skill.version === undefined
+        ? null
+        : safeText(skill.version, 80),
+    version_id:
+      typeof skill.version_id === "string"
+        ? safeText(skill.version_id, 80)
+        : null,
+    source:
+      typeof skill.source === "string" ? safeText(skill.source, 40) : null,
+    feedback_available: body?.feedback?.available === true,
+    task_outcome_available: body?.task_outcome?.available === true,
+    used_at: new Date().toISOString(),
+  };
+}
+
+export function recordDirectSelectionSurface(
+  sessionId,
+  selection,
+  env = process.env,
+) {
+  const path = directSelectionPath(sessionId, env);
+  try {
+    if (!selection) {
+      rmSync(path, { force: true });
+      return true;
+    }
+    const normalized = normalizeDirectSelectionSurface(
+      selection,
+      sessionId,
+      env,
+    );
+    const records = readDirectSelectionSurfaces(sessionId, env).filter(
+      (item) =>
+        !normalized.query_id ||
+        !normalized.result_id ||
+        item.query_id !== normalized.query_id ||
+        item.result_id !== normalized.result_id,
+    );
+    records.push(normalized);
+    return writeDirectSelectionSurfaces(sessionId, records, env);
+  } catch {
+    return false;
+  }
+}
+
+export function readDirectSelectionSurfaces(sessionId, env = process.env) {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(directSelectionPath(sessionId, env), "utf8"),
+    );
+    const records = (Array.isArray(parsed) ? parsed : [parsed])
+      .map((item) => normalizeStoredDirectSelectionSurface(item))
+      .filter(Boolean)
+      .filter(
+        (item) =>
+          Date.parse(item.used_at) + DIRECT_SELECTION_MARKER_TTL_MS >=
+          Date.now(),
+      )
+      .slice(-DIRECT_SELECTION_MARKER_LIMIT);
+    if (records.length === 0) {
+      rmSync(directSelectionPath(sessionId, env), { force: true });
+    }
+    return records;
+  } catch {
+    return [];
+  }
+}
+
+export function readDirectSelectionSurface(sessionId, env = process.env) {
+  return readDirectSelectionSurfaces(sessionId, env).at(-1) ?? null;
+}
+
+function normalizeDirectSelectionSurface(selection, sessionId, env) {
+  return {
+    invocation_id: selection.invocation_id
+      ? safeText(selection.invocation_id, 80)
+      : null,
+    query_id: selection.query_id ? safeText(selection.query_id, 80) : null,
+    result_id: selection.result_id ? safeText(selection.result_id, 80) : null,
+    slug: safeText(selection.slug, 120),
+    version: selection.version ? safeText(selection.version, 80) : null,
+    version_id: selection.version_id
+      ? safeText(selection.version_id, 80)
+      : null,
+    source: selection.source ? safeText(selection.source, 40) : null,
+    feedback_available: selection.feedback_available === true,
+    task_outcome_available: selection.task_outcome_available === true,
+    prompted_at: selection.prompted_at
+      ? safeText(selection.prompted_at, 40)
+      : null,
+    use_count: Number.isFinite(selection.use_count)
+      ? Math.max(0, Math.round(selection.use_count))
+      : readRegistryUseCount(sessionId, env),
+    used_at: safeText(selection.used_at ?? new Date().toISOString(), 40),
+  };
+}
+
+function normalizeStoredDirectSelectionSurface(selection) {
+  const usedAt = Date.parse(String(selection?.used_at ?? ""));
+  if (!selection?.slug || !Number.isFinite(usedAt)) return null;
+  return {
+    invocation_id: selection.invocation_id
+      ? safeText(selection.invocation_id, 80)
+      : null,
+    query_id: selection.query_id ? safeText(selection.query_id, 80) : null,
+    result_id: selection.result_id ? safeText(selection.result_id, 80) : null,
+    slug: safeText(selection.slug, 120),
+    version: selection.version ? safeText(selection.version, 80) : null,
+    version_id: selection.version_id
+      ? safeText(selection.version_id, 80)
+      : null,
+    source: selection.source ? safeText(selection.source, 40) : null,
+    feedback_available: selection.feedback_available === true,
+    task_outcome_available: selection.task_outcome_available === true,
+    prompted_at: selection.prompted_at
+      ? safeText(selection.prompted_at, 40)
+      : null,
+    use_count: Number.isFinite(selection.use_count)
+      ? Math.max(0, Math.round(selection.use_count))
+      : 0,
+    used_at: new Date(usedAt).toISOString(),
+  };
+}
+
+function writeDirectSelectionSurfaces(sessionId, records, env) {
+  try {
+    const path = directSelectionPath(sessionId, env);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify(records.slice(-DIRECT_SELECTION_MARKER_LIMIT)),
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function markDirectSelectionSurfacesPrompted(
+  sessionId,
+  useCount,
+  env = process.env,
+) {
+  const records = readDirectSelectionSurfaces(sessionId, env);
+  const now = new Date().toISOString();
+  let changed = false;
+  for (const selection of records) {
+    if (
+      !selection.prompted_at &&
+      Number.isFinite(selection.use_count) &&
+      selection.use_count <= useCount
+    ) {
+      selection.prompted_at = now;
+      changed = true;
+    }
+  }
+  return changed
+    ? writeDirectSelectionSurfaces(sessionId, records, env)
+    : false;
+}
+
+export function clearHighMatchSurfaceForExplicitSelection(
+  sessionId,
+  slug,
+  env = process.env,
+) {
+  const match = readHighMatchSurface(sessionId, env);
+  if (!match || match.target_type !== "skill" || match.slug !== String(slug)) {
+    return false;
+  }
+  return recordHighMatchSurface(sessionId, null, env);
+}
+
 // Store only bounded public result metadata. A later completed query replaces
 // or clears the marker, so Stop never repeats a stale high-match instruction.
 export function recordHighMatchSurface(sessionId, match, env = process.env) {
@@ -1275,7 +1825,7 @@ export function clearHighMatchSurfaceIfOpened(
 }
 
 export function valueEpisodeFromResponse(response) {
-  const body = response?.body ?? response;
+  const body = responseBodyFromToolResponse(response);
   const queryId = body?.query_id ?? body?.query_feedback?.query_id;
   if (!queryId || body?.task_outcome?.available !== true) return null;
   const eligibleResultIds = new Set(
@@ -1284,7 +1834,19 @@ export function valueEpisodeFromResponse(response) {
       : [],
   );
   if (eligibleResultIds.size === 0) return null;
+  const directSelection = body?.selection_mode === "explicit";
   const candidates = [
+    ...(directSelection && body?.skill
+      ? [
+          {
+            ...body.skill,
+            result_id: body.result_id,
+            task_outcome_eligible:
+              body.skill.task_outcome_eligible === true &&
+              body?.task_outcome?.eligible_result_ids?.includes(body.result_id),
+          },
+        ]
+      : []),
     ...(Array.isArray(body?.skills) ? body.skills : []),
     ...(Array.isArray(body?.resources) ? body.resources : []),
   ]
@@ -1301,10 +1863,7 @@ export function valueEpisodeFromResponse(response) {
         ? safeText(item.value_estimate_id, 80)
         : null,
     }));
-  const bundles = (Array.isArray(body?.skill_bundles)
-    ? body.skill_bundles
-    : []
-  )
+  const bundles = (Array.isArray(body?.skill_bundles) ? body.skill_bundles : [])
     .filter((bundle) => {
       const resultIds = Array.isArray(bundle?.result_ids)
         ? bundle.result_ids.map((id) => String(id))
@@ -1320,18 +1879,23 @@ export function valueEpisodeFromResponse(response) {
     .slice(0, 20)
     .map((bundle) => ({
       bundle_id: safeText(bundle.bundle_id, 80),
-      result_ids: bundle.result_ids
-        .slice(0, 3)
-        .map((id) => safeText(id, 80)),
+      result_ids: bundle.result_ids.slice(0, 3).map((id) => safeText(id, 80)),
       value_estimate_id: bundle.value_estimate_id
         ? safeText(bundle.value_estimate_id, 80)
         : null,
     }));
   return {
     query_id: safeText(queryId, 80),
+    interaction_kind: directSelection ? "direct_selection" : "query",
     candidates,
     bundles,
-    selected_result_ids: [],
+    selected_result_ids:
+      directSelection && candidates[0]?.result_id
+        ? [candidates[0].result_id]
+        : [],
+    feedback_available: directSelection
+      ? body?.feedback?.available === true
+      : true,
     created_at: new Date().toISOString(),
     reported_at: null,
   };
@@ -1373,6 +1937,10 @@ export function readValueEpisodeSurfaces(sessionId, env = process.env) {
       .slice(-VALUE_EPISODE_MARKER_LIMIT)
       .map((item) => ({
         query_id: safeText(item.query_id, 80),
+        interaction_kind:
+          item.interaction_kind === "direct_selection"
+            ? "direct_selection"
+            : "query",
         candidates: Array.isArray(item.candidates)
           ? item.candidates.slice(0, 40).map((candidate) => ({
               result_id: safeText(candidate?.result_id, 80),
@@ -1385,9 +1953,7 @@ export function readValueEpisodeSurfaces(sessionId, env = process.env) {
           ? item.bundles.slice(0, 20).map((bundle) => ({
               bundle_id: safeText(bundle?.bundle_id, 80),
               result_ids: Array.isArray(bundle?.result_ids)
-                ? bundle.result_ids
-                    .slice(0, 3)
-                    .map((id) => safeText(id, 80))
+                ? bundle.result_ids.slice(0, 3).map((id) => safeText(id, 80))
                 : [],
               value_estimate_id: bundle?.value_estimate_id
                 ? safeText(bundle.value_estimate_id, 80)
@@ -1397,10 +1963,9 @@ export function readValueEpisodeSurfaces(sessionId, env = process.env) {
         selected_result_ids: Array.isArray(item.selected_result_ids)
           ? item.selected_result_ids.slice(0, 3).map((id) => safeText(id, 80))
           : [],
+        feedback_available: item.feedback_available !== false,
         created_at: safeText(item.created_at ?? "", 40),
-        reported_at: item.reported_at
-          ? safeText(item.reported_at, 40)
-          : null,
+        reported_at: item.reported_at ? safeText(item.reported_at, 40) : null,
       }));
   } catch {
     return [];
@@ -1416,7 +1981,10 @@ export function markValueEpisodeSelection(
   if (!queryId || !resultId) return false;
   const records = readValueEpisodeSurfaces(sessionId, env);
   const record = records.find((item) => item.query_id === queryId);
-  if (!record || !record.candidates.some((item) => item.result_id === resultId)) {
+  if (
+    !record ||
+    !record.candidates.some((item) => item.result_id === resultId)
+  ) {
     return false;
   }
   record.selected_result_ids = [
@@ -1425,11 +1993,7 @@ export function markValueEpisodeSelection(
   return writeValueEpisodeSurfaces(sessionId, records, env);
 }
 
-export async function reportTaskOutcomesOnStop(
-  sessionId,
-  input,
-  options = {},
-) {
+export async function reportTaskOutcomesOnStop(sessionId, input, options = {}) {
   const env = options.env ?? process.env;
   const records = readValueEpisodeSurfaces(sessionId, env);
   const pending = records.filter((item) => !item.reported_at).slice(0, 5);
@@ -1449,15 +2013,13 @@ export async function reportTaskOutcomesOnStop(
     const selected = episode.selected_result_ids.slice(0, 3);
     const selectedKey = [...selected].sort().join("\u0000");
     const selectedBundle = episode.bundles.find(
-      (bundle) =>
-        [...bundle.result_ids].sort().join("\u0000") === selectedKey,
+      (bundle) => [...bundle.result_ids].sort().join("\u0000") === selectedKey,
     );
     const estimateId = selectedBundle?.value_estimate_id
       ? selectedBundle.value_estimate_id
       : selected.length === 1
-        ? episode.candidates.find(
-            (item) => item.result_id === selected[0],
-          )?.value_estimate_id
+        ? episode.candidates.find((item) => item.result_id === selected[0])
+            ?.value_estimate_id
         : null;
     const response = await postTaskOutcome(
       {
@@ -1493,10 +2055,7 @@ export async function reportTaskOutcomesOnStop(
 async function postTaskOutcome(payload, options = {}) {
   const env = options.env ?? process.env;
   const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    autoQueryTimeoutMs(env),
-  );
+  const timeout = setTimeout(() => controller.abort(), autoQueryTimeoutMs(env));
   try {
     const headers = {
       "content-type": "application/json",
@@ -1525,7 +2084,10 @@ function writeValueEpisodeSurfaces(sessionId, records, env) {
   try {
     const path = valueEpisodePath(sessionId, env);
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(records.slice(-VALUE_EPISODE_MARKER_LIMIT)));
+    writeFileSync(
+      path,
+      JSON.stringify(records.slice(-VALUE_EPISODE_MARKER_LIMIT)),
+    );
     return true;
   } catch {
     return false;
@@ -1534,7 +2096,10 @@ function writeValueEpisodeSurfaces(sessionId, records, env) {
 
 function tokenUsageFromRuntime(input) {
   const usage =
-    input?.token_usage ?? input?.tokenUsage ?? input?.usage ?? input?.model_usage;
+    input?.token_usage ??
+    input?.tokenUsage ??
+    input?.usage ??
+    input?.model_usage;
   if (!usage || typeof usage !== "object") return null;
   const inputTokens = finiteNonNegative(
     usage.input_tokens ?? usage.inputTokens ?? usage.prompt_tokens,
@@ -1564,7 +2129,9 @@ function finiteNonNegative(value) {
 }
 
 function normalizeReasoningEffort(value) {
-  const normalized = String(value ?? "").trim().toLowerCase();
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
   return ["none", "minimal", "low", "medium", "high", "max"].includes(
     normalized,
   )
@@ -1612,7 +2179,11 @@ export function readPromptedCount(sessionId, env = process.env) {
 
 // Record the use count at which we just prompted this session.
 export function writePromptedCount(sessionId, count, env = process.env) {
-  return writeCountFile(promptPath(sessionId, env), count);
+  const written = writeCountFile(promptPath(sessionId, env), count);
+  if (written) {
+    markDirectSelectionSurfacesPrompted(sessionId, count, env);
+  }
+  return written;
 }
 
 // --- Shared helpers ----------------------------------------------------------

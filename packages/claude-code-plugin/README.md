@@ -69,12 +69,23 @@ support or for users who need the local-only `bootstrap_agent_identity` tool.
 After install, the `remembrance` MCP server or endpoint should expose tools such
 as `query_skills`, `submit_query_feedback`, `submit_feedback`,
 `submit_remembrance`, `get_skill`, `get_resource`, `report_task_outcome`, and
-`get_value_proof`; some clients display
+`get_value_proof`, plus `list_skills` and `invoke_skill`; some clients display
 those tools with a `remembrance.`
 namespace. The local bundled server also exposes `bootstrap_agent_identity`.
-Query results label high, possible, and exploratory matches and include a
-concise reason, approximate context tokens, verified-use evidence, risk, and
-correlation IDs. Claude should open a high match with `get_skill` or
+Use `/remembrance:use <slug>` when a person explicitly selects a skill. Claude
+resolves ambiguous names with the indexed, normalized slug-prefix filter in
+`list_skills`, never guesses the exact slug, and calls `invoke_skill` to recheck
+current policy and load the active reviewed version. It uses `query_skills` for
+discovery.
+MCP catalog/resource handles contain no full private instructions and do not
+count as use. Direct selections receive post-use feedback and outcome prompts,
+but never query-fit feedback.
+Query results label high, possible, and exploratory matches and include bounded
+`why_matched` terms, capabilities, and constraint evidence; conservative
+`applicability` scope and use/exclusion conditions; metadata digests; a concise
+reason; approximate context tokens; verified-use evidence; risk; and
+correlation IDs. Claude should first rule out an unlikely or irrelevant
+corner-case result and report query fit `poor`, then open a remaining high match with `get_skill` or
 `get_resource` and its `query_id`/`result_id` before custom work; possible and
 exploratory matches remain optional. The completion hook asks once about an
 unopened high match so Claude can fetch it or report explicit poor-fit feedback;

@@ -43,6 +43,9 @@ import {
   countRegistryConsumption,
   countTaskEligibility,
   decideStop,
+  markDirectSelectionSurfacesPrompted,
+  readDirectSelectionSurfaces,
+  readPromptedCount as readSharedPromptedCount,
   readRegistryUseCount,
   readTaskEligibilityCount,
   reportTaskOutcomesOnStop,
@@ -65,10 +68,10 @@ export function sessionUsedRemembrance(transcript) {
   }
   return (
     /Remembrance auto-query context/i.test(text) ||
-    /mcp__[a-z0-9_]*remembrance[a-z0-9_]*__(query_skills|get_skill|get_resource|submit_remembrance|submit_query_feedback|submit_feedback|submit_suggestion|submit_resource|propose_skill_idea)/i.test(
+    /mcp__[a-z0-9_]*remembrance[a-z0-9_]*__(query_skills|get_skill|get_resource|invoke_skill|submit_remembrance|submit_query_feedback|submit_feedback|submit_suggestion|submit_resource|propose_skill_idea)/i.test(
       text,
     ) ||
-    /\/api\/v1\/agent\/(query|query-feedback|remembrances|skill-ideas|suggestions|feedback)\b/i.test(
+    /\/api\/v1\/agent\/(query|query-feedback|skill-invocations|remembrances|skill-ideas|suggestions|feedback)\b/i.test(
       text,
     ) ||
     /\bremembrancer\b/i.test(text)
@@ -136,7 +139,9 @@ export function decideContribution(input, options = {}) {
   const readUse = options.readUseCount ?? readRegistryUseCount;
   const readEligibility =
     options.readEligibilityCount ?? readTaskEligibilityCount;
-  const readCount = options.readCount ?? readPromptedCount;
+  const readCount =
+    options.readCount ??
+    ((id) => Math.max(readPromptedCount(id), readSharedPromptedCount(id, env)));
   const decision = decideStop(
     {
       session_id: sessionId,
@@ -151,6 +156,8 @@ export function decideContribution(input, options = {}) {
         Math.max(transcriptEligibility, readEligibility(sessionId, env)),
       readPromptedCount: () => readCount(sessionId),
       readHighMatch: options.readHighMatch,
+      readDirectSelections:
+        options.readDirectSelections ?? readDirectSelectionSurfaces,
     },
   );
   return decision.allow
@@ -179,6 +186,13 @@ export async function handleStopHook(input, options = {}) {
   }
   const writeCount = options.writeCount ?? writePromptedCount;
   writeCount(input?.session_id ?? "unknown", decision.consumption);
+  const markDirectSelections =
+    options.markDirectSelectionsPrompted ?? markDirectSelectionSurfacesPrompted;
+  markDirectSelections(
+    input?.session_id ?? "unknown",
+    decision.consumption,
+    options.env ?? process.env,
+  );
   return {
     allow: false,
     why: decision.why,

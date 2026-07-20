@@ -112,6 +112,122 @@ describe("Cursor afterMCPExecution hook", () => {
     );
   });
 
+  it("records a successful explicit invocation and its selected value episode", async () => {
+    const recordRegistryUse = vi.fn(() => 2);
+    const recordDirectSelection = vi.fn();
+    const recordValueEpisode = vi.fn();
+    const clearExplicit = vi.fn(() => true);
+    const result = await handleMcpUse(
+      {
+        tool_name: "invoke_skill",
+        conversation_id: "conv_direct",
+        result: {
+          selection_mode: "explicit",
+          query_id: "rinv_cursor",
+          result_id: "qres_cursor_direct",
+          skill: {
+            slug: "web-ui-ux-qa",
+            version: 5,
+            version_id: "skv_cursor",
+            skill_md: "# Instructions",
+            task_outcome_eligible: true,
+          },
+          feedback: { available: true },
+          task_outcome: {
+            available: true,
+            eligible_result_ids: ["qres_cursor_direct"],
+          },
+        },
+      },
+      {
+        env: {},
+        recordRegistryUse,
+        recordDirectSelection,
+        recordValueEpisode,
+        clearHighMatchSurfaceForExplicitSelection: clearExplicit,
+      },
+    );
+
+    expect(result).toEqual({
+      recorded: true,
+      kind: "direct_selection",
+      tool: "invoke_skill",
+      count: 2,
+    });
+    expect(recordDirectSelection).toHaveBeenCalledWith(
+      "conv_direct",
+      expect.objectContaining({ slug: "web-ui-ux-qa", use_count: 2 }),
+      {},
+    );
+    expect(recordValueEpisode).toHaveBeenCalledWith(
+      "conv_direct",
+      expect.objectContaining({
+        interaction_kind: "direct_selection",
+        selected_result_ids: ["qres_cursor_direct"],
+      }),
+      {},
+    );
+    expect(clearExplicit).toHaveBeenCalledWith(
+      "conv_direct",
+      "web-ui-ux-qa",
+      {},
+    );
+  });
+
+  it("does not count failed invocations or catalog browsing as skill use", async () => {
+    const recordRegistryUse = vi.fn();
+    expect(
+      await handleMcpUse(
+        {
+          tool_name: "invoke_skill",
+          conversation_id: "conv_failed",
+          result: { isError: true },
+        },
+        { env: {}, recordRegistryUse },
+      ),
+    ).toEqual({
+      recorded: false,
+      kind: "failed",
+      tool: "invoke_skill",
+    });
+    expect(
+      await handleMcpUse(
+        {
+          tool_name: "list_skills",
+          conversation_id: "conv_list",
+          result: { skills: [{ slug: "listed-only" }] },
+        },
+        { env: {}, recordRegistryUse },
+      ),
+    ).toEqual({
+      recorded: false,
+      kind: "ignored",
+      tool: "list_skills",
+    });
+    expect(
+      await handleMcpUse(
+        {
+          tool_name: "resources/read",
+          conversation_id: "conv_resource",
+          result: {
+            contents: [
+              {
+                uri: "remembrance://skills/listed-only",
+                text: '{"selection_handle":{"slug":"listed-only"}}',
+              },
+            ],
+          },
+        },
+        { env: {}, recordRegistryUse },
+      ),
+    ).toEqual({
+      recorded: false,
+      kind: "ignored",
+      tool: "read",
+    });
+    expect(recordRegistryUse).not.toHaveBeenCalled();
+  });
+
   it("marks the current use as handled after an explicit contribution", async () => {
     const writePromptedCount = vi.fn();
     const result = await handleMcpUse(
@@ -131,6 +247,72 @@ describe("Cursor afterMCPExecution hook", () => {
       count: 2,
     });
     expect(writePromptedCount).toHaveBeenCalledWith("session_1", 2, {});
+  });
+
+  it("keeps completion pending for a feedback-generated remembrance", async () => {
+    const writePromptedCount = vi.fn();
+    const result = await handleMcpUse(
+      {
+        tool_name: "submit_feedback",
+        session_id: "session_feedback_followup",
+        result: {
+          next_step: {
+            submit_remembrance_payload: {
+              type: "skill_feedback",
+              lesson: "Reusable correction.",
+            },
+          },
+        },
+      },
+      {
+        env: {},
+        readRegistryUseCount: () => 1,
+        readTaskEligibilityCount: () => 0,
+        writePromptedCount,
+      },
+    );
+
+    expect(result).toEqual({
+      recorded: false,
+      kind: "remembrance_followup_pending",
+      tool: "submit_feedback",
+    });
+    expect(writePromptedCount).not.toHaveBeenCalled();
+  });
+
+  it("does not mark an HTTP-rejected contribution as handled", async () => {
+    const writePromptedCount = vi.fn();
+    const result = await handleMcpUse(
+      {
+        tool_name: "submit_feedback",
+        session_id: "session_rejected_feedback",
+        result: {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                ok: false,
+                status: 503,
+                body: { error: "Feedback unavailable" },
+              }),
+            },
+          ],
+        },
+      },
+      {
+        env: {},
+        readRegistryUseCount: () => 1,
+        readTaskEligibilityCount: () => 0,
+        writePromptedCount,
+      },
+    );
+
+    expect(result).toEqual({
+      recorded: false,
+      kind: "failed",
+      tool: "submit_feedback",
+    });
+    expect(writePromptedCount).not.toHaveBeenCalled();
   });
 
   it("treats explicit query-fit feedback as a completed contribution", async () => {

@@ -76,8 +76,8 @@ function attestationEvidenceHashForRemembrance(payload) {
 }
 
 // ../core/src/agent-guidance.ts
-var REMEMBRANCE_QUERY_TOOL_DESCRIPTION = "Call before non-trivial service, API, tool, library, workflow, UI, review, test, security, or deployment work to find relevant Remembrance skills and resources. For short context-dependent follow-ups, infer the concrete task from the full conversation, preserve any plugin-supplied client_context.directive_id/runtime/trigger_reason, and query anyway. High matches should be fetched before custom work; possible and exploratory matches remain optional. Do not use for broad web search or one-off facts.";
-var REMEMBRANCE_MCP_SERVER_INSTRUCTIONS = "Remembrance is shared operational memory for agents. BEFORE non-trivial service/API/tool/library/workflow/UI/review/test/security/deployment work, call query_skills to reuse proven skills and resources instead of rediscovering them. A local repository change still qualifies when it involves a reusable workflow or lesson; skip only genuinely trivial throwaway edits and one-off facts. For short follow-ups such as 'fix these issues', 'continue', or 'try again', infer the concrete task, domain, and constraints from the full conversation and still call query_skills; do not wait for the current prompt to repeat trigger keywords. Treat match_tier as a decision aid: for a high match, call get_skill or get_resource before custom work and pass the returned query_id/result_id so the surfaced-to-fetch funnel closes; possible and exploratory matches are optional. The response includes approximate context tokens, verified uses, and risk so you can weigh the detour. Honor query_skills.skill_access on every response. When policy is org_only, use only returned organization skills and never substitute bundled or live public skill references; if an organization key is configured and the query is unavailable, fail closed because the policy cannot be confirmed. AFTER query_skills, call submit_query_feedback once with one complete set of explicit good/partial/poor judgments using the returned query_id and result_id values; leave unrated results neutral, and remember that a poor query match is not the same as a globally bad skill. Reuse the same organization or anonymous auth scope as the query. AFTER you actually use a skill or resource, close the post-use loop with submit_feedback (useful true/false plus a one-line lesson and the originating query_id/result_id; it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable, or propose_skill_idea only if nothing fit and you built a new workflow. When delegating, pass the selected slug, query_id, and result_id to the subagent; it should fetch that result or run its own full-context query. Before finishing any reusable task, self-check for a missed query. If you catch your own mistake, the user catches one, CI/deploy fails, a security issue appears, or you fix a release/versioning miss, submit a failure_report remembrance even if no skill was used; raw MCP clients have no plugin Stop hook to remind you later. Attach evidence (reproduction detail, artifact hashes, or an attestation); evidence-less public reports wait in unverified intake until corroborated. Redact secrets, private URLs, credentials, raw logs, and proprietary content; submit summaries and hashes, not raw traces.";
+var REMEMBRANCE_QUERY_TOOL_DESCRIPTION = "Call before non-trivial service, API, tool, library, workflow, UI, review, test, security, or deployment work to find relevant Remembrance skills and resources. For short context-dependent follow-ups, infer the concrete task from the full conversation, preserve any plugin-supplied client_context.directive_id/runtime/trigger_reason, and query anyway. Compare each candidate's bounded why_matched evidence and applicability conditions before opening it; discard stated unlikely or corner-case mismatches. High matches should be fetched before custom work; possible and exploratory matches remain optional. Do not use for broad web search or one-off facts.";
+var REMEMBRANCE_MCP_SERVER_INSTRUCTIONS = "Remembrance is shared operational memory for agents. When the user explicitly names an authorized Remembrance skill or supplies a remembrance://skills/{slug} URI, resolve ambiguous names with list_skills using its normalized slug-prefix filter, then call invoke_skill with an exact returned slug. Never guess a slug. list_skills is catalog resolution, not relevance search; use query_skills when the user wants relevant candidates rather than a known selection. invoke_skill rechecks authorization and organization policy, resolves the current reviewed version, and returns the only full instruction body. Catalog listings and MCP resource reads are lightweight handles, not skill use. Do not run query_skills merely to rediscover that explicit selection, and do not submit query-fit feedback for it. After meaningful direct use, follow the returned task-outcome and post-use feedback instructions once. BEFORE non-trivial service/API/tool/library/workflow/UI/review/test/security/deployment work, call query_skills to reuse proven skills and resources instead of rediscovering them. A local repository change still qualifies when it involves a reusable workflow or lesson; skip only genuinely trivial throwaway edits and one-off facts. For short follow-ups such as 'fix these issues', 'continue', or 'try again', infer the concrete task, domain, and constraints from the full conversation and still call query_skills; do not wait for the current prompt to repeat trigger keywords. Treat match_tier as a decision aid, then inspect why_matched and applicability before opening a result. These fields show bounded matched terms/capabilities, satisfied and missed constraints, qualitative lexical/semantic evidence, declared scope, use conditions, and exclusions without exposing unstable raw ranking scores. Discard an unlikely or irrelevant corner-case result and report fit: poor; do not force its use. For a remaining high match, call get_skill or get_resource before custom work and pass the returned query_id/result_id so the surfaced-to-fetch funnel closes; possible and exploratory matches are optional. The response also includes approximate context tokens, verified uses, risk, tags, permissions, dependencies, and contraindications so you can weigh the detour safely. Honor query_skills.skill_access on every response. When policy is org_only, use only returned organization skills and never substitute bundled or live public skill references; if an organization key is configured and the query is unavailable, fail closed because the policy cannot be confirmed. AFTER query_skills, call submit_query_feedback once with one complete set of explicit good/partial/poor judgments using the returned query_id and result_id values; leave unrated results neutral, and remember that a poor query match is not the same as a globally bad skill. Reuse the same organization or anonymous auth scope as the query. AFTER you actually use a skill or resource, close the post-use loop with submit_feedback (useful true/false plus a one-line lesson and the originating query_id/result_id; it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable, or propose_skill_idea only if nothing fit and you built a new workflow. When delegating, pass the selected slug, exact version, query_id, and result_id to the subagent; it should invoke/fetch that result or run its own full-context query. The parent reports the terminal outcome unless the subagent creates its own invocation. Before finishing any reusable task, self-check for a missed query. If you catch your own mistake, the user catches one, CI/deploy fails, a security issue appears, or you fix a release/versioning miss, submit a failure_report remembrance even if no skill was used; raw MCP clients have no plugin Stop hook to remind you later. Attach evidence (reproduction detail, artifact hashes, or an attestation); evidence-less public reports wait in unverified intake until corroborated. Redact secrets, private URLs, credentials, raw logs, and proprietary content; submit summaries and hashes, not raw traces.";
 
 // ../core/src/redaction.ts
 var SECRET_PATTERN_SPECS = [
@@ -4158,6 +4158,60 @@ var coerce = {
 };
 var NEVER = INVALID;
 
+// ../core/src/skill-catalog.ts
+var REMEMBRANCE_SKILL_RESOURCE_URI_TEMPLATE = "remembrance://skills/{slug}";
+function normalizeSkillCatalogPrefix(value) {
+  return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+function remembranceSkillResourceUri(slug) {
+  return `remembrance://skills/${encodeURIComponent(slug)}`;
+}
+function parseRemembranceSkillResourceUri(uri) {
+  let parsed;
+  try {
+    parsed = new URL(uri);
+  } catch {
+    throw new Error("Invalid Remembrance skill resource URI.");
+  }
+  if (parsed.protocol !== "remembrance:" || parsed.hostname !== "skills" || parsed.search || parsed.hash) {
+    throw new Error("Invalid Remembrance skill resource URI.");
+  }
+  const encodedSlug = parsed.pathname.replace(/^\/+/, "");
+  if (!encodedSlug || encodedSlug.includes("/")) {
+    throw new Error("Invalid Remembrance skill resource URI.");
+  }
+  let slug;
+  try {
+    slug = decodeURIComponent(encodedSlug);
+  } catch {
+    throw new Error("Invalid Remembrance skill resource URI.");
+  }
+  if (!slug || remembranceSkillResourceUri(slug) !== uri) {
+    throw new Error("Invalid Remembrance skill resource URI.");
+  }
+  return slug;
+}
+function remembranceSkillResourceHandle(entry) {
+  return JSON.stringify(
+    {
+      kind: "remembrance_skill_selection_handle",
+      action: "invoke_skill",
+      slug: entry.slug,
+      name: entry.name,
+      summary: entry.summary,
+      version: entry.version,
+      source: entry.source,
+      visibility: entry.visibility,
+      risk_level: entry.risk_level,
+      domains: entry.domains,
+      tags: entry.tags,
+      instruction: "Call invoke_skill with this exact slug to recheck authorization and load the current active reviewed version. Do not infer private instructions from this handle."
+    },
+    null,
+    2
+  );
+}
+
 // ../core/src/schemas.ts
 var DEFAULT_MUTATION_BODY_LIMIT_BYTES = 256 * 1024;
 var MAX_SHORT_TEXT_LENGTH = 512;
@@ -4451,6 +4505,54 @@ var economicsContextSchema = external_exports.object({
   }).strict().default({}),
   measurement_capabilities: external_exports.array(economicsMeasurementCapabilitySchema).max(economicsMeasurementCapabilitySchema.options.length).default([])
 }).strict();
+var skillCatalogRequestSchema = external_exports.object({
+  q: boundedString(MAX_SHORT_TEXT_LENGTH).transform(normalizeSkillCatalogPrefix).refine((value) => value.length > 0, {
+    message: "q must contain at least one letter or digit"
+  }).optional(),
+  slug: boundedString(MAX_SHORT_TEXT_LENGTH).optional(),
+  cursor: boundedString(MAX_LONG_TEXT_LENGTH).optional(),
+  limit: external_exports.number().int().min(1).max(100).default(50)
+}).strict().superRefine((value, ctx) => {
+  if (value.q && value.slug) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "q and slug cannot be supplied together",
+      path: ["slug"]
+    });
+  }
+  if (value.slug && value.cursor) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "slug and cursor cannot be supplied together",
+      path: ["cursor"]
+    });
+  }
+});
+var skillCatalogEntrySchema = external_exports.object({
+  slug: boundedString(MAX_SHORT_TEXT_LENGTH),
+  name: boundedString(MAX_SHORT_TEXT_LENGTH),
+  summary: external_exports.string().max(MAX_LONG_TEXT_LENGTH),
+  version: boundedString(MAX_SHORT_TEXT_LENGTH),
+  source: external_exports.enum(["public", "org_overlay"]),
+  visibility: visibilitySchema,
+  risk_level: riskLevelSchema,
+  domains: external_exports.array(boundedString(MAX_SHORT_TEXT_LENGTH)).max(50),
+  tags: external_exports.array(boundedString(MAX_SHORT_TEXT_LENGTH)).max(50),
+  updated_at: external_exports.string().datetime(),
+  resource_uri: boundedString(MAX_LONG_TEXT_LENGTH)
+}).strict();
+var skillCatalogResponseSchema = external_exports.object({
+  skills: external_exports.array(skillCatalogEntrySchema).max(100),
+  next_cursor: boundedString(MAX_LONG_TEXT_LENGTH).nullable()
+}).strict();
+var agentSkillInvocationRequestSchema = external_exports.object({
+  slug: boundedString(MAX_SHORT_TEXT_LENGTH),
+  agent: agentSchema.optional(),
+  task: queryTaskSchema.optional(),
+  client_context: queryClientContextSchema.optional(),
+  economics_context: economicsContextSchema.optional(),
+  idempotency_key: boundedString(MAX_SHORT_TEXT_LENGTH).optional()
+}).strict();
 var agentDirectiveShownEventSchema = external_exports.object({
   event: external_exports.literal("shown"),
   directive_id: queryDirectiveIdSchema,
@@ -4665,6 +4767,10 @@ var remembrancePayloadSchema = external_exports.object({
   resource: remembranceResourceRefSchema.optional(),
   outcome: outcomeSchema,
   lesson: boundedString(MAX_LONG_TEXT_LENGTH),
+  interaction: external_exports.object({
+    query_id: boundedString(MAX_SHORT_TEXT_LENGTH),
+    result_id: boundedString(MAX_SHORT_TEXT_LENGTH)
+  }).strict().optional(),
   enterprise_encryption: enterpriseEncryptedPayloadEnvelopeSchema.optional(),
   suggested_update: suggestedUpdateSchema.default({ kind: "none" }),
   evidence: evidenceSchema.default({ artifact_hashes: [] }),
@@ -4677,6 +4783,11 @@ var remembrancePayloadSchema = external_exports.object({
   // after parse (before auth/idempotency/storage/verifier) so it is never
   // persisted or hashed.
   verified_attestation: external_exports.boolean().optional()
+}).strict();
+var skillApplicabilitySchema = external_exports.object({
+  scope: external_exports.enum(["general", "specialized", "corner_case"]),
+  use_when: external_exports.array(boundedString(MAX_SHORT_TEXT_LENGTH)).max(20).default([]),
+  avoid_when: external_exports.array(boundedString(MAX_SHORT_TEXT_LENGTH)).max(20).default([])
 }).strict();
 var skillMetadataSchema = external_exports.object({
   schema_version: external_exports.literal("0.1"),
@@ -4695,6 +4806,7 @@ var skillMetadataSchema = external_exports.object({
   dependencies: external_exports.array(boundedJsonValue()).max(80).default([]),
   permissions: external_exports.record(external_exports.boolean()).default({}),
   contraindications: external_exports.array(external_exports.string().max(MAX_LONG_TEXT_LENGTH)).max(80).default([]),
+  applicability: skillApplicabilitySchema.optional(),
   feedback_url: external_exports.string().url(),
   install_command: external_exports.string().min(1),
   stats: external_exports.object({
@@ -6553,6 +6665,19 @@ var toolDefinitions = [
     agentQueryRequestSchema
   ),
   tool(
+    "list_skills",
+    "Browse the live authorized skill catalog without loading full instructions. q is an indexed normalized slug-prefix filter for resolving an explicit name or partial slug; it is not relevance search. Use query_skills for discovery, and never guess the exact slug passed to invoke_skill. Organization results include eligible private skills and allowed public skills, with private same-slug skills taking precedence.",
+    "/api/v1/agent/skill-catalog",
+    skillCatalogRequestSchema,
+    "GET"
+  ),
+  tool(
+    "invoke_skill",
+    "Load an explicitly selected skill through the authoritative policy boundary. Use an exact slug returned by list_skills, an MCP resource, or query_skills. This resolves the current active reviewed version, records direct selection, and returns post-use feedback and outcome instructions. Do not use submit_query_feedback for this explicit selection.",
+    "/api/v1/agent/skill-invocations",
+    agentSkillInvocationRequestSchema
+  ),
+  tool(
     "get_skill",
     "Fetch a known skill by slug after query_skills returns it. Pass query_id and result_id from that response so Remembrance can measure whether surfaced guidance was opened. Do not guess private or inactive slugs.",
     "/api/v1/skills/{slug}",
@@ -6695,7 +6820,7 @@ function resolveApiKey() {
   return fromFile ? String(fromFile) : "";
 }
 var apiBase = (process.env.REMEMBRANCE_API_URL || readRemembranceConfig().apiUrl || "https://remembrance.dev").replace(/\/$/, "");
-var SERVER_VERSION = true ? "0.1.27" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.33" : "0.0.0-dev";
 var tools = toolDefinitions;
 var inputBuffer = Buffer.alloc(0);
 var clientFraming = "ndjson";
@@ -6792,7 +6917,7 @@ async function dispatchJsonRpcRequest(request) {
       id: request.id,
       result: {
         protocolVersion: "2024-11-05",
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, resources: {} },
         serverInfo: {
           name: "@remembrance-ai/mcp-server",
           version: SERVER_VERSION
@@ -6812,6 +6937,41 @@ async function dispatchJsonRpcRequest(request) {
         }))
       }
     };
+  }
+  if (request.method === "resources/list") {
+    try {
+      return {
+        id: request.id,
+        result: await listSkillResources(request.params?.cursor)
+      };
+    } catch (error) {
+      return { id: request.id, error: jsonRpcErrorForToolError(error) };
+    }
+  }
+  if (request.method === "resources/templates/list") {
+    return {
+      id: request.id,
+      result: {
+        resourceTemplates: [
+          {
+            uriTemplate: REMEMBRANCE_SKILL_RESOURCE_URI_TEMPLATE,
+            name: "Remembrance skill",
+            description: "A lightweight authorized skill-selection handle. Read it, then call invoke_skill to load the current reviewed instructions.",
+            mimeType: "application/json"
+          }
+        ]
+      }
+    };
+  }
+  if (request.method === "resources/read") {
+    try {
+      return {
+        id: request.id,
+        result: await readSkillResource(request.params?.uri)
+      };
+    } catch (error) {
+      return { id: request.id, error: jsonRpcErrorForToolError(error) };
+    }
   }
   if (request.method === "tools/call") {
     const name = String(request.params?.name ?? "");
@@ -7088,7 +7248,7 @@ async function readIdentity(path = identityPath()) {
 }
 async function callRemembrance(definition, rawArguments) {
   const parsed = definition.schema.parse(rawArguments ?? {});
-  const payload = definition.name === "query_skills" ? {
+  const payload = definition.name === "query_skills" || definition.name === "invoke_skill" ? {
     ...parsed,
     client_context: {
       ...parsed.client_context ?? {},
@@ -7195,13 +7355,60 @@ function endpointFor(definition, payload) {
   const endpoint = definition.endpoint.replaceAll("{slug}", encodeURIComponent(String(payload.slug ?? ""))).replaceAll("{id}", encodeURIComponent(String(payload.id ?? "")));
   if (definition.method !== "GET") return endpoint;
   const params = new URLSearchParams();
-  for (const key of ["query_id", "result_id"]) {
-    if (typeof payload[key] === "string" && payload[key]) {
-      params.set(key, payload[key]);
+  const queryKeys = definition.name === "list_skills" ? ["q", "slug", "cursor", "limit"] : ["query_id", "result_id"];
+  for (const key of queryKeys) {
+    const value = payload[key];
+    if (typeof value === "string" && value || typeof value === "number" && Number.isFinite(value)) {
+      params.set(key, String(value));
     }
   }
   const query = params.toString();
   return query ? `${endpoint}?${query}` : endpoint;
+}
+async function listSkillResources(rawCursor) {
+  const cursor = typeof rawCursor === "string" && rawCursor ? rawCursor : void 0;
+  const catalog = await fetchSkillCatalog({ cursor, limit: 50 });
+  return {
+    resources: catalog.skills.map((skill) => ({
+      uri: skill.resource_uri,
+      name: skill.name,
+      description: skill.summary,
+      mimeType: "application/json"
+    })),
+    ...catalog.next_cursor ? { nextCursor: catalog.next_cursor } : {}
+  };
+}
+async function readSkillResource(rawUri) {
+  if (typeof rawUri !== "string") {
+    throw new Error("resources/read requires a Remembrance skill URI.");
+  }
+  const slug = parseRemembranceSkillResourceUri(rawUri);
+  const catalog = await fetchSkillCatalog({ slug, limit: 1 });
+  const skill = catalog.skills.find((entry) => entry.slug === slug);
+  if (!skill) {
+    throw new Error("Skill resource is unavailable or inaccessible.");
+  }
+  return {
+    contents: [
+      {
+        uri: skill.resource_uri,
+        mimeType: "application/json",
+        text: remembranceSkillResourceHandle(skill)
+      }
+    ]
+  };
+}
+async function fetchSkillCatalog(input) {
+  const response = await callRemembrance(
+    mustFindTool("list_skills"),
+    input
+  );
+  if (!response.ok) {
+    throw new Error(
+      `Skill catalog is unavailable${response.status ? ` (${response.status})` : ""}.`
+    );
+  }
+  return skillCatalogResponseSchema.parse(response.body);
 }
 async function ensureEconomicsSessionToken() {
   const identity = await readIdentity();

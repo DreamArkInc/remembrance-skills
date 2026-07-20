@@ -1,6 +1,6 @@
 {
   "name": "remembrance",
-  "version": "0.1.27",
+  "version": "0.1.33",
   "description": "Auto-query Remembrance skills/resources before relevant Codex tasks and expose Remembrance MCP tools.",
   "author": {
     "name": "Remembrance"

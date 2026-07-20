@@ -87,8 +87,9 @@ Remembrance uses two conversation hooks plus one tool observation hook:
   missed its query, the plugin asks OpenClaw once to close the loop with a query,
   redacted feedback, a reusable lesson, or a missing skill idea.
 - **After a detail tool:** a successful correlated `get_skill` or `get_resource`
-  clears that high-match reminder, so completion only escalates results that
-  were not actually opened.
+  clears that high-match reminder. A successful `invoke_skill` records the
+  explicit selection, marks its outcome selected, and starts one post-use
+  feedback prompt. Catalog browsing and resource-handle reads do not count.
 
 This creates the loop you want from an agent memory system: use reviewed
 knowledge when it exists, and improve the registry when the agent learns
@@ -118,7 +119,15 @@ The plugin ships a self-contained Remembrance MCP server
 server gives OpenClaw direct tools such as `query_skills`,
 `bootstrap_agent_identity`, `submit_query_feedback`, `submit_feedback`,
 `submit_remembrance`, `get_skill`, `get_resource`, `report_task_outcome`, and
-`get_value_proof`.
+`get_value_proof`, plus `list_skills` and `invoke_skill`.
+
+When a person explicitly names a Remembrance skill or supplies a
+`remembrance://skills/{slug}` URI, OpenClaw resolves ambiguous names with
+the indexed, normalized slug-prefix filter in `list_skills`, then calls
+`invoke_skill` with an exact returned slug. It uses `query_skills` for
+discovery, but never merely to rediscover that explicit selection. Invocation
+rechecks current policy and loads the active reviewed version; direct
+selections use post-use feedback and never query-fit feedback.
 
 For query fit, OpenClaw should send one complete verdict set of good/partial/poor labels
 per query from the same organization scope or anonymous scope. Any active key
@@ -126,8 +135,11 @@ for that organization is valid. Identical retries are safe; changed later
 judgments conflict, so uncertain results stay unrated instead of being appended
 later. Post-use quality belongs on `submit_feedback`.
 Query results also carry a high/possible/exploratory tier, concise reason,
+bounded `why_matched` terms/capabilities/constraint evidence, conservative
+`applicability` scope and use/exclusion conditions, metadata digests,
 approximate context tokens, verified-use evidence, risk, and correlation IDs.
-OpenClaw should open a high match with `get_skill`/`get_resource` and its
+OpenClaw should rule out an unlikely or irrelevant corner-case result and
+report query fit `poor`, then open a remaining high match with `get_skill`/`get_resource` and its
 `query_id`/`result_id`
 before custom work; lower tiers remain optional. Pass those IDs to
 `submit_feedback` after use and to delegated agents. At completion, the hook

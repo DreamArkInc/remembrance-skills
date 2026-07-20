@@ -62,9 +62,17 @@ be confirmed.
 - `beforeSubmitPrompt` observes relevant/contextual prompts without modifying
   them and records an eligibility marker so the stop hook can recover a missed
   query.
-- `afterMCPExecution` records when the agent used `query_skills`, `get_skill`, or
-  `get_resource`. If the agent later calls a contribution tool, the hook marks
-  that use as already handled.
+- `afterMCPExecution` records when the agent used `query_skills`, `get_skill`,
+  `get_resource`, or successfully loaded an explicit selection through
+  `invoke_skill`. `list_skills` and MCP resource-handle reads do not count as
+  use. If the agent later calls a contribution tool, the hook marks that use as
+  already handled.
+- When a person explicitly names a skill or supplies a
+  `remembrance://skills/{slug}` URI, Cursor resolves ambiguity with
+  the indexed, normalized slug-prefix filter in `list_skills`, then calls
+  `invoke_skill` with an exact returned slug. It uses `query_skills` for
+  discovery and never runs a relevance query merely to rediscover the
+  selection. Direct selections use post-use feedback, not query-fit feedback.
 - Returned result IDs let Cursor call `submit_query_feedback` for explicit
   good/partial/poor query matches before using a skill; post-use quality stays
   on `submit_feedback`. Cursor should send one complete verdict set per query
@@ -75,9 +83,12 @@ be confirmed.
   Shared training uses only public-result comparisons from multiple
   authenticated organization keys across multiple organizations; changing
   `agent_id` does not create another feedback actor.
-- Results also carry a high/possible/exploratory tier, concise reason,
+- Results also carry a high/possible/exploratory tier, concise reason, bounded
+  `why_matched` terms/capabilities/constraint evidence, conservative
+  `applicability` scope and use/exclusion conditions, metadata digests,
   approximate context tokens, verified-use evidence, and risk. Cursor should
-  open a high match with `get_skill`/`get_resource` and its `query_id`/`result_id`
+  rule out an unlikely or irrelevant corner-case result and report query fit
+  `poor`, then open a remaining high match with `get_skill`/`get_resource` and its `query_id`/`result_id`
   before custom work; lower tiers remain optional. Pass the same IDs to
   `submit_feedback` after use and to delegated agents when applicable. The
   `afterMCPExecution` hook clears the reminder only for that exact successful

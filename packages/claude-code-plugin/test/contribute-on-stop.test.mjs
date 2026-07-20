@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   contributeDisabled,
   contributionReason,
@@ -90,6 +90,55 @@ describe("Remembrance contribute-on-stop hook", () => {
       why: "prompt_contribution",
       consumption: 2,
     });
+  });
+
+  it("prompts once for every newly invoked skill and marks the batch prompted", async () => {
+    const selections = [
+      {
+        slug: "first-skill",
+        query_id: "rinv_first",
+        result_id: "qres_first",
+        feedback_available: true,
+        use_count: 1,
+        prompted_at: null,
+      },
+      {
+        slug: "second-skill",
+        query_id: "rinv_second",
+        result_id: "qres_second",
+        feedback_available: true,
+        use_count: 2,
+        prompted_at: null,
+      },
+    ];
+    const writeCount = vi.fn();
+    const markDirectSelectionsPrompted = vi.fn();
+    const result = await handleStopHook(
+      {
+        session_id: "s-direct-batch",
+        transcript_path: "/x",
+        stop_hook_active: false,
+      },
+      {
+        ...base,
+        readTranscript: () => twoUsesTranscript,
+        readUseCount: () => 2,
+        readDirectSelections: () => selections,
+        reportTaskOutcomes: async () => 2,
+        writeCount,
+        markDirectSelectionsPrompted,
+      },
+    );
+    expect(result.allow).toBe(false);
+    expect(result.output.reason).toContain("2 Remembrance skills");
+    expect(result.output.reason).toContain("first-skill");
+    expect(result.output.reason).toContain("second-skill");
+    expect(writeCount).toHaveBeenCalledWith("s-direct-batch", 2);
+    expect(markDirectSelectionsPrompted).toHaveBeenCalledWith(
+      "s-direct-batch",
+      2,
+      {},
+    );
   });
 
   it("does not re-prompt after a decline when only free-text remembrancer is mentioned", () => {

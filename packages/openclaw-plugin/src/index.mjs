@@ -49,23 +49,40 @@
 import process from "node:process";
 import {
   clearHighMatchSurfaceIfOpened,
+  clearHighMatchSurfaceForExplicitSelection,
   contributionReason,
   debugLog,
   decideStop,
+  directSelectionFromResponse,
+  highMatchFromResponse,
+  markCurrentEngagementHandled,
   readRegistryUseCount,
   readTaskEligibilityCount,
   recordDirectiveFollowThroughForTool,
+  recordDirectSelectionSurface,
   recordDirectiveSurface,
   recordHighMatchSurface,
   recordRegistryUse,
   recordTaskEligibility,
   recordValueEpisodeSurface,
   reportTaskOutcomesOnStop,
+  responseRequestsRemembranceFollowup,
   runPromptHook,
   sessionIdFor,
+  toolResponseIndicatesFailure,
   writePromptedCount,
   valueEpisodeFromResponse,
 } from "./hook-core.mjs";
+
+const CONTRIBUTION_TOOLS = [
+  "submit_query_feedback",
+  "submit_feedback",
+  "submit_remembrance",
+  "propose_skill_idea",
+  "submit_suggestion",
+  "submit_resource",
+  "submit_resource_review",
+];
 
 // --- definePluginEntry shim --------------------------------------------------
 //
@@ -188,19 +205,32 @@ export async function handlePrePrompt(event, options = {}) {
 // after_tool_call hook. Correlate successful queries with task directives, and
 // clear the completion nudge only when the exact high match was opened.
 export async function handleAfterToolCall(event, options = {}) {
-  if (event?.error ?? event?.isError ?? event?.result?.isError) {
+  const response = event?.result ?? event?.output ?? event?.response ?? null;
+  if (
+    event?.error ||
+    event?.isError ||
+    event?.result?.isError ||
+    toolResponseIndicatesFailure(response)
+  ) {
     return { cleared: false, why: "tool_failed" };
   }
   const env = options.env ?? process.env;
   const toolName = event?.toolName ?? event?.tool_name ?? "";
-  if (String(toolName).toLowerCase().endsWith("query_skills")) {
+  const normalizedToolName = String(toolName).toLowerCase();
+  const sessionId = sessionIdFromEvent(event);
+  if (normalizedToolName.endsWith("query_skills")) {
+    const recordUse = options.recordRegistryUse ?? recordRegistryUse;
+    recordUse(sessionId, env);
+    const recordHighMatch =
+      options.recordHighMatch ?? recordHighMatchSurface;
+    recordHighMatch(sessionId, highMatchFromResponse(response), env);
     const recordFollowThrough =
       options.recordDirectiveFollowThrough ??
       recordDirectiveFollowThroughForTool;
     const followed = await recordFollowThrough(
-      sessionIdFromEvent(event),
+      sessionId,
       toolName,
-      event?.result ?? event?.output ?? event?.response ?? null,
+      response,
       {
         env,
         fetchImpl: options.fetchImpl ?? fetch,
@@ -210,10 +240,8 @@ export async function handleAfterToolCall(event, options = {}) {
     const recordValueEpisode =
       options.recordValueEpisode ?? recordValueEpisodeSurface;
     recordValueEpisode(
-      sessionIdFromEvent(event),
-      valueEpisodeFromResponse(
-        event?.result ?? event?.output ?? event?.response ?? null,
-      ),
+      sessionId,
+      valueEpisodeFromResponse(response),
       env,
     );
     return {
@@ -222,10 +250,57 @@ export async function handleAfterToolCall(event, options = {}) {
       why: followed ? "directive_followed" : "no_current_directive",
     };
   }
+  if (normalizedToolName.endsWith("invoke_skill")) {
+    const selection = directSelectionFromResponse(response);
+    if (!selection) {
+      return { recorded: false, cleared: false, why: "invocation_not_loaded" };
+    }
+    const recordUse = options.recordRegistryUse ?? recordRegistryUse;
+    const useCount = recordUse(sessionId, env);
+    const recordSelection =
+      options.recordDirectSelection ?? recordDirectSelectionSurface;
+    recordSelection(sessionId, { ...selection, use_count: useCount }, env);
+    const recordValueEpisode =
+      options.recordValueEpisode ?? recordValueEpisodeSurface;
+    recordValueEpisode(sessionId, valueEpisodeFromResponse(response), env);
+    const clearExplicit =
+      options.clearHighMatchSurfaceForExplicitSelection ??
+      clearHighMatchSurfaceForExplicitSelection;
+    const cleared = clearExplicit(sessionId, selection.slug, env);
+    return {
+      recorded: true,
+      cleared,
+      why: "direct_skill_invoked",
+      count: useCount,
+    };
+  }
+  if (
+    CONTRIBUTION_TOOLS.some((tool) => normalizedToolName.endsWith(tool))
+  ) {
+    if (
+      normalizedToolName.endsWith("submit_feedback") &&
+      responseRequestsRemembranceFollowup(response)
+    ) {
+      return {
+        recorded: false,
+        cleared: false,
+        why: "remembrance_followup_pending",
+      };
+    }
+    const markHandled =
+      options.markCurrentEngagementHandled ?? markCurrentEngagementHandled;
+    const count = markHandled(sessionId, env);
+    return {
+      recorded: count > 0,
+      cleared: false,
+      why: "contribution_handled",
+      count,
+    };
+  }
   const clear =
     options.clearHighMatchSurfaceIfOpened ?? clearHighMatchSurfaceIfOpened;
   const cleared = clear(
-    sessionIdFromEvent(event),
+    sessionId,
     toolName,
     event?.params ?? event?.arguments ?? event?.tool_input ?? {},
     env,
