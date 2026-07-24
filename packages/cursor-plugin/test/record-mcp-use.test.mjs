@@ -5,9 +5,15 @@ describe("Cursor afterMCPExecution hook", () => {
   it("records registry consumption for Remembrance query/fetch tools", async () => {
     const recordRegistryUse = vi.fn(() => 3);
     const recordDirectiveFollowThrough = vi.fn(async () => true);
+    const recordHealth = vi.fn();
     const result = await handleMcpUse(
       { tool_name: "query_skills", conversation_id: "conv_123" },
-      { env: {}, recordRegistryUse, recordDirectiveFollowThrough },
+      {
+        env: {},
+        recordRegistryUse,
+        recordDirectiveFollowThrough,
+        recordHealth,
+      },
     );
 
     expect(result).toEqual({
@@ -22,6 +28,13 @@ describe("Cursor afterMCPExecution hook", () => {
       "query_skills",
       null,
       expect.objectContaining({ env: {} }),
+    );
+    expect(recordHealth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        surface: "cursor",
+        component: "tool_observer",
+      }),
+      {},
     );
   });
 
@@ -231,7 +244,7 @@ describe("Cursor afterMCPExecution hook", () => {
   it("marks the current use as handled after an explicit contribution", async () => {
     const writePromptedCount = vi.fn();
     const result = await handleMcpUse(
-      { tool_name: "submit_remembrance", session_id: "session_1" },
+      { tool_name: "propose_private_skill", session_id: "session_1" },
       {
         env: {},
         readRegistryUseCount: () => 2,
@@ -243,7 +256,7 @@ describe("Cursor afterMCPExecution hook", () => {
     expect(result).toEqual({
       recorded: true,
       kind: "contribution",
-      tool: "submit_remembrance",
+      tool: "propose_private_skill",
       count: 2,
     });
     expect(writePromptedCount).toHaveBeenCalledWith("session_1", 2, {});

@@ -58,13 +58,21 @@ describe("Remembrance contribute-on-stop hook", () => {
   });
 
   it("blocks the stop to prompt contribution on first registry use", async () => {
+    const recordHealth = vi.fn();
     const result = await handleStopHook(
       { session_id: "s1", transcript_path: "/x", stop_hook_active: false },
-      base,
+      { ...base, recordHealth },
     );
     expect(result.allow).toBe(false);
     expect(result.output.decision).toBe("block");
     expect(result.output.reason).toBe(contributionReason());
+    expect(recordHealth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        surface: "claude_code",
+        component: "completion_hook",
+      }),
+      {},
+    );
   });
 
   it("re-prompts only when consumption increased since the last prompt", () => {

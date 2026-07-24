@@ -1,5 +1,6 @@
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -26,9 +27,11 @@ const expectedMcpTools = [
   "get_skill",
   "get_resource",
   "bootstrap_agent_identity",
+  "queue_private_skill_import",
   "submit_feedback",
   "submit_remembrance",
   "propose_skill_idea",
+  "propose_private_skill",
   "submit_suggestion",
   "submit_resource",
   "submit_resource_review",
@@ -90,6 +93,7 @@ function readFrames(buffer) {
 describe("Remembrance Claude Code prompt hook", () => {
   it("queries Remembrance for external service and workflow prompts", async () => {
     const calls = [];
+    const recordHealth = vi.fn();
     const output = await handleHookInput(
       {
         hook_event_name: "UserPromptSubmit",
@@ -116,6 +120,7 @@ describe("Remembrance Claude Code prompt hook", () => {
             resources: [],
           });
         }),
+        recordHealth,
       },
     );
 
@@ -135,6 +140,13 @@ describe("Remembrance Claude Code prompt hook", () => {
     });
     expect(output?.hookSpecificOutput.additionalContext).toContain(
       "vercel-build-debug",
+    );
+    expect(recordHealth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        surface: "claude_code",
+        component: "prompt_hook",
+      }),
+      expect.any(Object),
     );
   });
 
@@ -396,12 +408,71 @@ describe("Remembrance Claude Code prompt hook", () => {
     }
   });
 
+  it("surfaces shared-config authentication on success, failure, and cache replay", async () => {
+    const configHome = join(tempRoot, `claude-config-${(cacheCounter += 1)}`);
+    mkdirSync(join(configHome, "remembrance"), { recursive: true });
+    writeFileSync(
+      join(configHome, "remembrance", "config.json"),
+      JSON.stringify({ apiKey: "rk_claude_shared" }),
+    );
+    const env = testEnv({
+      XDG_CONFIG_HOME: configHome,
+      REMEMBRANCE_API_KEY: "",
+    });
+    const successFetch = vi.fn(async () =>
+      Response.json({
+        skills: [{ slug: "claude-shared", description: "Shared guidance" }],
+        resources: [],
+      }),
+    );
+
+    const first = await handleHookInput(
+      { prompt: "Set up a Vercel deployment.", session_id: "claude-shared-1" },
+      { env, fetchImpl: successFetch },
+    );
+    const cached = await handleHookInput(
+      { prompt: "Set up a Vercel deployment.", session_id: "claude-shared-2" },
+      { env, fetchImpl: successFetch },
+    );
+    for (const output of [first, cached]) {
+      expect(output.hookSpecificOutput.additionalContext).toContain(
+        "Remembrance credential source",
+      );
+      expect(output.hookSpecificOutput.additionalContext).toContain(
+        "get_connection_status",
+      );
+      expect(output.hookSpecificOutput.additionalContext).not.toContain(
+        "rk_claude_shared",
+      );
+    }
+    expect(successFetch).toHaveBeenCalledOnce();
+
+    const failed = await handleHookInput(
+      { prompt: "Debug a Stripe API failure.", session_id: "claude-shared-3" },
+      {
+        env: testEnv({
+          XDG_CONFIG_HOME: configHome,
+          REMEMBRANCE_API_KEY: "",
+        }),
+        fetchImpl: vi.fn(async () => {
+          throw new Error("registry unavailable");
+        }),
+      },
+    );
+    expect(failed.hookSpecificOutput.additionalContext).toContain(
+      "Remembrance credential source",
+    );
+    expect(failed.hookSpecificOutput.additionalContext).toContain(
+      "query-unavailable context",
+    );
+    expect(failed.hookSpecificOutput.additionalContext).not.toContain(
+      "rk_claude_shared",
+    );
+  });
+
   it("validates plugin, hook, mcp, and marketplace manifests", () => {
     const plugin = JSON.parse(
       readFileSync(resolve(root, ".claude-plugin/plugin.json"), "utf8"),
-    );
-    const codexPlugin = JSON.parse(
-      readFileSync(resolve(root, ".codex-plugin/plugin.json"), "utf8"),
     );
     const packageJson = JSON.parse(
       readFileSync(resolve(root, "package.json"), "utf8"),
@@ -409,13 +480,7 @@ describe("Remembrance Claude Code prompt hook", () => {
     const hooks = JSON.parse(
       readFileSync(resolve(root, "hooks/hooks.json"), "utf8"),
     );
-    const codexHooks = JSON.parse(
-      readFileSync(resolve(root, "hooks/codex-hooks.json"), "utf8"),
-    );
     const mcp = JSON.parse(readFileSync(resolve(root, ".mcp.json"), "utf8"));
-    const codexMcp = JSON.parse(
-      readFileSync(resolve(root, ".mcp.codex.json"), "utf8"),
-    );
     const skill = readFileSync(
       resolve(root, "skills/remembrancer/SKILL.md"),
       "utf8",
@@ -444,12 +509,6 @@ describe("Remembrance Claude Code prompt hook", () => {
       mcpServers: "./.mcp.json",
       skills: "./skills",
     });
-    expect(codexPlugin).toMatchObject({
-      name: "remembrance",
-      hooks: "./hooks/codex-hooks.json",
-      mcpServers: "./.mcp.codex.json",
-      skills: "./skills",
-    });
     // The manifest must NOT reference the standard hooks/hooks.json — Claude Code
     // auto-loads that path, and a manifest `hooks` pointing at it makes the
     // plugin fail to load with a "Duplicate hooks file detected" error.
@@ -464,24 +523,10 @@ describe("Remembrance Claude Code prompt hook", () => {
       "record-detail-open.mjs",
     );
     expect(hooks.hooks.PostToolUse[0].matcher).toContain("query_skills");
-    expect(codexHooks.hooks.UserPromptSubmit[0].hooks[0].command).toBe(
-      'node "${PLUGIN_ROOT}/scripts/codex-query-on-prompt.mjs"',
-    );
-    expect(codexHooks.hooks.Stop[0].hooks[0].command).toBe(
-      'node "${PLUGIN_ROOT}/scripts/codex-contribute-on-stop.mjs"',
-    );
-    expect(codexHooks.hooks.PostToolUse[0].hooks[0].command).toBe(
-      'node "${PLUGIN_ROOT}/scripts/codex-record-detail-open.mjs"',
-    );
     expect(plugin.mcpServers).toBe("./.mcp.json");
     expect(mcp.mcpServers.remembrance).toMatchObject({
       command: "node",
       args: ["${CLAUDE_PLUGIN_ROOT}/servers/remembrance-mcp.mjs"],
-    });
-    expect(codexMcp.mcpServers.remembrance).toMatchObject({
-      type: "http",
-      url: "https://remembrance.dev/api/mcp",
-      bearer_token_env_var: "REMEMBRANCE_API_KEY",
     });
     expect(mcp.mcpServers.remembrance.env).toMatchObject({
       // Empty default (not a baked remembrance.dev): lets the bundled MCP
@@ -491,34 +536,27 @@ describe("Remembrance Claude Code prompt hook", () => {
       REMEMBRANCE_API_KEY: "${REMEMBRANCE_API_KEY:-}",
       REMEMBRANCE_AGENT_KEY_PATH: "${REMEMBRANCE_AGENT_KEY_PATH:-}",
     });
-    expect(JSON.stringify(codexMcp)).not.toContain("PLUGIN_ROOT");
-    expect(codexMcp.mcpServers.remembrance.command).toBeUndefined();
-    expect(codexMcp.mcpServers.remembrance.args).toBeUndefined();
-    expect(codexMcp.mcpServers.remembrance.env).toBeUndefined();
     expect(JSON.stringify(mcp)).not.toContain("${REMEMBRANCE_API_KEY}");
     expect(JSON.stringify(mcp)).not.toContain("${REMEMBRANCE_AGENT_KEY_PATH}");
-    expect(JSON.stringify(codexMcp)).not.toContain("${REMEMBRANCE_API_KEY}");
-    expect(JSON.stringify(codexMcp)).not.toContain(
-      "${REMEMBRANCE_AGENT_KEY_PATH}",
-    );
     expect(marketplace.plugins[0]).toMatchObject({
       name: "remembrance",
       source: "./packages/claude-code-plugin",
     });
     expect(packageJson.version).toBe(plugin.version);
-    expect(packageJson.version).toBe(codexPlugin.version);
     expect(marketplace.metadata.version).toBe(plugin.version);
-    expect(existsSync(resolve(root, "scripts/codex-query-on-prompt.mjs"))).toBe(
-      true,
-    );
-    expect(
-      existsSync(resolve(root, "scripts/codex-contribute-on-stop.mjs")),
-    ).toBe(true);
     expect(skill).toBe(canonicalSkill);
     expect(attestationReference).toBe(canonicalAttestationReference);
     expect(
       existsSync(
         resolve(root, "skills/remembrancer/scripts/validate-remembrance.mjs"),
+      ),
+    ).toBe(true);
+    expect(
+      existsSync(
+        resolve(
+          root,
+          "skills/remembrancer/scripts/queue-private-skill-import.mjs",
+        ),
       ),
     ).toBe(true);
     expect(skill).toContain("Query Remembrance first");
@@ -535,6 +573,10 @@ describe("Remembrance Claude Code prompt hook", () => {
     expect(skill).toContain(
       "POST https://remembrance.dev/api/v1/agent/skill-ideas",
     );
+    expect(skill).toContain(
+      "POST https://remembrance.dev/api/v1/agent/private-skill-ideas",
+    );
+    expect(skill).toContain("queue_private_skill_import");
     expect(skill).toContain("POST https://remembrance.dev/api/v1/resources");
     expect(skill).toContain(
       "POST https://remembrance.dev/api/v1/resources/reviews",
@@ -576,6 +618,23 @@ describe("Remembrance Claude Code prompt hook", () => {
           );
           const names = list.result.tools.map((tool) => tool.name);
           expect(names).toEqual(expect.arrayContaining(expectedMcpTools));
+          const privateProposal = list.result.tools.find(
+            (tool) => tool.name === "propose_private_skill",
+          );
+          const localHandoff = list.result.tools.find(
+            (tool) => tool.name === "queue_private_skill_import",
+          );
+          expect(privateProposal.annotations).toMatchObject({
+            readOnlyHint: false,
+            openWorldHint: false,
+            destructiveHint: false,
+          });
+          expect(localHandoff.annotations).toMatchObject({
+            readOnlyHint: false,
+            openWorldHint: false,
+            destructiveHint: false,
+            idempotentHint: true,
+          });
           return;
         }
         await delay(50);

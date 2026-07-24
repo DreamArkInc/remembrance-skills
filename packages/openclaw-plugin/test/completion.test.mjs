@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { handleCompletion, handleFinalize } from "../src/index.mjs";
 import { contributionReason } from "../src/hook-core.mjs";
 
@@ -22,10 +22,12 @@ function base(overrides = {}) {
 describe("OpenClaw completion hook (before_agent_finalize)", () => {
   it("reports the native task outcome before applying the finalize decision", async () => {
     const calls = [];
+    const recordHealth = vi.fn();
     const result = await handleFinalize(
       event(),
       base({
         reportTaskOutcomes: async (...args) => calls.push(args),
+        recordHealth,
         readUseCount: () => 0,
       }),
     );
@@ -38,6 +40,13 @@ describe("OpenClaw completion hook (before_agent_finalize)", () => {
       action: "finalize",
       why: "registry_not_used",
     });
+    expect(recordHealth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        surface: "openclaw",
+        component: "completion_hook",
+      }),
+      {},
+    );
   });
 
   it("revises with the contribution reason on new registry use", () => {

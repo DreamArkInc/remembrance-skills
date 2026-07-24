@@ -23,6 +23,7 @@ describe("Claude Code direct skill invocation hook", () => {
     const recordRegistryUse = vi.fn(() => 1);
     const recordDirectSelection = vi.fn();
     const recordValueEpisode = vi.fn();
+    const recordHealth = vi.fn();
     const result = await handlePostToolUse(
       {
         session_id: "claude_direct",
@@ -50,6 +51,7 @@ describe("Claude Code direct skill invocation hook", () => {
         recordRegistryUse,
         recordDirectSelection,
         recordValueEpisode,
+        recordHealth,
         clearHighMatchSurfaceForExplicitSelection: () => false,
       },
     );
@@ -61,6 +63,13 @@ describe("Claude Code direct skill invocation hook", () => {
     expect(recordDirectSelection).toHaveBeenCalledWith(
       "claude_direct",
       expect.objectContaining({ slug: "mongodb-aggregation", use_count: 1 }),
+      {},
+    );
+    expect(recordHealth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        surface: "claude_code",
+        component: "tool_observer",
+      }),
       {},
     );
     expect(recordValueEpisode).toHaveBeenCalledWith(
@@ -77,7 +86,7 @@ describe("Claude Code direct skill invocation hook", () => {
       await handlePostToolUse(
         {
           session_id: "claude_direct",
-          tool_name: "mcp__remembrance__submit_remembrance",
+          tool_name: "mcp__remembrance__propose_private_skill",
           tool_response: { id: "rpub_test" },
         },
         { env: {}, markCurrentEngagementHandled },

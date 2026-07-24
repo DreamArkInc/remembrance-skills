@@ -9,7 +9,9 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
   decideStop,
+  recordPluginLifecycleHealth,
   reportTaskOutcomesOnStop,
+  resolveApiCredential,
   sessionIdFor,
   writePromptedCount,
 } from "./hook-core.mjs";
@@ -45,8 +47,19 @@ export function handleStop(input, options = {}) {
 
 export async function handleStopHook(input, options = {}) {
   const env = options.env ?? process.env;
+  const sessionId = cursorSessionId(input, env);
+  const recordHealth = options.recordHealth ?? recordPluginLifecycleHealth;
+  recordHealth(
+    {
+      surface: "cursor",
+      component: "completion_hook",
+      credentialSource: resolveApiCredential(env).source,
+      sessionId,
+    },
+    env,
+  );
   const report = options.reportTaskOutcomes ?? reportTaskOutcomesOnStop;
-  await report(cursorSessionId(input, env), input, {
+  await report(sessionId, input, {
     env,
     fetchImpl: options.fetchImpl ?? fetch,
     userAgent: "@remembrance/cursor-plugin",

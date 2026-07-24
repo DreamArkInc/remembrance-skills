@@ -35,13 +35,16 @@ import {
   isContextualContinuationPrompt,
   readRemembranceConfig,
   redactPrompt,
+  recordPluginLifecycleHealth,
   recordRegistryUse,
   recordDirectiveSurface,
   recordHighMatchSurface,
   recordTaskEligibility,
   recordValueEpisodeSurface,
   resolveApiKey,
+  resolveApiCredential,
   sessionIdFor,
+  sharedConfigCredentialNotice,
   shouldQueryPrompt,
   continuationQueryContext,
   unavailableQueryContext,
@@ -110,6 +113,17 @@ export function buildQueryPayload(
 
 export async function handleHookInput(input, options = {}) {
   const env = options.env ?? process.env;
+  const sessionId = sessionIdFor(input);
+  const recordHealth = options.recordHealth ?? recordPluginLifecycleHealth;
+  recordHealth(
+    {
+      surface: "claude_code",
+      component: "prompt_hook",
+      credentialSource: resolveApiCredential(env).source,
+      sessionId,
+    },
+    env,
+  );
   if (disabled(env.REMEMBRANCE_AUTO_QUERY)) {
     debugLog(env, "disabled", {}, options);
     return null;
@@ -128,7 +142,10 @@ export async function handleHookInput(input, options = {}) {
       });
       recordEligibility(input, env, options);
       recordDirective(input, directive, env, options);
-      return outputForContext(continuationQueryContext(directive));
+      return withCredentialNotice(
+        outputForContext(continuationQueryContext(directive)),
+        env,
+      );
     }
     debugLog(env, "skip", { reason: decision.reason }, options);
     return null;
@@ -151,7 +168,7 @@ export async function handleHookInput(input, options = {}) {
     const output =
       cached.output ?? outputForContext(emptyQueryContext(decision.reason));
     recordUse(input, env, options, cached.highMatch ?? null);
-    return output;
+    return withCredentialNotice(output, env);
   }
   debugLog(env, "cache_miss", { key: shortCacheKey(cacheKey) }, options);
 
@@ -164,7 +181,10 @@ export async function handleHookInput(input, options = {}) {
     },
   );
   if (!response) {
-    return outputForContext(unavailableQueryContext(env));
+    return withCredentialNotice(
+      outputForContext(unavailableQueryContext(env)),
+      env,
+    );
   }
   const context =
     formatContext(response, decision.reason, limitFromEnv(env)) ??
@@ -173,7 +193,7 @@ export async function handleHookInput(input, options = {}) {
   const highMatch = highMatchFromResponse(response);
   await writeCachedOutput(cacheKey, output, highMatch, env, options);
   recordUse(input, env, options, highMatch, response);
-  return output;
+  return withCredentialNotice(output, env);
 }
 
 function outputForContext(context) {
@@ -181,6 +201,17 @@ function outputForContext(context) {
     hookSpecificOutput: {
       hookEventName: "UserPromptSubmit",
       additionalContext: context,
+    },
+  };
+}
+
+function withCredentialNotice(output, env) {
+  const notice = sharedConfigCredentialNotice(env);
+  if (!notice) return output;
+  return {
+    hookSpecificOutput: {
+      ...output.hookSpecificOutput,
+      additionalContext: `${notice}\n\n${output.hookSpecificOutput.additionalContext}`,
     },
   };
 }

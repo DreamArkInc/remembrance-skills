@@ -30,7 +30,13 @@ unavailable.
 
 ```bash
 openclaw plugins install clawhub:@remembrance/openclaw-plugin
+openclaw remembrance setup
 ```
+
+The setup command preserves existing OpenClaw settings, enables the required
+conversation-hook permission, and registers this installed package's bundled
+local MCP server by its absolute path. It does not copy your organization key
+into OpenClaw config.
 
 If you only want public registry results, the plugin can run without a key. For
 private team memory, create an enterprise key in the Remembrance dashboard and
@@ -42,8 +48,8 @@ printf '{"apiKey":"YOUR_ORG_KEY","apiUrl":"https://remembrance.dev"}\n' > ~/.con
 chmod 600 ~/.config/remembrance/config.json
 ```
 
-Then enable conversation access for the Remembrance plugin in
-`~/.openclaw/openclaw.json`:
+In a centrally managed environment, the setup command's equivalent
+conversation-access setting in `~/.openclaw/openclaw.json` is:
 
 ```json5
 {
@@ -61,7 +67,60 @@ Then enable conversation access for the Remembrance plugin in
 }
 ```
 
-Restart OpenClaw after changing the plugin or key config.
+Restart OpenClaw after setup or key changes, then verify both surfaces:
+
+```bash
+openclaw plugins inspect remembrance --runtime --json
+openclaw mcp doctor remembrance --probe
+```
+
+Then call Remembrance MCP `get_connection_status`. It should report
+`local_stdio_mcp`, `shared_config`, secure config permissions, and the expected
+organization scope without exposing the key. Do not conclude that OpenClaw is
+anonymous from an unset `REMEMBRANCE_API_KEY` or an anonymous curl/browser
+probe; those do not test the bundled plugin process.
+
+### Private repository contributions
+
+After the organization approves Remembrance as a destination, use
+`propose_private_skill` for repository-derived instructions. It requires the
+organization key and can only create a private review candidate. OpenClaw's
+conversation access setting lets the plugin observe prompts; it does not
+override a gateway, sandbox, or enterprise egress denial. Never retry denied
+private content through a different network transport.
+
+For a managed Gateway, add `remembrance` to `plugins.allow`, keep it out of
+`plugins.deny`, enable `plugins.entries.remembrance`, and retain
+`hooks.allowConversationAccess: true`. Use a normal `coding` or `messaging`
+tool profile: `minimal` hides MCP tools, while
+`tools.deny: ["bundle-mcp"]` disables them. Filter the saved
+`mcp.servers.remembrance` entry with `toolFilter.include` using the bounded
+organization tool list in
+`skills/remembrancer/references/remembrance-setup.md` or the live guide at
+<https://remembrance.dev/docs/remembrancer#private-repository-policy>, then
+verify both the live plugin and MCP connection:
+
+```bash
+openclaw plugins inspect remembrance --runtime --json
+openclaw mcp status --verbose
+openclaw mcp doctor remembrance --probe
+```
+
+The standalone OpenClaw policy file can require the `remembrance` server as a
+conformance check, but runtime availability still depends on plugin enablement,
+the active tool profile, `tools.deny`, and `toolFilter`. With an organization
+key, generic `propose_skill_idea` stays in the private review queue. Never
+remove or bypass the key to force a public candidate; use reviewed public
+propagation after private review.
+
+The bundled local MCP server exposes `queue_private_skill_import` for that
+case. It contacts no network and writes a mode-0600 JSON handoff under the
+user's fixed Remembrance state directory. An organization admin uploads the
+file at **Dashboard > Skills > Import**, and each skill enters the standard
+private verification queue. If only the skill bundle is available, run
+`skills/remembrancer/scripts/queue-private-skill-import.mjs` instead. The agent
+must not report a successful submission until the dashboard returns an import
+receipt.
 
 If `openclaw plugins search remembrance` returns unrelated packages, such as a
 genealogy/roots package, do not install them. The official package is
@@ -116,10 +175,12 @@ answer text to these hooks. The plugin will no-op instead of breaking the run.
 
 The plugin ships a self-contained Remembrance MCP server
 (`servers/remembrance-mcp.mjs`). The hooks provide automatic behavior; the MCP
-server gives OpenClaw direct tools such as `query_skills`,
-`bootstrap_agent_identity`, `submit_query_feedback`, `submit_feedback`,
+server gives OpenClaw direct tools such as `get_connection_status`,
+`query_skills`, `bootstrap_agent_identity`, `submit_query_feedback`, `submit_feedback`,
 `submit_remembrance`, `get_skill`, `get_resource`, `report_task_outcome`, and
-`get_value_proof`, plus `list_skills` and `invoke_skill`.
+`get_value_proof`, plus `list_skills`, `invoke_skill`, and the
+organization-only `propose_private_skill`. Local MCP also includes
+`queue_private_skill_import`, which never contacts Remembrance.
 
 When a person explicitly names a Remembrance skill or supplies a
 `remembrance://skills/{slug}` URI, OpenClaw resolves ambiguous names with
@@ -177,7 +238,8 @@ is an **illustrative** merge fragment. OpenClaw only expands real uppercase
 `${VAR}` values and does **not** define an `${OPENCLAW_PLUGIN_ROOT}` variable, so
 the `args` path must be an **absolute path** — replace
 `/abs/path/to/openclaw-plugin` with the real absolute path to this package before
-merging into `~/.openclaw/openclaw.json`:
+merging into `~/.openclaw/openclaw.json`. Normal installs should run
+`openclaw remembrance setup` instead:
 
 ```json5
 {
@@ -417,10 +479,11 @@ opts?)` (with `priority` / `timeoutMs` options); handlers are `async (event)
 - **No plugin-root variable for `openclaw.mcp.json`.** OpenClaw only expands real
   uppercase `${VAR}` values and does **not** define an `${OPENCLAW_PLUGIN_ROOT}`
   (nor a documented plugin-root variable) for MCP configs, so the shipped
-  fragment is illustrative only — use an **absolute path** for `args`, or add the
-  server via the CLI (`openclaw mcp add remembrance --command node --arg
-/abs/path/...`).
+  fragment is illustrative only. The plugin-owned `openclaw remembrance setup`
+  command writes the installed absolute path through OpenClaw's supported
+  config-mutation API; managed installations may use an absolute `args` path or
+  `openclaw mcp add remembrance --command node --arg /abs/path/...`.
 - **`openclaw.compat.pluginApi` / `openclaw.build.openclawVersion` values.**
-  ClawHub requires these fields for code plugins but the docs don't pin exact
-  version strings; the placeholders (`^1.0.0`, `>=1.0.0`) should be reconciled
-  with the target OpenClaw release before publishing.
+  ClawHub requires date-versioned compatibility metadata. The package is pinned
+  to the oldest OpenClaw host exercised by the release gate; update the pin and
+  rerun that host gate before publishing a release that needs newer host APIs.

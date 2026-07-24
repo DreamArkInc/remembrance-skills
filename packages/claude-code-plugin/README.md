@@ -1,8 +1,8 @@
-# Remembrance Native Agent Plugin
+# Remembrance Claude Code Plugin
 
 Installs the Remembrancer skill, starts a bundled Remembrance MCP server, and
-adds two hooks that keep the registry loop symmetric: a `UserPromptSubmit` hook
-that queries Remembrance before Claude Code or Codex reasons about tasks likely
+adds lifecycle hooks that keep the registry loop symmetric: a `UserPromptSubmit` hook
+that queries Remembrance before Claude Code reasons about tasks likely
 to involve reusable skills/resources, and a `Stop` hook that either recovers a
 missed query or prompts the agent once to contribute what it learned (a
 remembrance, feedback, or skill idea) instead of silently moving on.
@@ -21,7 +21,8 @@ claude plugin marketplace add dreamarkinc/remembrance-skills
 claude plugin install remembrance@remembrance
 ```
 
-For Codex:
+The same marketplace publishes Codex through a dedicated, independently
+validated package:
 
 ```bash
 codex plugin marketplace add dreamarkinc/remembrance-skills
@@ -31,10 +32,10 @@ codex plugin add remembrance@remembrance
 If `codex` is not on your shell `PATH`, the macOS desktop app usually bundles
 the CLI at `/Applications/Codex.app/Contents/Resources/codex`.
 
-Codex installs the same native prompt/completion hooks, but its MCP registration
-uses the hosted `https://remembrance.dev/api/mcp` endpoint instead of a local
-`${PLUGIN_ROOT}` stdio path. That keeps auto-query and contribution prompts
-first-class while avoiding client-specific plugin-root expansion failures.
+The repository-level `.agents/plugins/marketplace.json` routes Codex to
+`packages/codex-plugin`; this Claude package is never reused as a Codex plugin.
+That separation prevents one host's manifest and plugin-root conventions from
+silently disabling another host's hooks.
 
 The hook runs on every user prompt, but it only calls Remembrance when the prompt
 mentions named services, APIs, CLIs, frameworks, deployment/CI/payment/migration
@@ -57,21 +58,71 @@ nothing new qualified, and it fails open. The agent can satisfy it by
 contributing or by briefly declining. Set
 `REMEMBRANCE_AUTO_CONTRIBUTE=0` to disable it.
 
-The native Claude/OpenClaw plugin packages run the bundled MCP server from the
-plugin directory and ship the canonical Remembrancer skill references/scripts.
-The Codex plugin uses the hosted MCP endpoint for tool calls while keeping the
-native hooks local. The Cursor plugin registers the MCP server through Cursor's
+The native Claude Code, Codex, and OpenClaw plugin packages run a local MCP server and ship
+the canonical Remembrancer skill references/scripts. The Cursor plugin registers the MCP server through Cursor's
 plugin `mcp.json`, ships an always-apply Cursor rule, and records both reusable
 prompts and actual MCP use before recovering or contributing at Stop. None of
 these require separate hand-edited `npx @remembrance-ai/mcp-server` setup. The
 standalone npm MCP package remains available for clients without native plugin
-support or for users who need the local-only `bootstrap_agent_identity` tool.
+support.
 After install, the `remembrance` MCP server or endpoint should expose tools such
-as `query_skills`, `submit_query_feedback`, `submit_feedback`,
+as `get_connection_status`, `query_skills`, `submit_query_feedback`, `submit_feedback`,
 `submit_remembrance`, `get_skill`, `get_resource`, `report_task_outcome`, and
 `get_value_proof`, plus `list_skills` and `invoke_skill`; some clients display
 those tools with a `remembrance.`
 namespace. The local bundled server also exposes `bootstrap_agent_identity`.
+It also exposes local-only `queue_private_skill_import`; all transports expose
+organization-only `propose_private_skill` when the caller has a
+submission-capable organization key.
+Call `get_connection_status` before diagnosing authentication. It reports the
+active local/hosted transport, credential source, verified registry scope, and
+observed native lifecycle components without returning the key. Claude Code's
+hooks and bundled MCP read `~/.config/remembrance/config.json`. A
+manual hosted MCP override cannot read that file and needs a request
+credential. An unset environment variable or anonymous curl/browser probe is
+not proof that another transport is anonymous. Degraded component evidence is
+reported in bounded, content-free form for deduplicated admin triage unless
+`REMEMBRANCE_HEALTH_REPORTING=0`.
+
+### Private repository contributions
+
+Use `propose_private_skill` when repository-derived instructions are approved
+for the authenticated organization's private review queue. Unlike the generic
+skill-idea tool, this endpoint rejects anonymous callers and can never create a
+public candidate. It still performs a network write, so the host's own privacy
+and egress policy must allow `https://remembrance.dev` and the Remembrance MCP
+server. Claude Code administrators can allow the specific Remembrance MCP tools
+through managed permissions; managed Codex deployments can allow the exact MCP
+server identity, domain, and matching data-exfiltration action. Keep unrelated
+denials intact.
+
+For managed Claude Code, force-enable `remembrance@remembrance` in
+`enabledPlugins`, allow exact `mcp__remembrance__...` tool names, and match the
+server by `serverUrl`, not only by its user-assigned name. If the organization
+deploys `managed-mcp.json`, it must define
+`https://remembrance.dev/api/mcp` there because that exclusive file suppresses
+plugin-provided MCP servers. Reference `${REMEMBRANCE_API_KEY}` from each
+user's environment; never put a real key in the system-readable managed file.
+Hooks from a plugin force-enabled in managed settings remain available when
+`allowManagedHooksOnly` is enabled. The exact managed MCP/settings JSON and
+official documentation links are in
+`skills/remembrancer/references/remembrance-setup.md` and the live guide at
+<https://remembrance.dev/docs/remembrancer#private-repository-policy>.
+
+With an organization key, generic `propose_skill_idea` calls also stay in that
+organization's review queue. Never remove or bypass the key to force a public
+candidate; use the reviewed public-propagation flow after private review.
+
+If the host denies the export, do not retry the same content through `curl`, a
+browser, or another MCP transport. Local stdio MCP exposes
+`queue_private_skill_import`, which writes an inert mode-0600 JSON handoff and
+does not contact a network. Hosted-only clients can run the bundled
+`skills/remembrancer/scripts/queue-private-skill-import.mjs` script. An
+organization admin uploads the resulting file at **Dashboard > Skills >
+Import**; the skills then enter the normal private review pipeline. Until that
+page returns an import receipt, the agent must describe the skills as queued
+locally, not submitted.
+
 Use `/remembrance:use <slug>` when a person explicitly selects a skill. Claude
 resolves ambiguous names with the indexed, normalized slug-prefix filter in
 `list_skills`, never guesses the exact slug, and calls `invoke_skill` to recheck
@@ -124,12 +175,6 @@ used for the original query. They remain workspace-only and never enter public
 cohorts. For Vercel AI Gateway work, pass every task
 generation ID in `metering_reference`; Remembrance encrypts the references and
 does not trust caller totals unless every generation reconciles through Vercel.
-For Codex, when `REMEMBRANCE_API_URL` points hooks at a non-default registry,
-the hook reads `[mcp_servers.remembrance].url` from Codex config and only shows a
-registry-split notice when the hosted MCP URL actually differs. If Codex MCP is
-configured somewhere the hook cannot read, set `REMEMBRANCE_CODEX_MCP_URL` to
-that MCP endpoint so the comparison is explicit.
-
 If MCP tools are unavailable, use the REST contract from
 `https://remembrance.dev/llms.txt` or the API docs at
 `https://remembrance.dev/docs/api`.
@@ -138,8 +183,8 @@ Environment:
 
 - `REMEMBRANCE_API_URL`: API origin. Defaults to `https://remembrance.dev`.
 - `REMEMBRANCE_API_KEY`: optional org API key.
-- `REMEMBRANCE_CODEX_MCP_URL`: Codex-only hosted MCP endpoint used only to
-  verify hook/MCP registry alignment when the hook cannot read Codex config.
+- `REMEMBRANCE_HEALTH_REPORTING=0`: disables bounded degraded-activation
+  reporting while retaining local diagnostics.
 - `REMEMBRANCE_AUTO_QUERY=0`: disables the prompt hook.
 - `REMEMBRANCE_AUTO_QUERY_LIMIT`: result limit, default `3`, max `10`.
 - `REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS`: hook query timeout, default `2000`.
@@ -154,16 +199,13 @@ not block the user's work, but they fail closed for public-skill fallback until
 the organization policy can be confirmed.
 
 For the Claude Code desktop app, macOS GUI apps do not reliably inherit shell
-exports. Put org keys in `~/.claude/settings.json` (not
-`~/.claude/settings.local.json`) and fully quit/relaunch:
+exports. Use the shared mode-0600 config that both the hooks and bundled MCP
+read, then fully quit and relaunch Claude Code:
 
-```json
-{
-  "env": {
-    "REMEMBRANCE_API_URL": "https://remembrance.dev",
-    "REMEMBRANCE_API_KEY": "YOUR_ORG_KEY"
-  }
-}
+```sh
+mkdir -p ~/.config/remembrance
+printf '{"apiKey":"YOUR_ORG_KEY","apiUrl":"https://remembrance.dev"}\n' > ~/.config/remembrance/config.json
+chmod 600 ~/.config/remembrance/config.json
 ```
 
 The hook never blocks work on API errors. Malformed responses and timeouts

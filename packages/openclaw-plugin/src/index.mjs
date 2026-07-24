@@ -46,6 +46,8 @@
 // probed defensively (event.prompt / event.userPrompt / event.input?.prompt /
 // event.messages). The core still fails open if none match.
 
+import { accessSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import process from "node:process";
 import {
   clearHighMatchSurfaceIfOpened,
@@ -62,11 +64,13 @@ import {
   recordDirectSelectionSurface,
   recordDirectiveSurface,
   recordHighMatchSurface,
+  recordPluginLifecycleHealth,
   recordRegistryUse,
   recordTaskEligibility,
   recordValueEpisodeSurface,
   reportTaskOutcomesOnStop,
   responseRequestsRemembranceFollowup,
+  resolveApiCredential,
   runPromptHook,
   sessionIdFor,
   toolResponseIndicatesFailure,
@@ -79,6 +83,7 @@ const CONTRIBUTION_TOOLS = [
   "submit_feedback",
   "submit_remembrance",
   "propose_skill_idea",
+  "propose_private_skill",
   "submit_suggestion",
   "submit_resource",
   "submit_resource_review",
@@ -161,6 +166,17 @@ export function sessionIdFromEvent(event) {
 // Fail-open: any thrown error resolves to undefined (inject nothing).
 export async function handlePrePrompt(event, options = {}) {
   const env = options.env ?? process.env;
+  const sessionId = sessionIdFromEvent(event);
+  const recordHealth = options.recordHealth ?? recordPluginLifecycleHealth;
+  recordHealth(
+    {
+      surface: "openclaw",
+      component: "prompt_hook",
+      credentialSource: resolveApiCredential(env).source,
+      sessionId,
+    },
+    env,
+  );
   try {
     const prompt = promptFromEvent(event);
     const result = await runPromptHook(prompt, {
@@ -175,7 +191,6 @@ export async function handlePrePrompt(event, options = {}) {
     if (!result) {
       return undefined;
     }
-    const sessionId = sessionIdFromEvent(event);
     if (result.eligible) {
       const recordEligibility =
         options.recordEligibility ?? recordTaskEligibility;
@@ -205,6 +220,18 @@ export async function handlePrePrompt(event, options = {}) {
 // after_tool_call hook. Correlate successful queries with task directives, and
 // clear the completion nudge only when the exact high match was opened.
 export async function handleAfterToolCall(event, options = {}) {
+  const env = options.env ?? process.env;
+  const sessionId = sessionIdFromEvent(event);
+  const recordHealth = options.recordHealth ?? recordPluginLifecycleHealth;
+  recordHealth(
+    {
+      surface: "openclaw",
+      component: "tool_observer",
+      credentialSource: resolveApiCredential(env).source,
+      sessionId,
+    },
+    env,
+  );
   const response = event?.result ?? event?.output ?? event?.response ?? null;
   if (
     event?.error ||
@@ -214,36 +241,24 @@ export async function handleAfterToolCall(event, options = {}) {
   ) {
     return { cleared: false, why: "tool_failed" };
   }
-  const env = options.env ?? process.env;
   const toolName = event?.toolName ?? event?.tool_name ?? "";
   const normalizedToolName = String(toolName).toLowerCase();
-  const sessionId = sessionIdFromEvent(event);
   if (normalizedToolName.endsWith("query_skills")) {
     const recordUse = options.recordRegistryUse ?? recordRegistryUse;
     recordUse(sessionId, env);
-    const recordHighMatch =
-      options.recordHighMatch ?? recordHighMatchSurface;
+    const recordHighMatch = options.recordHighMatch ?? recordHighMatchSurface;
     recordHighMatch(sessionId, highMatchFromResponse(response), env);
     const recordFollowThrough =
       options.recordDirectiveFollowThrough ??
       recordDirectiveFollowThroughForTool;
-    const followed = await recordFollowThrough(
-      sessionId,
-      toolName,
-      response,
-      {
-        env,
-        fetchImpl: options.fetchImpl ?? fetch,
-        userAgent: "@remembrance/openclaw-plugin",
-      },
-    );
+    const followed = await recordFollowThrough(sessionId, toolName, response, {
+      env,
+      fetchImpl: options.fetchImpl ?? fetch,
+      userAgent: "@remembrance/openclaw-plugin",
+    });
     const recordValueEpisode =
       options.recordValueEpisode ?? recordValueEpisodeSurface;
-    recordValueEpisode(
-      sessionId,
-      valueEpisodeFromResponse(response),
-      env,
-    );
+    recordValueEpisode(sessionId, valueEpisodeFromResponse(response), env);
     return {
       cleared: false,
       directive_followed: followed,
@@ -274,9 +289,7 @@ export async function handleAfterToolCall(event, options = {}) {
       count: useCount,
     };
   }
-  if (
-    CONTRIBUTION_TOOLS.some((tool) => normalizedToolName.endsWith(tool))
-  ) {
+  if (CONTRIBUTION_TOOLS.some((tool) => normalizedToolName.endsWith(tool))) {
     if (
       normalizedToolName.endsWith("submit_feedback") &&
       responseRequestsRemembranceFollowup(response)
@@ -313,8 +326,19 @@ export async function handleAfterToolCall(event, options = {}) {
 
 export async function handleFinalize(event, options = {}) {
   const env = options.env ?? process.env;
+  const sessionId = sessionIdFromEvent(event);
+  const recordHealth = options.recordHealth ?? recordPluginLifecycleHealth;
+  recordHealth(
+    {
+      surface: "openclaw",
+      component: "completion_hook",
+      credentialSource: resolveApiCredential(env).source,
+      sessionId,
+    },
+    env,
+  );
   const report = options.reportTaskOutcomes ?? reportTaskOutcomesOnStop;
-  await report(sessionIdFromEvent(event), event, {
+  await report(sessionId, event, {
     env,
     fetchImpl: options.fetchImpl ?? fetch,
     userAgent: "@remembrance/openclaw-plugin",
@@ -392,6 +416,117 @@ function completionMessageFromEvent(event) {
   );
 }
 
+function pluginVersion() {
+  try {
+    return JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ).version;
+  } catch {
+    return "unknown";
+  }
+}
+
+function record(value) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : {};
+}
+
+export function configureOpenClawRemembrance(draft, pluginRoot) {
+  const root = String(pluginRoot ?? "").trim();
+  if (!root) {
+    throw new Error("OpenClaw did not provide the installed plugin root.");
+  }
+  const serverPath = resolve(root, "servers/remembrance-mcp.mjs");
+  accessSync(serverPath);
+
+  const plugins = record(draft.plugins);
+  const entries = record(plugins.entries);
+  const entry = record(entries.remembrance);
+  const hooks = record(entry.hooks);
+  entries.remembrance = {
+    ...entry,
+    enabled: true,
+    hooks: {
+      ...hooks,
+      allowConversationAccess: true,
+    },
+  };
+  plugins.entries = entries;
+  draft.plugins = plugins;
+
+  const mcp = record(draft.mcp);
+  const servers = record(mcp.servers);
+  const existingServer = record(servers.remembrance);
+  const existingEnv = record(existingServer.env);
+  servers.remembrance = {
+    ...existingServer,
+    command: "node",
+    args: [serverPath],
+    env: {
+      ...existingEnv,
+      REMEMBRANCE_PLUGIN_HOST: "openclaw",
+    },
+  };
+  mcp.servers = servers;
+  draft.mcp = mcp;
+  return { serverPath };
+}
+
+function registerSetupCli(api) {
+  if (typeof api?.registerCli !== "function") return;
+  api.registerCli(
+    ({ program }) => {
+      const command = program
+        .command("remembrance")
+        .description("Configure and inspect the Remembrance plugin");
+      command
+        .command("setup")
+        .description("Enable Remembrance hooks and its bundled local MCP")
+        .option("--json", "Print machine-readable setup details")
+        .action(async (options = {}) => {
+          let serverPath = "";
+          await api.runtime.config.mutateConfigFile({
+            afterWrite: { mode: "auto" },
+            mutate: (draft) => {
+              ({ serverPath } = configureOpenClawRemembrance(
+                draft,
+                api.rootDir,
+              ));
+            },
+          });
+          const result = {
+            ok: true,
+            plugin: "remembrance",
+            conversation_access: true,
+            mcp_server: "remembrance",
+            mcp_transport: "local_stdio",
+            mcp_server_path: serverPath,
+            credential_source: "shared_config_or_environment",
+            next: "Restart OpenClaw, then run: openclaw mcp doctor remembrance --probe",
+          };
+          const output = options.json
+            ? JSON.stringify(result)
+            : [
+                "Remembrance hooks and bundled local MCP are configured.",
+                `Server: ${serverPath}`,
+                result.next,
+              ].join("\n");
+          process.stdout.write(`${output}\n`);
+        });
+    },
+    {
+      descriptors: [
+        {
+          name: "remembrance",
+          description: "Configure and inspect the Remembrance plugin",
+          hasSubcommands: true,
+        },
+      ],
+    },
+  );
+}
+
 // --- Plugin definition -------------------------------------------------------
 
 const plugin = definePluginEntry({
@@ -400,6 +535,31 @@ const plugin = definePluginEntry({
   description:
     "Auto-query Remembrance before relevant tasks and nudge contribution at completion.",
   register(api) {
+    const credential = resolveApiCredential(process.env);
+    const activatesRuntime =
+      !api?.registrationMode || api.registrationMode === "full";
+    if (activatesRuntime) {
+      recordPluginLifecycleHealth(
+        {
+          surface: "openclaw",
+          component: "session_start",
+          pluginVersion: pluginVersion(),
+          hostVersion: String(api?.version ?? api?.hostVersion ?? "").trim(),
+          credentialSource: credential.source,
+        },
+        process.env,
+      );
+    }
+    const auth =
+      credential.source === "none"
+        ? "public registry access"
+        : `${credential.source.replace("_", " ")} organization credential`;
+    if (activatesRuntime) {
+      api?.logger?.info?.(
+        `Remembrance lifecycle hooks registered; MCP should report the same ${auth} through get_connection_status.`,
+      );
+    }
+    registerSetupCli(api);
     // PRE-prompt: inject matching skills/resources before the model turn.
     api.on("before_prompt_build", async (event) => handlePrePrompt(event), {
       priority: 50,

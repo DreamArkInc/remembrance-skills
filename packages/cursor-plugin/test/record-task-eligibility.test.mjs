@@ -7,6 +7,7 @@ import {
 describe("Cursor beforeSubmitPrompt eligibility observer", () => {
   it("records explicit reusable work without changing the prompt", async () => {
     const recordEligibility = vi.fn(() => 1);
+    const recordHealth = vi.fn();
     const result = await handlePromptEligibility(
       {
         prompt: "Fix the responsive review-card workflow and run Playwright.",
@@ -15,6 +16,7 @@ describe("Cursor beforeSubmitPrompt eligibility observer", () => {
       {
         env: {},
         recordEligibility,
+        recordHealth,
         recordDirective: vi.fn(),
         fetchImpl: vi.fn(async () => Response.json({ recorded: true })),
       },
@@ -26,6 +28,10 @@ describe("Cursor beforeSubmitPrompt eligibility observer", () => {
       sessionId: "conv-explicit",
     });
     expect(recordEligibility).toHaveBeenCalledWith("conv-explicit", {});
+    expect(recordHealth).toHaveBeenCalledWith(
+      expect.objectContaining({ surface: "cursor", component: "prompt_hook" }),
+      {},
+    );
   });
 
   it("records context-dependent follow-ups so Stop can recover a missed query", async () => {

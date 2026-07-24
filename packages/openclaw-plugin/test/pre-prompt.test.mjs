@@ -37,6 +37,7 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
     const recorded = [];
     const eligible = [];
     const highMatches = [];
+    const recordHealth = vi.fn();
     const result = await handlePrePrompt(
       event("Fix this Vercel Next.js build error in GitHub Actions."),
       {
@@ -44,6 +45,7 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
         recordUse: (id) => recorded.push(id),
         recordEligibility: (id) => eligible.push(id),
         recordHighMatch: (id, match) => highMatches.push({ id, match }),
+        recordHealth,
         fetchImpl: vi.fn(async (url, init) => {
           calls.push({
             url,
@@ -90,6 +92,13 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
       },
     });
     expect(calls[0].headers["user-agent"]).toBe("@remembrance/openclaw-plugin");
+    expect(recordHealth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        surface: "openclaw",
+        component: "prompt_hook",
+      }),
+      expect.any(Object),
+    );
     expect(result.appendSystemContext).toContain(
       "Remembrance auto-query context",
     );

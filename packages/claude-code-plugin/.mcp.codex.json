@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "remembrance": {
-      "type": "http",
-      "url": "https://remembrance.dev/api/mcp",
-      "bearer_token_env_var": "REMEMBRANCE_API_KEY"
-    }
-  }
-}

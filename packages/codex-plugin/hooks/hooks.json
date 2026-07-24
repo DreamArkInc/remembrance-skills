@@ -1,0 +1,46 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CODEX_PLUGIN_ROOT}/scripts/session-start.mjs\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CODEX_PLUGIN_ROOT}/scripts/query-on-prompt.mjs\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__.*remembrance.*__(query_skills|get_skill|get_resource|invoke_skill|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|propose_private_skill|submit_suggestion|submit_resource|submit_resource_review)|remembrance[._](query_skills|get_skill|get_resource|invoke_skill|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|propose_private_skill|submit_suggestion|submit_resource|submit_resource_review)|query_skills|get_skill|get_resource|invoke_skill|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|propose_private_skill|submit_suggestion|submit_resource|submit_resource_review",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CODEX_PLUGIN_ROOT}/scripts/record-detail-open.mjs\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CODEX_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\""
+          }
+        ]
+      }
+    ]
+  }
+}

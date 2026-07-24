@@ -11,10 +11,11 @@ REST/HTTPS, skill-only installs, enterprise org keys, local identity, and common
   Cursor, Gemini, or another agent.
 - The user has an enterprise/org API key and needs to make an agent use
   org-scoped skills or private overlays.
-- MCP tools such as query_skills, list_skills, invoke_skill,
-  submit_query_feedback, submit_feedback, submit_remembrance,
-  report_task_outcome, get_value_proof, get_skill, get_resource, or
-  bootstrap_agent_identity are missing.
+- MCP tools such as get_connection_status, query_skills, list_skills,
+  invoke_skill, submit_query_feedback, submit_feedback, submit_remembrance,
+  propose_private_skill, queue_private_skill_import, report_task_outcome,
+  get_value_proof, get_skill, get_resource, or bootstrap_agent_identity are
+  missing.
 - A native plugin appears installed but hooks, trust prompts, or MCP tools do
   not work.
 - A request fails with 401, 403, 404, 413, 422, 429, or a missing-key error.
@@ -122,18 +123,21 @@ OpenClaw:
 
 ~~~bash
 openclaw plugins install clawhub:@remembrance/openclaw-plugin
+openclaw remembrance setup
 ~~~
 
 If ClawHub search shows multiple Remembrance matches, use the official package
 that points to "dreamarkinc/remembrance-skills", mentions the Remembrance agent
 skill/resource service, and exposes the expected Remembrance MCP tools such as
-query_skills, list_skills, invoke_skill, submit_query_feedback,
-submit_remembrance, get_skill, and get_resource, plus report_task_outcome and
-get_value_proof. Do not install
+get_connection_status, query_skills, list_skills, invoke_skill,
+submit_query_feedback, submit_remembrance, get_skill, and get_resource, plus
+report_task_outcome and get_value_proof. Do not install
 unrelated roots, genealogy, ancestry, or memorial packages.
 
-OpenClaw also needs conversation access for hooks. In
-"~/.openclaw/openclaw.json", enable:
+The setup command preserves existing OpenClaw settings, enables conversation
+access, and registers the bundled local MCP by its installed absolute path.
+In centrally managed environments, apply this equivalent configuration in
+"~/.openclaw/openclaw.json":
 
 ~~~json
 {
@@ -164,9 +168,11 @@ mkdir -p ~/.cursor/plugins/local
 ln -s /absolute/path/to/remembrance/packages/cursor-plugin ~/.cursor/plugins/local/remembrance
 ~~~
 
-Cursor cloud agents do not currently support the plugin's sessionStart,
-afterMCPExecution, or stop hooks. For cloud agents, use project rules plus MCP
-or REST until Cursor exposes those hooks in cloud agents.
+Cursor now documents conversation hooks for cloud agents, but a local plugin
+install does not automatically provision the cloud surface. Distribute the
+plugin through the team marketplace, register Remembrance under **Dashboard >
+Integrations & MCP**, and verify query, invocation, feedback, and contribution
+receipts in both local and cloud runs.
 
 After installing any native plugin, restart the agent app/session and approve
 the one-time trust prompt if the runtime asks for it. A currently running Codex
@@ -183,6 +189,13 @@ printf '{"apiKey":"YOUR_ORG_KEY"}\n' > ~/.config/remembrance/config.json
 chmod 600 ~/.config/remembrance/config.json
 ~~~
 
+Do not infer connection scope by checking one environment variable. After
+setup, call MCP `get_connection_status`. It names the active transport,
+credential source, verified organization/public scope, and config permission
+status without exposing the key. An anonymous curl or browser probe describes
+only that request, not the plugin. Raw REST clients do not load this file
+automatically; they must deliberately read it or send a key header.
+
 Use an environment variable when the agent process reliably inherits shell env:
 
 ~~~bash
@@ -190,32 +203,164 @@ export REMEMBRANCE_API_KEY="YOUR_ORG_KEY"
 export REMEMBRANCE_API_URL="https://remembrance.dev"
 ~~~
 
-For Codex Desktop on macOS, GUI apps do not inherit shell exports. Use
-`launchctl setenv`, fully quit Codex, and reopen it so the native hooks and
-hosted MCP endpoint can read the org key:
+For Codex Desktop, the packaged plugin now runs a bundled local MCP server.
+The native hooks and MCP process both read the shared file above, so the GUI
+does not need `launchctl setenv` for the normal plugin path. Fully quit and
+reopen Codex after installing or updating the plugin, then call
+`get_connection_status`. A healthy install reports `local_stdio_mcp`, the
+expected organization scope, and an active `plugin_health` lifecycle.
 
-~~~bash
-launchctl setenv REMEMBRANCE_API_URL "https://remembrance.dev"
-launchctl setenv REMEMBRANCE_API_KEY "YOUR_ORG_KEY"
+If filesystem skills are visible but `get_connection_status` is absent, or if
+that tool reports missing native hooks, treat the install as partially active.
+Update or reinstall from the Remembrance marketplace, fully restart Codex, and
+run the check again. The plugin records only local component timestamps and
+version/source categories; a degraded check may submit those bounded issue
+codes for deduplicated global-admin triage. It never submits prompts, keys,
+paths, or raw logs. Set `REMEMBRANCE_HEALTH_REPORTING=0` to disable that
+best-effort report.
+
+A manually configured hosted MCP URL is still supported, but hosted MCP cannot
+read the shared file and must receive its own request credential. Only that
+manual override needs a process environment or HTTP header credential. A Codex
+tenant/privacy-policy denial is enforced by Codex before the request reaches
+Remembrance; do not classify it as a Remembrance rejection.
+
+### Approve private repository contributions in managed Codex
+
+An API key authorizes Remembrance; it does not authorize Codex to export
+repository-derived content. Codex Auto-review separately evaluates MCP and
+network actions for data exfiltration. A chat approval may not override an
+enterprise deny rule, and no Remembrance plugin setting can weaken that host
+boundary.
+
+For an organization that has approved Remembrance as an operational-memory
+processor, a Codex administrator should do all of the following:
+
+1. Allow the exact Remembrance MCP server identity and
+   `https://remembrance.dev/api/mcp` in managed Codex requirements.
+2. Merge a narrow Remembrance destination rule into the existing
+   `guardian_policy_config`. Do not replace the rest of the tenant policy or
+   remove its credential, secret, raw-log, or unrelated-source-code denies.
+3. If local stdio, REST fallback, or plugin scripts need command networking,
+   validate Codex's experimental managed-network requirements on the fleet,
+   then allow only `remembrance.dev`. Hosted MCP does not need shell-network
+   permission.
+4. Keep the organization API key scoped to `agent:query` and
+   `submission:create`; use `propose_private_skill` for repository-derived
+   skills so the destination cannot silently become public.
+
+With an organization key, generic `propose_skill_idea` submissions also stay
+inside that organization's review queue. Never remove, suppress, or bypass the
+key to force a public candidate. Submit privately, then use the reviewed public-
+propagation flow for a redacted public-safe version when the organization wants
+to share it.
+
+The exact plugin MCP identity belongs in managed `requirements.toml`. The
+tool allowlist belongs in managed configuration. This keeps reads and normal
+skill use available while prompting for non-read-only writes:
+
+Add these entries to `requirements.toml`:
+
+~~~toml
+[features]
+hooks = true
+
+[plugins."remembrance@remembrance".mcp_servers.remembrance]
+identity = { url = "https://remembrance.dev/api/mcp" }
+
+[marketplaces]
+restrict_to_allowed_sources = true
+
+[marketplaces.allowed_sources.remembrance]
+source = "git"
+url = "https://github.com/dreamarkinc/remembrance-skills.git"
 ~~~
+
+Add this separately to `managed_config.toml`:
+
+~~~toml
+[plugins."remembrance@remembrance".mcp_servers.remembrance]
+enabled = true
+enabled_tools = [
+  "get_connection_status",
+  "query_skills",
+  "list_skills",
+  "invoke_skill",
+  "get_skill",
+  "get_resource",
+  "get_value_proof",
+  "submit_query_feedback",
+  "submit_feedback",
+  "report_task_outcome",
+  "submit_remembrance",
+  "propose_private_skill",
+  "submit_suggestion",
+]
+default_tools_approval_mode = "writes"
+~~~
+
+If `allow_managed_hooks_only = true`, Codex skips plugin hooks. Either leave
+the vetted Remembrance plugin hooks permitted or deploy equivalent managed
+query/completion hooks; otherwise MCP calls may work while the query and
+feedback reminders never run.
+
+The MCP annotation for `propose_private_skill` is non-read-only and
+closed-world: it makes a network request, but can change only the authenticated
+organization's private review queue and cannot change publicly visible internet
+state. Closed-world does not mean zero-network. Only
+`queue_private_skill_import` is the local, zero-network fallback.
+
+Example text to merge into the tenant-specific guardian policy:
+
+~~~toml
+guardian_policy_config = """
+## Environment Profile
+- https://remembrance.dev is an organization-approved operational-memory
+  destination when an organization-authenticated Remembrance tool is used.
+
+## Tenant Risk Taxonomy and Allow/Deny Rules
+- Allow redacted capability queries and curated reusable skill instructions
+  derived from this organization's repositories to remembrance.dev only when
+  the user requested the contribution and the tool guarantees organization-
+  private review.
+- Do not allow anonymous or public submission of private repository content.
+- Continue denying credentials, secrets, .env contents, raw private logs, full
+  repository exports, and unrelated proprietary source.
+"""
+
+# Optional and experimental: validate on every managed client/OS first. This
+# is needed only for command/stdio/REST paths, not hosted HTTP MCP itself.
+[experimental_network]
+enabled = true
+allowed_domains = ["remembrance.dev"]
+~~~
+
+`guardian_policy_config` replaces the tenant-specific policy section, so an
+administrator must merge this text with the organization's existing policy;
+it is not a safe standalone replacement. Managed requirements take precedence
+over a user's local `[auto_review].policy`. See the official Codex
+[Auto-review](https://learn.chatgpt.com/docs/sandboxing/auto-review) and
+[managed configuration](https://learn.chatgpt.com/docs/enterprise/managed-configuration#configure-automatic-review-policy)
+documentation for the current schema and deployment options.
+
+If the organization does not approve direct egress, keep the host denial. Use
+`queue_private_skill_import` locally, or run the bundled
+`scripts/queue-private-skill-import.mjs` helper, then have an organization
+admin upload the mode-0600 JSON at **Dashboard > Skills > Import**. The handoff
+never contains an API key or organization id, never contacts Remembrance, and
+does not count as submitted until the dashboard returns an import batch receipt.
 
 If Codex still sees `<your org key>` after restart, remove stale
 `REMEMBRANCE_API_KEY` exports from shell profiles such as `~/.zshrc` and
 `~/.zprofile`. A terminal-launched Codex inherits shell env, and shell env
 overrides `launchctl` and the config file.
 
-For the Claude Code desktop app, put the key in the user-scoped settings file
-and fully quit/relaunch the app. Use `~/.claude/settings.json`, not
-`~/.claude/settings.local.json`:
-
-~~~json
-{
-  "env": {
-    "REMEMBRANCE_API_URL": "https://remembrance.dev",
-    "REMEMBRANCE_API_KEY": "YOUR_ORG_KEY"
-  }
-}
-~~~
+For the Claude Code desktop app, prefer the shared mode-0600 config file above.
+The plugin hooks and bundled local MCP server both read it, so the GUI process
+does not need to inherit shell exports or duplicate the key in Claude settings.
+Fully quit and relaunch Claude Code after changing the file, then call
+`get_connection_status` and confirm `shared_config`, `local_stdio_mcp`,
+active plugin health, and the expected organization scope.
 
 For Cursor, prefer the shared config file above. The Cursor plugin-managed MCP
 server and local hooks read it. If using a non-prod Remembrance endpoint, include
@@ -224,6 +369,276 @@ server and local hooks read it. If using a non-prod Remembrance endpoint, includ
 ~~~json
 {"apiKey":"YOUR_ORG_KEY","apiUrl":"https://remembrance.dev"}
 ~~~
+
+Every host has the same two-boundary rule: installing the plugin and configuring
+an organization key authorizes Remembrance, while the host's tool, network, and
+data-governance policy decides whether repository-derived content may leave the
+workspace. Use the host-specific controls below; do not use a wildcard server,
+all-network rule, or blanket permission bypass.
+
+The recommended organization allowlist includes discovery, direct skill use,
+bounded feedback/outcomes, and organization-private contribution:
+
+~~~text
+get_connection_status
+query_skills
+list_skills
+invoke_skill
+get_skill
+get_resource
+get_value_proof
+submit_query_feedback
+submit_feedback
+report_task_outcome
+submit_remembrance
+propose_private_skill
+submit_suggestion
+~~~
+
+It intentionally omits `propose_skill_idea`, `submit_resource`,
+`submit_resource_review`, `request_attestation_challenge`, and
+`register_agent_key`. Add those dual-scope/public, resource, or identity tools
+only when the organization explicitly approves them. With a verified
+organization key, `propose_skill_idea` remains private, but it is excluded from
+the managed default because the same tool creates a public candidate when used
+anonymously. `bootstrap_agent_identity` and
+`queue_private_skill_import` are local-only tools and never belong in a
+hosted MCP allowlist.
+
+### Approve Claude Code
+
+Force-enable `remembrance@remembrance` in managed settings so its vetted hooks
+still run when `allowManagedHooksOnly` is enabled. If the organization deploys
+`managed-mcp.json`, define Remembrance there because exclusive managed MCP
+suppresses every plugin-provided MCP server. Use the exact URL as the security
+boundary; a server name alone is not sufficient.
+
+Do not put a real key directly in `managed-mcp.json`; every local user can read
+that file. Reference each user's process environment instead:
+
+~~~json
+{
+  "mcpServers": {
+    "remembrance": {
+      "type": "http",
+      "url": "https://remembrance.dev/api/mcp",
+      "headers": {
+        "X-Remembrance-API-Key": "${REMEMBRANCE_API_KEY}"
+      }
+    }
+  }
+}
+~~~
+
+Merge this into managed settings:
+
+~~~json
+{
+  "enabledPlugins": { "remembrance@remembrance": true },
+  "strictKnownMarketplaces": [
+    { "source": "github", "repo": "dreamarkinc/remembrance-skills" }
+  ],
+  "allowedMcpServers": [
+    { "serverUrl": "https://remembrance.dev/api/mcp" }
+  ],
+  "allowManagedMcpServersOnly": true,
+  "allowManagedHooksOnly": true,
+  "permissions": {
+    "allow": [
+      "mcp__remembrance__get_connection_status",
+      "mcp__remembrance__query_skills",
+      "mcp__remembrance__list_skills",
+      "mcp__remembrance__invoke_skill",
+      "mcp__remembrance__get_skill",
+      "mcp__remembrance__get_resource",
+      "mcp__remembrance__get_value_proof",
+      "mcp__remembrance__submit_query_feedback",
+      "mcp__remembrance__submit_feedback",
+      "mcp__remembrance__report_task_outcome",
+      "mcp__remembrance__submit_remembrance",
+      "mcp__remembrance__propose_private_skill",
+      "mcp__remembrance__submit_suggestion",
+    ]
+  },
+  "sandbox": {
+    "network": {
+      "allowedDomains": ["remembrance.dev"]
+    }
+  }
+}
+~~~
+
+The exclusive managed MCP file lives at
+`/Library/Application Support/ClaudeCode/managed-mcp.json` on macOS,
+`/etc/claude-code/managed-mcp.json` on Linux/WSL, and
+`C:\Program Files\ClaudeCode\managed-mcp.json` on Windows. The sandbox
+domain applies to command/REST fallbacks; managed HTTP MCP authorization remains
+the exact server URL plus named tools. Verify with `claude mcp list`, then call
+`get_connection_status` and confirm organization scope before contribution
+work. See the official
+[managed MCP](https://code.claude.com/docs/en/managed-mcp),
+[permissions](https://code.claude.com/docs/en/permissions), and
+[hooks](https://code.claude.com/docs/en/hooks) references.
+
+### Approve Gemini CLI
+
+Define the canonical server and its tool allowlist in the system override
+settings, not only user or workspace settings. Leave `trust` false unless the
+organization has deliberately chosen to bypass every confirmation for this
+narrow server/tool set:
+
+~~~json
+{
+  "mcp": { "allowed": ["remembrance"] },
+  "mcpServers": {
+    "remembrance": {
+      "command": "npx",
+      "args": ["-y", "@remembrance-ai/mcp-server"],
+      "env": {
+        "REMEMBRANCE_API_URL": "https://remembrance.dev",
+        "REMEMBRANCE_API_KEY": "${REMEMBRANCE_API_KEY}"
+      },
+      "includeTools": [
+      "get_connection_status",
+      "query_skills",
+      "list_skills",
+      "invoke_skill",
+      "get_skill",
+      "get_resource",
+      "get_value_proof",
+      "submit_query_feedback",
+      "submit_feedback",
+      "report_task_outcome",
+      "submit_remembrance",
+      "propose_private_skill",
+      "submit_suggestion",
+      ],
+      "trust": false
+    }
+  }
+}
+~~~
+
+System settings live at `/Library/Application Support/GeminiCli/settings.json`
+on macOS, `/etc/gemini-cli/settings.json` on Linux, and
+`C:\ProgramData\gemini-cli\settings.json` on Windows. Also allow
+`remembrance.dev` in the organization's egress policy. Restart Gemini CLI,
+inspect the registered server, then call `get_connection_status` and confirm
+organization scope before contribution work. See the official
+[enterprise configuration](https://google-gemini.github.io/gemini-cli/docs/cli/enterprise.html)
+and [MCP settings](https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html).
+
+### Approve OpenClaw
+
+Pin the exact plugin id, enable its conversation hooks, and filter the saved
+Remembrance MCP server. `plugins.deny` wins over the allowlist. The `minimal`
+tool profile hides MCP tools, and `tools.deny: ["bundle-mcp"]` disables them:
+
+~~~json
+{
+  "plugins": {
+    "allow": ["remembrance"],
+    "entries": {
+      "remembrance": {
+        "enabled": true,
+        "hooks": { "allowConversationAccess": true },
+        "config": {}
+      }
+    }
+  },
+  "mcp": {
+    "servers": {
+      "remembrance": {
+        "toolFilter": {
+          "include": [
+      "get_connection_status",
+      "query_skills",
+      "list_skills",
+      "invoke_skill",
+      "get_skill",
+      "get_resource",
+      "get_value_proof",
+      "submit_query_feedback",
+      "submit_feedback",
+      "report_task_outcome",
+      "submit_remembrance",
+      "propose_private_skill",
+      "submit_suggestion",
+          ]
+        }
+      }
+    }
+  }
+}
+~~~
+
+Use a normal `coding` or `messaging` tool profile. Then verify cold config,
+the active Gateway plugin, and live MCP capabilities separately:
+
+~~~bash
+openclaw plugins inspect remembrance --runtime --json
+openclaw mcp status --verbose
+openclaw mcp doctor remembrance --probe
+~~~
+
+OpenClaw's standalone policy file can require `remembrance` in
+`mcp.servers.allow`, but that is a conformance check. Runtime availability
+still depends on plugin enablement, the active tool profile, `tools.deny`, and
+the server's `toolFilter`. Merge this separately into `policy.jsonc`:
+
+~~~json
+{
+  "mcp": {
+    "servers": {
+      "allow": ["remembrance"]
+    }
+  }
+}
+~~~
+
+Keep the organization key in the plugin's mode-0600 shared config or another
+approved secret source, not in `policy.jsonc`. After the probes, call
+`get_connection_status` and confirm organization scope. See the official
+[plugin policy](https://docs.openclaw.ai/tools/plugin),
+[conversation hook policy](https://docs.openclaw.ai/plugins/hooks),
+[MCP tool filters](https://docs.openclaw.ai/cli/mcp), and
+[policy checks](https://docs.openclaw.ai/cli/policy).
+
+### Approve Cursor
+
+For local agents, publish Remembrance in the team marketplace and choose
+`Required` or `Default On`. For cloud agents, also register the exact
+Remembrance endpoint under **Dashboard > Integrations & MCP** so the same Team
+MCP is distributed across cloud agents, the Agents window, IDE, and CLI. Add
+`remembrance.dev` to the enterprise sandbox network allowlist for command-
+based fallback paths.
+
+Cursor's current public enterprise documentation does not define a managed
+per-MCP-tool allowlist equivalent to Codex, Claude Code, Gemini CLI, or
+OpenClaw. Keep Cursor's normal tool approvals enabled and do not claim an
+undocumented control exists. Call `get_connection_status` and confirm
+organization scope on every enabled surface, then verify query, invocation,
+feedback, and private-contribution receipts; local plugin hooks and cloud-agent
+hooks can differ. See the official
+[team plugin modes](https://cursor.com/changelog/05-01-26),
+[Team MCP distribution](https://cursor.com/changelog/team-marketplace-updates),
+[sandbox network controls](https://cursor.com/changelog/2-5), and
+[cloud-agent hooks](https://cursor.com/changelog/side-chat).
+
+### Approve other MCP clients
+
+Register exactly `https://remembrance.dev/api/mcp` or the exact local
+`npx @remembrance-ai/mcp-server` command. Use the recommended organization
+tool list above when the client supports tool filtering. Keep normal approval
+behavior for non-read-only calls unless unattended organization-private
+contribution is explicitly approved. A client with no server/tool policy must
+use its existing destination control or the zero-network handoff. Supply the
+organization key through the client's secret/header mechanism, then call
+`get_connection_status` and confirm organization scope before private writes.
+
+If any host still denies the export, that denial remains authoritative. The
+portable local handoff and dashboard import work identically for Codex, Claude
+Code, Gemini CLI, Cursor, OpenClaw, and raw local MCP clients.
 
 For direct REST clients, send either:
 
@@ -313,35 +728,40 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
 
 1. Start a fresh agent session.
 2. Check whether Remembrance MCP tools are visible. Expected tools include
-   query_skills, list_skills, invoke_skill, get_skill, get_resource,
-   submit_query_feedback, submit_feedback, submit_remembrance,
-   report_task_outcome, get_value_proof, and bootstrap_agent_identity. Clients
+   get_connection_status, query_skills, list_skills, invoke_skill, get_skill,
+   get_resource, submit_query_feedback, submit_feedback, submit_remembrance,
+   propose_private_skill, report_task_outcome, get_value_proof, and
+   bootstrap_agent_identity. Local MCP also exposes
+   queue_private_skill_import. Clients
    with MCP resource discovery should also expose paginated
    `remembrance://skills/{slug}` handles.
-3. Ask the agent to query Remembrance for a known task, for example:
+3. Call get_connection_status and confirm the active transport, credential
+   source, and expected public/organization scope before inspecting environment
+   variables or making a raw probe.
+4. Ask the agent to query Remembrance for a known task, for example:
    "Query Remembrance for web UI QA before reviewing a responsive dashboard."
-4. Follow with a context-only prompt such as "fix these issues". Confirm the
+5. Follow with a context-only prompt such as "fix these issues". Confirm the
    agent still queries using the dashboard task from the full conversation, or
    that the native hook injects a continuation reminder before it acts.
    In the retrieval dashboard, confirm the directive moves from shown/pending to
    followed and is attributed to the expected runtime.
-5. Do not treat setup as complete until the agent reports a concrete query
+6. Do not treat setup as complete until the agent reports a concrete query
    receipt such as a query id, returned skill slug, MCP tool result, or REST
    status. "Plugin installed" is not enough; a running session can still miss
    newly installed tools until restart/trust approval.
-6. Ask the agent to use a known Remembrance skill by name. Confirm it resolves
+7. Ask the agent to use a known Remembrance skill by name. Confirm it resolves
    ambiguity with the list_skills slug-prefix filter when needed, calls
    invoke_skill without first running a relevance query, and receives
    `selection_mode: "explicit"` plus one correlated result.
    Catalog/resource-handle reads alone must not count as use.
-7. After the agent evaluates relevance-query results, confirm it reports
+8. After the agent evaluates relevance-query results, confirm it reports
    explicit query fit with submit_query_feedback and the returned
    `query_id`/`result_id`. It must not send query-fit feedback for the direct
    selection from the prior step.
-8. If the response contains a high match, confirm the agent opens it with
+9. If the response contains a high match, confirm the agent opens it with
    get_skill/get_resource and the returned `query_id`/`result_id` before custom work.
    A completion hook should ask once about an unopened high match.
-9. After the agent uses a queried or directly selected skill/resource, confirm
+10. After the agent uses a queried or directly selected skill/resource, confirm
    it reports task
    completion or abandonment with report_task_outcome, then ask it to submit
    feedback with the same query/result IDs. When a qualified potential-savings
@@ -349,13 +769,19 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
    A complete loop has a feedback/remembrance receipt such as a public id or
    verification job id. Hooks should help, but explicit receipts prove the
    agent actually contributed evidence.
-10. Ask the agent to submit a `failure_report` remembrance for one reusable
+11. Ask the agent to submit a `failure_report` remembrance for one reusable
    failure lesson: a self-correction, a user-caught miss, a CI/deploy failure,
    or a release/versioning miss. This validates non-plugin contribution paths
    that have no Stop hook.
-11. If using an org key, list and invoke an org-only skill or private overlay
+12. If using an org key, list and invoke an org-only skill or private overlay
    that should not appear anonymously.
-12. If using local MCP, run bootstrap_agent_identity once when verified TOFU
+13. With an organization submission key, submit one disposable redacted skill
+   through propose_private_skill and verify it appears only in that
+   organization's review queue. If host policy denies the export, run
+   queue_private_skill_import instead, upload its JSON in the dashboard, and
+   verify the agent reports a local queue receipt separately from the server
+   import receipt.
+14. If using local MCP, run bootstrap_agent_identity once when verified TOFU
    contributions are needed.
 
 ## Troubleshooting matrix
@@ -386,10 +812,16 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
 - "OpenClaw search found another Remembrance package": do not install it unless
   it points to dreamarkinc/remembrance-skills and exposes the Remembrance MCP
   tools.
-- "OpenClaw hooks do nothing": verify allowConversationAccess is true and that
-  OpenClaw was restarted after plugin install/config changes.
+- "OpenClaw hooks do nothing": run "openclaw remembrance setup", verify
+  allowConversationAccess is true, run "openclaw mcp doctor remembrance
+  --probe", and restart OpenClaw after plugin install/config changes.
 - "Claude desktop ignores env vars": put env in the user-scoped Claude settings
   that the desktop app reads, then fully quit and relaunch.
+- "Host policy denied private repository export": this is not a Remembrance
+  API failure. An administrator must narrowly approve the Remembrance MCP
+  server, destination, and private contribution action. Otherwise use the
+  zero-network local handoff and dashboard import; never retry the same private
+  content through another transport.
 - "Request body too large / 413": summarize logs or evidence before sending;
   do not submit raw transcripts, screenshots, zip files, or large private
   payloads.

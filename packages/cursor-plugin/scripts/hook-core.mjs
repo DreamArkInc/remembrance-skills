@@ -20,7 +20,10 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
+  renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -40,6 +43,19 @@ const VALUE_EPISODE_MARKER_LIMIT = 20;
 const VALUE_EPISODE_MARKER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DIRECT_SELECTION_MARKER_LIMIT = 20;
 const DIRECT_SELECTION_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
+const PLUGIN_HEALTH_DIR = "remembrance-plugin-health";
+const PLUGIN_HEALTH_COMPONENTS = new Set([
+  "session_start",
+  "prompt_hook",
+  "tool_observer",
+  "completion_hook",
+]);
+const PLUGIN_HEALTH_SURFACES = new Set([
+  "codex",
+  "claude_code",
+  "cursor",
+  "openclaw",
+]);
 
 const SERVICE_PATTERNS = [
   /\b(vercel|heroku|netlify|cloudflare|aws|gcp|azure)\b/i,
@@ -861,6 +877,8 @@ export function emptyQueryContext(reason = "trigger_match") {
 // query completed (including a legitimate no-result response).
 export async function runPromptHook(prompt, options = {}) {
   const env = options.env ?? process.env;
+  const includeSharedConfigCredentialNotice =
+    options.includeSharedConfigCredentialNotice !== false;
   if (disabled(env.REMEMBRANCE_AUTO_QUERY)) {
     debugLog(env, "disabled", {}, options);
     return null;
@@ -901,21 +919,33 @@ export async function runPromptHook(prompt, options = {}) {
   if (!response) {
     return {
       consumed: false,
-      context: unavailableQueryContext(env),
+      context: includeSharedConfigCredentialNotice
+        ? withSharedConfigCredentialNotice(unavailableQueryContext(env), env)
+        : unavailableQueryContext(env),
       eligible: true,
       reason: "query_unavailable",
     };
   }
   return {
     consumed: true,
-    context:
-      formatContext(response, decision.reason, limitFromEnv(env)) ??
-      emptyQueryContext(decision.reason),
+    context: includeSharedConfigCredentialNotice
+      ? withSharedConfigCredentialNotice(
+          formatContext(response, decision.reason, limitFromEnv(env)) ??
+            emptyQueryContext(decision.reason),
+          env,
+        )
+      : (formatContext(response, decision.reason, limitFromEnv(env)) ??
+        emptyQueryContext(decision.reason)),
     eligible: true,
     highMatch: highMatchFromResponse(response),
     valueEpisode: valueEpisodeFromResponse(response),
     reason: decision.reason,
   };
+}
+
+function withSharedConfigCredentialNotice(context, env) {
+  const notice = sharedConfigCredentialNotice(env);
+  return notice ? `${notice}\n\n${context}` : context;
 }
 
 // Backward-compatible string-only wrapper used by callers that do not need the
@@ -1017,6 +1047,7 @@ export function contributionReason(
       "Call submit_feedback once for each listed skill with useful true or false and a concise post-use lesson.",
       "If submit_feedback returns next_step.submit_remembrance_payload, submit that reviewed evidence when the lesson is reusable.",
       "Report failed attempts, corrections, security findings, and reusable workflow improvements instead of silently changing the skill.",
+      "If host privacy policy blocks private repository-derived instructions, do not retry through another transport: queue organization skills locally with queue_private_skill_import (or the bundled handoff script) and wait for an admin import receipt.",
       "Redact secrets, private URLs, credentials, prompts, outputs, source paths, and proprietary content.",
       "If nothing is genuinely worth capturing, say so in one line; you will not be asked again for this use.",
     ]
@@ -1031,8 +1062,9 @@ export function contributionReason(
     "• submit_query_feedback — send one complete good / partial / poor verdict set using query_id and returned result_id values; leave uncertain results unrated. A poor query match is not the same as a globally bad skill.",
     "• submit_feedback — a quick useful / not-useful signal plus a one-line lesson.",
     "• submit_remembrance — post the ready next_step.submit_remembrance_payload returned by submit_feedback when the lesson is reusable, adding redacted evidence when available.",
-    "• propose_skill_idea — only if no existing skill fit and you built a reusable workflow.",
-    "Use the Remembrance MCP tools directly when they are visible. If this runtime has no MCP tools exposed, use the REST endpoints from the query response; if the API is unavailable, emit REMEMBRANCE_SUBMISSION_PAYLOAD with the redacted JSON you would submit.",
+    "• propose_skill_idea — only if no existing skill fit and you built a reusable workflow. With an organization key it remains organization-private; never remove or bypass the key to force a public candidate.",
+    "• propose_private_skill — prefer this explicit organization-only path for repository-derived skills after the host and organization approve Remembrance as the destination.",
+    "Use the Remembrance MCP tools directly when they are visible. If this runtime has no MCP tools exposed, use the REST endpoints from the query response. A host privacy-policy denial is not API unavailability: never retry private repository content through another transport; queue organization skills locally with queue_private_skill_import (or the bundled handoff script) and wait for an admin import receipt. If the API itself is unavailable, emit REMEMBRANCE_SUBMISSION_PAYLOAD with the redacted JSON you would submit.",
     "Redact secrets, private URLs, and proprietary content; submit redacted summaries and hashes, not raw traces.",
     "Attach evidence: reproduction detail in outcome.failure_modes, artifact hashes of redacted logs/diffs, or an attestation. Evidence-less public reports wait in unverified intake until corroborated; evidence-backed ones verify faster and rank higher.",
     "If nothing is genuinely worth capturing, just say so in one line — you will not be asked again this session.",
@@ -2200,13 +2232,197 @@ export function contributeDisabled(value) {
   return /^(0|false|no)$/i.test(String(value ?? "").trim());
 }
 
+function pluginHealthDir(env = process.env) {
+  return env?.REMEMBRANCE_PLUGIN_HEALTH_DIR
+    ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR)
+    : join(tmpdir(), PLUGIN_HEALTH_DIR);
+}
+
+function normalizedPluginHealthSurface(value) {
+  const surface = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  return PLUGIN_HEALTH_SURFACES.has(surface) ? surface : null;
+}
+
+export function pluginHealthPath(surface, env = process.env) {
+  return pluginHealthSessionPath(surface, null, env);
+}
+
+function pluginHealthSessionPath(surface, sessionId, env = process.env) {
+  const normalized = normalizedPluginHealthSurface(surface);
+  if (!normalized) return null;
+  const normalizedSession = safeText(sessionId ?? "", 256);
+  if (!normalizedSession || normalizedSession === "unknown") {
+    return join(pluginHealthDir(env), `${normalized}.json`);
+  }
+  const sessionHash = createHash("sha256")
+    .update(normalizedSession, "utf8")
+    .digest("hex")
+    .slice(0, 24);
+  return join(pluginHealthDir(env), `${normalized}.${sessionHash}.json`);
+}
+
+export function readPluginLifecycleHealth(
+  surface,
+  env = process.env,
+  sessionId = null,
+) {
+  const path = pluginHealthSessionPath(surface, sessionId, env);
+  if (!path) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+// Record that a native lifecycle component actually executed. The marker is
+// intentionally local and content-free: it contains only surface/version,
+// component timestamps, and the credential source category. Local MCP reads
+// it through get_connection_status so partial activation cannot look healthy.
+export function recordPluginLifecycleHealth(
+  {
+    surface,
+    component,
+    pluginVersion = null,
+    hostVersion = null,
+    credentialSource = null,
+    sessionId = null,
+  },
+  env = process.env,
+) {
+  const normalizedSurface = normalizedPluginHealthSurface(surface);
+  const normalizedComponent = String(component ?? "")
+    .trim()
+    .toLowerCase();
+  if (
+    !normalizedSurface ||
+    !PLUGIN_HEALTH_COMPONENTS.has(normalizedComponent)
+  ) {
+    return false;
+  }
+  const path = pluginHealthSessionPath(normalizedSurface, sessionId, env);
+  if (!path) return false;
+  const now = new Date().toISOString();
+  let existing =
+    readPluginLifecycleHealth(normalizedSurface, env, sessionId) ?? {};
+  // Hosts may emit SessionStart without the stable session id later supplied
+  // to prompt/tool/completion hooks. Seed that startup observation into the
+  // first session-specific marker, but never copy another session's later
+  // components.
+  if (
+    sessionId &&
+    sessionId !== "unknown" &&
+    Object.keys(existing).length === 0 &&
+    normalizedComponent !== "session_start"
+  ) {
+    const startup = readPluginLifecycleHealth(normalizedSurface, env);
+    const startupComponents =
+      startup?.components &&
+      typeof startup.components === "object" &&
+      !Array.isArray(startup.components) &&
+      typeof startup.components.session_start === "string"
+        ? { session_start: startup.components.session_start }
+        : {};
+    existing = {
+      ...(startup ?? {}),
+      components: startupComponents,
+    };
+  }
+  const existingComponents =
+    existing.components &&
+    typeof existing.components === "object" &&
+    !Array.isArray(existing.components)
+      ? existing.components
+      : {};
+  // A new host session must not inherit prompt/tool/completion observations
+  // from a prior session. Otherwise a current partial activation could look
+  // healthy for as long as the old marker remains fresh.
+  const currentComponents =
+    normalizedComponent === "session_start" ? {} : existingComponents;
+  const payload = {
+    schema_version: 1,
+    surface: normalizedSurface,
+    session_hash:
+      sessionId && sessionId !== "unknown"
+        ? createHash("sha256")
+            .update(String(sessionId), "utf8")
+            .digest("hex")
+            .slice(0, 24)
+        : null,
+    plugin_version: safeText(
+      pluginVersion ?? existing.plugin_version ?? "",
+      64,
+    ),
+    host_version: safeText(hostVersion ?? existing.host_version ?? "", 64),
+    credential_source: ["environment", "shared_config", "none"].includes(
+      credentialSource,
+    )
+      ? credentialSource
+      : ["environment", "shared_config", "none"].includes(
+            existing.credential_source,
+          )
+        ? existing.credential_source
+        : "none",
+    components: {
+      ...currentComponents,
+      [normalizedComponent]: now,
+    },
+    last_seen_at: now,
+  };
+  const temporaryPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(temporaryPath, `${JSON.stringify(payload)}\n`, {
+      mode: 0o600,
+    });
+    renameSync(temporaryPath, path);
+    prunePluginHealthSessionMarkers(normalizedSurface, path, env);
+    return true;
+  } catch {
+    try {
+      rmSync(temporaryPath, { force: true });
+    } catch {
+      // Health recording is best-effort and must never break a host hook.
+    }
+    return false;
+  }
+}
+
+function prunePluginHealthSessionMarkers(surface, keepPath, env) {
+  const directory = pluginHealthDir(env);
+  try {
+    const candidates = readdirSync(directory)
+      .filter(
+        (name) =>
+          name.startsWith(`${surface}.`) &&
+          /^[a-z_]+\.[a-f0-9]{24}\.json$/.test(name),
+      )
+      .map((name) => {
+        const path = join(directory, name);
+        return { path, modified: statSync(path).mtimeMs };
+      })
+      .sort((left, right) => right.modified - left.modified);
+    for (const candidate of candidates.slice(32)) {
+      if (candidate.path !== keepPath) rmSync(candidate.path, { force: true });
+    }
+  } catch {
+    // Pruning is advisory; health recording must remain fail-open.
+  }
+}
+
 // Well-known config file that carries the org API key (and, optionally, the API
 // URL). It exists so a plugin user can authenticate ONCE — via one copy-paste
-// command that writes this file — and have BOTH the prompt hooks and the MCP
-// server pick the key up, regardless of how the runtime happens to pass (or not
-// pass) environment variables to hook commands. Co-located with the agent
-// attestation key under the XDG config dir. Fail-open: any read/parse error
-// yields an empty config so a missing/garbled file never breaks the hook.
+// command that writes this file — and have prompt hooks plus local/bundled MCP
+// servers pick the key up, regardless of how the runtime happens to pass (or
+// not pass) environment variables to hook commands. Hosted MCP cannot read a
+// file on the caller's machine and authenticates separately. Co-located with
+// the agent attestation key under the XDG config dir. Fail-open: any read/parse
+// error yields an empty config so a missing/garbled file never breaks the hook.
 export function remembranceConfigPath(env = process.env) {
   return join(
     env.XDG_CONFIG_HOME || join(homedir(), ".config"),
@@ -2226,14 +2442,36 @@ export function readRemembranceConfig(env = process.env) {
   }
 }
 
+export function resolveApiCredential(env = process.env) {
+  if (env.REMEMBRANCE_API_KEY) {
+    return {
+      apiKey: String(env.REMEMBRANCE_API_KEY),
+      source: "environment",
+    };
+  }
+  const fromFile = readRemembranceConfig(env).apiKey;
+  return fromFile
+    ? { apiKey: String(fromFile), source: "shared_config" }
+    : { apiKey: "", source: "none" };
+}
+
 // The org API key: an explicit env var wins, then the config file. Returns ""
 // when neither is present (the request then goes out anonymously).
 export function resolveApiKey(env = process.env) {
-  if (env.REMEMBRANCE_API_KEY) {
-    return String(env.REMEMBRANCE_API_KEY);
+  return resolveApiCredential(env).apiKey;
+}
+
+export function sharedConfigCredentialNotice(env = process.env) {
+  if (resolveApiCredential(env).source !== "shared_config") {
+    return null;
   }
-  const fromFile = readRemembranceConfig(env).apiKey;
-  return fromFile ? String(fromFile) : "";
+  return (
+    `Remembrance credential source: this plugin hook resolved its key from ` +
+    `the shared Remembrance config file (normally ` +
+    `~/.config/remembrance/config.json). REMEMBRANCE_API_KEY may be unset; do not ` +
+    `use an anonymous REST/browser probe to infer this hook's scope. Call ` +
+    `get_connection_status for the MCP transport you will use.`
+  );
 }
 
 function apiUrl(env) {
@@ -2244,12 +2482,10 @@ function apiUrl(env) {
   );
 }
 
-// Codex hosted MCP registration is separate from the hook runtime config. Point
-// the hooks at a non-default registry (dev testing, self-host) while MCP still
-// points at another URL, and the two surfaces silently diverge — hooks query one
-// registry, MCP tools another. Claude Code and OpenClaw register the LOCAL
-// bundled server, which resolves the same env as the hooks, so only the Codex
-// adapters surface this notice.
+// A manually configured hosted Codex MCP registration can diverge from the
+// hook runtime registry. The packaged Codex plugin now uses its bundled local
+// MCP server, which resolves the same shared config as the hooks and therefore
+// has no split to warn about.
 export function hostedMcpSplitNotice(env = process.env) {
   const hookBase = normalizeRegistryBaseUrl(apiUrl(env));
   if (hookBase === normalizeRegistryBaseUrl(DEFAULT_API_URL)) {
@@ -2286,19 +2522,60 @@ export function resolveHostedMcpRegistry(env = process.env) {
   }
 
   const config = readCodexMcpConfig(env);
+  if (config?.command) {
+    return {
+      apiBase: normalizeRegistryBaseUrl(apiUrl(env)),
+      mcpUrl: "local stdio",
+      source: "active Codex MCP config",
+    };
+  }
   if (config?.url) {
     return {
       apiBase: normalizeRegistryBaseUrl(config.url),
       mcpUrl: config.url,
-      source: config.path,
+      source: "active Codex MCP config",
     };
   }
 
-  const packagedUrl = readPackagedCodexMcpUrl() ?? `${DEFAULT_API_URL}/api/mcp`;
+  const packaged = readPackagedCodexMcpRegistration();
+  if (packaged?.command) {
+    return {
+      apiBase: normalizeRegistryBaseUrl(apiUrl(env)),
+      mcpUrl: "local stdio",
+      source: "bundled local Codex MCP server",
+    };
+  }
+  const packagedUrl = packaged?.url ?? `${DEFAULT_API_URL}/api/mcp`;
   return {
     apiBase: normalizeRegistryBaseUrl(packagedUrl),
     mcpUrl: packagedUrl,
     source: "packaged Codex MCP manifest",
+  };
+}
+
+export function resolveCodexHostedMcpRegistration(env = process.env) {
+  const config = readCodexMcpConfig(env);
+  if (config) {
+    return {
+      url: config.url,
+      ...(config.command ? { command: config.command } : {}),
+      credentialEnvVars: config.credentialEnvVars,
+      hasStaticCredential: config.hasStaticCredential,
+      source: "active Codex MCP config",
+    };
+  }
+  const packaged = readPackagedCodexMcpRegistration();
+  if (packaged) {
+    return {
+      ...packaged,
+      source: "packaged Codex MCP manifest",
+    };
+  }
+  return {
+    url: null,
+    credentialEnvVars: [],
+    hasStaticCredential: false,
+    source: "Codex MCP registration",
   };
 }
 
@@ -2330,9 +2607,11 @@ export function readCodexMcpConfig(env = process.env) {
       if (!existsSync(path)) {
         continue;
       }
-      const url = parseCodexMcpUrl(readFileSync(path, "utf8"));
-      if (url) {
-        return { path, url };
+      const registration = parseCodexMcpRegistration(
+        readFileSync(path, "utf8"),
+      );
+      if (registration) {
+        return { path, ...registration };
       }
     } catch {
       // Fail open: a malformed/unreadable Codex config should not break hooks.
@@ -2342,27 +2621,85 @@ export function readCodexMcpConfig(env = process.env) {
 }
 
 export function parseCodexMcpUrl(toml) {
-  let inRemembranceServer = false;
+  return parseCodexMcpRegistration(toml)?.url ?? null;
+}
+
+export function parseCodexMcpRegistration(toml) {
+  let section = "";
+  let found = false;
+  let url = null;
+  let command = null;
+  const credentialEnvVars = new Set();
+  let hasStaticCredential = false;
+
   for (const rawLine of String(toml ?? "").split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) {
       continue;
     }
-    const section = line.match(/^\[([^\]]+)\]$/);
-    if (section) {
-      inRemembranceServer =
-        section[1].trim().replace(/["']/g, "") === "mcp_servers.remembrance";
+    const sectionMatch = line.match(/^\[([^\]]+)\]$/);
+    if (sectionMatch) {
+      section = sectionMatch[1].trim().replace(/["']/g, "");
+      if (
+        section === "mcp_servers.remembrance" ||
+        section.startsWith("mcp_servers.remembrance.")
+      ) {
+        found = true;
+      }
       continue;
     }
-    if (!inRemembranceServer) {
+    if (
+      section !== "mcp_servers.remembrance" &&
+      !section.startsWith("mcp_servers.remembrance.")
+    ) {
       continue;
     }
-    const url = line.match(/^url\s*=\s*(.+)$/);
-    if (url) {
-      return parseTomlString(url[1]);
+
+    const assignment = line.match(/^(.+?)\s*=\s*(.+)$/);
+    if (!assignment) {
+      continue;
+    }
+    const key = parseTomlKey(assignment[1]);
+    const value = assignment[2];
+
+    if (section === "mcp_servers.remembrance") {
+      if (key === "url") {
+        url = parseTomlString(value);
+      } else if (key === "command") {
+        command = parseTomlString(value);
+      } else if (key === "bearer_token_env_var") {
+        addCredentialEnvVar(credentialEnvVars, parseTomlString(value));
+      } else if (key === "env_http_headers") {
+        for (const [header, envName] of parseTomlInlineTable(value)) {
+          if (isRemembranceAuthHeader(header)) {
+            addCredentialEnvVar(credentialEnvVars, envName);
+          }
+        }
+      } else if (key === "http_headers" || key === "headers") {
+        hasStaticCredential ||= parseTomlInlineTable(value).some(([header]) =>
+          isRemembranceAuthHeader(header),
+        );
+      }
+    } else if (section === "mcp_servers.remembrance.env_http_headers") {
+      if (isRemembranceAuthHeader(key)) {
+        addCredentialEnvVar(credentialEnvVars, parseTomlString(value));
+      }
+    } else if (
+      section === "mcp_servers.remembrance.http_headers" ||
+      section === "mcp_servers.remembrance.headers"
+    ) {
+      hasStaticCredential ||= isRemembranceAuthHeader(key);
     }
   }
-  return null;
+
+  return found
+    ? {
+        url,
+        credentialEnvVars: [...credentialEnvVars],
+        hasStaticCredential,
+        ...(command ? { command } : {}),
+      }
+    : null;
 }
 
 function codexConfigPaths(env) {
@@ -2377,22 +2714,88 @@ function codexConfigPaths(env) {
   ];
 }
 
-function readPackagedCodexMcpUrl() {
+function readPackagedCodexMcpRegistration() {
   for (const relativePath of ["../.mcp.codex.json", "../.mcp.json"]) {
     try {
       const parsed = JSON.parse(
         readFileSync(new URL(relativePath, import.meta.url), "utf8"),
       );
-      const url = stringOrNull(parsed?.mcpServers?.remembrance?.url);
-      if (url) {
-        return url;
+      const server = parsed?.mcpServers?.remembrance;
+      if (!server || typeof server !== "object" || Array.isArray(server)) {
+        continue;
       }
+      const credentialEnvVars = new Set();
+      addCredentialEnvVar(
+        credentialEnvVars,
+        stringOrNull(server.bearer_token_env_var),
+      );
+      for (const [header, envName] of Object.entries(
+        server.env_http_headers ?? {},
+      )) {
+        if (isRemembranceAuthHeader(header)) {
+          addCredentialEnvVar(credentialEnvVars, stringOrNull(envName));
+        }
+      }
+      const staticHeaders = {
+        ...(server.http_headers ?? {}),
+        ...(server.headers ?? {}),
+      };
+      return {
+        url: stringOrNull(server.url),
+        ...(stringOrNull(server.command)
+          ? { command: stringOrNull(server.command) }
+          : {}),
+        credentialEnvVars: [...credentialEnvVars],
+        hasStaticCredential: Object.keys(staticHeaders).some((header) =>
+          isRemembranceAuthHeader(header),
+        ),
+      };
     } catch {
       // Hook-core is copied into multiple plugin packages; not every copy has a
       // hosted Codex MCP manifest next to it.
     }
   }
   return null;
+}
+
+function addCredentialEnvVar(target, value) {
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(value ?? ""))) {
+    target.add(String(value));
+  }
+}
+
+function isRemembranceAuthHeader(value) {
+  return ["authorization", "x-remembrance-api-key", "x-api-key"].includes(
+    String(value ?? "")
+      .trim()
+      .toLowerCase(),
+  );
+}
+
+function parseTomlKey(value) {
+  return String(value ?? "")
+    .trim()
+    .replace(/^["']|["']$/g, "");
+}
+
+function parseTomlInlineTable(value) {
+  const entries = [];
+  const source = String(value ?? "").trim();
+  if (!source.startsWith("{") || !source.endsWith("}")) {
+    return entries;
+  }
+  const body = source.slice(1, -1);
+  const pattern =
+    /(?:^|,)\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+))\s*=\s*("(?:\\.|[^"])*"|'[^']*'|[^,}]+)/g;
+  let match;
+  while ((match = pattern.exec(body)) !== null) {
+    const key = match[1] ?? match[2] ?? match[3] ?? "";
+    const parsedValue = parseTomlString(match[4]);
+    if (key && parsedValue) {
+      entries.push([key, parsedValue]);
+    }
+  }
+  return entries;
 }
 
 function parseTomlString(value) {

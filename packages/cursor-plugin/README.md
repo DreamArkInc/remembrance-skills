@@ -35,6 +35,12 @@ printf '{"apiKey":"YOUR_ORG_KEY"}\n' > ~/.config/remembrance/config.json
 chmod 600 ~/.config/remembrance/config.json
 ```
 
+After restart, call MCP `get_connection_status`. It should report
+`local_stdio_mcp`, `shared_config`, and the expected organization scope. Never
+infer Cursor's plugin scope from `REMEMBRANCE_API_KEY` alone or from an
+anonymous REST/browser probe; the diagnostic verifies the process that will
+actually serve Cursor's tools without exposing the key.
+
 For dev/self-hosted registries, add `apiUrl` to the same file:
 
 ```json
@@ -46,6 +52,41 @@ Cursor uses only returned organization skills and never substitutes bundled or
 live public skill references. A query failure does not block the user's work,
 but it fails closed for public-skill fallback until the organization policy can
 be confirmed.
+
+### Private repository contributions
+
+When the organization has approved Remembrance as a destination, Cursor should
+use `propose_private_skill` for repository-derived instructions. That tool
+requires organization authentication and can only create a private review
+candidate. Cursor or enterprise network policy may still deny the export before
+Remembrance receives it; that denial is not an API failure and must not be
+worked around with another network transport.
+
+For managed Cursor rollout, publish Remembrance through a team marketplace as
+`Required` or `Default On`. Register the same Remembrance MCP endpoint under
+**Dashboard > Integrations & MCP** for cloud agents, the Agents window, IDE,
+and CLI, and allow `remembrance.dev` in the enterprise sandbox network policy
+for command-based fallback paths. Cursor's current public enterprise docs do
+not define a managed per-MCP-tool allowlist equivalent to Codex, Claude Code,
+Gemini CLI, or OpenClaw, so keep normal tool approvals enabled rather than
+claiming a nonexistent control. Verify query, invocation, feedback, and private
+contribution receipts separately on local and cloud surfaces.
+The shared organization tool inventory and host-by-host policy references are
+in `skills/remembrancer/references/remembrance-setup.md` and the live guide at
+<https://remembrance.dev/docs/remembrancer#private-repository-policy>.
+
+With an organization key, generic `propose_skill_idea` also stays private.
+Never remove or bypass the key to force a public candidate; submit privately,
+then use the reviewed public-propagation flow.
+
+If export remains blocked, use local MCP `queue_private_skill_import`. It writes
+a mode-0600 JSON handoff under the user's fixed Remembrance state directory and
+contacts no network. An organization admin uploads that file at **Dashboard >
+Skills > Import**, where each skill follows the same private verification flow
+as a normal organization skill. Hosted/cloud agents without the local tool can
+run the bundled `skills/remembrancer/scripts/queue-private-skill-import.mjs`
+script in the workspace and hand the resulting file to the admin. A local queue
+receipt is not a server submission receipt.
 
 ## What the plugin does
 
@@ -67,6 +108,9 @@ be confirmed.
   `invoke_skill`. `list_skills` and MCP resource-handle reads do not count as
   use. If the agent later calls a contribution tool, the hook marks that use as
   already handled.
+- `propose_private_skill` is the explicit organization-only submission path.
+  Local MCP also provides the zero-network `queue_private_skill_import`
+  fallback for host-policy denials.
 - When a person explicitly names a skill or supplies a
   `remembrance://skills/{slug}` URI, Cursor resolves ambiguity with
   the indexed, normalized slug-prefix filter in `list_skills`, then calls
@@ -134,15 +178,19 @@ This package follows Cursor's documented plugin structure:
 - Hook scripts communicate over stdin/stdout JSON.
 - `sessionStart`, `beforeSubmitPrompt`, `afterMCPExecution`, and `stop` are
   Cursor agent hooks.
-- Cursor cloud agents do not support these local plugin hooks, so cloud-agent
-  installs should rely on project rules plus MCP/REST
-  setup until Cursor exposes those hooks in cloud agents.
+- Cursor now documents conversation hooks for cloud agents, but a local plugin
+  install does not automatically provision cloud agents. Distribute the plugin
+  through a team marketplace, register Remembrance under **Dashboard >
+  Integrations & MCP**, and verify query, invocation, feedback, and contribution
+  receipts on both local and cloud surfaces.
 
 References:
 
 - https://cursor.com/docs/reference/plugins.md
 - https://cursor.com/docs/hooks.md
 - https://cursor.com/docs/mcp.md
+- https://cursor.com/changelog/team-marketplace-updates
+- https://cursor.com/changelog/side-chat
 
 ## Test
 

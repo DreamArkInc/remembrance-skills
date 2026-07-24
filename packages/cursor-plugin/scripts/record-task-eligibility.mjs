@@ -13,7 +13,9 @@ import {
   disabled,
   isContextualContinuationPrompt,
   recordDirectiveSurface,
+  recordPluginLifecycleHealth,
   recordTaskEligibility,
+  resolveApiCredential,
   shouldQueryPrompt,
 } from "./hook-core.mjs";
 import { cursorSessionId } from "./record-mcp-use.mjs";
@@ -31,6 +33,17 @@ export function promptFromCursorInput(input) {
 
 export async function handlePromptEligibility(input, options = {}) {
   const env = options.env ?? process.env;
+  const sessionId = cursorSessionId(input, env);
+  const recordHealth = options.recordHealth ?? recordPluginLifecycleHealth;
+  recordHealth(
+    {
+      surface: "cursor",
+      component: "prompt_hook",
+      credentialSource: resolveApiCredential(env).source,
+      sessionId,
+    },
+    env,
+  );
   if (disabled(env.REMEMBRANCE_AUTO_QUERY)) {
     return { eligible: false, reason: "disabled" };
   }
@@ -40,7 +53,6 @@ export async function handlePromptEligibility(input, options = {}) {
   if (!decision.likely_match && !continuation) {
     return { eligible: false, reason: decision.reason };
   }
-  const sessionId = cursorSessionId(input, env);
   const record = options.recordEligibility ?? recordTaskEligibility;
   record(sessionId, env);
   const reason = continuation ? "contextual_continuation" : decision.reason;

@@ -17,9 +17,11 @@ import {
   recordDirectiveFollowThroughForTool,
   recordDirectSelectionSurface,
   recordHighMatchSurface,
+  recordPluginLifecycleHealth,
   recordRegistryUse,
   recordValueEpisodeSurface,
   responseRequestsRemembranceFollowup,
+  resolveApiCredential,
   toolResponseIndicatesFailure,
   valueEpisodeFromResponse,
   writePromptedCount,
@@ -35,6 +37,7 @@ const CONTRIBUTION_TOOLS = new Set([
   "submit_feedback",
   "submit_remembrance",
   "propose_skill_idea",
+  "propose_private_skill",
   "submit_suggestion",
   "submit_resource",
   "submit_resource_review",
@@ -72,6 +75,16 @@ function toolName(input) {
 export async function handleMcpUse(input, options = {}) {
   const env = options.env ?? process.env;
   const sessionId = cursorSessionId(input, env);
+  const recordHealth = options.recordHealth ?? recordPluginLifecycleHealth;
+  recordHealth(
+    {
+      surface: "cursor",
+      component: "tool_observer",
+      credentialSource: resolveApiCredential(env).source,
+      sessionId,
+    },
+    env,
+  );
   const tool = toolName(input);
   if (toolFailed(input)) {
     return { recorded: false, kind: "failed", tool };
@@ -218,13 +231,13 @@ function mcpResponseFromHook(input) {
 function toolFailed(input) {
   return Boolean(
     input?.error ||
-      input?.is_error ||
-      input?.isError ||
-      input?.result?.isError ||
-      input?.output?.isError ||
-      input?.tool_result?.isError ||
-      input?.toolResult?.isError ||
-      toolResponseIndicatesFailure(mcpResponseFromHook(input)),
+    input?.is_error ||
+    input?.isError ||
+    input?.result?.isError ||
+    input?.output?.isError ||
+    input?.tool_result?.isError ||
+    input?.toolResult?.isError ||
+    toolResponseIndicatesFailure(mcpResponseFromHook(input)),
   );
 }
 

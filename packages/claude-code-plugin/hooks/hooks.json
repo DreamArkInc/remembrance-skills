@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.mjs\""
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "matcher": "",
@@ -13,7 +24,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__.*remembrance.*__(query_skills|get_skill|get_resource|invoke_skill|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|submit_suggestion|submit_resource|submit_resource_review)|remembrance[._](query_skills|get_skill|get_resource|invoke_skill|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|submit_suggestion|submit_resource|submit_resource_review)|query_skills|get_skill|get_resource|invoke_skill|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|submit_suggestion|submit_resource|submit_resource_review",
+        "matcher": "mcp__.*remembrance.*__(query_skills|get_skill|get_resource|invoke_skill|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|propose_private_skill|submit_suggestion|submit_resource|submit_resource_review)|remembrance[._](query_skills|get_skill|get_resource|invoke_skill|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|propose_private_skill|submit_suggestion|submit_resource|submit_resource_review)|query_skills|get_skill|get_resource|invoke_skill|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|propose_private_skill|submit_suggestion|submit_resource|submit_resource_review",
         "hooks": [
           {
             "type": "command",

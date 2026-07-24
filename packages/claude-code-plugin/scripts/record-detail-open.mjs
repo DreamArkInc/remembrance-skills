@@ -11,9 +11,11 @@ import {
   recordDirectiveFollowThroughForTool,
   recordDirectSelectionSurface,
   recordHighMatchSurface,
+  recordPluginLifecycleHealth,
   recordRegistryUse,
   recordValueEpisodeSurface,
   responseRequestsRemembranceFollowup,
+  resolveApiCredential,
   sessionIdFor,
   toolResponseIndicatesFailure,
   valueEpisodeFromResponse,
@@ -24,44 +26,45 @@ const CONTRIBUTION_TOOLS = [
   "submit_feedback",
   "submit_remembrance",
   "propose_skill_idea",
+  "propose_private_skill",
   "submit_suggestion",
   "submit_resource",
   "submit_resource_review",
 ];
 
 export async function handlePostToolUse(input, options = {}) {
-  if (toolFailed(input)) return { cleared: false, why: "tool_failed" };
   const env = options.env ?? process.env;
+  const sessionId = sessionIdFor(input);
+  const recordHealth = options.recordHealth ?? recordPluginLifecycleHealth;
+  recordHealth(
+    {
+      surface: "claude_code",
+      component: "tool_observer",
+      credentialSource: resolveApiCredential(env).source,
+      sessionId,
+    },
+    env,
+  );
+  if (toolFailed(input)) return { cleared: false, why: "tool_failed" };
   const name = toolName(input);
   const normalizedName = String(name).toLowerCase();
-  const sessionId = sessionIdFor(input);
   if (normalizedName.endsWith("query_skills")) {
     const response = toolResponse(input);
     const recordUse = options.recordRegistryUse ?? recordRegistryUse;
     recordUse(sessionId, env);
-    const recordHighMatch =
-      options.recordHighMatch ?? recordHighMatchSurface;
+    const recordHighMatch = options.recordHighMatch ?? recordHighMatchSurface;
     recordHighMatch(sessionId, highMatchFromResponse(response), env);
     const recordFollowThrough =
       options.recordDirectiveFollowThrough ??
       recordDirectiveFollowThroughForTool;
-    const followed = await recordFollowThrough(
-      sessionId,
-      name,
-      response,
-      {
-        env,
-        fetchImpl: options.fetchImpl ?? fetch,
-        userAgent: options.userAgent,
-      },
-    );
+    const followed = await recordFollowThrough(sessionId, name, response, {
+      env,
+      fetchImpl: options.fetchImpl ?? fetch,
+      userAgent: options.userAgent,
+    });
     const recordValueEpisode =
       options.recordValueEpisode ?? recordValueEpisodeSurface;
-    recordValueEpisode(
-      sessionId,
-      valueEpisodeFromResponse(response),
-      env,
-    );
+    recordValueEpisode(sessionId, valueEpisodeFromResponse(response), env);
     return {
       cleared: false,
       directive_followed: followed,
@@ -171,11 +174,11 @@ function toolArguments(input) {
 function toolFailed(input) {
   return Boolean(
     input?.error ||
-      input?.is_error ||
-      input?.isError ||
-      input?.tool_response?.isError ||
-      input?.toolResponse?.isError ||
-      toolResponseIndicatesFailure(toolResponse(input)),
+    input?.is_error ||
+    input?.isError ||
+    input?.tool_response?.isError ||
+    input?.toolResponse?.isError ||
+    toolResponseIndicatesFailure(toolResponse(input)),
   );
 }
 

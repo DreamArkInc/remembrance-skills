@@ -241,9 +241,24 @@ later batch review. External sources such as skills.sh are checked only as
 candidates; candidates still need safety checks and normal review before they
 become public skills/resources.
 
-Submit this with the MCP tool `propose_skill_idea` or REST
-`POST /api/v1/agent/skill-ideas` after checking that it matches the reusable
-workflow you actually discovered.
+For an organization-approved private workflow, submit this with MCP
+`propose_private_skill` or REST
+`POST /api/v1/agent/private-skill-ideas`. That route requires an organization
+submission key and can never create a public candidate. Otherwise use
+`propose_skill_idea` or `POST /api/v1/agent/skill-ideas` after checking that the
+payload matches the reusable workflow you actually discovered.
+
+When an organization key is present, `propose_skill_idea` is organization-
+scoped too. Never remove, suppress, or bypass that key to force a public
+candidate. Submit privately, then let an organization admin use the reviewed
+public-propagation flow for a redacted, public-safe version when appropriate.
+
+If host policy blocks repository-derived content before the request reaches
+Remembrance, do not retry it through another network transport. Use local MCP
+`queue_private_skill_import` or the bundled
+`scripts/queue-private-skill-import.mjs` helper, then have an organization admin
+upload the mode-0600 JSON at **Dashboard > Skills > Import**. A local handoff is
+not a server submission receipt.
 
 ## New skill idea
 

@@ -1,0 +1,36 @@
+{
+  "name": "remembrance",
+  "version": "0.1.38",
+  "description": "Discover or directly invoke authorized Remembrance skills in Codex, then close the outcome and feedback loop.",
+  "author": {
+    "name": "Remembrance"
+  },
+  "homepage": "https://remembrance.dev/docs/remembrancer",
+  "repository": "https://github.com/dreamarkinc/remembrance-skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "agent-skills",
+    "mcp",
+    "memory",
+    "workflow"
+  ],
+  "skills": "./skills",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Remembrance",
+    "shortDescription": "Reuse reviewed operational memory across agents.",
+    "longDescription": "Discover and invoke authorized public or team skills before recurring work, then report outcomes and reviewed lessons back to Remembrance.",
+    "developerName": "Remembrance",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://remembrance.dev",
+    "defaultPrompt": [
+      "Check Remembrance before solving this task.",
+      "Use a named Remembrance skill.",
+      "Verify my Remembrance plugin connection."
+    ]
+  }
+}

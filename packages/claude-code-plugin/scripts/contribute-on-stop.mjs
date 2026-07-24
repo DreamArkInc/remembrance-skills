@@ -48,7 +48,9 @@ import {
   readPromptedCount as readSharedPromptedCount,
   readRegistryUseCount,
   readTaskEligibilityCount,
+  recordPluginLifecycleHealth,
   reportTaskOutcomesOnStop,
+  resolveApiCredential,
 } from "./hook-core.mjs";
 
 const MAX_TRANSCRIPT_BYTES = 4 * 1024 * 1024;
@@ -68,7 +70,7 @@ export function sessionUsedRemembrance(transcript) {
   }
   return (
     /Remembrance auto-query context/i.test(text) ||
-    /mcp__[a-z0-9_]*remembrance[a-z0-9_]*__(query_skills|get_skill|get_resource|invoke_skill|submit_remembrance|submit_query_feedback|submit_feedback|submit_suggestion|submit_resource|propose_skill_idea)/i.test(
+    /mcp__[a-z0-9_]*remembrance[a-z0-9_]*__(query_skills|get_skill|get_resource|invoke_skill|submit_remembrance|submit_query_feedback|submit_feedback|submit_suggestion|submit_resource|propose_skill_idea|propose_private_skill)/i.test(
       text,
     ) ||
     /\/api\/v1\/agent\/(query|query-feedback|skill-invocations|remembrances|skill-ideas|suggestions|feedback)\b/i.test(
@@ -171,11 +173,23 @@ export function decideContribution(input, options = {}) {
 }
 
 export async function handleStopHook(input, options = {}) {
+  const env = options.env ?? process.env;
+  const sessionId = input?.session_id ?? "unknown";
+  const recordHealth = options.recordHealth ?? recordPluginLifecycleHealth;
+  recordHealth(
+    {
+      surface: "claude_code",
+      component: "completion_hook",
+      credentialSource: resolveApiCredential(env).source,
+      sessionId,
+    },
+    env,
+  );
   await (options.reportTaskOutcomes ?? reportTaskOutcomesOnStop)(
-    input?.session_id ?? "unknown",
+    sessionId,
     input,
     {
-      env: options.env ?? process.env,
+      env,
       fetchImpl: options.fetchImpl ?? fetch,
       userAgent: "@remembrance/claude-code-plugin",
     },

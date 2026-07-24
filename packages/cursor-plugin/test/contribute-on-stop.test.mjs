@@ -4,11 +4,13 @@ import { handleStop, handleStopHook } from "../scripts/contribute-on-stop.mjs";
 describe("Cursor stop hook", () => {
   it("reports the native task outcome before applying the stop decision", async () => {
     const reportTaskOutcomes = vi.fn().mockResolvedValue(1);
+    const recordHealth = vi.fn();
     const result = await handleStopHook(
       { loop_count: 1, conversation_id: "conv-outcome" },
       {
         env: {},
         reportTaskOutcomes,
+        recordHealth,
         readUseCount: () => 0,
         readEligibilityCount: () => 0,
         readPromptedCount: () => 0,
@@ -23,6 +25,14 @@ describe("Cursor stop hook", () => {
       }),
     );
     expect(result).toMatchObject({ allow: true, why: "stop_hook_active" });
+    expect(recordHealth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        surface: "cursor",
+        component: "completion_hook",
+        sessionId: "conv-outcome",
+      }),
+      {},
+    );
   });
 
   it("returns a followup_message when Remembrance was used and no contribution was prompted", () => {

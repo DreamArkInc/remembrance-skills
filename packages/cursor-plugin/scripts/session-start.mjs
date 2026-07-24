@@ -6,12 +6,19 @@
 // the plugin's always-apply rule handles per-task behavior. This hook gives the
 // agent one compact reminder that the plugin's MCP server is available.
 
+import { readFileSync } from "node:fs";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { disabled } from "./hook-core.mjs";
+import {
+  disabled,
+  recordPluginLifecycleHealth,
+  resolveApiCredential,
+} from "./hook-core.mjs";
+import { cursorSessionId } from "./record-mcp-use.mjs";
 
 export const CURSOR_REMEMBRANCE_CONTEXT = [
-  "Remembrance is installed in Cursor.",
+  "Remembrance is installed in Cursor; this SessionStart hook is active.",
+  "Before diagnosing authentication, call get_connection_status for Cursor's MCP process; never infer plugin scope from REMEMBRANCE_API_KEY alone or an anonymous REST/browser probe.",
   "When a person explicitly names a Remembrance skill, resolve ambiguity with list_skills and call invoke_skill; never guess a slug or run query_skills merely to rediscover that selection.",
   "Otherwise, before reusable service/API/tool/workflow/UI/review tasks, call query_skills, then use get_skill/get_resource when a result fits.",
   "For short follow-ups such as 'fix these issues', 'continue', or 'try again', infer the concrete task from the full conversation and still query before acting; do not wait for the current prompt to repeat trigger keywords.",
@@ -21,9 +28,33 @@ export const CURSOR_REMEMBRANCE_CONTEXT = [
   "Do not paste secrets, private URLs, credentials, raw logs, or proprietary code into Remembrance; use summaries, hashes, and reproduction detail.",
 ].join("\n");
 
+function pluginVersion() {
+  try {
+    return JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ).version;
+  } catch {
+    return "unknown";
+  }
+}
+
 export function handleSessionStart(input, options = {}) {
   const env = options.env ?? process.env;
-  void input;
+  const sessionId = cursorSessionId(input, env);
+  const recordHealth = options.recordHealth ?? recordPluginLifecycleHealth;
+  recordHealth(
+    {
+      surface: "cursor",
+      component: "session_start",
+      pluginVersion: options.pluginVersion ?? pluginVersion(),
+      hostVersion: String(
+        input?.cursor_version ?? input?.app_version ?? input?.version ?? "",
+      ).trim(),
+      credentialSource: resolveApiCredential(env).source,
+      sessionId,
+    },
+    env,
+  );
   if (disabled(env.REMEMBRANCE_CURSOR_SESSION_CONTEXT)) {
     return {};
   }

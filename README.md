@@ -14,7 +14,8 @@ agent on it gets.**
 This repository is the public, open distribution surface:
 
 - `skills/remembrancer/` — the entry skill (installable via skills.sh)
-- `packages/claude-code-plugin/` — the native Claude Code and Codex plugin package (skill + prompt hooks + MCP config; Codex uses hosted MCP)
+- `packages/codex-plugin/` — the native Codex plugin (skill + lifecycle hooks + bundled local MCP)
+- `packages/claude-code-plugin/` — the native Claude Code plugin
 - `packages/cursor-plugin/` — the native Cursor plugin package (skill + rules + MCP config + contribution hooks)
 - `packages/openclaw-plugin/` — the native OpenClaw plugin package (conversation hooks + MCP server)
 - `.claude-plugin/marketplace.json` — the plugin marketplace manifest
@@ -60,15 +61,14 @@ The prompt hook queries explicit reusable work and reminds short follow-ups such
 as "fix these issues" to query from the full conversation. The Stop hook closes
 the contribution loop or recovers a missed query once per task.
 
-For **org-scoped (enterprise) access**, set your org key as `REMEMBRANCE_API_KEY`
-and the bundled MCP server picks it up. In a terminal-launched agent, `export`
-it before starting `claude`; for the **Claude Code desktop app** (which doesn't
-inherit shell env) put it in `~/.claude/settings.json` (user-scoped) — **not**
-`~/.claude/settings.local.json`, which Claude Code does not read — then fully
-quit and relaunch the app:
+For **org-scoped (enterprise) access**, write the org key once to the shared
+mode-0600 config that both plugin hooks and bundled local MCP read, then fully
+restart Claude Code and call `get_connection_status`:
 
-```json
-{ "env": { "REMEMBRANCE_API_KEY": "your-org-key" } }
+```bash
+mkdir -p ~/.config/remembrance
+printf '{"apiKey":"your-org-key"}\n' > ~/.config/remembrance/config.json
+chmod 600 ~/.config/remembrance/config.json
 ```
 
 ### Claude Code — remote (zero install)
@@ -167,28 +167,37 @@ The prompt hook queries explicit reusable work and injects a full-conversation
 reminder for contextual follow-ups. The Stop hook recovers any eligible task
 whose query was missed, or prompts evidence after a completed use.
 
-For Codex Desktop org-scoped access on macOS, GUI apps do not inherit shell
-exports. Run these once, then fully quit and reopen Codex:
+For Codex Desktop org-scoped access, write the shared config once. Both the
+native hooks and bundled local MCP server read it, so GUI process environment
+setup is unnecessary:
 
 ```bash
-launchctl setenv REMEMBRANCE_API_URL "https://remembrance.dev"
-launchctl setenv REMEMBRANCE_API_KEY "your-org-key"
+mkdir -p ~/.config/remembrance
+printf '{"apiKey":"your-org-key","apiUrl":"https://remembrance.dev"}\n' > ~/.config/remembrance/config.json
+chmod 600 ~/.config/remembrance/config.json
 ```
+
+Fully quit and reopen Codex, then call `get_connection_status`. Confirm
+`local_stdio_mcp`, the expected organization scope, and active plugin health.
+Visible skills without native hooks or MCP tools is a degraded partial install,
+not a successful setup.
 
 ### OpenClaw — plugin (skill + tools + conversation hooks)
 
 ```bash
 openclaw plugins install clawhub:@remembrance/openclaw-plugin
+openclaw remembrance setup
 ```
 
 If ClawHub search shows multiple Remembrance matches, use the package that
 points to `dreamarkinc/remembrance-skills` and exposes the Remembrance MCP
 tools. Do not install unrelated roots/genealogy packages.
 
-OpenClaw requires one explicit opt-in for raw conversation hooks. In
-`~/.openclaw/openclaw.json`, enable `hooks.allowConversationAccess` for the
-`remembrance` plugin. For org-scoped access, prefer the shared Remembrance
-config file:
+The setup command preserves existing settings, enables the raw conversation
+hooks, and registers the installed bundled MCP by its absolute path. Managed
+environments may apply the equivalent `hooks.allowConversationAccess` and
+`mcp.servers.remembrance` config centrally. For org-scoped access, prefer the
+shared Remembrance config file:
 
 ```bash
 mkdir -p ~/.config/remembrance
@@ -197,7 +206,9 @@ chmod 600 ~/.config/remembrance/config.json
 ```
 
 Use OpenClaw process env or MCP server env only when that is easier for your
-runtime; the package README includes the full MCP config block.
+runtime. Restart OpenClaw, then run
+`openclaw mcp doctor remembrance --probe`; the package README includes the full
+managed config block.
 
 OpenClaw's pre-prompt hook handles explicit tasks, contextual follow-ups, empty
 results, and query failures without blocking work. Its completion hook recovers
@@ -211,7 +222,7 @@ Add to `~/.codex/config.toml` (global) or `.codex/config.toml` (per project):
 [mcp_servers.remembrance]
 url = "https://remembrance.dev/api/mcp"
 # Optional, for org-scoped/private access:
-# bearer_token_env_var = "REMEMBRANCE_API_KEY"
+# env_http_headers = { "X-Remembrance-API-Key" = "REMEMBRANCE_API_KEY" }
 ```
 
 ### Any agent — skill only (skills.sh)
@@ -246,6 +257,16 @@ Local and hosted MCP initialize with the same standing instructions for
 full-conversation queries, missed-query self-checks, redaction, and reusable
 evidence. MCP clients must follow those instructions proactively because no
 native Stop hook runs around a raw MCP connection.
+
+Call `get_connection_status` before diagnosing authentication. Local stdio can
+read `REMEMBRANCE_API_KEY` or `~/.config/remembrance/config.json`; hosted MCP
+cannot read local files and uses its request header. The tool reports the exact
+transport, credential source, verified registry scope, and declared native
+lifecycle observations without exposing the key. A degraded check submits only
+bounded component/version issue codes for deduplicated admin triage; disable
+that best-effort report with `REMEMBRANCE_HEALTH_REPORTING=0`. An
+environment-only check or anonymous REST/browser probe is not an authoritative
+test of another transport.
 
 The local server additionally offers `bootstrap_agent_identity`, which mints and
 registers a local TOFU attestation key so your agent's verified contributions

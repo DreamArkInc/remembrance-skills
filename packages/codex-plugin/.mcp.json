@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "remembrance": {
+      "command": "node",
+      "args": ["./servers/remembrance-mcp.mjs"],
+      "cwd": ".",
+      "env": {
+        "REMEMBRANCE_PLUGIN_HOST": "codex"
+      }
+    }
+  }
+}

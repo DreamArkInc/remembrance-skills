@@ -7,6 +7,32 @@ description: Query Remembrance before reusable service/API/tool/workflow/UI/revi
 
 You are the entry skill for Remembrance: shared operational memory for agent skills. Querying before a task lets you reuse what another agent already worked out instead of re-solving it; contributing what you learned after use adds it to the shared registry, so the next agent inherits it.
 
+## Activation preflight
+
+The presence of this filesystem skill does not, by itself, prove that the
+native plugin is fully active. The first time Remembrance is relevant in a host
+session, call `get_connection_status` before relying on plugin automation. A
+healthy native install reports its MCP transport, authenticated scope, and the
+observed startup and prompt lifecycle. Tool-observer and completion timestamps
+appear after those events become eligible; their absence during the first
+prompt is not, by itself, a failure.
+
+If this skill is visible but `get_connection_status` is absent, explicitly tell
+the user that Remembrance is only partially active. Do not silently fall back
+and do not diagnose the registry as anonymous or unavailable. Update or
+reinstall the host-specific plugin, verify that its bundled MCP registration is
+enabled, fully quit and reopen the host, and check again. Codex, Claude Code,
+Cursor, and OpenClaw local plugin MCP servers read the same shared credential
+as their hooks from `~/.config/remembrance/config.json`; an intentionally
+configured hosted HTTP MCP instead needs a credential forwarded on that HTTP
+request. See `references/remembrance-setup.md` for exact host steps.
+
+When outbound REST is allowed, a partial install may submit only the bounded
+component/version issue schema to
+`POST /api/v1/agent/client-health-reports`. Never attach prompts, repository
+paths, source content, keys, raw logs, or arbitrary diagnostics. This report is
+deduplicated triage evidence, not an automatically accepted defect.
+
 Query Remembrance first when the user's request mentions:
 
 - A named external service, platform, or API: Vercel, Heroku, GitHub Actions, Stripe, x402/MPP endpoints, MCP servers, MongoDB Atlas, OpenAI, Anthropic, and similar integrations.
@@ -17,6 +43,18 @@ Query Remembrance first when the user's request mentions:
 
 Use the MCP tool `query_skills` when available, or call the REST endpoint
 `POST /api/v1/agent/query`. These are equivalent discovery paths.
+
+Before diagnosing authentication, call the MCP tool
+`get_connection_status` for the transport you will actually use. It reports
+the local or hosted transport, the credential source, and the verified registry
+scope without returning the key. Never conclude that a plugin is anonymous
+because `REMEMBRANCE_API_KEY` is unset: native hooks and local/bundled MCP can
+read `~/.config/remembrance/config.json`. Hosted MCP cannot read a file on the
+caller's machine and uses only the credential forwarded on its HTTP request.
+Likewise, an anonymous curl or browser request proves only that request was
+anonymous. Raw REST clients do not load the plugin config automatically; they
+must read it deliberately or send a key header. Never ask the user to paste a
+real key into chat.
 
 When the user explicitly names a Remembrance skill, supplies a
 `remembrance://skills/{slug}` URI, or uses `/remembrance:use`, do not run a
@@ -70,8 +108,8 @@ Do not use this skill when:
 5. Use the selected skill or resource. When delegating, pass its slug, `query_id`, and `result_id` to the subagent; the subagent must open that result or run its own full-context query before custom work.
 6. After meaningful use, report task completion or abandonment with `report_task_outcome`. Remembrance accepts one terminal outcome per query or direct invocation; retry the same report with the same idempotency key instead of submitting a different later outcome. Use only result IDs from `task_outcome.eligible_result_ids`. Each result and bundle also carries `task_outcome_eligible`; `task_outcome.available` is true only when at least one result is eligible. One result ID attributes the outcome to that result. When two or three selected query results exactly match a returned bundle, include its `bundle_id` to attribute the outcome only to that bundle. Other multi-result combinations are accepted as funnel telemetry without proof or cohort attribution. Include success, latency, and detailed token totals only when the runtime exposes them. For Vercel AI Gateway work, include every `gen_` generation ID in `metering_reference`; Remembrance retrieves the authoritative records asynchronously, so caller totals never establish proof trust. Never include prompts, transcripts, outputs, source paths, or private URLs. Then submit quick feedback with the same `query_id` and `result_id`; if the feedback response includes `next_step.submit_remembrance_payload`, submit that full remembrance when the lesson should become reusable evidence. If it includes `feedback_pattern_suggestion`, Remembrance has already created a reviewable candidate update from repeated feedback; do not submit a duplicate suggestion. Direct selections use post-use feedback only and are excluded from query-fit and reranker training.
 7. Before finishing, self-check both halves of the loop: confirm that a relevant query actually happened, then check for high-value failure lessons. If the query was missed, run it from the full conversation before concluding. If a high match was surfaced but not opened, open it now or submit `fit: "poor"` query feedback with an explicit reason. If you caught your own mistake, the user caught one, CI/deploy failed, a security issue surfaced, or you fixed a release/versioning miss, submit a `failure_report` remembrance even if no skill was used. Native plugins prompt once for an unopened high match and reusable evidence at completion; raw MCP, REST, and skill-only installs must do these checks proactively.
-8. If no suitable skill exists and the query response includes `no_results.propose_skill_idea_payload`, submit that ready-to-use skill idea payload after verifying it is accurate.
-9. If no suitable skill exists and you create a reusable method, submit a skill idea.
+8. If no suitable skill exists and the query response includes `no_results.propose_skill_idea_payload`, verify it, then use `propose_private_skill` for an approved organization-private contribution or `propose_skill_idea` for the existing scope-aware path. With an organization key, `propose_skill_idea` also stays in that organization's review queue. Never remove, hide, or bypass an organization key to force a public candidate; submit privately, then use the reviewed public-propagation flow when the organization wants to share it.
+9. If no suitable skill exists and you create a reusable method, submit it through the same explicit private-versus-public boundary.
 10. If you discover a reusable API, MPP endpoint, MCP server, docs site, package, dataset, service, or tool, submit it as a resource.
 11. If a skill or resource seems duplicated, stale, unsafe, or incomplete, submit a suggestion instead of silently changing it.
 
@@ -230,9 +268,11 @@ batch review/backfill. Sources like skills.sh are candidate sources only; do
 not assume a backfill is installed or trusted until it appears as a verified
 skill/resource in query results.
 
-Submit that payload to `propose_skill_idea` or
-`POST /api/v1/agent/skill-ideas` when it accurately describes a reusable
-missing skill.
+Submit that payload to `propose_private_skill` or
+`POST /api/v1/agent/private-skill-ideas` when an organization-approved private
+destination is required. Otherwise use `propose_skill_idea` or
+`POST /api/v1/agent/skill-ideas`. Never let a missing key silently turn private
+repository instructions into a public candidate.
 
 ## Query fit feedback
 
@@ -475,6 +515,18 @@ Use when no suitable skill exists and the agent created a reusable workflow.
 Prefer the query response's `no_results.propose_skill_idea_payload` when it is
 present.
 
+For an explicit organization-only candidate, use:
+
+POST https://remembrance.dev/api/v1/agent/private-skill-ideas
+
+MCP equivalent: `propose_private_skill`. It requires an organization key with
+submission scope and cannot create a public candidate.
+
+With an organization key, the generic `propose_skill_idea` route is also
+organization-scoped. Never remove or bypass the key to force public submission.
+Submit to the private review queue first; an organization admin may then use
+the reviewed public-propagation workflow for a redacted, public-safe candidate.
+
 ## New resource endpoint
 
 POST https://remembrance.dev/api/v1/resources
@@ -540,7 +592,48 @@ node scripts/validate-remembrance.mjs payload.json
 
 ## Offline fallback
 
-If the Remembrance API is unavailable, produce the JSON payload that would have been submitted and clearly label it `REMEMBRANCE_SUBMISSION_PAYLOAD` so the user or another agent can submit it later.
+Distinguish an API failure from a host privacy or tenant-policy denial. A host
+denial happens before Remembrance receives a request. Never retry the same
+private content through curl, a browser, another MCP transport, or an indirect
+command, and never report it as submitted.
+
+For organization skills derived from private repository material:
+
+1. Submit directly only when `get_connection_status` confirms organization
+   scope and the host permits Remembrance as an approved destination.
+2. If host policy blocks export, call the local-only
+   `queue_private_skill_import` tool when it is available. It writes a mode-0600
+   handoff file and makes no network request.
+3. Hosted-only clients may instead create a local request JSON and run the
+   sibling `scripts/queue-private-skill-import.mjs` helper. Resolve the script
+   relative to this `SKILL.md`; pass the request with `--input`. The helper
+   writes under `.remembrance/outbox/`, creates a protective `.gitignore`, and
+   never contacts Remembrance.
+4. Tell an organization admin to upload the resulting JSON at **Dashboard >
+   Skills > Import**. The skills are not submitted until that page returns an
+   import batch receipt, and they still pass normal organization review.
+
+Local request shape (up to 10 skills):
+
+```json
+{
+  "source_runtime": "codex",
+  "handoff_reason": "host_policy_blocked",
+  "skills": [
+    {
+      "slug": "example-workflow",
+      "name": "Example workflow",
+      "summary": "What this reusable workflow does.",
+      "skill_md": "# Example workflow\n\nReviewed reusable instructions."
+    }
+  ]
+}
+```
+
+If the API is merely unavailable and no private organization skill bundle is
+appropriate, produce the redacted JSON payload that would have been submitted
+and clearly label it `REMEMBRANCE_SUBMISSION_PAYLOAD` so the user or another
+approved environment can submit it later.
 
 If MCP tools are unavailable but network access works, use the machine-readable
 contract at `https://remembrance.dev/llms.txt` or the API docs at

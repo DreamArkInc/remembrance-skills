@@ -4,6 +4,7 @@ import { handleAfterToolCall } from "../src/index.mjs";
 describe("OpenClaw after_tool_call hook", () => {
   it("clears a correlated high match after a successful detail open", async () => {
     const clear = vi.fn(() => true);
+    const recordHealth = vi.fn();
     const result = await handleAfterToolCall(
       {
         toolName: "mcp__remembrance__get_resource",
@@ -14,7 +15,7 @@ describe("OpenClaw after_tool_call hook", () => {
         },
         context: { runId: "run_openclaw", sessionId: "session_openclaw" },
       },
-      { env: {}, clearHighMatchSurfaceIfOpened: clear },
+      { env: {}, clearHighMatchSurfaceIfOpened: clear, recordHealth },
     );
 
     expect(result).toEqual({
@@ -29,6 +30,13 @@ describe("OpenClaw after_tool_call hook", () => {
         query_id: "rq_openclaw",
         result_id: "qres_openclaw",
       },
+      {},
+    );
+    expect(recordHealth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        surface: "openclaw",
+        component: "tool_observer",
+      }),
       {},
     );
   });
@@ -161,7 +169,7 @@ describe("OpenClaw after_tool_call hook", () => {
     expect(
       await handleAfterToolCall(
         {
-          toolName: "submit_feedback",
+          toolName: "propose_private_skill",
           result: { accepted: true },
           context: { runId: "run_feedback" },
         },
