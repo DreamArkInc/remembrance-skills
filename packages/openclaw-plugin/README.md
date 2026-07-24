@@ -321,10 +321,16 @@ configured in CircleCI:
 npm run publish:openclaw-clawhub
 ```
 
-The publish script validates and packs the generated package, attaches source
-commit metadata (`dreamarkinc/remembrance-skills`, `packages/openclaw-plugin`,
-and the current commit SHA), dry-runs the ClawHub publish, and skips cleanly when
-the package version already exists.
+The publish script validates and packs the generated package, resolves the
+already-published `master` commit from
+`dreamarkinc/remembrance-skills`, verifies that
+`packages/openclaw-plugin/package.json` at that commit has the exact release
+version, and attaches that public commit as source provenance. It dry-runs the
+ClawHub publish, waits through staged security checks until the exact version
+is publicly inspectable, and skips cleanly when the package version already
+exists. The release-channel status marker separately retains the originating
+CircleCI build SHA so the final fan-in gate cannot reuse another deployment's
+success.
 
 ## Behavior
 
