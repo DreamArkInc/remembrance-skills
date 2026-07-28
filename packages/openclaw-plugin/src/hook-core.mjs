@@ -55,6 +55,8 @@ const PLUGIN_HEALTH_SURFACES = new Set([
   "claude_code",
   "cursor",
   "openclaw",
+  "vs_code",
+  "opencode",
 ]);
 
 const SERVICE_PATTERNS = [
@@ -376,11 +378,16 @@ export async function queryRemembrance(payload, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), autoQueryTimeoutMs(env));
   try {
+    const credential = resolveApiCredential(env);
+    if (isUnusableConfigurationSource(credential.source)) {
+      debugLog(env, "shared_config_unusable", {}, options);
+      return null;
+    }
     const headers = {
       "content-type": "application/json",
       "user-agent": options.userAgent ?? DEFAULT_USER_AGENT,
     };
-    const apiKey = resolveApiKey(env);
+    const apiKey = credential.apiKey;
     if (apiKey) {
       headers["x-remembrance-api-key"] = apiKey;
     }
@@ -430,16 +437,18 @@ export async function createContinuationDirective(options = {}) {
     ),
     shown_at: new Date().toISOString(),
   };
-  await reportDirectiveEvent(
-    {
-      event: "shown",
-      directive_id: directive.directive_id,
-      surface: "plugin_hook",
-      runtime: directive.runtime,
-      trigger_reason: directive.trigger_reason,
-    },
-    options,
-  );
+  if (options.reportShown !== false) {
+    await reportDirectiveEvent(
+      {
+        event: "shown",
+        directive_id: directive.directive_id,
+        surface: "plugin_hook",
+        runtime: directive.runtime,
+        trigger_reason: directive.trigger_reason,
+      },
+      options,
+    );
+  }
   return directive;
 }
 
@@ -455,11 +464,13 @@ export async function reportDirectiveEvent(event, options = {}) {
     directiveEventTimeoutMs(env),
   );
   try {
+    const credential = resolveApiCredential(env);
+    if (isUnusableConfigurationSource(credential.source)) return false;
     const headers = {
       "content-type": "application/json",
       "user-agent": options.userAgent ?? DEFAULT_USER_AGENT,
     };
-    const apiKey = resolveApiKey(env);
+    const apiKey = credential.apiKey;
     if (apiKey) headers["x-remembrance-api-key"] = apiKey;
     const response = await fetchImpl(
       `${apiUrl(env)}/api/v1/agent/directive-events`,
@@ -499,7 +510,18 @@ function runtimeFromIdentity(identity) {
 
 function normalizeRuntime(value) {
   if (value === "claude") return "claude_code";
-  if (["codex", "claude_code", "cursor", "openclaw", "other"].includes(value)) {
+  if (value === "vscode") return "vs_code";
+  if (
+    [
+      "codex",
+      "claude_code",
+      "cursor",
+      "openclaw",
+      "vs_code",
+      "opencode",
+      "other",
+    ].includes(value)
+  ) {
     return value;
   }
   return "unknown";
@@ -850,9 +872,12 @@ export function continuationQueryContext(directive = null) {
 }
 
 export function unavailableQueryContext(env = process.env) {
-  const organizationFallback = resolveApiKey(env)
-    ? "An organization API key is configured, but the organization skill policy could not be confirmed. Fail closed: do not use bundled public skill references while the query is unavailable."
-    : "No organization API key is configured; bundled public references remain an optional offline fallback.";
+  const credential = resolveApiCredential(env);
+  const organizationFallback = isUnusableConfigurationSource(credential.source)
+    ? "The shared Remembrance config exists but is unreadable or invalid. Fail closed: do not use bundled public references or remote tools until the config is fixed or intentionally removed."
+    : credential.apiKey
+      ? "An organization API key is configured, but the organization skill policy could not be confirmed. Fail closed: do not use bundled public skill references while the query is unavailable."
+      : "No organization API key is configured; bundled public references remain an optional offline fallback.";
   return [
     "Remembrance query-unavailable context:",
     "This task qualified for Remembrance, but the automatic query did not complete. Continue without blocking, and call query_skills directly when the MCP tool is visible.",
@@ -874,7 +899,8 @@ export function emptyQueryContext(reason = "trigger_match") {
 
 // Full prompt-hook result. `eligible` means this turn should be recovered at
 // completion even if no registry result was consumed. `consumed` means a real
-// query completed (including a legitimate no-result response).
+// query completed; `matched` means that response contained at least one result
+// the current credential is allowed to use.
 export async function runPromptHook(prompt, options = {}) {
   const env = options.env ?? process.env;
   const includeSharedConfigCredentialNotice =
@@ -890,6 +916,7 @@ export async function runPromptHook(prompt, options = {}) {
       const directive = await createContinuationDirective({
         env,
         fetchImpl: options.fetchImpl ?? fetch,
+        reportShown: options.reportDirectiveShown,
         runtime: runtimeFromIdentity(options.identity),
         stderr: options.stderr,
         userAgent: options.userAgent,
@@ -928,6 +955,7 @@ export async function runPromptHook(prompt, options = {}) {
   }
   return {
     consumed: true,
+    matched: queryResponseHasMatches(response),
     context: includeSharedConfigCredentialNotice
       ? withSharedConfigCredentialNotice(
           formatContext(response, decision.reason, limitFromEnv(env)) ??
@@ -941,6 +969,15 @@ export async function runPromptHook(prompt, options = {}) {
     valueEpisode: valueEpisodeFromResponse(response),
     reason: decision.reason,
   };
+}
+
+export function queryResponseHasMatches(response) {
+  const body = responseBodyFromToolResponse(response);
+  const skills = Array.isArray(body?.skills)
+    ? body.skills.filter((item) => publicSkillCandidateAllowed(body, item))
+    : [];
+  const resources = Array.isArray(body?.resources) ? body.resources : [];
+  return skills.length > 0 || resources.length > 0;
 }
 
 function withSharedConfigCredentialNotice(context, env) {
@@ -1062,8 +1099,8 @@ export function contributionReason(
     "• submit_query_feedback — send one complete good / partial / poor verdict set using query_id and returned result_id values; leave uncertain results unrated. A poor query match is not the same as a globally bad skill.",
     "• submit_feedback — a quick useful / not-useful signal plus a one-line lesson.",
     "• submit_remembrance — post the ready next_step.submit_remembrance_payload returned by submit_feedback when the lesson is reusable, adding redacted evidence when available.",
-    "• propose_skill_idea — only if no existing skill fit and you built a reusable workflow. With an organization key it remains organization-private; never remove or bypass the key to force a public candidate.",
-    "• propose_private_skill — prefer this explicit organization-only path for repository-derived skills after the host and organization approve Remembrance as the destination.",
+    "• propose_private_skill — the default proposal path. Use it for anything repository-derived or organization-specific, after the host and organization approve Remembrance as the destination. It cannot create a public candidate under any credential state, so it stays private even if your key stops resolving.",
+    "• propose_skill_idea — only if no existing skill fit, you built a reusable workflow, AND a public candidate is an acceptable outcome. An active organization key keeps it private; intentionally omitting a key makes the call PUBLIC. A supplied invalid/inactive key fails with 401 and an insufficient key fails with 403, creating no candidate. Read `visibility` in a successful response (organization_private or public_candidate) and report where it landed. Never remove or bypass the key to force a public candidate.",
     "Use the Remembrance MCP tools directly when they are visible. If this runtime has no MCP tools exposed, use the REST endpoints from the query response. A host privacy-policy denial is not API unavailability: never retry private repository content through another transport; queue organization skills locally with queue_private_skill_import (or the bundled handoff script) and wait for an admin import receipt. If the API itself is unavailable, emit REMEMBRANCE_SUBMISSION_PAYLOAD with the redacted JSON you would submit.",
     "Redact secrets, private URLs, and proprietary content; submit redacted summaries and hashes, not raw traces.",
     "Attach evidence: reproduction detail in outcome.failure_modes, artifact hashes of redacted logs/diffs, or an attestation. Evidence-less public reports wait in unverified intake until corroborated; evidence-backed ones verify faster and rank higher.",
@@ -1280,10 +1317,10 @@ function writeCountFile(path, count) {
   }
 }
 
-// Increment (and return) the per-session registry-use counter. Called only when
-// the query adapter completed a registry query, including a legitimate empty
-// response. Fail-open: on any filesystem error it returns the best count it can
-// and never throws.
+// Increment (and return) the per-session registry-use counter. Prompt and tool
+// adapters call this only after an authorized registry match or explicit skill
+// invocation. A legitimate empty query remains eligible for completion recovery
+// without inflating registry-use counts. Fail-open on filesystem errors.
 export function recordRegistryUse(sessionId, env = process.env) {
   const path = usePath(sessionId, env);
   const next = readCountFile(path) + 1;
@@ -2089,11 +2126,13 @@ async function postTaskOutcome(payload, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), autoQueryTimeoutMs(env));
   try {
+    const credential = resolveApiCredential(env);
+    if (isUnusableConfigurationSource(credential.source)) return false;
     const headers = {
       "content-type": "application/json",
       "user-agent": options.userAgent ?? DEFAULT_USER_AGENT,
     };
-    const apiKey = resolveApiKey(env);
+    const apiKey = credential.apiKey;
     if (apiKey) headers["x-remembrance-api-key"] = apiKey;
     const response = await (options.fetchImpl ?? fetch)(
       `${apiUrl(env)}/api/v1/agent/task-outcomes`,
@@ -2424,8 +2463,10 @@ function prunePluginHealthSessionMarkers(surface, keepPath, env) {
 // package keeps this at the fixed user-home path rather than honoring
 // environment-controlled config roots: the hook sends network requests, so
 // ClawHub security scans treat dynamic env-driven credential paths as a
-// higher-risk exfiltration pattern. Fail-open: any read/parse error yields an
-// empty config so a missing/garbled file never breaks the hook.
+// higher-risk exfiltration pattern. General reads remain best-effort for
+// diagnostics; credential resolution separately distinguishes an absent file
+// from a present malformed file and blocks remote calls for the latter instead
+// of silently changing scope.
 export function remembranceConfigPath() {
   return join(homedir(), ".config", "remembrance", "config.json");
 }
@@ -2442,16 +2483,39 @@ export function readRemembranceConfig(env = process.env) {
 }
 
 export function resolveApiCredential(env = process.env) {
-  if (env.REMEMBRANCE_API_KEY) {
+  const apiConfiguration = resolveApiConfiguration(env);
+  if (isUnusableConfigurationSource(apiConfiguration.source)) {
+    return { apiKey: "", source: apiConfiguration.source };
+  }
+  const environmentKey = String(env.REMEMBRANCE_API_KEY ?? "").trim();
+  if (environmentKey) {
     return {
-      apiKey: String(env.REMEMBRANCE_API_KEY),
+      apiKey: environmentKey,
       source: "environment",
     };
   }
-  const fromFile = readRemembranceConfig(env).apiKey;
-  return fromFile
-    ? { apiKey: String(fromFile), source: "shared_config" }
-    : { apiKey: "", source: "none" };
+  const path = remembranceConfigPath(env);
+  if (!existsSync(path)) {
+    return { apiKey: "", source: "none" };
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { apiKey: "", source: "unusable_shared_config" };
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(parsed, "apiKey") &&
+      (typeof parsed.apiKey !== "string" || !parsed.apiKey.trim())
+    ) {
+      return { apiKey: "", source: "unusable_shared_config" };
+    }
+    const fromFile = parsed.apiKey;
+    return typeof fromFile === "string" && fromFile.trim()
+      ? { apiKey: fromFile.trim(), source: "shared_config" }
+      : { apiKey: "", source: "none" };
+  } catch {
+    return { apiKey: "", source: "unusable_shared_config" };
+  }
 }
 
 // The org API key: an explicit env var wins, then the config file. Returns ""
@@ -2461,7 +2525,24 @@ export function resolveApiKey(env = process.env) {
 }
 
 export function sharedConfigCredentialNotice(env = process.env) {
-  if (resolveApiCredential(env).source !== "shared_config") {
+  const source = resolveApiCredential(env).source;
+  if (source === "unusable_environment") {
+    return (
+      "Remembrance setup needs attention: REMEMBRANCE_API_URL is invalid. " +
+      "Remote Remembrance calls are paused locally instead of changing " +
+      "destinations. Set it to an absolute HTTP(S) registry URL or " +
+      "intentionally remove it, then call get_connection_status."
+    );
+  }
+  if (source === "unusable_shared_config") {
+    return (
+      "Remembrance setup needs attention: the shared config file exists but " +
+      "is unreadable or invalid. Remote Remembrance calls are paused locally " +
+      "instead of falling back to anonymous scope. Fix or intentionally remove " +
+      "~/.config/remembrance/config.json, then call get_connection_status."
+    );
+  }
+  if (source !== "shared_config") {
     return null;
   }
   return (
@@ -2473,11 +2554,65 @@ export function sharedConfigCredentialNotice(env = process.env) {
   );
 }
 
+export function resolveApiConfiguration(env = process.env) {
+  const environmentUrl = String(env.REMEMBRANCE_API_URL ?? "").trim();
+  if (environmentUrl) {
+    const normalized = normalizeApiUrl(environmentUrl);
+    return normalized
+      ? { apiUrl: normalized, source: "environment" }
+      : { apiUrl: DEFAULT_API_URL, source: "unusable_environment" };
+  }
+  const path = remembranceConfigPath(env);
+  if (!existsSync(path)) {
+    return { apiUrl: DEFAULT_API_URL, source: "default" };
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {
+        apiUrl: DEFAULT_API_URL,
+        source: "unusable_shared_config",
+      };
+    }
+    if (!Object.prototype.hasOwnProperty.call(parsed, "apiUrl")) {
+      return { apiUrl: DEFAULT_API_URL, source: "default" };
+    }
+    const normalized = normalizeApiUrl(parsed.apiUrl);
+    return normalized
+      ? { apiUrl: normalized, source: "shared_config" }
+      : { apiUrl: DEFAULT_API_URL, source: "unusable_shared_config" };
+  } catch {
+    return { apiUrl: DEFAULT_API_URL, source: "unusable_shared_config" };
+  }
+}
+
 function apiUrl(env) {
-  const fromFile = readRemembranceConfig(env).apiUrl;
-  return String(env.REMEMBRANCE_API_URL || fromFile || DEFAULT_API_URL).replace(
-    /\/$/,
-    "",
+  return resolveApiConfiguration(env).apiUrl;
+}
+
+function normalizeApiUrl(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const candidate = value.trim();
+  try {
+    const parsed = new URL(candidate);
+    if (
+      !["http:", "https:"].includes(parsed.protocol) ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return null;
+    }
+    return candidate.replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
+
+function isUnusableConfigurationSource(source) {
+  return (
+    source === "unusable_environment" || source === "unusable_shared_config"
   );
 }
 

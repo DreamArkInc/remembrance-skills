@@ -39,6 +39,7 @@ import {
   readTaskEligibilityCount,
   readRemembranceConfig,
   readValueEpisodeSurfaces,
+  queryResponseHasMatches,
   recordRegistryUse,
   recordDirectiveFollowThroughForTool,
   recordDirectSelectionSurface,
@@ -50,6 +51,7 @@ import {
   redactPrompt,
   remembranceConfigPath,
   reportTaskOutcomesOnStop,
+  resolveApiConfiguration,
   resolveApiCredential,
   resolveApiKey,
   sharedConfigCredentialNotice,
@@ -162,10 +164,7 @@ describe("native plugin lifecycle health markers", () => {
 
   it("keeps concurrent host-session lifecycle evidence isolated", () => {
     const env = {
-      REMEMBRANCE_PLUGIN_HEALTH_DIR: join(
-        tempRoot,
-        "concurrent-plugin-health",
-      ),
+      REMEMBRANCE_PLUGIN_HEALTH_DIR: join(tempRoot, "concurrent-plugin-health"),
     };
     for (const component of ["session_start", "prompt_hook"]) {
       expect(
@@ -482,6 +481,28 @@ describe("hook-core trigger + payload helpers", () => {
     expect(context).not.toContain("public-high-match");
     expect(context).not.toContain("HIGH MATCH — required next step");
     expect(highMatchFromResponse(response)).toBeNull();
+    expect(queryResponseHasMatches(response)).toBe(true);
+    expect(
+      queryResponseHasMatches({
+        body: {
+          skill_access: { public_skills_allowed: false },
+          skills: [{ slug: "public-only", source: "public" }],
+          resources: [],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      queryResponseHasMatches({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              body: { skills: [], resources: [{ slug: "docs" }] },
+            }),
+          },
+        ],
+      }),
+    ).toBe(true);
   });
 
   it("surfaces bounded corner-case exclusions so the agent can discard a poor match", () => {
@@ -1411,13 +1432,28 @@ describe("hook-core marker round-trip", () => {
     expect(reason).toContain("you used Remembrance this session");
     expect(reason).toContain("submit_query_feedback");
     expect(reason).toContain("propose_private_skill");
-    expect(reason).toContain(
-      "never remove or bypass the key to force a public candidate",
+    // Case-insensitive: this pins the safety CLAIM, not one capitalization of
+    // it, so reordering the surrounding sentences cannot break it spuriously.
+    expect(reason).toMatch(
+      /never remove or bypass the key to force a public candidate/i,
     );
     expect(reason).toContain("queue_private_skill_import");
     expect(reason).toContain("host privacy-policy denial");
     expect(reason.indexOf("submit_query_feedback")).toBeLessThan(
       reason.indexOf("submit_feedback"),
+    );
+    // The menu must state the exact auth boundary: omitting a key is the
+    // intentional public path, while a supplied bad or insufficient key fails
+    // without creating a candidate.
+    expect(reason).toMatch(/active organization key keeps it private/i);
+    expect(reason).toMatch(/invalid\/inactive key fails with 401/i);
+    expect(reason).toMatch(/insufficient key fails with 403/i);
+    expect(reason).toContain("organization_private");
+    expect(reason).toContain("public_candidate");
+    // The safe default must be listed FIRST, because reading order is what made
+    // the credential-dependent tool look like the primary path.
+    expect(reason.indexOf("propose_private_skill")).toBeLessThan(
+      reason.indexOf("propose_skill_idea"),
     );
     expect(contributionReason("release versioning miss")).toContain(
       "High-value lesson detected: release versioning miss",
@@ -1452,7 +1488,7 @@ describe("hook-core marker round-trip", () => {
 
 describe("hook-core org key resolution", () => {
   // Point XDG_CONFIG_HOME at an isolated temp dir; optionally seed a config.json
-  // (a string is written verbatim so we can exercise malformed-file fail-open).
+  // (a string is written verbatim so we can exercise fail-closed parsing).
   function configEnv(config, extra = {}) {
     counter += 1;
     const dir = join(tempRoot, `cfg-${counter}`);
@@ -1483,6 +1519,14 @@ describe("hook-core org key resolution", () => {
       source: "environment",
     });
     expect(sharedConfigCredentialNotice(env)).toBeNull();
+    expect(
+      resolveApiCredential(
+        configEnv(
+          { apiKey: " from-file " },
+          { REMEMBRANCE_API_KEY: " from-env " },
+        ),
+      ),
+    ).toEqual({ apiKey: "from-env", source: "environment" });
   });
 
   it("falls back to the config-file key when the env var is unset or empty", () => {
@@ -1503,6 +1547,11 @@ describe("hook-core org key resolution", () => {
         configEnv({ apiKey: "rmb_file_key" }, { REMEMBRANCE_API_KEY: "" }),
       ),
     ).toBe("rmb_file_key");
+    expect(
+      resolveApiCredential(
+        configEnv({ apiKey: " rmb_file_key " }, { REMEMBRANCE_API_KEY: "  " }),
+      ),
+    ).toEqual({ apiKey: "rmb_file_key", source: "shared_config" });
   });
 
   it("returns empty string when neither env nor file provides a key", () => {
@@ -1515,11 +1564,78 @@ describe("hook-core org key resolution", () => {
     );
   });
 
-  it("fails open on a missing or malformed config file", () => {
+  it("distinguishes an absent config from a present but unusable config", () => {
     expect(readRemembranceConfig(configEnv())).toEqual({});
     expect(readRemembranceConfig(configEnv("{not json"))).toEqual({});
     expect(readRemembranceConfig(configEnv("[1,2,3]"))).toEqual({});
-    expect(resolveApiKey(configEnv("garbage"))).toBe("");
+    const malformed = configEnv("garbage");
+    expect(resolveApiKey(malformed)).toBe("");
+    expect(resolveApiCredential(malformed)).toEqual({
+      apiKey: "",
+      source: "unusable_shared_config",
+    });
+    expect(sharedConfigCredentialNotice(malformed)).toMatch(
+      /calls are paused locally/i,
+    );
+    expect(resolveApiCredential(configEnv("[1,2,3]"))).toEqual({
+      apiKey: "",
+      source: "unusable_shared_config",
+    });
+    for (const config of [{ apiKey: 123 }, { apiKey: "" }]) {
+      expect(resolveApiCredential(configEnv(config))).toEqual({
+        apiKey: "",
+        source: "unusable_shared_config",
+      });
+    }
+  });
+
+  it("fails closed for invalid registry URLs without overriding a complete environment", () => {
+    for (const apiUrl of [
+      42,
+      "",
+      "registry.example",
+      "https://user:secret@registry.example",
+      "https://registry.example?tenant=private",
+    ]) {
+      const env = configEnv({ apiKey: "rk_file", apiUrl });
+      expect(resolveApiConfiguration(env)).toEqual({
+        apiUrl: "https://remembrance.dev",
+        source: "unusable_shared_config",
+      });
+      expect(resolveApiCredential(env)).toEqual({
+        apiKey: "",
+        source: "unusable_shared_config",
+      });
+    }
+
+    const invalidEnvironment = configEnv(undefined, {
+      REMEMBRANCE_API_KEY: "rk_environment",
+      REMEMBRANCE_API_URL: "javascript:alert(1)",
+    });
+    expect(resolveApiConfiguration(invalidEnvironment)).toEqual({
+      apiUrl: "https://remembrance.dev",
+      source: "unusable_environment",
+    });
+    expect(resolveApiCredential(invalidEnvironment)).toEqual({
+      apiKey: "",
+      source: "unusable_environment",
+    });
+    expect(sharedConfigCredentialNotice(invalidEnvironment)).toContain(
+      "absolute HTTP(S) registry URL",
+    );
+
+    const completeEnvironment = configEnv("{not json", {
+      REMEMBRANCE_API_KEY: "rk_environment",
+      REMEMBRANCE_API_URL: "https://registry.example/",
+    });
+    expect(resolveApiConfiguration(completeEnvironment)).toEqual({
+      apiUrl: "https://registry.example",
+      source: "environment",
+    });
+    expect(resolveApiCredential(completeEnvironment)).toEqual({
+      apiKey: "rk_environment",
+      source: "environment",
+    });
   });
 });
 

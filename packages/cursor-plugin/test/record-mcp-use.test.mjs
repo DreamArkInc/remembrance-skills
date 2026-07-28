@@ -7,7 +7,16 @@ describe("Cursor afterMCPExecution hook", () => {
     const recordDirectiveFollowThrough = vi.fn(async () => true);
     const recordHealth = vi.fn();
     const result = await handleMcpUse(
-      { tool_name: "query_skills", conversation_id: "conv_123" },
+      {
+        tool_name: "query_skills",
+        conversation_id: "conv_123",
+        result: {
+          body: {
+            skills: [{ slug: "release-review" }],
+            resources: [],
+          },
+        },
+      },
       {
         env: {},
         recordRegistryUse,
@@ -26,7 +35,12 @@ describe("Cursor afterMCPExecution hook", () => {
     expect(recordDirectiveFollowThrough).toHaveBeenCalledWith(
       "conv_123",
       "query_skills",
-      null,
+      {
+        body: {
+          resources: [],
+          skills: [{ slug: "release-review" }],
+        },
+      },
       expect.objectContaining({ env: {} }),
     );
     expect(recordHealth).toHaveBeenCalledWith(
@@ -44,6 +58,12 @@ describe("Cursor afterMCPExecution hook", () => {
       {
         tool_name: "mcp__remembrance__query_skills",
         conversation_id: "conv_123",
+        result: {
+          body: {
+            skills: [{ slug: "release-review" }],
+            resources: [],
+          },
+        },
       },
       { env: {}, recordRegistryUse },
     );
@@ -51,6 +71,28 @@ describe("Cursor afterMCPExecution hook", () => {
     expect(result.recorded).toBe(true);
     expect(result.tool).toBe("query_skills");
     expect(recordRegistryUse).toHaveBeenCalledWith("conv_123", {});
+  });
+
+  it("keeps an empty query observable without counting registry consumption", async () => {
+    const recordRegistryUse = vi.fn();
+    const recordDirectiveFollowThrough = vi.fn(async () => true);
+    const result = await handleMcpUse(
+      {
+        tool_name: "query_skills",
+        conversation_id: "conv_empty",
+        result: { body: { query_id: "rq_empty", skills: [], resources: [] } },
+      },
+      { env: {}, recordRegistryUse, recordDirectiveFollowThrough },
+    );
+
+    expect(result).toEqual({
+      recorded: false,
+      kind: "empty_query",
+      tool: "query_skills",
+      count: 0,
+    });
+    expect(recordRegistryUse).not.toHaveBeenCalled();
+    expect(recordDirectiveFollowThrough).toHaveBeenCalledOnce();
   });
 
   it("records a high match when Cursor exposes the MCP result payload", async () => {

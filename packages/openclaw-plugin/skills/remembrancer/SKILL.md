@@ -108,7 +108,7 @@ Do not use this skill when:
 5. Use the selected skill or resource. When delegating, pass its slug, `query_id`, and `result_id` to the subagent; the subagent must open that result or run its own full-context query before custom work.
 6. After meaningful use, report task completion or abandonment with `report_task_outcome`. Remembrance accepts one terminal outcome per query or direct invocation; retry the same report with the same idempotency key instead of submitting a different later outcome. Use only result IDs from `task_outcome.eligible_result_ids`. Each result and bundle also carries `task_outcome_eligible`; `task_outcome.available` is true only when at least one result is eligible. One result ID attributes the outcome to that result. When two or three selected query results exactly match a returned bundle, include its `bundle_id` to attribute the outcome only to that bundle. Other multi-result combinations are accepted as funnel telemetry without proof or cohort attribution. Include success, latency, and detailed token totals only when the runtime exposes them. For Vercel AI Gateway work, include every `gen_` generation ID in `metering_reference`; Remembrance retrieves the authoritative records asynchronously, so caller totals never establish proof trust. Never include prompts, transcripts, outputs, source paths, or private URLs. Then submit quick feedback with the same `query_id` and `result_id`; if the feedback response includes `next_step.submit_remembrance_payload`, submit that full remembrance when the lesson should become reusable evidence. If it includes `feedback_pattern_suggestion`, Remembrance has already created a reviewable candidate update from repeated feedback; do not submit a duplicate suggestion. Direct selections use post-use feedback only and are excluded from query-fit and reranker training.
 7. Before finishing, self-check both halves of the loop: confirm that a relevant query actually happened, then check for high-value failure lessons. If the query was missed, run it from the full conversation before concluding. If a high match was surfaced but not opened, open it now or submit `fit: "poor"` query feedback with an explicit reason. If you caught your own mistake, the user caught one, CI/deploy failed, a security issue surfaced, or you fixed a release/versioning miss, submit a `failure_report` remembrance even if no skill was used. Native plugins prompt once for an unopened high match and reusable evidence at completion; raw MCP, REST, and skill-only installs must do these checks proactively.
-8. If no suitable skill exists and the query response includes `no_results.propose_skill_idea_payload`, verify it, then use `propose_private_skill` for an approved organization-private contribution or `propose_skill_idea` for the existing scope-aware path. With an organization key, `propose_skill_idea` also stays in that organization's review queue. Never remove, hide, or bypass an organization key to force a public candidate; submit privately, then use the reviewed public-propagation flow when the organization wants to share it.
+8. If no suitable skill exists and the query response includes `no_results.propose_skill_idea_payload`, verify it, then choose the proposal route by asking one question: **could this content be harmful or unwanted as a public candidate?** If yes — anything repository-derived or organization-specific — use `propose_private_skill`, which cannot create a public candidate under any credential state. Use `propose_skill_idea` only when a public candidate is an acceptable outcome: an active organization key keeps it private, while intentionally omitting a key creates a PUBLIC candidate. A supplied invalid/inactive key fails with 401 and an insufficient key fails with 403; neither failure creates a candidate. Either route, read `visibility` in the successful response (`organization_private` or `public_candidate`) and state where the candidate landed. Never remove, hide, or bypass an organization key to force a public candidate; submit privately, then use the reviewed public-propagation flow when the organization wants to share it.
 9. If no suitable skill exists and you create a reusable method, submit it through the same explicit private-versus-public boundary.
 10. If you discover a reusable API, MPP endpoint, MCP server, docs site, package, dataset, service, or tool, submit it as a resource.
 11. If a skill or resource seems duplicated, stale, unsafe, or incomplete, submit a suggestion instead of silently changing it.
@@ -228,7 +228,7 @@ Send:
 {
   "agent": {
     "id": "optional",
-    "provider": "codex|cursor|claude|openclaw|generic|other",
+    "provider": "codex|cursor|claude|openclaw|vscode|opencode|generic|other",
     "model": "optional"
   },
   "task": {
@@ -390,7 +390,9 @@ Use the full remembrance shape when you have richer task/outcome/evidence data:
 {
   "schema_version": "0.1",
   "type": "skill_use",
-  "agent": { "provider": "codex|cursor|claude|openclaw|generic|other" },
+  "agent": {
+    "provider": "codex|cursor|claude|openclaw|vscode|opencode|generic|other"
+  },
   "task": {
     "domain": "domain-slug",
     "summary": "redacted summary",
@@ -457,7 +459,8 @@ REST-only agents can do the same flow without MCP. See
 challenge signing, local key file shape, and a dependency-free Node 24 example.
 
 Do not confuse agent providers with attestation providers. In `agent.provider`,
-use `codex`, `cursor`, `claude`, `openclaw`, `generic`, or `other`. In
+use `codex`, `cursor`, `claude`, `openclaw`, `vscode`, `opencode`, `generic`,
+or `other`. In
 `evidence.attestation.provider`, use `claude_code`, `codex`, `cursor`, or
 `other`; these labels mean Remembrance-registered/plugin keys, not native
 provider identity tokens.
@@ -520,12 +523,20 @@ For an explicit organization-only candidate, use:
 POST https://remembrance.dev/api/v1/agent/private-skill-ideas
 
 MCP equivalent: `propose_private_skill`. It requires an organization key with
-submission scope and cannot create a public candidate.
+submission scope and cannot create a public candidate. Its privacy is
+structural, so an unresolved key fails the request closed (401/403) instead of
+downgrading it to a public submission. Prefer it whenever the content must not
+reach the public registry.
 
-With an organization key, the generic `propose_skill_idea` route is also
-organization-scoped. Never remove or bypass the key to force public submission.
-Submit to the private review queue first; an organization admin may then use
-the reviewed public-propagation workflow for a redacted, public-safe candidate.
+The generic `/skill-ideas` route is scope-aware rather than private: with an
+active organization key the candidate is organization-scoped, while
+intentionally omitting a key creates a PUBLIC candidate. A supplied invalid or
+inactive key fails with 401, and a valid key without submission scope fails with
+403; neither failure creates a candidate. Read `visibility` in a successful
+response, which is `organization_private` or `public_candidate`. Never remove
+or bypass the key to force public submission. Submit to the private review queue
+first; an organization admin may then use the reviewed public-propagation
+workflow for a redacted, public-safe candidate.
 
 ## New resource endpoint
 
@@ -615,9 +626,13 @@ For organization skills derived from private repository material:
 
 Local request shape (up to 10 skills):
 
+Replace `<current_runtime>` with the active host's handoff runtime from the
+central Remembrance agent-host registry. Use `other` only when the host has no
+named runtime.
+
 ```json
 {
-  "source_runtime": "codex",
+  "source_runtime": "<current_runtime>",
   "handoff_reason": "host_policy_blocked",
   "skills": [
     {

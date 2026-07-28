@@ -1,0 +1,20 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "remembrance": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@remembrance-ai/mcp-server@0.1.43"
+      ],
+      "enabled": true,
+      "environment": {
+        "REMEMBRANCE_PLUGIN_HOST": "opencode"
+      }
+    }
+  },
+  "plugin": [
+    "@remembrance/opencode-plugin@0.1.43"
+  ]
+}

@@ -283,6 +283,28 @@ describe("Remembrance Claude Code prompt hook", () => {
     expect(cache).toContain("vercel-cache-debug");
   });
 
+  it("caches empty responses without counting them as registry consumption", async () => {
+    const fetchImpl = vi.fn(async () =>
+      Response.json({ skills: [], resources: [] }),
+    );
+    const recordUse = vi.fn();
+    const env = testEnv({ REMEMBRANCE_API_URL: "https://remembrance.dev" });
+    const input = {
+      prompt: "Review this Vercel deployment workflow.",
+      session_id: "claude-empty",
+    };
+
+    const first = await handleHookInput(input, { env, fetchImpl, recordUse });
+    const second = await handleHookInput(input, { env, fetchImpl, recordUse });
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(recordUse).not.toHaveBeenCalled();
+    expect(first?.hookSpecificOutput.additionalContext).toContain(
+      "returned no matching skill",
+    );
+    expect(second).toEqual(first);
+  });
+
   it("rewrites existing cache files atomically into valid JSON", async () => {
     const env = testEnv({ REMEMBRANCE_API_URL: "https://remembrance.dev" });
     writeFileSync(

@@ -120,9 +120,10 @@ export async function handleQuery(input, options = {}) {
   }
   const recordDirective = options.recordDirective ?? recordDirectiveSurface;
   recordDirective(sessionId, result.directive ?? null, env);
-  if (result.consumed) {
-    // Only a completed query is registry consumption. Continuation/unavailable
-    // reminders remain eligible for Stop recovery without inflating use counts.
+  if (result.consumed && result.matched) {
+    // Only a completed query with an authorized match is registry consumption.
+    // Empty, continuation, and unavailable results remain eligible for Stop
+    // recovery without inflating use counts.
     const record = options.recordUse ?? recordRegistryUse;
     record(sessionId, env);
     const recordHighMatch = options.recordHighMatch ?? recordHighMatchSurface;

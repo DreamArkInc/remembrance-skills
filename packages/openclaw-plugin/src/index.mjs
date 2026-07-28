@@ -66,6 +66,7 @@ import {
   recordHighMatchSurface,
   recordPluginLifecycleHealth,
   recordRegistryUse,
+  queryResponseHasMatches,
   recordTaskEligibility,
   recordValueEpisodeSurface,
   reportTaskOutcomesOnStop,
@@ -198,7 +199,7 @@ export async function handlePrePrompt(event, options = {}) {
     }
     const recordDirective = options.recordDirective ?? recordDirectiveSurface;
     recordDirective(sessionId, result.directive ?? null, env);
-    if (result.consumed) {
+    if (result.consumed && result.matched) {
       const record = options.recordUse ?? recordRegistryUse;
       record(sessionId, env);
       const recordHighMatch = options.recordHighMatch ?? recordHighMatchSurface;
@@ -244,8 +245,10 @@ export async function handleAfterToolCall(event, options = {}) {
   const toolName = event?.toolName ?? event?.tool_name ?? "";
   const normalizedToolName = String(toolName).toLowerCase();
   if (normalizedToolName.endsWith("query_skills")) {
-    const recordUse = options.recordRegistryUse ?? recordRegistryUse;
-    recordUse(sessionId, env);
+    if (queryResponseHasMatches(response)) {
+      const recordUse = options.recordRegistryUse ?? recordRegistryUse;
+      recordUse(sessionId, env);
+    }
     const recordHighMatch = options.recordHighMatch ?? recordHighMatchSurface;
     recordHighMatch(sessionId, highMatchFromResponse(response), env);
     const recordFollowThrough =

@@ -1,0 +1,21 @@
+{
+  "name": "remembrance",
+  "version": "0.1.43",
+  "description": "Discover and directly invoke authorized Remembrance skills in VS Code agent mode, then close the outcome and feedback loop.",
+  "author": {
+    "name": "Remembrance"
+  },
+  "homepage": "https://remembrance.dev/docs/remembrancer",
+  "repository": "https://github.com/dreamarkinc/remembrance-skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "agent-skills",
+    "mcp",
+    "memory",
+    "vscode",
+    "workflow"
+  ],
+  "skills": "./skills",
+  "hooks": "./.claude-plugin/vscode-hooks.json",
+  "mcpServers": "./.claude-plugin/vscode-mcp.json"
+}

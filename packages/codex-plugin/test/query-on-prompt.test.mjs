@@ -206,6 +206,51 @@ describe("Codex query-on-prompt adapter", () => {
     expect(readRegistryUseCount("t-marker", env)).toBe(1);
   });
 
+  it("keeps empty results eligible without counting them as registry use", async () => {
+    const recorded = [];
+    const eligible = [];
+    const output = await handleQuery(
+      { prompt: "Set up Vercel deployment.", turn_id: "t-empty" },
+      {
+        env: testEnv(),
+        fetchImpl: vi.fn(async () =>
+          Response.json({ skills: [], resources: [] }),
+        ),
+        recordUse: (id) => recorded.push(id),
+        recordEligibility: (id) => eligible.push(id),
+      },
+    );
+
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "returned no matching skill",
+    );
+    expect(recorded).toEqual([]);
+    expect(eligible).toEqual(["t-empty"]);
+  });
+
+  it("does not query anonymously when a shared config file is malformed", async () => {
+    const env = testEnv();
+    mkdirSync(join(env.XDG_CONFIG_HOME, "remembrance"), { recursive: true });
+    writeFileSync(
+      join(env.XDG_CONFIG_HOME, "remembrance", "config.json"),
+      '{"apiKey":"unfinished"',
+    );
+    const fetchImpl = vi.fn();
+
+    const output = await handleQuery(
+      { prompt: "Set up Vercel deployment.", turn_id: "t-bad-config" },
+      { env, fetchImpl },
+    );
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "shared config file exists but is unreadable",
+    );
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "falling back to anonymous scope",
+    );
+  });
+
   it("prefixes a registry-split notice when the hook URL is overridden", async () => {
     const hit = () =>
       Response.json({

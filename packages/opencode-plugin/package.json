@@ -1,0 +1,44 @@
+{
+  "name": "@remembrance/opencode-plugin",
+  "version": "0.1.43",
+  "license": "Apache-2.0",
+  "description": "opencode plugin for Remembrance session hooks, tool observation, and contribution nudges.",
+  "type": "module",
+  "main": "src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "bin": {
+    "remembrance-opencode-setup": "bin/setup.mjs"
+  },
+  "files": [
+    "bin",
+    "scripts",
+    "servers",
+    "skills",
+    "src",
+    "LICENSE",
+    "README.md",
+    "opencode.json"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": false
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "scripts": {
+    "build": "node --check src/index.mjs && node --check bin/setup.mjs && node --check scripts/hook-core.mjs",
+    "prepack": "npm run build",
+    "test": "vitest run",
+    "test:coverage": "vitest run test/*.test.mjs --coverage.enabled=true --coverage.provider=v8 --coverage.include=src/index.mjs --coverage.include=bin/setup.mjs --coverage.reporter=text --coverage.thresholds.lines=96 --coverage.thresholds.functions=90 --coverage.thresholds.statements=96 --coverage.thresholds.branches=87",
+    "typecheck": "node --check src/index.mjs && node --check bin/setup.mjs && node --check scripts/hook-core.mjs"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1"
+  },
+  "devDependencies": {
+    "vitest": "^3.1.2"
+  }
+}

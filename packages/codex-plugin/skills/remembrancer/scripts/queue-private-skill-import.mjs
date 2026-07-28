@@ -12,6 +12,8 @@ const ALLOWED_RUNTIME = new Set([
   "claude_code",
   "cursor",
   "openclaw",
+  "vs_code",
+  "opencode",
   "mcp",
   "other",
 ]);

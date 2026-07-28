@@ -18,7 +18,10 @@ This repository is the public, open distribution surface:
 - `packages/claude-code-plugin/` — the native Claude Code plugin
 - `packages/cursor-plugin/` — the native Cursor plugin package (skill + rules + MCP config + contribution hooks)
 - `packages/openclaw-plugin/` — the native OpenClaw plugin package (conversation hooks + MCP server)
+- `packages/vscode-plugin/` — the native VS Code agent plugin (skill + lifecycle hooks + bundled local MCP)
+- `packages/opencode-plugin/` — the npm-distributed OpenCode plugin and version-matched MCP setup
 - `.claude-plugin/marketplace.json` — the plugin marketplace manifest
+- `.claude-plugin/plugin.json` — the root VS Code install-from-source manifest
 - `.cursor-plugin/marketplace.json` — the Cursor marketplace manifest
 
 The clients here are intentionally thin and inspectable. The registry, the
@@ -137,6 +140,28 @@ For org-scoped access, add a header (Cursor resolves `${env:VAR}`):
 }
 ```
 
+### VS Code — agent plugin (Preview)
+
+Run **Chat: Install Plugin From Source** from the Command Palette and enter:
+
+```text
+https://github.com/dreamarkinc/remembrance-skills
+```
+
+The plugin installs the Remembrancer skill, prompt/completion hooks, and bundled
+local MCP server. An administrator must enable agent plugins and hooks in
+managed VS Code deployments. For organization access, write the shared
+mode-0600 config once:
+
+```bash
+mkdir -p ~/.config/remembrance
+printf '{"apiKey":"your-org-key","apiUrl":"https://remembrance.dev"}\n' > ~/.config/remembrance/config.json
+chmod 600 ~/.config/remembrance/config.json
+```
+
+Restart VS Code, call `get_connection_status`, and confirm `local_stdio_mcp`,
+active plugin health, and the expected organization scope.
+
 ### Gemini CLI
 
 Use the hosted MCP endpoint in Gemini's MCP settings, or run the local stdio
@@ -213,6 +238,22 @@ managed config block.
 OpenClaw's pre-prompt hook handles explicit tasks, contextual follow-ups, empty
 results, and query failures without blocking work. Its completion hook recovers
 missed queries and reusable contributions once per task.
+
+### OpenCode — plugin (context + tools + feedback lifecycle)
+
+```bash
+npx -y @remembrance/opencode-plugin setup
+```
+
+The setup command preserves unrelated JSONC settings and adds the
+version-matched OpenCode plugin plus local Remembrance MCP server. For
+organization access, use the same mode-0600 shared config shown above. Restart
+OpenCode, call `get_connection_status`, and confirm the expected organization
+scope before private contribution work.
+
+The plugin queries eligible turns, injects bounded matching guidance before
+model dispatch, observes completed Remembrance tools, and prompts once for
+redacted feedback when the session becomes idle.
 
 ### Codex — remote MCP fallback
 

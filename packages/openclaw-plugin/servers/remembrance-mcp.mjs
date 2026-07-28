@@ -78,6 +78,219 @@ function attestationEvidenceHashForRemembrance(payload) {
   );
 }
 
+// ../core/src/agent-hosts.ts
+var AGENT_HOSTS = [
+  {
+    surface: "codex",
+    host_name: "Codex",
+    query_provider: "codex",
+    handoff_runtime: "codex",
+    package_path: "packages/codex-plugin",
+    distribution: "codex_marketplace",
+    public_mirror: true,
+    client_release: true,
+    release_smoke: true,
+    release_gate: "host",
+    plugin: true,
+    hooks: {
+      session_start: true,
+      prompt_hook: true,
+      pre_model_prompt: true,
+      tool_observer: true,
+      completion_hook: true
+    }
+  },
+  {
+    surface: "claude_code",
+    host_name: "Claude Code",
+    query_provider: "claude",
+    handoff_runtime: "claude_code",
+    package_path: "packages/claude-code-plugin",
+    distribution: "claude_marketplace",
+    public_mirror: true,
+    client_release: true,
+    release_smoke: true,
+    release_gate: "host",
+    plugin: true,
+    hooks: {
+      session_start: true,
+      prompt_hook: true,
+      pre_model_prompt: true,
+      tool_observer: true,
+      completion_hook: true
+    }
+  },
+  {
+    surface: "cursor",
+    host_name: "Cursor",
+    query_provider: "cursor",
+    handoff_runtime: "cursor",
+    package_path: "packages/cursor-plugin",
+    distribution: "cursor_marketplace",
+    public_mirror: true,
+    client_release: true,
+    release_smoke: true,
+    release_gate: "source_contract",
+    plugin: true,
+    hooks: {
+      session_start: true,
+      prompt_hook: true,
+      pre_model_prompt: false,
+      tool_observer: true,
+      completion_hook: true
+    }
+  },
+  {
+    surface: "openclaw",
+    host_name: "OpenClaw",
+    query_provider: "openclaw",
+    handoff_runtime: "openclaw",
+    package_path: "packages/openclaw-plugin",
+    distribution: "openclaw_clawhub",
+    public_mirror: true,
+    client_release: true,
+    release_smoke: true,
+    release_gate: "host",
+    plugin: true,
+    hooks: {
+      session_start: true,
+      prompt_hook: true,
+      pre_model_prompt: true,
+      tool_observer: true,
+      completion_hook: true
+    }
+  },
+  {
+    surface: "vs_code",
+    host_name: "VS Code",
+    query_provider: "vscode",
+    handoff_runtime: "vs_code",
+    package_path: "packages/vscode-plugin",
+    distribution: "public_mirror_source",
+    public_mirror: true,
+    client_release: true,
+    release_smoke: true,
+    release_gate: "source_contract",
+    plugin: true,
+    hooks: {
+      session_start: true,
+      prompt_hook: true,
+      pre_model_prompt: true,
+      tool_observer: true,
+      completion_hook: true
+    }
+  },
+  {
+    surface: "opencode",
+    host_name: "opencode",
+    query_provider: "opencode",
+    handoff_runtime: "opencode",
+    package_path: "packages/opencode-plugin",
+    distribution: "npm",
+    public_mirror: true,
+    client_release: true,
+    release_smoke: true,
+    release_gate: "host",
+    plugin: true,
+    hooks: {
+      session_start: true,
+      prompt_hook: true,
+      pre_model_prompt: true,
+      tool_observer: true,
+      completion_hook: true
+    }
+  },
+  {
+    surface: "mcp",
+    host_name: "MCP",
+    query_provider: "other",
+    handoff_runtime: "mcp",
+    package_path: "packages/mcp-server",
+    distribution: "npm",
+    public_mirror: false,
+    client_release: true,
+    release_smoke: true,
+    release_gate: "transport",
+    plugin: false,
+    hooks: {
+      session_start: false,
+      prompt_hook: false,
+      pre_model_prompt: false,
+      tool_observer: false,
+      completion_hook: false
+    }
+  },
+  {
+    surface: "rest",
+    host_name: "REST",
+    query_provider: "other",
+    handoff_runtime: null,
+    package_path: null,
+    distribution: "built_in",
+    public_mirror: false,
+    client_release: false,
+    release_smoke: true,
+    release_gate: "transport",
+    plugin: false,
+    hooks: {
+      session_start: false,
+      prompt_hook: false,
+      pre_model_prompt: false,
+      tool_observer: false,
+      completion_hook: false
+    }
+  }
+];
+function nonEmptyTuple(values) {
+  if (values.length === 0) {
+    throw new Error("Agent host registry must contain at least one value.");
+  }
+  return values;
+}
+function uniqueValues(values) {
+  return [...new Set(values)];
+}
+var AGENT_HOST_SURFACES = nonEmptyTuple(
+  AGENT_HOSTS.map((host) => host.surface)
+);
+var AGENT_HOST_NAMES = nonEmptyTuple(
+  AGENT_HOSTS.map((host) => host.host_name)
+);
+var AGENT_QUERY_PROVIDERS = nonEmptyTuple(
+  uniqueValues([
+    ...AGENT_HOSTS.map((host) => host.query_provider),
+    "generic",
+    "other"
+  ])
+);
+var ORGANIZATION_SKILL_HANDOFF_RUNTIMES = nonEmptyTuple(
+  uniqueValues([
+    ...AGENT_HOSTS.flatMap(
+      (host) => host.handoff_runtime ? [host.handoff_runtime] : []
+    ),
+    "other"
+  ])
+);
+var PLUGIN_HOSTS = AGENT_HOSTS.filter((host) => host.plugin);
+var PLUGIN_HOST_SURFACES = nonEmptyTuple(
+  PLUGIN_HOSTS.map((host) => host.surface)
+);
+var PUBLIC_MIRROR_PLUGIN_PATHS = PLUGIN_HOSTS.filter(
+  (host) => host.public_mirror && host.package_path
+).map((host) => host.package_path);
+var CLIENT_RELEASE_PACKAGE_PATHS = AGENT_HOSTS.filter(
+  (host) => host.client_release && host.package_path
+).map((host) => host.package_path);
+var CLIENT_HEALTH_HOST_BY_SURFACE = Object.fromEntries(
+  AGENT_HOSTS.map((host) => [host.surface, host.host_name])
+);
+function agentHostBySurface(surface) {
+  return AGENT_HOSTS.find((host) => host.surface === surface);
+}
+function isPluginHostSurface(value) {
+  return PLUGIN_HOSTS.some((host) => host.surface === value);
+}
+
 // ../../node_modules/zod/v3/external.js
 var external_exports = {};
 __export(external_exports, {
@@ -4120,14 +4333,7 @@ var coerce = {
 var NEVER = INVALID;
 
 // ../core/src/client-health.ts
-var clientHealthSurfaceSchema = external_exports.enum([
-  "codex",
-  "claude_code",
-  "cursor",
-  "openclaw",
-  "mcp",
-  "rest"
-]);
+var clientHealthSurfaceSchema = external_exports.enum(AGENT_HOST_SURFACES);
 var clientHealthIssueCodeSchema = external_exports.enum([
   "partial_activation",
   "native_hooks_not_observed",
@@ -4145,14 +4351,6 @@ var clientHealthIssueCodeSchema = external_exports.enum([
   "unsupported_hook_manifest",
   "unsupported_plugin_host"
 ]);
-var CLIENT_HEALTH_HOST_BY_SURFACE = {
-  codex: "Codex",
-  claude_code: "Claude Code",
-  cursor: "Cursor",
-  openclaw: "OpenClaw",
-  mcp: "MCP",
-  rest: "REST"
-};
 var componentStatusSchema = external_exports.enum([
   "active",
   "not_observed",
@@ -4162,14 +4360,7 @@ var componentStatusSchema = external_exports.enum([
 var clientHealthReportSchema = external_exports.object({
   surface: clientHealthSurfaceSchema,
   plugin_version: external_exports.string().trim().max(64).regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
-  host_name: external_exports.enum([
-    "Codex",
-    "Claude Code",
-    "Cursor",
-    "OpenClaw",
-    "MCP",
-    "REST"
-  ]),
+  host_name: external_exports.enum(AGENT_HOST_NAMES),
   host_version: external_exports.string().trim().max(64).regex(/^[0-9A-Za-z._+ -]*$/).nullable().default(null),
   transport: external_exports.enum(["local_stdio_mcp", "hosted_http_mcp", "none"]),
   credential_source: external_exports.enum([
@@ -4233,7 +4424,12 @@ var secureWebhookUrlSchema = external_exports.string().trim().url().max(2048).su
 });
 var slackWebhookUrlSchema = secureWebhookUrlSchema.superRefine(
   (value, context) => {
-    const parsed = new URL(value);
+    let parsed;
+    try {
+      parsed = new URL(value);
+    } catch {
+      return;
+    }
     if (parsed.hostname.toLowerCase() !== "hooks.slack.com" || !parsed.pathname.startsWith("/services/")) {
       context.addIssue({
         code: external_exports.ZodIssueCode.custom,
@@ -4329,12 +4525,6 @@ var SECRET_PATTERN_SPECS = [
 var SECRET_PATTERNS = SECRET_PATTERN_SPECS.map(
   ([source, flags]) => new RegExp(source, flags)
 );
-function redactString(value) {
-  return SECRET_PATTERNS.reduce(
-    (current, pattern) => current.replace(pattern, "[redacted]"),
-    value
-  );
-}
 
 // ../core/src/organization-skill-handoff.ts
 var ORGANIZATION_SKILL_HANDOFF_KIND = "remembrance.organization_skill_import";
@@ -4365,7 +4555,7 @@ var organizationSkillHandoffSkillSchema = external_exports.object({
 });
 var organizationSkillHandoffRequestSchema = external_exports.object({
   skills: external_exports.array(organizationSkillHandoffSkillSchema).min(1).max(MAX_ORGANIZATION_SKILL_HANDOFF_SKILLS),
-  source_runtime: external_exports.enum(["codex", "claude_code", "cursor", "openclaw", "mcp", "other"]).default("other"),
+  source_runtime: external_exports.enum(ORGANIZATION_SKILL_HANDOFF_RUNTIMES).default("other"),
   handoff_reason: external_exports.enum(["host_policy_blocked", "network_unavailable", "manual_offline"]).default("host_policy_blocked"),
   idempotency_key: boundedText(512).optional()
 }).strict();
@@ -4535,14 +4725,7 @@ function boundedJsonRecord(maxBytes = MAX_JSON_FIELD_BYTES) {
     }
   });
 }
-var agentProviderSchema = external_exports.enum([
-  "codex",
-  "cursor",
-  "claude",
-  "openclaw",
-  "generic",
-  "other"
-]);
+var agentProviderSchema = external_exports.enum(AGENT_QUERY_PROVIDERS);
 var attestationProviderSchema = external_exports.enum([
   "claude_code",
   "codex",
@@ -4739,6 +4922,8 @@ var queryRuntimeSchema = external_exports.enum([
   "claude_code",
   "cursor",
   "openclaw",
+  "vs_code",
+  "opencode",
   "other",
   "unknown"
 ]);
@@ -8486,13 +8671,13 @@ var toolDefinitions = [
   ),
   tool(
     "propose_skill_idea",
-    "Propose a missing reusable skill when query_skills has no useful result. With an organization API key, the candidate stays inside that organization and enters its review queue; without one, it is a public candidate. Never remove or bypass an organization key to force public submission: submit privately, then use the reviewed public-propagation flow. Send repository-derived private instructions only when Remembrance is an organization-approved destination. If host policy blocks the export, queue_private_skill_import locally and do not claim submission.",
+    "Propose a missing reusable skill when query_skills has no useful result. THIS TOOL'S VISIBILITY IS NOT FIXED: an active organization API key keeps the candidate inside that organization's review queue, while intentionally calling without a key creates a PUBLIC candidate. A supplied invalid/inactive key fails with 401 and a valid key without submission:create fails with 403; neither failure creates a candidate. Prefer propose_private_skill for anything repository-derived, organization-specific, or otherwise not intended for the public registry because that endpoint structurally requires organization auth. Use propose_skill_idea only when a public candidate is an acceptable outcome. Check `visibility` (organization_private or public_candidate) and `owner_scope` in the successful response, and report where the candidate landed. Never remove or bypass an organization key to force public submission: submit privately, then use the reviewed public-propagation flow. Send repository-derived private instructions only when Remembrance is an organization-approved destination. If host policy blocks the export, queue_private_skill_import locally and do not claim submission.",
     "/api/v1/agent/skill-ideas",
     skillIdeaRequestSchema
   ),
   tool(
     "propose_private_skill",
-    "Submit a proposed skill only to the authenticated organization's private review queue. This endpoint rejects anonymous use and never creates a public candidate. Use it for repository-derived instructions only when Remembrance is an organization-approved destination. If host policy blocks the export, queue_private_skill_import locally instead; never retry through another transport or claim submission without a receipt.",
+    "Submit a proposed skill only to the authenticated organization's private review queue. Privacy here is STRUCTURAL, not credential-dependent: this endpoint rejects anonymous use and never creates a public candidate, so unlike propose_skill_idea it cannot silently fall through to public when a key fails to resolve \u2014 it fails closed with 401/403 instead. Prefer it whenever the content is repository-derived, organization-specific, or must not reach the public registry; that preference is about removing the credential from the privacy decision, not about propose_skill_idea being unsafe when a key is present. Use it for repository-derived instructions only when Remembrance is an organization-approved destination. The response reports `visibility` (always organization_private here) \u2014 a rejection means nothing was submitted. If host policy blocks the export, queue_private_skill_import locally instead; never retry through another transport or claim submission without a receipt.",
     "/api/v1/agent/private-skill-ideas",
     skillIdeaRequestSchema
   ),
@@ -8636,12 +8821,6 @@ var PLUGIN_HEALTH_COMPONENTS = [
   "tool_observer",
   "completion_hook"
 ];
-var PLUGIN_HEALTH_SURFACES = /* @__PURE__ */ new Set([
-  "codex",
-  "claude_code",
-  "cursor",
-  "openclaw"
-]);
 var PLUGIN_HEALTH_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var PLUGIN_HEALTH_MAX_FUTURE_SKEW_MS = 5 * 60 * 1e3;
 var nodeFileSystem = {
@@ -8654,34 +8833,67 @@ function remembranceConfigPath(env = process.env, homeDirectory = homedir2()) {
   const configRoot = env.REMEMBRANCE_PLUGIN_HOST?.trim().toLowerCase() === "openclaw" ? join2(homeDirectory, ".config") : join2(homeDirectory, ".config");
   return join2(configRoot, "remembrance", "config.json");
 }
-function readRemembranceConfig(env = process.env, fileSystem = nodeFileSystem) {
-  try {
-    return normalizeConfig(
-      JSON.parse(fileSystem.read(remembranceConfigPath(env)))
-    );
-  } catch {
-    return {};
-  }
-}
 function resolveApiCredential(env = process.env, fileSystem = nodeFileSystem) {
-  if (env.REMEMBRANCE_API_KEY) {
-    return { apiKey: env.REMEMBRANCE_API_KEY, source: "environment" };
+  const environmentKey = env.REMEMBRANCE_API_KEY?.trim();
+  if (environmentKey) {
+    return { apiKey: environmentKey, source: "environment" };
   }
-  const apiKey = readRemembranceConfig(env, fileSystem).apiKey;
-  return apiKey ? { apiKey, source: "shared_config" } : { apiKey: "", source: "none" };
+  const path = remembranceConfigPath(env);
+  if (!fileSystem.exists(path)) {
+    return { apiKey: "", source: "none" };
+  }
+  try {
+    const parsed = JSON.parse(fileSystem.read(path));
+    if (!isRecord(parsed)) {
+      return { apiKey: "", source: "unusable_shared_config" };
+    }
+    if (Object.prototype.hasOwnProperty.call(parsed, "apiKey") && (typeof parsed.apiKey !== "string" || !parsed.apiKey.trim())) {
+      return { apiKey: "", source: "unusable_shared_config" };
+    }
+    const apiKey = normalizeConfig(parsed).apiKey;
+    return apiKey ? { apiKey, source: "shared_config" } : { apiKey: "", source: "none" };
+  } catch {
+    return { apiKey: "", source: "unusable_shared_config" };
+  }
 }
 function resolveApiKey(env = process.env, fileSystem = nodeFileSystem) {
   return resolveApiCredential(env, fileSystem).apiKey;
 }
 function resolveApiConfiguration(env = process.env, fileSystem = nodeFileSystem) {
-  if (env.REMEMBRANCE_API_URL) {
-    return {
-      baseUrl: env.REMEMBRANCE_API_URL.replace(/\/$/, ""),
-      source: "environment"
+  const environmentUrl = env.REMEMBRANCE_API_URL?.trim();
+  if (environmentUrl) {
+    const normalized = normalizeApiUrl(environmentUrl);
+    return normalized ? { baseUrl: normalized, source: "environment" } : {
+      baseUrl: "https://remembrance.dev",
+      source: "unusable_environment"
     };
   }
-  const apiUrl = readRemembranceConfig(env, fileSystem).apiUrl;
-  return apiUrl ? { baseUrl: apiUrl.replace(/\/$/, ""), source: "shared_config" } : { baseUrl: "https://remembrance.dev", source: "default" };
+  const path = remembranceConfigPath(env);
+  if (!fileSystem.exists(path)) {
+    return { baseUrl: "https://remembrance.dev", source: "default" };
+  }
+  try {
+    const parsed = JSON.parse(fileSystem.read(path));
+    if (!isRecord(parsed)) {
+      return {
+        baseUrl: "https://remembrance.dev",
+        source: "unusable_shared_config"
+      };
+    }
+    if (!Object.prototype.hasOwnProperty.call(parsed, "apiUrl")) {
+      return { baseUrl: "https://remembrance.dev", source: "default" };
+    }
+    const normalized = normalizeApiUrl(parsed.apiUrl);
+    return normalized ? { baseUrl: normalized, source: "shared_config" } : {
+      baseUrl: "https://remembrance.dev",
+      source: "unusable_shared_config"
+    };
+  } catch {
+    return {
+      baseUrl: "https://remembrance.dev",
+      source: "unusable_shared_config"
+    };
+  }
 }
 function sharedConfigStatus(env = process.env, fileSystem = nodeFileSystem) {
   const path = remembranceConfigPath(env);
@@ -8744,7 +8956,7 @@ function localConnectionStatus(result, options) {
       api_url: options.apiBase,
       api_url_source: options.apiUrlSource,
       shared_config: sharedConfigStatus(env, fileSystem),
-      credential_boundary: "This local MCP process resolves REMEMBRANCE_API_KEY first, then the shared config file. Anonymous curl or browser probes do not test this process."
+      credential_boundary: credential.source === "unusable_shared_config" || options.apiUrlSource === "unusable_shared_config" ? "The shared Remembrance config exists but is unreadable or invalid. Remote tools fail locally until it is fixed or intentionally removed; no request silently falls back to anonymous scope." : options.apiUrlSource === "unusable_environment" ? "REMEMBRANCE_API_URL is invalid. Remote tools fail locally until it is set to an absolute HTTP(S) registry URL or intentionally removed." : "This local MCP process resolves REMEMBRANCE_API_KEY first, then the shared config file. Anonymous curl or browser probes do not test this process."
     },
     registry: response.body ?? (response.error ? { error: String(response.error) } : null),
     plugin_health: pluginHealth
@@ -8763,7 +8975,7 @@ function localPluginLifecycleHealth(options) {
       issues: []
     };
   }
-  if (!PLUGIN_HEALTH_SURFACES.has(rawSurface)) {
+  if (!isPluginHostSurface(rawSurface)) {
     return {
       expected: true,
       status: "degraded",
@@ -8772,12 +8984,13 @@ function localPluginLifecycleHealth(options) {
       issues: [
         {
           code: "unsupported_plugin_host",
-          action: "Remove REMEMBRANCE_PLUGIN_HOST or set it to codex, claude_code, cursor, or openclaw."
+          action: "Remove REMEMBRANCE_PLUGIN_HOST or set it to a supported native plugin surface."
         }
       ]
     };
   }
   const surface = rawSurface;
+  const host = agentHostBySurface(surface);
   const healthDir = env.REMEMBRANCE_PLUGIN_HEALTH_DIR ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR) : join2(tmpdir(), "remembrance-plugin-health");
   const paths = lifecycleMarkerPaths(surface, healthDir, fileSystem);
   if (paths.length === 0) {
@@ -8823,7 +9036,7 @@ function localPluginLifecycleHealth(options) {
       const observed = Number.isFinite(lastSeenMs2) && (component !== "prompt_hook" || !Number.isFinite(sessionStartMs) || lastSeenMs2 >= sessionStartMs);
       return [
         component,
-        observed ? { observed: true, last_seen_at: lastSeen } : { observed: false, last_seen_at: null }
+        observed ? { observed: true, last_seen_at: lastSeen, expected: true } : { observed: false, last_seen_at: null, expected: true }
       ];
     })
   );
@@ -8932,10 +9145,25 @@ function lifecycleMarkerPaths(surface, healthDir, fileSystem) {
 }
 function normalizeConfig(value) {
   if (!isRecord(value)) return {};
+  const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim() : "";
+  const apiUrl = typeof value.apiUrl === "string" ? value.apiUrl.trim() : "";
   return {
-    ...typeof value.apiKey === "string" && value.apiKey ? { apiKey: value.apiKey } : {},
-    ...typeof value.apiUrl === "string" && value.apiUrl ? { apiUrl: value.apiUrl } : {}
+    ...apiKey ? { apiKey } : {},
+    ...apiUrl ? { apiUrl } : {}
   };
+}
+function normalizeApiUrl(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const candidate = value.trim();
+  try {
+    const parsed = new URL(candidate);
+    if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
+      return null;
+    }
+    return candidate.replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
 }
 function validLifecycleTimestamp(value, nowMs) {
   if (typeof value !== "string") return Number.NaN;
@@ -8952,7 +9180,7 @@ function isRecord(value) {
 // src/server.ts
 var apiConfiguration = resolveApiConfiguration();
 var apiBase = apiConfiguration.baseUrl;
-var SERVER_VERSION = true ? "0.1.39" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.43" : "0.0.0-dev";
 var tools = toolDefinitions;
 var inputBuffer = Buffer.alloc(0);
 var clientFraming = "ndjson";
@@ -8960,10 +9188,10 @@ var cachedEconomicsSession = null;
 var cachedValueProofKeys = null;
 process.stdin.on("data", (chunk) => {
   inputBuffer = Buffer.concat([inputBuffer, chunk]);
-  processMessages().catch((error) => {
+  processMessages().catch(() => {
     writeResponse(null, null, {
       code: -32603,
-      message: error instanceof Error ? redactString(error.message) : "Internal error"
+      message: "Internal MCP error."
     });
   });
 });
@@ -9143,12 +9371,14 @@ async function dispatchJsonRpcRequest(request) {
   return null;
 }
 function jsonRpcErrorForToolError(error) {
-  const message = error instanceof Error ? redactString(error.message) : "Tool call failed";
+  const validationError = isZodValidationError(error);
   return {
-    code: isZodValidationError(error) ? -32602 : -32603,
-    message
+    code: validationError ? -32602 : -32603,
+    message: validationError ? "Invalid MCP arguments." : error instanceof McpPublicError ? error.message : "MCP operation failed."
   };
 }
+var McpPublicError = class extends Error {
+};
 function isZodValidationError(error) {
   return error instanceof Error && (error.name === "ZodError" || messageLooksLikeZodError(error.message));
 }
@@ -9169,17 +9399,32 @@ async function callTool(definition, rawArguments) {
   if (definition.name === "submit_remembrance") {
     return submitRemembrance(payload);
   }
-  const result = await callRemembrance(definition, payload);
+  const localConfigurationError = remoteConfigurationError(
+    apiConfiguration.source,
+    resolveApiCredential().source
+  );
+  const result = definition.name === "get_connection_status" && localConfigurationError ? { ok: false, status: 0, error: localConfigurationError } : await callRemembrance(definition, payload);
   if (definition.name === "get_connection_status") {
     const status = localConnectionStatus(result, {
       apiBase,
       apiUrlSource: apiConfiguration.source,
       pluginVersion: SERVER_VERSION
     });
-    void reportDegradedClientHealth(status).catch(() => void 0);
+    if (!localConfigurationError) {
+      void reportDegradedClientHealth(status).catch(() => void 0);
+    }
     return status;
   }
   return result;
+}
+function remoteConfigurationError(apiUrlSource, credentialSource) {
+  if (apiUrlSource === "unusable_environment") {
+    return "REMEMBRANCE_API_URL is invalid. Set it to an absolute HTTP(S) registry URL or intentionally remove it before using remote Remembrance tools.";
+  }
+  if (apiUrlSource === "unusable_shared_config" || credentialSource === "unusable_shared_config") {
+    return "The shared Remembrance config exists but is unreadable or invalid. Fix or intentionally remove ~/.config/remembrance/config.json before using remote Remembrance tools.";
+  }
+  return null;
 }
 function clientHealthReportFromConnectionStatus(status) {
   const health = isRecord2(status.plugin_health) ? status.plugin_health : null;
@@ -9187,9 +9432,11 @@ function clientHealthReportFromConnectionStatus(status) {
     return null;
   }
   const surface = String(health.surface ?? "");
-  if (surface !== "codex" && surface !== "claude_code" && surface !== "cursor" && surface !== "openclaw") {
+  if (!isPluginHostSurface(surface)) {
     return null;
   }
+  const host = agentHostBySurface(surface);
+  if (!host || !host.plugin) return null;
   const components = isRecord2(health.components) ? health.components : {};
   const observed = (name) => isRecord2(components[name]) && components[name]?.observed === true ? "active" : "not_observed";
   const issueCodes = Array.isArray(health.issues) ? health.issues.map((issue) => isRecord2(issue) ? issue.code : null).filter((code) => typeof code === "string") : [];
@@ -9211,7 +9458,7 @@ function clientHealthReportFromConnectionStatus(status) {
   const candidate = {
     surface,
     plugin_version: typeof health.plugin_version === "string" && health.plugin_version ? health.plugin_version : SERVER_VERSION,
-    host_name: surface === "claude_code" ? "Claude Code" : surface === "openclaw" ? "OpenClaw" : surface === "cursor" ? "Cursor" : "Codex",
+    host_name: host.host_name,
     host_version: typeof health.host_version === "string" && health.host_version ? health.host_version : null,
     transport: "local_stdio_mcp",
     credential_source: health.credential_source === "environment" || health.credential_source === "shared_config" || health.credential_source === "none" ? health.credential_source : "unknown",
@@ -9489,7 +9736,15 @@ async function callRemembrance(definition, rawArguments) {
   const headers = {
     "content-type": "application/json"
   };
-  const apiKey = resolveApiKey();
+  const credential = resolveApiCredential();
+  const configurationError = remoteConfigurationError(
+    apiConfiguration.source,
+    credential.source
+  );
+  if (configurationError && definition.name !== "get_connection_status") {
+    throw new McpPublicError(configurationError);
+  }
+  const apiKey = credential.apiKey;
   if (apiKey) {
     headers["x-remembrance-api-key"] = apiKey;
   }
@@ -9516,13 +9771,13 @@ async function callRemembrance(definition, rawArguments) {
     return {
       ok: false,
       status: 0,
-      error: error instanceof Error ? redactString(error.message) : "API request failed"
+      error: controller.signal.aborted ? "Remembrance API request timed out." : "Remembrance API request failed."
     };
   } finally {
     clearTimeout(timeout);
   }
-  const body = await response.json().catch(async () => ({
-    text: await response.text().catch(() => "")
+  const body = await response.json().catch(() => ({
+    error: response.ok ? "Remembrance API returned an unreadable response." : "Remembrance API request failed."
   }));
   const verifiedBody = definition.name === "get_value_proof" && response.ok ? await verifySignedValueProofWithKeyRefresh(body, fetchValueProofKeySet) : body;
   return {
@@ -9550,7 +9805,7 @@ async function fetchValueProofKeySet(forceRefresh) {
       }
     );
     if (!response.ok) {
-      throw new Error(
+      throw new McpPublicError(
         `Value proof verification keys are unavailable (${response.status}).`
       );
     }
@@ -9577,7 +9832,7 @@ function apiTimeoutMs() {
     process.env.REMEMBRANCE_API_TIMEOUT_MS ?? "",
     10
   );
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1e4;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3e4;
 }
 function endpointFor(definition, payload) {
   if (!definition.endpoint) {
@@ -9611,13 +9866,20 @@ async function listSkillResources(rawCursor) {
 }
 async function readSkillResource(rawUri) {
   if (typeof rawUri !== "string") {
-    throw new Error("resources/read requires a Remembrance skill URI.");
+    throw new McpPublicError(
+      "resources/read requires a Remembrance skill URI."
+    );
   }
-  const slug = parseRemembranceSkillResourceUri(rawUri);
+  let slug;
+  try {
+    slug = parseRemembranceSkillResourceUri(rawUri);
+  } catch {
+    throw new McpPublicError("Invalid Remembrance skill resource URI.");
+  }
   const catalog = await fetchSkillCatalog({ slug, limit: 1 });
   const skill = catalog.skills.find((entry) => entry.slug === slug);
   if (!skill) {
-    throw new Error("Skill resource is unavailable or inaccessible.");
+    throw new McpPublicError("Skill resource is unavailable or inaccessible.");
   }
   return {
     contents: [
@@ -9635,7 +9897,7 @@ async function fetchSkillCatalog(input) {
     input
   );
   if (!response.ok) {
-    throw new Error(
+    throw new McpPublicError(
       `Skill catalog is unavailable${response.status ? ` (${response.status})` : ""}.`
     );
   }
@@ -9747,6 +10009,7 @@ export {
   dispatchJsonRpcRequest,
   formatJsonRpcResponse,
   readJsonRpcMessages,
+  remoteConfigurationError,
   reportDegradedClientHealth,
   resetValueProofKeyCacheForTests
 };

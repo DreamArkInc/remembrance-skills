@@ -41,6 +41,7 @@ import {
   recordHighMatchSurface,
   recordTaskEligibility,
   recordValueEpisodeSurface,
+  queryResponseHasMatches,
   resolveApiKey,
   resolveApiCredential,
   sessionIdFor,
@@ -167,7 +168,9 @@ export async function handleHookInput(input, options = {}) {
     );
     const output =
       cached.output ?? outputForContext(emptyQueryContext(decision.reason));
-    recordUse(input, env, options, cached.highMatch ?? null);
+    if (cached.matched) {
+      recordUse(input, env, options, cached.highMatch ?? null);
+    }
     return withCredentialNotice(output, env);
   }
   debugLog(env, "cache_miss", { key: shortCacheKey(cacheKey) }, options);
@@ -191,8 +194,11 @@ export async function handleHookInput(input, options = {}) {
     emptyQueryContext(decision.reason);
   const output = outputForContext(context);
   const highMatch = highMatchFromResponse(response);
-  await writeCachedOutput(cacheKey, output, highMatch, env, options);
-  recordUse(input, env, options, highMatch, response);
+  const matched = queryResponseHasMatches(response);
+  await writeCachedOutput(cacheKey, output, highMatch, matched, env, options);
+  if (matched) {
+    recordUse(input, env, options, highMatch, response);
+  }
   return withCredentialNotice(output, env);
 }
 
@@ -245,11 +251,16 @@ async function queryRemembrance(payload, options) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), autoQueryTimeoutMs(env));
   try {
+    const credential = resolveApiCredential(env);
+    if (credential.source === "unusable_shared_config") {
+      debugLog(env, "shared_config_unusable", {}, options);
+      return null;
+    }
     const headers = {
       "content-type": "application/json",
       "user-agent": "@remembrance/claude-code-plugin",
     };
-    const apiKey = resolveApiKey(env);
+    const apiKey = credential.apiKey;
     if (apiKey) {
       headers["x-remembrance-api-key"] = apiKey;
     }
@@ -305,7 +316,7 @@ async function readCachedOutput(cacheKey, env, options = {}) {
       if (freshEntries.length !== cache.entries.length) {
         await writeCacheFile({ entries: freshEntries }, env);
       }
-      return { hit: false, output: null, highMatch: null };
+      return { hit: false, output: null, highMatch: null, matched: false };
     }
     entry.touched_at = now;
     await writeCacheFile({ entries: freshEntries }, env);
@@ -313,10 +324,11 @@ async function readCachedOutput(cacheKey, env, options = {}) {
       hit: true,
       output: entry.output,
       highMatch: entry.high_match ?? null,
+      matched: entry.matched === true,
     };
   } catch (error) {
     debugLog(env, "cache_read_error", { error: errorName(error) }, options);
-    return { hit: false, output: null, highMatch: null };
+    return { hit: false, output: null, highMatch: null, matched: false };
   }
 }
 
@@ -324,6 +336,7 @@ async function writeCachedOutput(
   cacheKey,
   output,
   highMatch,
+  matched,
   env,
   options = {},
 ) {
@@ -337,6 +350,7 @@ async function writeCachedOutput(
       key: cacheKey,
       output,
       high_match: highMatch,
+      matched,
       touched_at: now,
       expires_at: now + CACHE_TTL_MS,
     });

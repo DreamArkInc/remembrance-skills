@@ -20,6 +20,7 @@ import {
   recordPluginLifecycleHealth,
   recordRegistryUse,
   recordValueEpisodeSurface,
+  queryResponseHasMatches,
   responseRequestsRemembranceFollowup,
   resolveApiCredential,
   toolResponseIndicatesFailure,
@@ -110,13 +111,16 @@ export async function handleMcpUse(input, options = {}) {
     return { recorded: true, kind: "direct_selection", tool, count };
   }
   if (CONSUMPTION_TOOLS.has(tool)) {
-    const record = options.recordRegistryUse ?? recordRegistryUse;
-    const count = record(sessionId, env);
     if (tool === "query_skills") {
+      const response = mcpResponseFromHook(input);
+      const matched = queryResponseHasMatches(response);
+      const count = matched
+        ? (options.recordRegistryUse ?? recordRegistryUse)(sessionId, env)
+        : readRegistryUseCount(sessionId, env);
       const recordFollowThrough =
         options.recordDirectiveFollowThrough ??
         recordDirectiveFollowThroughForTool;
-      await recordFollowThrough(sessionId, tool, mcpResponseFromHook(input), {
+      await recordFollowThrough(sessionId, tool, response, {
         env,
         fetchImpl: options.fetchImpl ?? fetch,
         userAgent: "@remembrance/cursor-plugin",
@@ -124,17 +128,25 @@ export async function handleMcpUse(input, options = {}) {
       const recordHighMatch = options.recordHighMatch ?? recordHighMatchSurface;
       recordHighMatch(
         sessionId,
-        highMatchFromResponse(mcpResponseFromHook(input)),
+        highMatchFromResponse(response),
         env,
       );
       const recordValueEpisode =
         options.recordValueEpisode ?? recordValueEpisodeSurface;
       recordValueEpisode(
         sessionId,
-        valueEpisodeFromResponse(mcpResponseFromHook(input)),
+        valueEpisodeFromResponse(response),
         env,
       );
+      return {
+        recorded: matched,
+        kind: matched ? "consumption" : "empty_query",
+        tool,
+        count,
+      };
     } else {
+      const record = options.recordRegistryUse ?? recordRegistryUse;
+      const count = record(sessionId, env);
       const clearHighMatch =
         options.clearHighMatch ?? clearHighMatchSurfaceIfOpened;
       clearHighMatch(
@@ -143,8 +155,8 @@ export async function handleMcpUse(input, options = {}) {
         toolArguments(input),
         env,
       );
+      return { recorded: true, kind: "consumption", tool, count };
     }
-    return { recorded: true, kind: "consumption", tool, count };
   }
   if (CONTRIBUTION_TOOLS.has(tool)) {
     if (

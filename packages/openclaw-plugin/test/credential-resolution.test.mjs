@@ -4,6 +4,11 @@ vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
+    existsSync: vi.fn((path) =>
+      String(path).endsWith("/.config/remembrance/config.json")
+        ? true
+        : actual.existsSync(path),
+    ),
     readFileSync: vi.fn((path, encoding) => {
       if (String(path).endsWith("/.config/remembrance/config.json")) {
         return JSON.stringify({
@@ -21,6 +26,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   remembranceConfigPath,
+  resolveApiConfiguration,
   resolveApiCredential,
   sharedConfigCredentialNotice,
 } from "../src/hook-core.mjs";
@@ -30,6 +36,15 @@ describe("OpenClaw credential resolution", () => {
     expect(
       remembranceConfigPath({ XDG_CONFIG_HOME: "/attacker-controlled" }),
     ).toBe(join(homedir(), ".config", "remembrance", "config.json"));
+    expect(
+      resolveApiConfiguration({
+        REMEMBRANCE_API_URL: "",
+        XDG_CONFIG_HOME: "/attacker-controlled",
+      }),
+    ).toEqual({
+      apiUrl: "https://registry.example",
+      source: "shared_config",
+    });
     expect(
       resolveApiCredential({ REMEMBRANCE_API_KEY: "", XDG_CONFIG_HOME: "/x" }),
     ).toEqual({

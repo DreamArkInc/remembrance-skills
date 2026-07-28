@@ -1,0 +1,414 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { Remembrance } from "../src/index.mjs";
+import {
+  readValueEpisodeSurfaces,
+  readRegistryUseCount,
+  recordRegistryUse,
+  recordTaskEligibility,
+  recordValueEpisodeSurface,
+} from "../scripts/hook-core.mjs";
+
+const tempRoot = mkdtempSync(join(tmpdir(), "remembrance-opencode-idle-"));
+const saved = {};
+const MANAGED = [
+  "REMEMBRANCE_API_KEY",
+  "REMEMBRANCE_API_URL",
+  "REMEMBRANCE_USAGE_DIR",
+  "REMEMBRANCE_HOOK_CACHE_PATH",
+  "REMEMBRANCE_AUTO_CONTRIBUTE",
+];
+let counter = 0;
+
+beforeEach(() => {
+  counter += 1;
+  for (const key of MANAGED) saved[key] = process.env[key];
+  process.env.REMEMBRANCE_USAGE_DIR = join(tempRoot, `usage-${counter}`);
+  process.env.REMEMBRANCE_HOOK_CACHE_PATH = join(
+    tempRoot,
+    `cache-${counter}.json`,
+  );
+  process.env.REMEMBRANCE_API_URL = "https://remembrance.dev";
+  delete process.env.REMEMBRANCE_API_KEY;
+  delete process.env.REMEMBRANCE_AUTO_CONTRIBUTE;
+});
+
+afterEach(() => {
+  for (const key of MANAGED) {
+    if (saved[key] === undefined) delete process.env[key];
+    else process.env[key] = saved[key];
+  }
+  vi.restoreAllMocks();
+});
+
+afterAll(() => {
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
+function loggingClient() {
+  const messages = [];
+  return {
+    messages,
+    client: {
+      app: {
+        log: async ({ body }) => {
+          messages.push(body);
+        },
+      },
+    },
+  };
+}
+
+function toastClient() {
+  const toasts = [];
+  return {
+    toasts,
+    client: {
+      tui: {
+        showToast: async ({ body }) => {
+          toasts.push(body);
+        },
+      },
+    },
+  };
+}
+
+async function emitSessionIdle(hooks, sessionID) {
+  await hooks.event({
+    event: {
+      type: "session.idle",
+      properties: { sessionID },
+    },
+  });
+}
+
+describe("opencode completion nudge (session.idle)", () => {
+  it("nudges once per engagement after Remembrance was used", async () => {
+    const sessionId = "s-used";
+    recordRegistryUse(sessionId, process.env);
+    const { client, messages } = loggingClient();
+    const hooks = await Remembrance({ client });
+
+    await emitSessionIdle(hooks, sessionId);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].service).toBe("remembrance");
+    expect(String(messages[0].message)).toMatch(/feedback|remembrance/i);
+
+    // opencode cannot ask the agent to revise, so the adapter advances the
+    // prompted count itself. A second idle must therefore stay silent.
+    await emitSessionIdle(hooks, sessionId);
+    expect(messages).toHaveLength(1);
+  });
+
+  it("reports a pending value episode before completing the engagement", async () => {
+    const sessionId = "s-outcome";
+    recordRegistryUse(sessionId, process.env);
+    recordValueEpisodeSurface(
+      sessionId,
+      {
+        query_id: "rq_opencode_outcome",
+        interaction_kind: "query",
+        candidates: [
+          {
+            result_id: "qres_opencode_outcome",
+            value_estimate_id: null,
+          },
+        ],
+        bundles: [],
+        selected_result_ids: ["qres_opencode_outcome"],
+        feedback_available: true,
+        created_at: new Date().toISOString(),
+        reported_at: null,
+      },
+      process.env,
+    );
+    const requests = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      requests.push({
+        url: String(url),
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return Response.json({ recorded: true }, { status: 201 });
+    });
+    const { client, messages } = loggingClient();
+    const hooks = await Remembrance({ client });
+
+    await emitSessionIdle(hooks, sessionId);
+
+    expect(requests).toEqual([
+      expect.objectContaining({
+        url: "https://remembrance.dev/api/v1/agent/task-outcomes",
+        body: expect.objectContaining({
+          query_id: "rq_opencode_outcome",
+          result_ids: ["qres_opencode_outcome"],
+          measurement_source: "plugin_observed",
+          status: "completed",
+        }),
+      }),
+    ]);
+    expect(readValueEpisodeSurfaces(sessionId, process.env)).toEqual([
+      expect.objectContaining({
+        query_id: "rq_opencode_outcome",
+        reported_at: expect.any(String),
+      }),
+    ]);
+    expect(messages).toHaveLength(1);
+  });
+
+  it("keeps completion fail-open when outcome reporting is unavailable", async () => {
+    const sessionId = "s-outcome-unavailable";
+    recordRegistryUse(sessionId, process.env);
+    recordValueEpisodeSurface(
+      sessionId,
+      {
+        query_id: "rq_opencode_unavailable",
+        interaction_kind: "query",
+        candidates: [
+          {
+            result_id: "qres_opencode_unavailable",
+            value_estimate_id: null,
+          },
+        ],
+        bundles: [],
+        selected_result_ids: ["qres_opencode_unavailable"],
+        feedback_available: true,
+        created_at: new Date().toISOString(),
+        reported_at: null,
+      },
+      process.env,
+    );
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(
+      new Error("simulated outcome outage"),
+    );
+    const { client, messages } = loggingClient();
+    const hooks = await Remembrance({ client });
+
+    await expect(emitSessionIdle(hooks, sessionId)).resolves.toBeUndefined();
+
+    expect(readValueEpisodeSurfaces(sessionId, process.env)).toEqual([
+      expect.objectContaining({
+        query_id: "rq_opencode_unavailable",
+        reported_at: null,
+      }),
+    ]);
+    expect(messages).toHaveLength(1);
+  });
+
+  it("stays silent when the session never used Remembrance", async () => {
+    const { client, messages } = loggingClient();
+    const hooks = await Remembrance({ client });
+    await emitSessionIdle(hooks, "s-unused");
+    expect(messages).toHaveLength(0);
+  });
+
+  it("honours REMEMBRANCE_AUTO_CONTRIBUTE=0", async () => {
+    const sessionId = "s-disabled";
+    recordRegistryUse(sessionId, process.env);
+    process.env.REMEMBRANCE_AUTO_CONTRIBUTE = "0";
+    const { client, messages } = loggingClient();
+    const hooks = await Remembrance({ client });
+    await emitSessionIdle(hooks, sessionId);
+    expect(messages).toHaveLength(0);
+  });
+
+  it("nudges on eligible reusable work even without a recorded use", async () => {
+    // Mirrors the Claude/Codex "recovers a contextual task even when no query
+    // completed" case: eligibility alone is enough to ask for a lesson.
+    const sessionId = "s-eligible";
+    recordTaskEligibility(sessionId, process.env);
+    const { client, messages } = loggingClient();
+    const hooks = await Remembrance({ client });
+    await emitSessionIdle(hooks, sessionId);
+    expect(messages.length).toBeGreaterThan(0);
+  });
+
+  it("does not mark a trivial prompt eligible for a completion nudge", async () => {
+    const { client, messages } = loggingClient();
+    const hooks = await Remembrance({ client });
+    await hooks["chat.message"](
+      { messageID: "m-trivial", sessionID: "s-trivial" },
+      {
+        message: {
+          id: "m-trivial",
+          role: "user",
+          sessionID: "s-trivial",
+        },
+        parts: [{ type: "text", text: "What time is it?" }],
+      },
+    );
+    await emitSessionIdle(hooks, "s-trivial");
+    expect(messages).toHaveLength(0);
+  });
+
+  it("uses the host toast surface when available", async () => {
+    recordRegistryUse("s-toast", process.env);
+    const { client, toasts } = toastClient();
+    const hooks = await Remembrance({ client });
+    await emitSessionIdle(hooks, "s-toast");
+    expect(toasts).toEqual([
+      expect.objectContaining({
+        title: "Remembrance",
+        message: expect.stringMatching(/feedback|remembrance/i),
+      }),
+    ]);
+  });
+
+  it("fails open when the host log throws", async () => {
+    recordRegistryUse("s-explode", process.env);
+    const hooks = await Remembrance({
+      client: {
+        app: {
+          log: async () => {
+            throw new Error("host is gone");
+          },
+        },
+      },
+    });
+    await expect(emitSessionIdle(hooks, "s-explode")).resolves.toBeUndefined();
+  });
+
+  it("resolves a missing session id to the stable fallback without throwing", async () => {
+    const { client } = loggingClient();
+    const hooks = await Remembrance({ client });
+    await expect(
+      hooks.event({
+        event: { type: "session.idle", properties: {} },
+      }),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("opencode tool observer (tool.execute.after)", () => {
+  it("correlates a matched query and ignores empty query consumption", async () => {
+    const { client } = loggingClient();
+    const hooks = await Remembrance({ client });
+    await expect(
+      hooks["tool.execute.after"](
+        { tool: "query_skills", sessionID: "s-tool" },
+        {
+          body: {
+            query_id: "rq_opencode",
+            skills: [
+              {
+                slug: "release-review",
+                result_id: "qres_opencode",
+                match_tier: "high",
+              },
+            ],
+            resources: [],
+          },
+        },
+      ),
+    ).resolves.toBeUndefined();
+    expect(readRegistryUseCount("s-tool", process.env)).toBe(1);
+
+    await hooks["tool.execute.after"](
+      { tool: "query_skills", sessionID: "s-empty-tool" },
+      { body: { query_id: "rq_empty", skills: [], resources: [] } },
+    );
+    expect(readRegistryUseCount("s-empty-tool", process.env)).toBe(0);
+  });
+
+  it("records explicit invocation and closes contribution handling", async () => {
+    const { client } = loggingClient();
+    const hooks = await Remembrance({ client });
+    await hooks["tool.execute.after"](
+      {
+        tool: "invoke_skill",
+        sessionID: "s-direct",
+        args: { slug: "release-review" },
+      },
+      {
+        body: {
+          selection_mode: "explicit",
+          query_id: "rinv_opencode",
+          result_id: "qres_direct",
+          skill: {
+            slug: "release-review",
+            version_id: "skv_direct",
+            skill_md: "# Release review\n\nCheck the release.",
+          },
+          feedback: { available: true },
+        },
+      },
+    );
+    expect(readRegistryUseCount("s-direct", process.env)).toBe(1);
+
+    await hooks["tool.execute.after"](
+      { tool: "submit_remembrance", sessionID: "s-direct" },
+      { body: { id: "rem_direct" } },
+    );
+    await emitSessionIdle(hooks, "s-direct");
+    expect(readRegistryUseCount("s-direct", process.env)).toBe(1);
+  });
+
+  it("keeps the contribution reminder open when feedback requests a remembrance", async () => {
+    const { client, messages } = loggingClient();
+    const hooks = await Remembrance({ client });
+    recordRegistryUse("s-followup", process.env);
+    await hooks["tool.execute.after"](
+      { tool: "submit_feedback", sessionID: "s-followup" },
+      {
+        body: {
+          next_step: {
+            submit_remembrance_payload: { type: "failure_report" },
+          },
+        },
+      },
+    );
+    await emitSessionIdle(hooks, "s-followup");
+    expect(messages).toHaveLength(1);
+  });
+
+  it("ignores an event with no resolvable tool name", async () => {
+    const { client, messages } = loggingClient();
+    const hooks = await Remembrance({ client });
+    await hooks["tool.execute.after"]({}, {});
+    expect(messages).toHaveLength(0);
+  });
+
+  it("forwards detail-tool arguments so unopened high matches can clear", async () => {
+    const { client } = loggingClient();
+    const hooks = await Remembrance({ client });
+    await hooks["tool.execute.after"](
+      { tool: "query_skills", sessionID: "s-detail" },
+      {
+        body: {
+          query_id: "rq_detail",
+          skills: [
+            {
+              slug: "release-review",
+              result_id: "qres_detail",
+              match_tier: "high",
+            },
+          ],
+          resources: [],
+        },
+      },
+    );
+    await expect(
+      hooks["tool.execute.after"](
+        {
+          tool: "get_skill",
+          sessionID: "s-detail",
+          arguments: {
+            slug: "release-review",
+            query_id: "rq_detail",
+            result_id: "qres_detail",
+          },
+        },
+        { body: { skill: { slug: "release-review" } } },
+      ),
+    ).resolves.toBeUndefined();
+  });
+});

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "remembrance": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/servers/remembrance-mcp.mjs"],
+      "env": {
+        "REMEMBRANCE_PLUGIN_HOST": "vs_code"
+      }
+    }
+  }
+}

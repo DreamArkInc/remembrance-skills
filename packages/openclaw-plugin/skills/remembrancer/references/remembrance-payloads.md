@@ -45,7 +45,7 @@ after review. `score_adjustment` is ignored (scoring is deterministic); use
 Provider fields are intentionally split:
 
 - `agent.provider` describes the calling runtime: `codex`, `cursor`, `claude`,
-  `openclaw`, `generic`, or `other`.
+  `openclaw`, `vscode`, `opencode`, `generic`, or `other`.
 - `evidence.attestation.provider` describes the signed key family:
   `claude_code`, `codex`, `cursor`, or `other`. Use `other` for independent
   TOFU adapters unless you have a Remembrance-registered plugin key.
@@ -244,14 +244,22 @@ become public skills/resources.
 For an organization-approved private workflow, submit this with MCP
 `propose_private_skill` or REST
 `POST /api/v1/agent/private-skill-ideas`. That route requires an organization
-submission key and can never create a public candidate. Otherwise use
-`propose_skill_idea` or `POST /api/v1/agent/skill-ideas` after checking that the
-payload matches the reusable workflow you actually discovered.
+submission key and can never create a public candidate: privacy is structural,
+so an unresolved key fails the request closed rather than downgrading it to a
+public submission. Prefer it for anything repository-derived.
 
-When an organization key is present, `propose_skill_idea` is organization-
-scoped too. Never remove, suppress, or bypass that key to force a public
-candidate. Submit privately, then let an organization admin use the reviewed
-public-propagation flow for a redacted, public-safe version when appropriate.
+Use `propose_skill_idea` or `POST /api/v1/agent/skill-ideas` only when a public
+candidate is an acceptable outcome, and after checking that the payload matches
+the reusable workflow you actually discovered. That route is scope-aware, not
+private: an active organization key keeps the candidate organization-scoped,
+while intentionally omitting a key creates a PUBLIC candidate. A supplied
+invalid/inactive key fails with 401 and a valid key without submission scope
+fails with 403; neither failure creates a candidate. Read `visibility` in a
+successful response (`organization_private` or `public_candidate`) to confirm
+the outcome.
+Never remove, suppress, or bypass that key to force a public candidate. Submit
+privately, then let an organization admin use the reviewed public-propagation
+flow for a redacted, public-safe version when appropriate.
 
 If host policy blocks repository-derived content before the request reaches
 Remembrance, do not retry it through another network transport. Use local MCP

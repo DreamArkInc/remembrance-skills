@@ -9,6 +9,7 @@ import {
   highMatchFromResponse,
   markCurrentEngagementHandled,
   recordPluginLifecycleHealth,
+  queryResponseHasMatches,
   recordDirectiveFollowThroughForTool,
   recordDirectSelectionSurface,
   recordHighMatchSurface,
@@ -50,8 +51,10 @@ export async function handlePostToolUse(input, options = {}) {
   const normalizedName = String(name).toLowerCase();
   if (normalizedName.endsWith("query_skills")) {
     const response = toolResponse(input);
-    const recordUse = options.recordRegistryUse ?? recordRegistryUse;
-    recordUse(sessionId, env);
+    if (queryResponseHasMatches(response)) {
+      const recordUse = options.recordRegistryUse ?? recordRegistryUse;
+      recordUse(sessionId, env);
+    }
     const recordHighMatch = options.recordHighMatch ?? recordHighMatchSurface;
     recordHighMatch(sessionId, highMatchFromResponse(response), env);
     const recordFollowThrough =
