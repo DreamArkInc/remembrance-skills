@@ -351,6 +351,13 @@ export function inferDomain(prompt) {
 export function inferConstraints(prompt) {
   const constraints = [];
   for (const [pattern, value] of [
+    [/\b(mcp|model context protocol|tool server)\b/i, "mcp"],
+    [/\b(install|setup|set up|configure)\b/i, "setup"],
+    [
+      /\b(api key|enterprise key|organization key|credential)\b/i,
+      "api-key",
+    ],
+    [/\b(troubleshoot|troubleshooting)\b/i, "troubleshooting"],
     [/\b(ci|github actions?|circleci)\b/i, "ci"],
     [/\b(deploy|deployment|vercel|heroku)\b/i, "deployment"],
     [/\b(payment|stripe|mpp|x402)\b/i, "payment"],

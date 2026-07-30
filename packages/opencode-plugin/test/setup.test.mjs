@@ -4,9 +4,11 @@ import {
   readFile,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -195,5 +197,30 @@ describe("opencode one-command setup", () => {
 
     await expect(runSetupCli(["--bad"], io)).resolves.toBe(1);
     expect(output.errors.at(-1)).toMatch(/unknown argument/i);
+  });
+
+  it("runs when Node resolves the executable through a symlinked path", async () => {
+    const root = await mkdtemp(join(tmpdir(), "remembrance-opencode-link-"));
+    tempDirs.push(root);
+    const linkedScript = join(root, "setup.mjs");
+    const configDirectory = join(root, "config");
+    await symlink(
+      fileURLToPath(new URL("../bin/setup.mjs", import.meta.url)),
+      linkedScript,
+    );
+
+    const result = spawnSync(process.execPath, [linkedScript, "setup"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCODE_CONFIG_DIR: configDirectory,
+      },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Configured Remembrance plugin and MCP");
+    await expect(
+      readFile(join(configDirectory, "opencode.json"), "utf8"),
+    ).resolves.toContain(`"@remembrance/opencode-plugin@${installedVersion}"`);
   });
 });

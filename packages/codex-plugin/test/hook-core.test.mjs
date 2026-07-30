@@ -859,6 +859,20 @@ describe("hook-core trigger + payload helpers", () => {
       surface: "plugin_hook",
       trigger_reason: "ui_or_dashboard_work",
     });
+    expect(
+      buildQueryPayload(
+        "Install the Remembrance opencode plugin, configure an organization API key, and troubleshoot missing MCP tools.",
+        { REMEMBRANCE_AUTO_QUERY_LIMIT: "5" },
+        { provider: "opencode", model: "opencode" },
+      ),
+    ).toMatchObject({
+      agent: { provider: "opencode", model: "opencode" },
+      task: {
+        domain: "mcp",
+        constraints: ["mcp", "setup", "api-key", "troubleshooting"],
+      },
+      limit: 5,
+    });
   });
 
   it("lets a runtime override the agent identity (e.g. OpenClaw)", () => {
