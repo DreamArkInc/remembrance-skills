@@ -9180,7 +9180,7 @@ function isRecord(value) {
 // src/server.ts
 var apiConfiguration = resolveApiConfiguration();
 var apiBase = apiConfiguration.baseUrl;
-var SERVER_VERSION = true ? "0.1.44" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.45" : "0.0.0-dev";
 var tools = toolDefinitions;
 var inputBuffer = Buffer.alloc(0);
 var clientFraming = "ndjson";

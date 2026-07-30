@@ -10,7 +10,7 @@ idle.
 Run one command:
 
 ```sh
-npx -y @remembrance/opencode-plugin setup
+npx -y @remembrance-ai/opencode-plugin setup
 ```
 
 The setup command adds the version-matched plugin and local Remembrance MCP
@@ -21,7 +21,7 @@ Restart opencode. Remembrance then appears in its tools list, adds bounded
 matching guidance to eligible model turns, observes completed use, and asks once
 for concise, redacted feedback.
 
-Use `npx -y @remembrance/opencode-plugin setup --dry-run` to preview the merged
+Use `npx -y @remembrance-ai/opencode-plugin setup --dry-run` to preview the merged
 config. `opencode.json` in this package is a reference config for managed
 deployments.
 

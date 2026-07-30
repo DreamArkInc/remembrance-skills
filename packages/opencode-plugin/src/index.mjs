@@ -286,7 +286,7 @@ export const Remembrance = async (context = {}) => {
       env,
       identity: { provider: SURFACE, model: "opencode" },
       reportDirectiveShown: false,
-      userAgent: "@remembrance/opencode-plugin",
+      userAgent: "@remembrance-ai/opencode-plugin",
     });
     if (result?.eligible) {
       recordTaskEligibility(sessionId, env);
@@ -355,7 +355,7 @@ export const Remembrance = async (context = {}) => {
           },
           {
             env,
-            userAgent: "@remembrance/opencode-plugin",
+            userAgent: "@remembrance-ai/opencode-plugin",
           },
         );
       }
@@ -414,7 +414,7 @@ export const Remembrance = async (context = {}) => {
       recordLifecycle("completion_hook", sessionId);
       await reportTaskOutcomesOnStop(sessionId, event, {
         env,
-        userAgent: "@remembrance/opencode-plugin",
+        userAgent: "@remembrance-ai/opencode-plugin",
       });
       const decision = decideStop({ session_id: sessionId }, { env });
       if (decision?.allow !== false || !decision?.reason) return;

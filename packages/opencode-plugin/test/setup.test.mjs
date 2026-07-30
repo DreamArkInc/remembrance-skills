@@ -65,7 +65,7 @@ describe("opencode one-command setup", () => {
 
   it("adds pinned plugin and MCP entries to an empty config", () => {
     const updated = updateOpenCodeConfigText("", "0.1.41");
-    expect(updated).toContain('"@remembrance/opencode-plugin@0.1.41"');
+    expect(updated).toContain('"@remembrance-ai/opencode-plugin@0.1.41"');
     expect(updated).toContain('"@remembrance-ai/mcp-server@0.1.41"');
     expect(updated).toContain('"REMEMBRANCE_PLUGIN_HOST": "opencode"');
   });
@@ -75,7 +75,12 @@ describe("opencode one-command setup", () => {
       `{
   // Keep the selected model.
   "model": "anthropic/claude-sonnet-4",
-  "plugin": ["existing", "@remembrance/opencode-plugin@0.1.39"],
+  "plugin": [
+    "existing",
+    "@remembrance-ai/opencode-plugin-helper@2.0.0",
+    "@remembrance-ai/opencode-plugin@0.1.39",
+    "@remembrance/opencode-plugin@0.1.38"
+  ],
   "mcp": {
     "other": { "type": "remote", "url": "https://example.test/mcp" },
     "remembrance": { "enabled": false }
@@ -87,9 +92,15 @@ describe("opencode one-command setup", () => {
     expect(updated).toContain("// Keep the selected model.");
     expect(updated).toContain('"model": "anthropic/claude-sonnet-4"');
     expect(updated).toContain('"existing"');
+    expect(updated).toContain(
+      '"@remembrance-ai/opencode-plugin-helper@2.0.0"',
+    );
     expect(updated).not.toContain("0.1.39");
+    expect(updated).not.toContain("@remembrance/opencode-plugin");
     expect(updated).toContain('"other"');
-    expect(updated.match(/@remembrance\/opencode-plugin/g)).toHaveLength(1);
+    expect(
+      updated.match(/"@remembrance-ai\/opencode-plugin@/g),
+    ).toHaveLength(1);
   });
 
   it("rejects malformed or non-object configs without guessing", () => {
@@ -156,7 +167,7 @@ describe("opencode one-command setup", () => {
     });
     expect(result.version).toBe(installedVersion);
     expect(result.updated).toContain(
-      `"@remembrance/opencode-plugin@${installedVersion}"`,
+      `"@remembrance-ai/opencode-plugin@${installedVersion}"`,
     );
   });
 
@@ -185,7 +196,7 @@ describe("opencode one-command setup", () => {
       runSetupCli(["setup", "--dry-run", "--config", configPath], io),
     ).resolves.toBe(0);
     expect(output.writes.join("")).toContain(
-      `"@remembrance/opencode-plugin@${installedVersion}"`,
+      `"@remembrance-ai/opencode-plugin@${installedVersion}"`,
     );
 
     await expect(
@@ -221,6 +232,6 @@ describe("opencode one-command setup", () => {
     expect(result.stdout).toContain("Configured Remembrance plugin and MCP");
     await expect(
       readFile(join(configDirectory, "opencode.json"), "utf8"),
-    ).resolves.toContain(`"@remembrance/opencode-plugin@${installedVersion}"`);
+    ).resolves.toContain(`"@remembrance-ai/opencode-plugin@${installedVersion}"`);
   });
 });

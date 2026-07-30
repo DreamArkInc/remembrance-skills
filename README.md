@@ -242,7 +242,7 @@ missed queries and reusable contributions once per task.
 ### OpenCode — plugin (context + tools + feedback lifecycle)
 
 ```bash
-npx -y @remembrance/opencode-plugin setup
+npx -y @remembrance-ai/opencode-plugin setup
 ```
 
 The setup command preserves unrelated JSONC settings and adds the

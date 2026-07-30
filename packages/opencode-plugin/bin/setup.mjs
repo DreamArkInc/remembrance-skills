@@ -15,6 +15,12 @@ import { fileURLToPath } from "node:url";
 import { applyEdits, modify, parse, printParseErrorCode } from "jsonc-parser";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const OPENCODE_PLUGIN_PACKAGE = "@remembrance-ai/opencode-plugin";
+const LEGACY_OPENCODE_PLUGIN_PACKAGE = "@remembrance/opencode-plugin";
+
+function isPackageSpec(value, packageName) {
+  return value === packageName || value.startsWith(`${packageName}@`);
+}
 
 export function defaultOpenCodeConfigPath(env = process.env, home = homedir()) {
   if (env.OPENCODE_CONFIG?.trim()) {
@@ -48,13 +54,16 @@ export function updateOpenCodeConfigText(source, version) {
     );
   }
 
-  const pluginSpec = `@remembrance/opencode-plugin@${version}`;
+  const pluginSpec = `${OPENCODE_PLUGIN_PACKAGE}@${version}`;
   const currentPlugins = Array.isArray(parsed.plugin)
     ? parsed.plugin.filter((value) => typeof value === "string")
     : [];
   const plugins = [
     ...currentPlugins.filter(
-      (value) => !value.startsWith("@remembrance/opencode-plugin"),
+      (value) =>
+        ![OPENCODE_PLUGIN_PACKAGE, LEGACY_OPENCODE_PLUGIN_PACKAGE].some(
+          (packageName) => isPackageSpec(value, packageName),
+        ),
     ),
     pluginSpec,
   ];

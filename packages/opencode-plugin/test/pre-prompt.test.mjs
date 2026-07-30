@@ -171,7 +171,7 @@ describe("opencode prompt context injection", () => {
     });
     expect(calls[0].body.client_context?.runtime).toBe("opencode");
     expect(calls[0].headers).toMatchObject({
-      "user-agent": "@remembrance/opencode-plugin",
+      "user-agent": "@remembrance-ai/opencode-plugin",
     });
   });
 

@@ -23,7 +23,7 @@ describe("opencode plugin registration", () => {
     // function; a CommonJS main or a missing export makes the plugin invisible.
     expect(pkg.type).toBe("module");
     expect(typeof Remembrance).toBe("function");
-    expect(pkg.name).toBe("@remembrance/opencode-plugin");
+    expect(pkg.name).toBe("@remembrance-ai/opencode-plugin");
   });
 
   it("declares the version-matched published MCP server in opencode.json", () => {
@@ -35,7 +35,7 @@ describe("opencode plugin registration", () => {
     ).toBeTruthy();
     const version = readJson("package.json").version;
     expect(server.command).toContain(`@remembrance-ai/mcp-server@${version}`);
-    expect(config.plugin).toContain(`@remembrance/opencode-plugin@${version}`);
+    expect(config.plugin).toContain(`@remembrance-ai/opencode-plugin@${version}`);
   });
 
   it("reports its own plugin host so client-health does not merge surfaces", () => {
