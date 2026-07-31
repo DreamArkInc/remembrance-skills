@@ -3,7 +3,10 @@ import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { Remembrance, pluginVersion } from "../src/index.mjs";
+import pluginModule, {
+  Remembrance,
+  pluginVersion,
+} from "../src/index.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const read = (rel) => readFileSync(resolve(root, rel), "utf8");
@@ -19,10 +22,16 @@ const expectedMcpTools = [
 describe("opencode plugin registration", () => {
   it("registers through the documented plugin entrypoint", () => {
     const pkg = readJson("package.json");
-    // opencode loads an in-process ES module and calls the exported plugin
-    // function; a CommonJS main or a missing export makes the plugin invisible.
+    // Current OpenCode hosts detect this object before considering legacy
+    // function exports. That prevents test helpers from being invoked as
+    // independent plugins and corrupting the host hook registry.
     expect(pkg.type).toBe("module");
     expect(typeof Remembrance).toBe("function");
+    expect(pluginModule).toEqual({
+      id: "@remembrance-ai/opencode-plugin",
+      server: Remembrance,
+    });
+    expect(pkg.exports?.["./server"]).toBe("./src/index.mjs");
     expect(pkg.name).toBe("@remembrance-ai/opencode-plugin");
   });
 

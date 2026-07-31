@@ -1,7 +1,8 @@
 // Remembrance opencode plugin entrypoint.
 //
-// opencode plugins are IN-PROCESS JS/TS modules, not stdin/stdout scripts: the
-// module exports a plugin function that receives
+// opencode plugins are IN-PROCESS JS/TS modules, not stdin/stdout scripts. The
+// default export is the current versioned plugin-module object; its `server`
+// function receives
 // `{ project, client, $, directory, worktree }` and returns an object whose
 // `event` callback receives the host's discriminated lifecycle-event union.
 // Specialized mutable hooks such as tool.execute.after remain direct keys.
@@ -548,4 +549,7 @@ function toolArgumentsFromEvent(input) {
   return value && typeof value === "object" ? value : {};
 }
 
-export default Remembrance;
+export default Object.freeze({
+  id: "@remembrance-ai/opencode-plugin",
+  server: Remembrance,
+});

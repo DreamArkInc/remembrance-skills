@@ -6,7 +6,7 @@
       "command": [
         "npx",
         "-y",
-        "@remembrance-ai/mcp-server@0.1.45"
+        "@remembrance-ai/mcp-server@0.1.46"
       ],
       "enabled": true,
       "environment": {
@@ -15,6 +15,6 @@
     }
   },
   "plugin": [
-    "@remembrance-ai/opencode-plugin@0.1.45"
+    "@remembrance-ai/opencode-plugin@0.1.46"
   ]
 }

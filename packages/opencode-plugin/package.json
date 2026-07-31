@@ -1,12 +1,13 @@
 {
   "name": "@remembrance-ai/opencode-plugin",
-  "version": "0.1.45",
+  "version": "0.1.46",
   "license": "Apache-2.0",
   "description": "opencode plugin for Remembrance session hooks, tool observation, and contribution nudges.",
   "type": "module",
   "main": "src/index.mjs",
   "exports": {
-    ".": "./src/index.mjs"
+    ".": "./src/index.mjs",
+    "./server": "./src/index.mjs"
   },
   "bin": {
     "remembrance-opencode-setup": "bin/setup.mjs"
