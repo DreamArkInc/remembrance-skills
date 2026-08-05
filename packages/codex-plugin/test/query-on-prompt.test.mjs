@@ -675,6 +675,18 @@ describe("Codex query-on-prompt adapter", () => {
     expect(hooks.hooks.PostToolUse[0].matcher).toContain("get_skill");
     expect(hooks.hooks.PostToolUse[0].matcher).toContain("get_resource");
     expect(hooks.hooks.PostToolUse[0].matcher).toContain("query_skills");
+    const postToolMatcher = new RegExp(hooks.hooks.PostToolUse[0].matcher);
+    for (const toolName of [
+      "mcp__remembrance__run_connection_doctor",
+      "mcp__plugin_remembrance_remembrance__get_connection_status",
+      "remembrance.list_skills",
+      "report_task_outcome",
+    ]) {
+      expect(postToolMatcher.test(toolName), toolName).toBe(true);
+    }
+    expect(postToolMatcher.test("mcp__other__run_connection_doctor")).toBe(
+      false,
+    );
     expect(hooks.hooks.PostToolUse[0].hooks[0].command).toContain(
       "record-detail-open.mjs",
     );

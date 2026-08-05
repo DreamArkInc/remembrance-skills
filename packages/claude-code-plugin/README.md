@@ -37,6 +37,10 @@ CODEX_CLI="${CODEX_CLI:-$(command -v codex || true)}"
 If `codex` is not on your shell `PATH`, this checks the current `ChatGPT.app`
 bundle first and retains the legacy `Codex.app` compatibility path.
 
+After a Codex install or update, enter `/hooks` in Codex and confirm the four
+Remembrance hooks all show **Active**. Trust any marked **Needs review**; Codex
+skips untrusted hooks. Changed hook definitions require review again.
+
 The repository-level `.agents/plugins/marketplace.json` routes Codex to
 `packages/codex-plugin`; this Claude package is never reused as a Codex plugin.
 That separation prevents one host's manifest and plugin-root conventions from

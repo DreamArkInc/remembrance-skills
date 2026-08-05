@@ -28,28 +28,32 @@ This one setup works for both first install and update. If your shell prints
 `codex: command not found`, it automatically checks the current
 `ChatGPT.app` bundle and then the legacy `Codex.app` compatibility path.
 
-Plugin-bundled hooks require a **one-time trust** the first time you run Codex
-after installing: Codex prompts you to approve the plugin's hooks and MCP
-endpoint before it will execute them. Approve once and it is remembered.
+Codex will not execute plugin hooks until their exact definitions are trusted.
+After installing or updating, fully open Codex, enter `/hooks`, and confirm the
+Remembrance `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` hooks
+all show **Active**. Trust any that show **Needs review**. Changed hook
+definitions require review again; this is a Codex security boundary and the
+installer does not bypass it.
 
 After install, fully restart Codex and verify the loop before assuming the
 plugin is active:
 
-1. Ask Codex: "Before solving, call Remembrance query_skills for Codex plugin
+1. Open `/hooks` and confirm all four Remembrance hooks show **Active**.
+2. Ask Codex: "Before solving, call Remembrance query_skills for Codex plugin
    setup."
-2. Ask it to run `run_connection_doctor`. Require `safe_to_query: true`; follow
+3. Ask it to run `run_connection_doctor`. Require `safe_to_query: true`; follow
    its one remediation if attention is required. Do not accept an environment-
    variable check or an anonymous curl/browser probe as a substitute.
-3. Confirm it reports a concrete Remembrance receipt such as a query id,
+4. Confirm it reports a concrete Remembrance receipt such as a query id,
    returned skill slug, MCP tool result, or REST status.
-4. After it evaluates returned results, confirm it calls
+5. After it evaluates returned results, confirm it calls
    `submit_query_feedback` for explicit good/partial/poor matches. After it
    actually uses a skill/resource, confirm it calls `submit_feedback` and, when
    the lesson is reusable, `submit_remembrance`.
 
-If Codex can see the plugin skill but not the MCP tools, the hooks can still use
-the REST fallback, but that should be treated as degraded until the trust prompt,
-restart, and MCP registration are fixed.
+If Codex can see the plugin skill but not the MCP tools, or `/hooks` shows any
+Remembrance hook as **Needs review**, treat the installation as degraded until
+hook trust, restart, and MCP registration are fixed.
 
 ## Manual install (config.toml)
 

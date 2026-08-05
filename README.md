@@ -212,6 +212,12 @@ Fully quit and reopen Codex, then call `run_connection_doctor`. Confirm
 Visible skills without native hooks or MCP tools is a degraded partial install,
 not a successful setup.
 
+Codex will not run new or changed plugin hooks until their exact definitions are
+trusted. After installing or updating, enter `/hooks` in Codex and confirm the
+Remembrance `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` hooks
+all show **Active**. Trust any marked **Needs review**, then fully restart Codex.
+Changed hook definitions require review again.
+
 ### OpenClaw — plugin (skill + tools + conversation hooks)
 
 ```bash

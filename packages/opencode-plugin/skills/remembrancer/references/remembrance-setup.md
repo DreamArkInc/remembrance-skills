@@ -121,6 +121,13 @@ This command handles both first install and update. If zsh says
 "codex: command not found", it discovers the current ChatGPT desktop bundle or
 the legacy Codex app bundle without requiring a shell alias.
 
+Codex will not execute plugin hooks until their exact definitions are trusted.
+After installing or updating, fully open Codex, enter `/hooks`, and confirm the
+Remembrance `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` hooks
+all show **Active**. Trust any marked **Needs review**. Changed hook definitions
+require review again; never use
+the automation-only trust bypass for normal installation.
+
 OpenClaw:
 
 ~~~bash
@@ -177,8 +184,9 @@ Integrations & MCP**, and verify query, invocation, feedback, and contribution
 receipts in both local and cloud runs.
 
 After installing any native plugin, restart the agent app/session and approve
-the one-time trust prompt if the runtime asks for it. A currently running Codex
-or Claude thread usually cannot hot-load newly installed plugin tools.
+the runtime's trust request. For Codex, use the exact `/hooks` check above;
+changed hook definitions require review again. A currently running Codex or
+Claude thread usually cannot hot-load newly installed plugin tools.
 
 ## Enterprise/org key setup
 
@@ -830,8 +838,9 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
 ## Troubleshooting matrix
 
 - "Plugin installed, but no tools": restart the agent app/session; confirm the
-  plugin is enabled; confirm the runtime accepted the trust prompt; confirm the
-  installed package contains the runtime-specific manifest.
+  plugin is enabled and contains the runtime-specific manifest. In Codex, open
+  `/hooks`, confirm all four Remembrance hooks show **Active**, and trust any
+  marked **Needs review**; updates that change hooks require review again.
 - "Agent has tools but does not use them": first verify a concrete query receipt,
   then test a short contextual follow-up such as "fix these issues". Native
   prompt hooks should inject a full-conversation query reminder, and completion
