@@ -35,8 +35,10 @@ printf '{"apiKey":"YOUR_ORG_KEY"}\n' > ~/.config/remembrance/config.json
 chmod 600 ~/.config/remembrance/config.json
 ```
 
-After restart, call MCP `get_connection_status`. It should report
-`local_stdio_mcp`, `shared_config`, and the expected organization scope. Never
+After restart, run MCP `run_connection_doctor` and require
+`safe_to_query: true`. It verifies the active connection and gives one exact
+next step if attention is required. Use `get_connection_status` only for lower-
+level fields. Never
 infer Cursor's plugin scope from `REMEMBRANCE_API_KEY` alone or from an
 anonymous REST/browser probe; the diagnostic verifies the process that will
 actually serve Cursor's tools without exposing the key.
@@ -46,6 +48,11 @@ For dev/self-hosted registries, add `apiUrl` to the same file:
 ```json
 { "apiKey": "YOUR_ORG_KEY", "apiUrl": "https://your-remembrance.example" }
 ```
+
+This paired file binds the key to that destination. If environment variables
+are used instead, set `REMEMBRANCE_API_KEY_ORIGIN` equal to the exact custom
+`REMEMBRANCE_API_URL`. Remote registries require HTTPS; a trusted private or
+link-local self-host also requires `REMEMBRANCE_ALLOW_PRIVATE_REGISTRY=true`.
 
 Every organization query returns `skill_access`. If its policy is `org_only`,
 Cursor uses only returned organization skills and never substitutes bundled or

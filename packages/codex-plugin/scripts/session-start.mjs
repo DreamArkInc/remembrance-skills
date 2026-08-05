@@ -49,7 +49,7 @@ export function handleSessionStart(input, options = {}) {
       additionalContext:
         `Remembrance plugin health: Codex SessionStart hook is active for plugin ${version}; ` +
         `the bundled local MCP server uses the same ${auth}. ` +
-        "Call get_connection_status before diagnosing setup. If that tool is absent, report partial activation and update/reinstall the plugin, then fully restart Codex.",
+        "Run run_connection_doctor if setup seems incomplete. It verifies the active connection and gives one exact next step. If that tool is absent, report partial activation, update or reinstall the plugin, and fully restart Codex.",
     },
   };
 }

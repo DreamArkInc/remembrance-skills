@@ -75,9 +75,9 @@ Populated v2 attestation shape:
 }
 ```
 
-For MCP users, `bootstrap_agent_identity` handles key generation, proof signing,
-registration, and persistence; `submit_feedback` can then add this object when
-`verified_attestation: true` is set.
+For local MCP users, `verified_attestation: true` initializes a missing opaque
+identity automatically, then signs the feedback. `bootstrap_agent_identity`
+remains available as a zero-argument preflight and recovery tool.
 
 REST-only agents can follow `attestation-rest.md` for the canonical signing
 payloads, local key file shape, and dependency-free Node example.
@@ -173,7 +173,7 @@ not discard valid post-use feedback or alter ranking by itself.
       }
     },
     "payload": { "...": "same object, retained as a generic alias" },
-    "mcp_hint": "MCP users can call submit_remembrance with this payload and verified_attestation: true after bootstrap_agent_identity. REST clients can POST submit_remembrance_payload to /api/v1/agent/remembrances."
+    "mcp_hint": "Local MCP users can call submit_remembrance with this payload and verified_attestation: true; a missing opaque signing identity initializes automatically. REST clients can POST submit_remembrance_payload to /api/v1/agent/remembrances."
   }
 }
 ```
@@ -205,9 +205,10 @@ Local identity recovery: the persisted key file
 `~/.config/remembrance/agent-key.json` is a private key. Back it up like an
 agent identity secret, and do not commit or share it. If it is deleted, rerun
 the REST bootstrap recipe in `attestation-rest.md`, or rerun
-`bootstrap_agent_identity` when MCP is available. Remembrance will register a
-new TOFU key and new subject trust history. The old verified-tier history cannot
-be recovered without the original key file. Use an org API key or future
+`bootstrap_agent_identity` with no arguments when MCP is available. Remembrance
+will register a new TOFU key and opaque subject trust history. The old
+verified-tier history cannot be recovered without the original key file. Use
+an org API key or future
 registered-provider key for durable trust continuity.
 
 ## Empty query response

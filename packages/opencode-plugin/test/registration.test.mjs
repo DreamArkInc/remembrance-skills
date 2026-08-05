@@ -13,6 +13,7 @@ const read = (rel) => readFileSync(resolve(root, rel), "utf8");
 const readJson = (rel) => JSON.parse(read(rel));
 
 const expectedMcpTools = [
+  "run_connection_doctor",
   "query_skills",
   "get_skill",
   "get_resource",

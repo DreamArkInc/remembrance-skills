@@ -11,7 +11,7 @@ REST/HTTPS, skill-only installs, enterprise org keys, local identity, and common
   Cursor, Gemini, or another agent.
 - The user has an enterprise/org API key and needs to make an agent use
   org-scoped skills or private overlays.
-- MCP tools such as get_connection_status, query_skills, list_skills,
+- MCP tools such as run_connection_doctor, get_connection_status, query_skills, list_skills,
   invoke_skill, submit_query_feedback, submit_feedback, submit_remembrance,
   propose_private_skill, queue_private_skill_import, report_task_outcome,
   get_value_proof, get_skill, get_resource, or bootstrap_agent_identity are
@@ -129,7 +129,7 @@ openclaw remembrance setup
 If ClawHub search shows multiple Remembrance matches, use the official package
 that points to "dreamarkinc/remembrance-skills", mentions the Remembrance agent
 skill/resource service, and exposes the expected Remembrance MCP tools such as
-get_connection_status, query_skills, list_skills, invoke_skill,
+run_connection_doctor, get_connection_status, query_skills, list_skills, invoke_skill,
 submit_query_feedback, submit_remembrance, get_skill, and get_resource, plus
 report_task_outcome and get_value_proof. Do not install
 unrelated roots, genealogy, ancestry, or memorial packages.
@@ -190,9 +190,11 @@ chmod 600 ~/.config/remembrance/config.json
 ~~~
 
 Do not infer connection scope by checking one environment variable. After
-setup, call MCP `get_connection_status`. It names the active transport,
-credential source, verified organization/public scope, and config permission
-status without exposing the key. An anonymous curl or browser probe describes
+setup, run MCP `run_connection_doctor`. It performs a non-mutating catalog
+read and names the active transport, credential source, verified
+organization/public scope, and config permission status with one exact
+remediation, without exposing the key, absolute paths, or custom registry URLs.
+Use `get_connection_status` only for the underlying fields. An anonymous curl or browser probe describes
 only that request, not the plugin. Raw REST clients do not load this file
 automatically; they must deliberately read it or send a key header.
 
@@ -203,14 +205,30 @@ export REMEMBRANCE_API_KEY="YOUR_ORG_KEY"
 export REMEMBRANCE_API_URL="https://remembrance.dev"
 ~~~
 
+For a custom registry, bind the key to that exact destination. Store `apiKey`
+and `apiUrl` together in the shared config, or bind environment credentials
+explicitly:
+
+~~~bash
+export REMEMBRANCE_API_KEY="YOUR_ORG_KEY"
+export REMEMBRANCE_API_URL="https://registry.example"
+export REMEMBRANCE_API_KEY_ORIGIN="https://registry.example"
+~~~
+
+Every remote registry requires HTTPS; only loopback development may use HTTP.
+An intentionally trusted private or link-local HTTPS registry also requires
+`REMEMBRANCE_ALLOW_PRIVATE_REGISTRY=true`. If the destination and credential
+binding do not match exactly, Remembrance pauses remote calls instead of
+forwarding the key.
+
 For Codex Desktop, the packaged plugin now runs a bundled local MCP server.
 The native hooks and MCP process both read the shared file above, so the GUI
 does not need `launchctl setenv` for the normal plugin path. Fully quit and
-reopen Codex after installing or updating the plugin, then call
-`get_connection_status`. A healthy install reports `local_stdio_mcp`, the
+reopen Codex after installing or updating the plugin, then run
+`run_connection_doctor`. A healthy install reports `local_stdio_mcp`, the
 expected organization scope, and an active `plugin_health` lifecycle.
 
-If filesystem skills are visible but `get_connection_status` is absent, or if
+If filesystem skills are visible but `run_connection_doctor` is absent, or if
 that tool reports missing native hooks, treat the install as partially active.
 Update or reinstall from the Remembrance marketplace, fully restart Codex, and
 run the check again. The plugin records only local component timestamps and
@@ -218,6 +236,12 @@ version/source categories; a degraded check may submit those bounded issue
 codes for deduplicated global-admin triage. It never submits prompts, keys,
 paths, or raw logs. Set `REMEMBRANCE_HEALTH_REPORTING=0` to disable that
 best-effort report.
+
+If no Remembrance MCP tool is visible, run
+`npx @remembrance-ai/mcp-server doctor`. This safely verifies registry,
+credential, and catalog-read access outside the host, but it deliberately
+reports host registration as unobservable. Update or reinstall the native
+plugin, fully restart the host, then rerun `run_connection_doctor` inside it.
 
 A manually configured hosted MCP URL is still supported, but hosted MCP cannot
 read the shared file and must receive its own request credential. Only that
@@ -283,6 +307,7 @@ Add this separately to `managed_config.toml`:
 enabled = true
 enabled_tools = [
   "get_connection_status",
+  "run_connection_doctor",
   "query_skills",
   "list_skills",
   "invoke_skill",
@@ -358,9 +383,8 @@ overrides `launchctl` and the config file.
 For the Claude Code desktop app, prefer the shared mode-0600 config file above.
 The plugin hooks and bundled local MCP server both read it, so the GUI process
 does not need to inherit shell exports or duplicate the key in Claude settings.
-Fully quit and relaunch Claude Code after changing the file, then call
-`get_connection_status` and confirm `shared_config`, `local_stdio_mcp`,
-active plugin health, and the expected organization scope.
+Fully quit and relaunch Claude Code after changing the file, then run
+`run_connection_doctor` and require `safe_to_query: true`.
 
 For Cursor, prefer the shared config file above. The Cursor plugin-managed MCP
 server and local hooks read it. If using a non-prod Remembrance endpoint, include
@@ -381,6 +405,7 @@ bounded feedback/outcomes, and organization-private contribution:
 
 ~~~text
 get_connection_status
+run_connection_doctor
 query_skills
 list_skills
 invoke_skill
@@ -446,6 +471,7 @@ Merge this into managed settings:
   "permissions": {
     "allow": [
       "mcp__remembrance__get_connection_status",
+      "mcp__remembrance__run_connection_doctor",
       "mcp__remembrance__query_skills",
       "mcp__remembrance__list_skills",
       "mcp__remembrance__invoke_skill",
@@ -473,8 +499,8 @@ The exclusive managed MCP file lives at
 `/etc/claude-code/managed-mcp.json` on Linux/WSL, and
 `C:\Program Files\ClaudeCode\managed-mcp.json` on Windows. The sandbox
 domain applies to command/REST fallbacks; managed HTTP MCP authorization remains
-the exact server URL plus named tools. Verify with `claude mcp list`, then call
-`get_connection_status` and confirm organization scope before contribution
+the exact server URL plus named tools. Verify with `claude mcp list`, then run
+`run_connection_doctor` and require organization scope before contribution
 work. See the official
 [managed MCP](https://code.claude.com/docs/en/managed-mcp),
 [permissions](https://code.claude.com/docs/en/permissions), and
@@ -500,6 +526,7 @@ narrow server/tool set:
       },
       "includeTools": [
       "get_connection_status",
+      "run_connection_doctor",
       "query_skills",
       "list_skills",
       "invoke_skill",
@@ -523,7 +550,7 @@ System settings live at `/Library/Application Support/GeminiCli/settings.json`
 on macOS, `/etc/gemini-cli/settings.json` on Linux, and
 `C:\ProgramData\gemini-cli\settings.json` on Windows. Also allow
 `remembrance.dev` in the organization's egress policy. Restart Gemini CLI,
-inspect the registered server, then call `get_connection_status` and confirm
+inspect the registered server, then run `run_connection_doctor` and require
 organization scope before contribution work. See the official
 [enterprise configuration](https://google-gemini.github.io/gemini-cli/docs/cli/enterprise.html)
 and [MCP settings](https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html).
@@ -552,6 +579,7 @@ tool profile hides MCP tools, and `tools.deny: ["bundle-mcp"]` disables them:
         "toolFilter": {
           "include": [
       "get_connection_status",
+      "run_connection_doctor",
       "query_skills",
       "list_skills",
       "invoke_skill",
@@ -597,8 +625,8 @@ the server's `toolFilter`. Merge this separately into `policy.jsonc`:
 ~~~
 
 Keep the organization key in the plugin's mode-0600 shared config or another
-approved secret source, not in `policy.jsonc`. After the probes, call
-`get_connection_status` and confirm organization scope. See the official
+approved secret source, not in `policy.jsonc`. After the probes, run
+`run_connection_doctor` and require organization scope. See the official
 [plugin policy](https://docs.openclaw.ai/tools/plugin),
 [conversation hook policy](https://docs.openclaw.ai/plugins/hooks),
 [MCP tool filters](https://docs.openclaw.ai/cli/mcp), and
@@ -616,7 +644,7 @@ based fallback paths.
 Cursor's current public enterprise documentation does not define a managed
 per-MCP-tool allowlist equivalent to Codex, Claude Code, Gemini CLI, or
 OpenClaw. Keep Cursor's normal tool approvals enabled and do not claim an
-undocumented control exists. Call `get_connection_status` and confirm
+undocumented control exists. Run `run_connection_doctor` and require
 organization scope on every enabled surface, then verify query, invocation,
 feedback, and private-contribution receipts; local plugin hooks and cloud-agent
 hooks can differ. See the official
@@ -633,8 +661,8 @@ tool list above when the client supports tool filtering. Keep normal approval
 behavior for non-read-only calls unless unattended organization-private
 contribution is explicitly approved. A client with no server/tool policy must
 use its existing destination control or the zero-network handoff. Supply the
-organization key through the client's secret/header mechanism, then call
-`get_connection_status` and confirm organization scope before private writes.
+organization key through the client's secret/header mechanism, then run
+`run_connection_doctor` and require organization scope before private writes.
 
 If any host still denies the export, that denial remains authoritative. The
 portable local handoff and dashboard import work identically for Codex, Claude
@@ -664,6 +692,16 @@ Local stdio MCP server:
 ~~~bash
 npx @remembrance-ai/mcp-server
 ~~~
+
+Independent setup check when the host does not expose Remembrance tools:
+
+~~~bash
+npx @remembrance-ai/mcp-server doctor
+~~~
+
+This verifies registry, credential, and catalog-read access without submitting
+content. It cannot prove host MCP registration; after repair, rerun
+`run_connection_doctor` inside the host.
 
 Cursor MCP fallback config (use this only when plugin install is unavailable):
 
@@ -728,16 +766,17 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
 
 1. Start a fresh agent session.
 2. Check whether Remembrance MCP tools are visible. Expected tools include
-   get_connection_status, query_skills, list_skills, invoke_skill, get_skill,
+   run_connection_doctor, get_connection_status, query_skills, list_skills, invoke_skill, get_skill,
    get_resource, submit_query_feedback, submit_feedback, submit_remembrance,
    propose_private_skill, report_task_outcome, get_value_proof, and
    bootstrap_agent_identity. Local MCP also exposes
    queue_private_skill_import. Clients
    with MCP resource discovery should also expose paginated
    `remembrance://skills/{slug}` handles.
-3. Call get_connection_status and confirm the active transport, credential
-   source, and expected public/organization scope before inspecting environment
-   variables or making a raw probe.
+3. Call run_connection_doctor and require `safe_to_query: true`. Confirm the
+   active transport and expected public/organization scope before inspecting
+   environment variables or making a raw probe. Follow its exact remediation
+   for any warning or failure.
 4. Ask the agent to query Remembrance for a known task, for example:
    "Query Remembrance for web UI QA before reviewing a responsive dashboard."
 5. Follow with a context-only prompt such as "fix these issues". Confirm the
@@ -781,8 +820,10 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
    queue_private_skill_import instead, upload its JSON in the dashboard, and
    verify the agent reports a local queue receipt separately from the server
    import receipt.
-14. If using local MCP, run bootstrap_agent_identity once when verified TOFU
-   contributions are needed.
+14. If using local MCP, verify local_signing_identity in get_connection_status.
+   A missing opaque identity initializes automatically on the first signed
+   contribution; bootstrap_agent_identity with no arguments is an optional
+   preflight or recovery action.
 
 ## Troubleshooting matrix
 

@@ -41,7 +41,7 @@ export function handleSessionStart(input, options = {}) {
       additionalContext:
         `Remembrance plugin health: Claude Code SessionStart hook is active for plugin ${version}; ` +
         "the bundled local MCP server resolves the same environment/shared config credential. " +
-        "Call get_connection_status before diagnosing setup; if it is absent, report partial activation and reinstall/update the plugin before restarting Claude Code.",
+        "Run run_connection_doctor if setup seems incomplete. It verifies the active connection and gives one exact next step. If that tool is absent, report partial activation, update or reinstall the plugin, and restart Claude Code.",
     },
   };
 }

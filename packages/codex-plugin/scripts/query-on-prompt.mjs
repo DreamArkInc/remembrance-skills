@@ -77,7 +77,7 @@ export function codexHostedMcpCredentialSplitNotice(env = process.env) {
     "Result: hook queries can use organization skills while native hosted MCP tools are unavailable, anonymous, or scoped differently.",
     `Fix for Codex Desktop on macOS: launchctl setenv ${remediationEnv} \"<same organization key>\", then fully quit and reopen Codex.`,
     `For a terminal launch: export ${remediationEnv}=\"<same organization key>\" before starting Codex.`,
-    "Once the native tools are visible, call get_connection_status and confirm hosted_http_mcp plus the expected organization scope.",
+    "Once the native tools are visible, run run_connection_doctor and follow its single remediation if attention is required.",
     "A Codex tenant/privacy-policy denial happens before any Remembrance request; it is not a Remembrance rejection.",
   ].join("\n");
 }

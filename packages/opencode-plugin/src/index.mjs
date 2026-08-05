@@ -13,7 +13,7 @@
 //
 //   SESSION START  (event -> session.created): records lifecycle health under the
 //     "opencode" surface and logs the activation notice, so a user can see the
-//     plugin loaded and knows to call get_connection_status.
+//     plugin loaded and knows to call run_connection_doctor.
 //
 //   PROMPT (chat.message -> experimental.chat.system.transform): queries from
 //     the current user turn, then injects the bounded result into the model's
@@ -268,7 +268,7 @@ export const Remembrance = async (context = {}) => {
       await notify(
         client,
         `Remembrance ${version} is active. Relevant memory is added before eligible turns; ` +
-          "get_connection_status verifies tools and organization access without exposing the key.",
+          "run_connection_doctor verifies the active connection and gives one exact next step without exposing the key.",
       );
     } catch (error) {
       debugLog(env, "opencode_session_created_failed", {

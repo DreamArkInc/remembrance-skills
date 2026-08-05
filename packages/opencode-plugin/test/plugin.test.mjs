@@ -111,7 +111,7 @@ describe("opencode plugin hooks", () => {
     });
     expect(messages).toHaveLength(1);
     expect(messages[0].service).toBe("remembrance");
-    expect(messages[0].message).toContain("get_connection_status");
+    expect(messages[0].message).toContain("run_connection_doctor");
     expect(messages[0].message).toContain("Relevant memory is added");
   });
 
@@ -140,7 +140,7 @@ describe("opencode plugin hooks", () => {
     expect(messages).toEqual([
       expect.objectContaining({
         level: "info",
-        message: expect.stringContaining("get_connection_status"),
+        message: expect.stringContaining("run_connection_doctor"),
       }),
     ]);
   });

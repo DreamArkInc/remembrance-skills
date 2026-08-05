@@ -18,7 +18,7 @@ import { cursorSessionId } from "./record-mcp-use.mjs";
 
 export const CURSOR_REMEMBRANCE_CONTEXT = [
   "Remembrance is installed in Cursor; this SessionStart hook is active.",
-  "Before diagnosing authentication, call get_connection_status for Cursor's MCP process; never infer plugin scope from REMEMBRANCE_API_KEY alone or an anonymous REST/browser probe.",
+  "If setup seems incomplete, run run_connection_doctor for Cursor's MCP process. It verifies the active connection and gives one exact next step; never infer plugin scope from REMEMBRANCE_API_KEY alone or an anonymous REST/browser probe.",
   "When a person explicitly names a Remembrance skill, resolve ambiguity with list_skills and call invoke_skill; never guess a slug or run query_skills merely to rediscover that selection.",
   "Otherwise, before reusable service/API/tool/workflow/UI/review tasks, call query_skills, then use get_skill/get_resource when a result fits.",
   "For short follow-ups such as 'fix these issues', 'continue', or 'try again', infer the concrete task from the full conversation and still query before acting; do not wait for the current prompt to repeat trigger keywords.",

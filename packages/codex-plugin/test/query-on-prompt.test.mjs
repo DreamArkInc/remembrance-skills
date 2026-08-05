@@ -40,6 +40,7 @@ function sharedConfigCodexEnv(
   writeFileSync(
     join(env.XDG_CONFIG_HOME, "remembrance", "config.json"),
     JSON.stringify({ apiKey: "rmb_shared_query_key" }),
+    { mode: 0o600 },
   );
   const configPath = join(env.XDG_CONFIG_HOME, "codex.toml");
   writeFileSync(configPath, mcpToml);
@@ -453,6 +454,7 @@ describe("Codex query-on-prompt adapter", () => {
     writeFileSync(
       join(configHome, "remembrance", "config.json"),
       JSON.stringify({ apiKey: "file-key-456" }),
+      { mode: 0o600 },
     );
     const headers = [];
     const output = await handleQuery(
@@ -472,7 +474,7 @@ describe("Codex query-on-prompt adapter", () => {
       "Remembrance credential source",
     );
     expect(output.hookSpecificOutput.additionalContext).toContain(
-      "get_connection_status",
+      "run_connection_doctor",
     );
     expect(output.hookSpecificOutput.additionalContext).not.toContain(
       "file-key-456",
@@ -485,6 +487,7 @@ describe("Codex query-on-prompt adapter", () => {
     writeFileSync(
       join(configHome, "remembrance", "config.json"),
       JSON.stringify({ apiKey: "file-key-failure" }),
+      { mode: 0o600 },
     );
     const output = await handleQuery(
       { prompt: "Set up Vercel deployment.", turn_id: "t-key-file-failure" },
@@ -504,7 +507,7 @@ describe("Codex query-on-prompt adapter", () => {
       "query-unavailable context",
     );
     expect(output.hookSpecificOutput.additionalContext).toContain(
-      "get_connection_status",
+      "run_connection_doctor",
     );
     expect(output.hookSpecificOutput.additionalContext).not.toContain(
       "file-key-failure",

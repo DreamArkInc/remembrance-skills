@@ -17,15 +17,23 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import {
+  chmodSync,
+  closeSync,
+  constants,
   existsSync,
+  fstatSync,
+  lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
+import { isIP } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import process from "node:process";
@@ -43,7 +51,8 @@ const VALUE_EPISODE_MARKER_LIMIT = 20;
 const VALUE_EPISODE_MARKER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DIRECT_SELECTION_MARKER_LIMIT = 20;
 const DIRECT_SELECTION_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
-const PLUGIN_HEALTH_DIR = "remembrance-plugin-health";
+const MAX_LOCAL_CONFIG_BYTES = 64 * 1024;
+const MAX_LOCAL_HEALTH_MARKER_BYTES = 16 * 1024;
 const PLUGIN_HEALTH_COMPONENTS = new Set([
   "session_start",
   "prompt_hook",
@@ -2281,7 +2290,7 @@ export function contributeDisabled(value) {
 function pluginHealthDir(env = process.env) {
   return env?.REMEMBRANCE_PLUGIN_HEALTH_DIR
     ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR)
-    : join(tmpdir(), PLUGIN_HEALTH_DIR);
+    : join(homedir(), ".cache", "remembrance", "plugin-health");
 }
 
 function normalizedPluginHealthSurface(value) {
@@ -2317,7 +2326,9 @@ export function readPluginLifecycleHealth(
   const path = pluginHealthSessionPath(surface, sessionId, env);
   if (!path) return null;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    const parsed = JSON.parse(
+      readSecureHookFile(path, MAX_LOCAL_HEALTH_MARKER_BYTES),
+    );
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? parsed
       : null;
@@ -2329,7 +2340,7 @@ export function readPluginLifecycleHealth(
 // Record that a native lifecycle component actually executed. The marker is
 // intentionally local and content-free: it contains only surface/version,
 // component timestamps, and the credential source category. Local MCP reads
-// it through get_connection_status so partial activation cannot look healthy.
+// it through run_connection_doctor so partial activation cannot look healthy.
 export function recordPluginLifecycleHealth(
   {
     surface,
@@ -2390,6 +2401,11 @@ export function recordPluginLifecycleHealth(
   // healthy for as long as the old marker remains fresh.
   const currentComponents =
     normalizedComponent === "session_start" ? {} : existingComponents;
+  const apiConfiguration = resolveApiConfiguration(env);
+  const apiDestinationFingerprint = createHash("sha256")
+    .update(apiConfiguration.apiUrl.replace(/\/+$/, ""), "utf8")
+    .digest("hex")
+    .slice(0, 16);
   const payload = {
     schema_version: 1,
     surface: normalizedSurface,
@@ -2414,6 +2430,8 @@ export function recordPluginLifecycleHealth(
           )
         ? existing.credential_source
         : "none",
+    api_destination_source: apiConfiguration.source,
+    api_destination_fingerprint: apiDestinationFingerprint,
     components: {
       ...currentComponents,
       [normalizedComponent]: now,
@@ -2422,9 +2440,10 @@ export function recordPluginLifecycleHealth(
   };
   const temporaryPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
-    mkdirSync(dirname(path), { recursive: true });
+    ensureSecureHookDirectory(dirname(path));
     writeFileSync(temporaryPath, `${JSON.stringify(payload)}\n`, {
       mode: 0o600,
+      flag: "wx",
     });
     renameSync(temporaryPath, path);
     prunePluginHealthSessionMarkers(normalizedSurface, path, env);
@@ -2480,7 +2499,9 @@ export function remembranceConfigPath() {
 
 export function readRemembranceConfig(env = process.env) {
   try {
-    const parsed = JSON.parse(readFileSync(remembranceConfigPath(env), "utf8"));
+    const parsed = JSON.parse(
+      readSecureHookFile(remembranceConfigPath(env), MAX_LOCAL_CONFIG_BYTES),
+    );
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? parsed
       : {};
@@ -2496,32 +2517,59 @@ export function resolveApiCredential(env = process.env) {
   }
   const environmentKey = String(env.REMEMBRANCE_API_KEY ?? "").trim();
   if (environmentKey) {
-    return {
-      apiKey: environmentKey,
-      source: "environment",
-    };
+    const explicitBinding = String(
+      env.REMEMBRANCE_API_KEY_ORIGIN ?? "",
+    ).trim();
+    const binding = explicitBinding
+      ? normalizeApiUrl(explicitBinding, env)
+      : { apiUrl: DEFAULT_API_URL, issue: null };
+    return credentialForApiDestination(
+      binding.apiUrl && !binding.issue
+        ? {
+            apiKey: environmentKey,
+            source: "environment",
+            boundApiUrl: binding.apiUrl,
+          }
+        : unusableDestinationCredential(),
+      apiConfiguration,
+    );
   }
   const path = remembranceConfigPath(env);
   if (!existsSync(path)) {
     return { apiKey: "", source: "none" };
   }
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    const parsed = JSON.parse(
+      readSecureHookFile(path, MAX_LOCAL_CONFIG_BYTES),
+    );
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return { apiKey: "", source: "unusable_shared_config" };
+      return unusableSharedConfigCredential();
     }
     if (
       Object.prototype.hasOwnProperty.call(parsed, "apiKey") &&
       (typeof parsed.apiKey !== "string" || !parsed.apiKey.trim())
     ) {
-      return { apiKey: "", source: "unusable_shared_config" };
+      return unusableSharedConfigCredential();
     }
     const fromFile = parsed.apiKey;
-    return typeof fromFile === "string" && fromFile.trim()
-      ? { apiKey: fromFile.trim(), source: "shared_config" }
-      : { apiKey: "", source: "none" };
+    if (typeof fromFile !== "string" || !fromFile.trim()) {
+      return { apiKey: "", source: "none" };
+    }
+    const binding = Object.prototype.hasOwnProperty.call(parsed, "apiUrl")
+      ? normalizeApiUrl(parsed.apiUrl, env)
+      : { apiUrl: DEFAULT_API_URL, issue: null };
+    return credentialForApiDestination(
+      binding.apiUrl && !binding.issue
+        ? {
+            apiKey: fromFile.trim(),
+            source: "shared_config",
+            boundApiUrl: binding.apiUrl,
+          }
+        : unusableSharedConfigCredential(),
+      apiConfiguration,
+    );
   } catch {
-    return { apiKey: "", source: "unusable_shared_config" };
+    return unusableSharedConfigCredential();
   }
 }
 
@@ -2537,8 +2585,10 @@ export function sharedConfigCredentialNotice(env = process.env) {
     return (
       "Remembrance setup needs attention: REMEMBRANCE_API_URL is invalid. " +
       "Remote Remembrance calls are paused locally instead of changing " +
-      "destinations. Set it to an absolute HTTP(S) registry URL or " +
-      "intentionally remove it, then call get_connection_status."
+      "destinations. Set it to an absolute HTTPS registry URL (HTTP is allowed " +
+      "only for loopback development) without credentials, query parameters, " +
+      "or fragments, or " +
+      "intentionally remove it, then run run_connection_doctor."
     );
   }
   if (source === "unusable_shared_config") {
@@ -2546,7 +2596,16 @@ export function sharedConfigCredentialNotice(env = process.env) {
       "Remembrance setup needs attention: the shared config file exists but " +
       "is unreadable or invalid. Remote Remembrance calls are paused locally " +
       "instead of falling back to anonymous scope. Fix or intentionally remove " +
-      "~/.config/remembrance/config.json, then call get_connection_status."
+      "~/.config/remembrance/config.json, then run run_connection_doctor."
+    );
+  }
+  if (source === "unusable_destination_binding") {
+    return (
+      "Remembrance setup needs attention: the API key is not bound to the " +
+      "configured registry destination. For a custom registry, store apiKey " +
+      "and apiUrl together in the shared config, or set " +
+      "REMEMBRANCE_API_KEY_ORIGIN to the exact REMEMBRANCE_API_URL value. " +
+      "Remote calls are paused so the key cannot be forwarded elsewhere."
     );
   }
   if (source !== "shared_config") {
@@ -2557,24 +2616,30 @@ export function sharedConfigCredentialNotice(env = process.env) {
     `the shared Remembrance config file (normally ` +
     `~/.config/remembrance/config.json). REMEMBRANCE_API_KEY may be unset; do not ` +
     `use an anonymous REST/browser probe to infer this hook's scope. Call ` +
-    `get_connection_status for the MCP transport you will use.`
+    `run_connection_doctor for the MCP transport you will use.`
   );
 }
 
 export function resolveApiConfiguration(env = process.env) {
   const environmentUrl = String(env.REMEMBRANCE_API_URL ?? "").trim();
   if (environmentUrl) {
-    const normalized = normalizeApiUrl(environmentUrl);
-    return normalized
-      ? { apiUrl: normalized, source: "environment" }
-      : { apiUrl: DEFAULT_API_URL, source: "unusable_environment" };
+    const normalized = normalizeApiUrl(environmentUrl, env);
+    return normalized.apiUrl && !normalized.issue
+      ? { apiUrl: normalized.apiUrl, source: "environment" }
+      : {
+          apiUrl: DEFAULT_API_URL,
+          source: "unusable_environment",
+          issue: normalized.issue ?? "invalid_url",
+        };
   }
   const path = remembranceConfigPath(env);
   if (!existsSync(path)) {
     return { apiUrl: DEFAULT_API_URL, source: "default" };
   }
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    const parsed = JSON.parse(
+      readSecureHookFile(path, MAX_LOCAL_CONFIG_BYTES),
+    );
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return {
         apiUrl: DEFAULT_API_URL,
@@ -2584,10 +2649,14 @@ export function resolveApiConfiguration(env = process.env) {
     if (!Object.prototype.hasOwnProperty.call(parsed, "apiUrl")) {
       return { apiUrl: DEFAULT_API_URL, source: "default" };
     }
-    const normalized = normalizeApiUrl(parsed.apiUrl);
-    return normalized
-      ? { apiUrl: normalized, source: "shared_config" }
-      : { apiUrl: DEFAULT_API_URL, source: "unusable_shared_config" };
+    const normalized = normalizeApiUrl(parsed.apiUrl, env);
+    return normalized.apiUrl && !normalized.issue
+      ? { apiUrl: normalized.apiUrl, source: "shared_config" }
+      : {
+          apiUrl: DEFAULT_API_URL,
+          source: "unusable_shared_config",
+          issue: normalized.issue ?? "invalid_url",
+        };
   } catch {
     return { apiUrl: DEFAULT_API_URL, source: "unusable_shared_config" };
   }
@@ -2597,8 +2666,10 @@ function apiUrl(env) {
   return resolveApiConfiguration(env).apiUrl;
 }
 
-function normalizeApiUrl(value) {
-  if (typeof value !== "string" || !value.trim()) return null;
+function normalizeApiUrl(value, env = process.env) {
+  if (typeof value !== "string" || !value.trim()) {
+    return { apiUrl: null, issue: "invalid_url" };
+  }
   const candidate = value.trim();
   try {
     const parsed = new URL(candidate);
@@ -2609,17 +2680,193 @@ function normalizeApiUrl(value) {
       parsed.search ||
       parsed.hash
     ) {
-      return null;
+      return { apiUrl: null, issue: "invalid_url" };
     }
-    return candidate.replace(/\/+$/, "");
+    const loopback = isLoopbackHostname(parsed.hostname);
+    const privateDestination = isPrivateDestinationHostname(parsed.hostname);
+    if (parsed.protocol === "http:" && !loopback) {
+      return { apiUrl: null, issue: "insecure_remote_http" };
+    }
+    if (
+      !loopback &&
+      privateDestination &&
+      env.REMEMBRANCE_ALLOW_PRIVATE_REGISTRY !== "true"
+    ) {
+      return {
+        apiUrl: null,
+        issue: "private_destination_requires_opt_in",
+      };
+    }
+    return { apiUrl: candidate.replace(/\/+$/, ""), issue: null };
   } catch {
-    return null;
+    return { apiUrl: null, issue: "invalid_url" };
   }
+}
+
+function credentialForApiDestination(credential, configuration) {
+  if (!credential.apiKey || isUnusableConfigurationSource(configuration.source)) {
+    return credential.apiKey
+      ? unusableDestinationCredential()
+      : { apiKey: "", source: credential.source };
+  }
+  return credential.boundApiUrl === configuration.apiUrl
+    ? { apiKey: credential.apiKey, source: credential.source }
+    : unusableDestinationCredential();
+}
+
+function unusableSharedConfigCredential() {
+  return {
+    apiKey: "",
+    source: "unusable_shared_config",
+  };
+}
+
+function unusableDestinationCredential() {
+  return {
+    apiKey: "",
+    source: "unusable_destination_binding",
+  };
+}
+
+function isLoopbackHostname(hostname) {
+  const normalized = normalizeHostname(hostname);
+  if (normalized === "localhost" || normalized.endsWith(".localhost")) {
+    return true;
+  }
+  if (normalized === "::1") return true;
+  if (isIP(normalized) === 4) {
+    return Number(normalized.split(".")[0]) === 127;
+  }
+  return false;
+}
+
+function isPrivateDestinationHostname(hostname) {
+  const normalized = normalizeHostname(hostname);
+  if (
+    normalized.endsWith(".local") ||
+    normalized.endsWith(".internal") ||
+    normalized === "localhost"
+  ) {
+    return true;
+  }
+  const version = isIP(normalized);
+  if (version === 4) {
+    const [a, b] = normalized.split(".").map(Number);
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      a >= 224
+    );
+  }
+  if (version === 6) {
+    return (
+      normalized === "::" ||
+      normalized === "::1" ||
+      normalized.startsWith("fc") ||
+      normalized.startsWith("fd") ||
+      /^fe[89ab]/.test(normalized)
+    );
+  }
+  return false;
+}
+
+function normalizeHostname(hostname) {
+  return String(hostname).replace(/^\[|\]$/g, "").toLowerCase();
+}
+
+function readSecureHookFile(path, maxBytes) {
+  const parent = lstatSync(dirname(path));
+  assertSecureHookDirectory(parent);
+  const before = lstatSync(path);
+  assertSecureHookFile(before, maxBytes);
+  const descriptor = openSync(
+    path,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+  );
+  try {
+    const opened = fstatSync(descriptor);
+    assertSecureHookFile(opened, maxBytes);
+    if (before.dev !== opened.dev || before.ino !== opened.ino) {
+      throw new Error("Remembrance local state changed while opening.");
+    }
+    return readBoundedHookDescriptor(descriptor, maxBytes);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function ensureSecureHookDirectory(path) {
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  const metadata = lstatSync(path);
+  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+    throw new Error("Remembrance health state is not a regular directory.");
+  }
+  assertCurrentHookUser(metadata.uid);
+  if (isPosixHookRuntime() && (metadata.mode & 0o077) !== 0) {
+    chmodSync(path, 0o700);
+  }
+}
+
+function assertSecureHookDirectory(metadata) {
+  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+    throw new Error("Remembrance local state parent is unsafe.");
+  }
+  assertCurrentHookUser(metadata.uid);
+  if (isPosixHookRuntime() && (metadata.mode & 0o022) !== 0) {
+    throw new Error("Remembrance local state parent is writable by others.");
+  }
+}
+
+function assertSecureHookFile(metadata, maxBytes) {
+  if (metadata.isSymbolicLink() || !metadata.isFile()) {
+    throw new Error("Remembrance local state is not a regular file.");
+  }
+  assertCurrentHookUser(metadata.uid);
+  if (metadata.size > maxBytes) {
+    throw new Error("Remembrance local state exceeds its size limit.");
+  }
+  if (isPosixHookRuntime() && (metadata.mode & 0o077) !== 0) {
+    throw new Error("Remembrance local state permissions are not private.");
+  }
+}
+
+function assertCurrentHookUser(uid) {
+  if (isPosixHookRuntime() && uid !== process.getuid()) {
+    throw new Error("Remembrance local state is owned by another user.");
+  }
+}
+
+function readBoundedHookDescriptor(descriptor, maxBytes) {
+  const chunks = [];
+  let total = 0;
+  while (total <= maxBytes) {
+    const chunk = Buffer.allocUnsafe(Math.min(8 * 1024, maxBytes + 1 - total));
+    const bytesRead = readSync(descriptor, chunk, 0, chunk.length, null);
+    if (bytesRead === 0) break;
+    chunks.push(chunk.subarray(0, bytesRead));
+    total += bytesRead;
+  }
+  if (total > maxBytes) {
+    throw new Error("Remembrance local state exceeds its size limit.");
+  }
+  return Buffer.concat(chunks, total).toString("utf8");
+}
+
+function isPosixHookRuntime() {
+  return typeof process.getuid === "function";
 }
 
 function isUnusableConfigurationSource(source) {
   return (
-    source === "unusable_environment" || source === "unusable_shared_config"
+    source === "unusable_environment" ||
+    source === "unusable_shared_config" ||
+    source === "unusable_destination_binding"
   );
 }
 

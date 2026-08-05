@@ -66,7 +66,7 @@ the contribution loop or recovers a missed query once per task.
 
 For **org-scoped (enterprise) access**, write the org key once to the shared
 mode-0600 config that both plugin hooks and bundled local MCP read, then fully
-restart Claude Code and call `get_connection_status`:
+restart Claude Code and call `run_connection_doctor`:
 
 ```bash
 mkdir -p ~/.config/remembrance
@@ -159,7 +159,7 @@ printf '{"apiKey":"your-org-key","apiUrl":"https://remembrance.dev"}\n' > ~/.con
 chmod 600 ~/.config/remembrance/config.json
 ```
 
-Restart VS Code, call `get_connection_status`, and confirm `local_stdio_mcp`,
+Restart VS Code, call `run_connection_doctor`, and confirm `local_stdio_mcp`,
 active plugin health, and the expected organization scope.
 
 ### Gemini CLI
@@ -202,7 +202,7 @@ printf '{"apiKey":"your-org-key","apiUrl":"https://remembrance.dev"}\n' > ~/.con
 chmod 600 ~/.config/remembrance/config.json
 ```
 
-Fully quit and reopen Codex, then call `get_connection_status`. Confirm
+Fully quit and reopen Codex, then call `run_connection_doctor`. Confirm
 `local_stdio_mcp`, the expected organization scope, and active plugin health.
 Visible skills without native hooks or MCP tools is a degraded partial install,
 not a successful setup.
@@ -248,7 +248,7 @@ npx -y @remembrance-ai/opencode-plugin setup
 The setup command preserves unrelated JSONC settings and adds the
 version-matched OpenCode plugin plus local Remembrance MCP server. For
 organization access, use the same mode-0600 shared config shown above. Restart
-OpenCode, call `get_connection_status`, and confirm the expected organization
+OpenCode, call `run_connection_doctor`, and confirm the expected organization
 scope before private contribution work.
 
 The plugin queries eligible turns, injects bounded matching guidance before
@@ -299,7 +299,8 @@ full-conversation queries, missed-query self-checks, redaction, and reusable
 evidence. MCP clients must follow those instructions proactively because no
 native Stop hook runs around a raw MCP connection.
 
-Call `get_connection_status` before diagnosing authentication. Local stdio can
+Call `run_connection_doctor` before diagnosing authentication. It performs one
+safe catalog read and provides exact remediation. Local stdio can
 read `REMEMBRANCE_API_KEY` or `~/.config/remembrance/config.json`; hosted MCP
 cannot read local files and uses its request header. The tool reports the exact
 transport, credential source, verified registry scope, and declared native
@@ -308,6 +309,11 @@ bounded component/version issue codes for deduplicated admin triage; disable
 that best-effort report with `REMEMBRANCE_HEALTH_REPORTING=0`. An
 environment-only check or anonymous REST/browser probe is not an authoritative
 test of another transport.
+
+If the host exposes no Remembrance MCP tool, run
+`npx @remembrance-ai/mcp-server doctor`, repair the host installation, fully
+restart it, and rerun `run_connection_doctor` inside the host. The standalone
+CLI verifies registry and auth access but cannot claim host MCP registration.
 
 The local server additionally offers `bootstrap_agent_identity`, which mints and
 registers a local TOFU attestation key so your agent's verified contributions

@@ -74,9 +74,10 @@ openclaw plugins inspect remembrance --runtime --json
 openclaw mcp doctor remembrance --probe
 ```
 
-Then call Remembrance MCP `get_connection_status`. It should report
-`local_stdio_mcp`, `shared_config`, secure config permissions, and the expected
-organization scope without exposing the key. Do not conclude that OpenClaw is
+Then run Remembrance MCP `run_connection_doctor` and require
+`safe_to_query: true`. It verifies the active connection and gives one exact
+next step without exposing the key. Use `get_connection_status` only for lower-
+level fields. Do not conclude that OpenClaw is
 anonymous from an unset `REMEMBRANCE_API_KEY` or an anonymous curl/browser
 probe; those do not test the bundled plugin process.
 
@@ -175,7 +176,7 @@ answer text to these hooks. The plugin will no-op instead of breaking the run.
 
 The plugin ships a self-contained Remembrance MCP server
 (`servers/remembrance-mcp.mjs`). The hooks provide automatic behavior; the MCP
-server gives OpenClaw direct tools such as `get_connection_status`,
+server gives OpenClaw direct tools such as `run_connection_doctor`, `get_connection_status`,
 `query_skills`, `bootstrap_agent_identity`, `submit_query_feedback`, `submit_feedback`,
 `submit_remembrance`, `get_skill`, `get_resource`, `report_task_outcome`, and
 `get_value_proof`, plus `list_skills`, `invoke_skill`, and the
@@ -392,6 +393,11 @@ query is sent.
 
 - `REMEMBRANCE_API_URL`: API origin. Defaults to `https://remembrance.dev`.
 - `REMEMBRANCE_API_KEY`: optional org API key.
+- `REMEMBRANCE_API_KEY_ORIGIN`: bind an environment key to an exact custom API
+  URL. It is unnecessary for the default cloud URL or when `apiKey` and
+  `apiUrl` are stored together in the shared config.
+- `REMEMBRANCE_ALLOW_PRIVATE_REGISTRY=true`: explicit opt-in for a trusted
+  private/link-local HTTPS self-host. Remote HTTP is rejected except on loopback.
 - `REMEMBRANCE_AUTO_QUERY=0`: disables the pre-prompt hook's network query.
 - `REMEMBRANCE_AUTO_QUERY_LIMIT`: result limit, default `3`, max `10`.
 - `REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS`: hook query timeout, default `2000`.
@@ -414,7 +420,8 @@ the organization policy can be confirmed.
 other Remembrance plugins, then OpenClaw applies a narrow ClawHub security
 hardening transform that removes generic environment-controlled credential-path
 lookups from the packaged artifact. The fixed `~/.config/remembrance/...`
-fallback, `REMEMBRANCE_API_KEY`, `REMEMBRANCE_API_URL`, and the explicit
+fallback, `REMEMBRANCE_API_KEY`, `REMEMBRANCE_API_URL`, destination-binding
+settings, and the explicit
 `REMEMBRANCE_AGENT_KEY_PATH` override remain supported. Do not edit these files
 by hand; change the canonical source or the OpenClaw hardening transform and run
 `npm run sync:hook-core` / `npm run refresh:generated`.

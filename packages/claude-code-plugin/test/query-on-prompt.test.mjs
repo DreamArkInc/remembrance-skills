@@ -436,6 +436,7 @@ describe("Remembrance Claude Code prompt hook", () => {
     writeFileSync(
       join(configHome, "remembrance", "config.json"),
       JSON.stringify({ apiKey: "rk_claude_shared" }),
+      { mode: 0o600 },
     );
     const env = testEnv({
       XDG_CONFIG_HOME: configHome,
@@ -461,7 +462,7 @@ describe("Remembrance Claude Code prompt hook", () => {
         "Remembrance credential source",
       );
       expect(output.hookSpecificOutput.additionalContext).toContain(
-        "get_connection_status",
+        "run_connection_doctor",
       );
       expect(output.hookSpecificOutput.additionalContext).not.toContain(
         "rk_claude_shared",
@@ -585,6 +586,9 @@ describe("Remembrance Claude Code prompt hook", () => {
     expect(skill).not.toContain("description: Call query_skills");
     expect(skill).toContain("`query_skills`");
     expect(skill).toContain("`bootstrap_agent_identity`");
+    expect(skill).toContain("`local_signing_identity`");
+    expect(skill).toContain("initializes automatically");
+    expect(skill).toContain("with no arguments");
     expect(skill).toContain("POST https://remembrance.dev/api/v1/agent/query");
     expect(skill).toContain(
       "POST https://remembrance.dev/api/v1/agent/feedback",

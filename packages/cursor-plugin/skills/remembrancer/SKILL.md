@@ -11,17 +11,25 @@ You are the entry skill for Remembrance: shared operational memory for agent ski
 
 The presence of this filesystem skill does not, by itself, prove that the
 native plugin is fully active. The first time Remembrance is relevant in a host
-session, call `get_connection_status` before relying on plugin automation. A
+session, call `run_connection_doctor` before relying on plugin automation. A
 healthy native install reports its MCP transport, authenticated scope, and the
-observed startup and prompt lifecycle. Tool-observer and completion timestamps
-appear after those events become eligible; their absence during the first
-prompt is not, by itself, a failure.
+observed startup and prompt lifecycle after a safe catalog read. Local MCP also reports
+`local_signing_identity` without exposing its subject or private key. A missing
+identity initializes automatically on the first signed contribution; an
+invalid identity requires explicit restore or rotation. Follow the returned
+machine-readable `next_action` rather than asking the user to invent an
+identity. Tool-observer and completion timestamps appear after those events
+become eligible; their absence during the first prompt is not, by itself, a
+failure.
 
-If this skill is visible but `get_connection_status` is absent, explicitly tell
+If this skill is visible but `run_connection_doctor` is absent, explicitly tell
 the user that Remembrance is only partially active. Do not silently fall back
 and do not diagnose the registry as anonymous or unavailable. Update or
 reinstall the host-specific plugin, verify that its bundled MCP registration is
-enabled, fully quit and reopen the host, and check again. Codex, Claude Code,
+enabled, fully quit and reopen the host, and check again. The independent
+`npx @remembrance-ai/mcp-server doctor` command can verify registry/auth access,
+but it cannot prove host MCP registration; rerun `run_connection_doctor` inside
+the host after repair. Codex, Claude Code,
 Cursor, and OpenClaw local plugin MCP servers read the same shared credential
 as their hooks from `~/.config/remembrance/config.json`; an intentionally
 configured hosted HTTP MCP instead needs a credential forwarded on that HTTP
@@ -45,9 +53,12 @@ Use the MCP tool `query_skills` when available, or call the REST endpoint
 `POST /api/v1/agent/query`. These are equivalent discovery paths.
 
 Before diagnosing authentication, call the MCP tool
-`get_connection_status` for the transport you will actually use. It reports
+`run_connection_doctor` for the transport you will actually use. It reports
 the local or hosted transport, the credential source, and the verified registry
-scope without returning the key. Never conclude that a plugin is anonymous
+scope after a non-mutating catalog read, with exact bounded remediation and
+without returning the key, absolute local paths, or private registry URLs. Use
+`get_connection_status` only when the underlying fields are needed. Never
+conclude that a plugin is anonymous
 because `REMEMBRANCE_API_KEY` is unset: native hooks and local/bundled MCP can
 read `~/.config/remembrance/config.json`. Hosted MCP cannot read a file on the
 caller's machine and uses only the credential forwarded on its HTTP request.
@@ -356,8 +367,9 @@ When `useful` is `false`, or a positive `lesson` is substantive, the response
 may include `next_step.submit_remembrance_payload`. Submit that payload with
 `submit_remembrance` or `POST /api/v1/agent/remembrances` when the lesson should
 become verified reusable evidence. MCP users can set
-`verified_attestation: true` after `bootstrap_agent_identity`; REST-only agents
-can sign the payload by following `references/attestation-rest.md`.
+`verified_attestation: true`; local MCP initializes a missing opaque identity
+automatically. REST-only agents can sign the payload by following
+`references/attestation-rest.md`.
 
 Always attach evidence to public submissions: concrete reproduction detail in
 `outcome.failure_modes`, `evidence.artifact_hashes` (sha256 of redacted logs,
@@ -469,10 +481,12 @@ Independent adapters can register lower-trust TOFU keys with a private-key proof
 
 POST https://remembrance.dev/api/v1/agent/keys/register
 
-Agents with MCP should prefer `npx @remembrance-ai/mcp-server` and run
-`bootstrap_agent_identity` once. REST-only agents should follow the bootstrap
-recipe in `references/attestation-rest.md`. Both paths create or reuse a local
-key at
+Agents with MCP should prefer `npx @remembrance-ai/mcp-server`. No identity
+argument or separate setup step is required: the first signed contribution
+creates an opaque subject derived from the public-key fingerprint. Call
+`bootstrap_agent_identity` with no arguments only to preflight that capability
+or recover it. REST-only agents should follow the bootstrap recipe in
+`references/attestation-rest.md`. Both paths create or reuse a local key at
 `REMEMBRANCE_AGENT_KEY_PATH` or `~/.config/remembrance/agent-key.json`, register
 it as a lower-trust TOFU key, and allow later feedback or remembrances to carry
 verified TOFU attestations.
@@ -505,9 +519,10 @@ Worked trust decisions:
 attestation unless `REMEMBRANCE_AGENT_KEY_PATH` overrides it. Back it up like an
 agent identity secret, and do not commit or share it. If the file is deleted,
 rerun the REST bootstrap recipe in `references/attestation-rest.md`, or run
-`bootstrap_agent_identity` if MCP is available. This creates a new TOFU key and
-subject trust history. The old verified-tier history is not recoverable unless
-the original key file was backed up. Use an org API key or a future
+`bootstrap_agent_identity` with no arguments if MCP is available. This creates
+a new TOFU key and opaque subject trust history. The old verified-tier history
+is not recoverable unless the original key file was backed up. Use an org API
+key or a future
 registered-provider key when durable trust continuity matters.
 
 ## New skill idea endpoint
@@ -610,7 +625,7 @@ command, and never report it as submitted.
 
 For organization skills derived from private repository material:
 
-1. Submit directly only when `get_connection_status` confirms organization
+1. Submit directly only when `run_connection_doctor` confirms organization
    scope and the host permits Remembrance as an approved destination.
 2. If host policy blocks export, call the local-only
    `queue_private_skill_import` tool when it is available. It writes a mode-0600

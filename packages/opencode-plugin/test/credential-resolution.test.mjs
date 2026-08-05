@@ -46,7 +46,7 @@ describe("opencode credential resolution", () => {
     });
     const notice = sharedConfigCredentialNotice(env);
     expect(notice).toContain("shared Remembrance config file");
-    expect(notice).toContain("get_connection_status");
+    expect(notice).toContain("run_connection_doctor");
     expect(notice).not.toContain("rk_opencode_shared");
   });
 
@@ -54,6 +54,8 @@ describe("opencode credential resolution", () => {
     const env = {
       ...(await sharedCredentialEnvironment()),
       REMEMBRANCE_API_KEY: "rk_opencode_environment",
+      REMEMBRANCE_API_KEY_ORIGIN: "https://registry.example",
+      REMEMBRANCE_API_URL: "https://registry.example",
     };
     expect(resolveApiCredential(env)).toEqual({
       apiKey: "rk_opencode_environment",
@@ -72,7 +74,9 @@ describe("opencode credential resolution", () => {
     const root = await mkdtemp(join(tmpdir(), "opencode-bad-credential-"));
     temporaryDirectories.push(root);
     await mkdir(join(root, "remembrance"));
-    await writeFile(join(root, "remembrance/config.json"), "{");
+    await writeFile(join(root, "remembrance/config.json"), "{", {
+      mode: 0o600,
+    });
     expect(resolveApiCredential({ XDG_CONFIG_HOME: root })).toMatchObject({
       apiKey: "",
       source: "unusable_shared_config",

@@ -25,6 +25,7 @@ function normalizeToClaude(source) {
     .replaceAll("VS Code SessionStart", "Claude Code SessionStart")
     .replaceAll("VS Code Stop adapter", "Claude Code Stop adapter")
     .replaceAll("Loop-safe: VS Code sets", "Loop-safe: Claude Code sets")
+    .replaceAll("and reload VS Code.", "and restart Claude Code.")
     .replaceAll("before reloading VS Code.", "before restarting Claude Code.");
 }
 

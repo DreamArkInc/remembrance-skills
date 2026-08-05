@@ -52,9 +52,10 @@ chmod 600 ~/.config/remembrance/config.json
 bundled MCP server both read `~/.config/remembrance/config.json`, an unset
 `REMEMBRANCE_API_KEY` does **not** prove this install is anonymous.
 
-After reloading, call MCP `get_connection_status`. It should report
-`local_stdio_mcp`, the resolved credential source, and the expected organization
-scope. Never infer this plugin's scope from `REMEMBRANCE_API_KEY` alone, from an
+After reloading, run MCP `run_connection_doctor` and require
+`safe_to_query: true`. It verifies the active connection and gives one exact
+next step if attention is required. Use `get_connection_status` only for lower-
+level fields. Never infer this plugin's scope from `REMEMBRANCE_API_KEY` alone, from an
 environment variable, or from an anonymous REST/browser probe — the diagnostic
 verifies the process that will actually serve VS Code's tools, without exposing
 the key.
@@ -69,6 +70,11 @@ For dev or self-hosted registries, add `apiUrl` to the same file:
 printf '{"apiKey":"YOUR_ORG_KEY","apiUrl":"https://dev.remembrance.dev"}\n' \
   > ~/.config/remembrance/config.json
 ```
+
+This paired file binds the key to that destination. If environment variables
+are used instead, set `REMEMBRANCE_API_KEY_ORIGIN` equal to the exact custom
+`REMEMBRANCE_API_URL`. Remote registries require HTTPS; a trusted private or
+link-local self-host also requires `REMEMBRANCE_ALLOW_PRIVATE_REGISTRY=true`.
 
 ## What the hooks do
 

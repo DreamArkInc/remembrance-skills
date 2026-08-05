@@ -38,9 +38,9 @@ plugin is active:
 
 1. Ask Codex: "Before solving, call Remembrance query_skills for Codex plugin
    setup."
-2. Ask it to call `get_connection_status`. Confirm the active MCP transport and
-   verified registry scope; do not accept an environment-variable check or an
-   anonymous curl/browser probe as a substitute.
+2. Ask it to run `run_connection_doctor`. Require `safe_to_query: true`; follow
+   its one remediation if attention is required. Do not accept an environment-
+   variable check or an anonymous curl/browser probe as a substitute.
 3. Confirm it reports a concrete Remembrance receipt such as a query id,
    returned skill slug, MCP tool result, or REST status.
 4. After it evaluates returned results, confirm it calls
@@ -88,9 +88,10 @@ env = { REMEMBRANCE_PLUGIN_HOST = "codex" }
 The bundled local MCP server and native hooks both resolve
 `REMEMBRANCE_API_KEY` first, then `~/.config/remembrance/config.json`. This
 removes the Codex Desktop environment split: one mode-0600 config file covers
-both. After restart, call `get_connection_status`; it reports
-`local_stdio_mcp`, registry scope, credential source, and observed native
-lifecycle components without exposing the key. A manually configured hosted
+both. After restart, run `run_connection_doctor`; it verifies a safe catalog
+read, registry scope, destination consistency, and observed native lifecycle
+without exposing the key. Use `get_connection_status` only for underlying
+fields. A manually configured hosted
 MCP URL remains supported, but it cannot read a caller file and must receive a
 request credential. A Codex tenant/privacy-policy denial occurs before the
 Remembrance request and must not be reported as a Remembrance authentication or
@@ -201,11 +202,13 @@ does not require separate `npx @remembrance-ai/mcp-server` setup or a GUI
 process environment variable. After install, the `remembrance` MCP server
 exposes tools such as `query_skills`, `submit_query_feedback`,
 `submit_feedback`, `submit_remembrance`, `get_skill`, `get_resource`,
-`list_skills`, `invoke_skill`, `report_task_outcome`, `get_value_proof`, and
-`get_connection_status`.
+`list_skills`, `invoke_skill`, `report_task_outcome`, `get_value_proof`,
+`run_connection_doctor`, and `get_connection_status`.
 
-Credential and lifecycle boundaries are observable. `get_connection_status`
-identifies transport, scope, credential source, and whether SessionStart,
+Credential and lifecycle boundaries are observable. `run_connection_doctor`
+performs a non-mutating read and interprets transport, scope, destination,
+permissions, and lifecycle health. `get_connection_status` exposes the lower-
+level transport and whether SessionStart,
 prompt, tool-observer, and completion hooks have actually run. A missing native
 marker is reported as degraded instead of allowing visible filesystem skills
 to imply a healthy install. Degraded checks send only bounded component and
@@ -296,6 +299,11 @@ If MCP tools are unavailable, use the REST contract from
 
 - `REMEMBRANCE_API_URL`: API origin. Defaults to `https://remembrance.dev`.
 - `REMEMBRANCE_API_KEY`: optional org API key.
+- `REMEMBRANCE_API_KEY_ORIGIN`: bind an environment key to an exact custom API
+  URL. It is unnecessary for the default cloud URL or when `apiKey` and
+  `apiUrl` are stored together in the shared config.
+- `REMEMBRANCE_ALLOW_PRIVATE_REGISTRY=true`: explicit opt-in for a trusted
+  private/link-local HTTPS self-host. Remote HTTP is rejected except on loopback.
 - `REMEMBRANCE_CODEX_MCP_URL`: optional manual Codex hosted-MCP endpoint used
   only to verify hook/MCP registry alignment when the hook cannot read Codex
   config. The packaged plugin does not need it.

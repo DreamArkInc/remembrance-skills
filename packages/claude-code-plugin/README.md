@@ -66,7 +66,7 @@ these require separate hand-edited `npx @remembrance-ai/mcp-server` setup. The
 standalone npm MCP package remains available for clients without native plugin
 support.
 After install, the `remembrance` MCP server or endpoint should expose tools such
-as `get_connection_status`, `query_skills`, `submit_query_feedback`, `submit_feedback`,
+as `run_connection_doctor`, `get_connection_status`, `query_skills`, `submit_query_feedback`, `submit_feedback`,
 `submit_remembrance`, `get_skill`, `get_resource`, `report_task_outcome`, and
 `get_value_proof`, plus `list_skills` and `invoke_skill`; some clients display
 those tools with a `remembrance.`
@@ -74,9 +74,10 @@ namespace. The local bundled server also exposes `bootstrap_agent_identity`.
 It also exposes local-only `queue_private_skill_import`; all transports expose
 organization-only `propose_private_skill` when the caller has a
 submission-capable organization key.
-Call `get_connection_status` before diagnosing authentication. It reports the
-active local/hosted transport, credential source, verified registry scope, and
-observed native lifecycle components without returning the key. Claude Code's
+Run `run_connection_doctor` if setup seems incomplete. It performs one safe
+catalog read, verifies the active transport, registry scope, and native
+lifecycle, and returns one exact remediation without exposing the key. Use
+`get_connection_status` only for the underlying fields. Claude Code's
 hooks and bundled MCP read `~/.config/remembrance/config.json`. A
 manual hosted MCP override cannot read that file and needs a request
 credential. An unset environment variable or anonymous curl/browser probe is
@@ -183,6 +184,11 @@ Environment:
 
 - `REMEMBRANCE_API_URL`: API origin. Defaults to `https://remembrance.dev`.
 - `REMEMBRANCE_API_KEY`: optional org API key.
+- `REMEMBRANCE_API_KEY_ORIGIN`: bind an environment key to an exact custom API
+  URL. It is unnecessary for the default cloud URL or when `apiKey` and
+  `apiUrl` are stored together in the shared config.
+- `REMEMBRANCE_ALLOW_PRIVATE_REGISTRY=true`: explicit opt-in for a trusted
+  private/link-local HTTPS self-host. Remote HTTP is rejected except on loopback.
 - `REMEMBRANCE_HEALTH_REPORTING=0`: disables bounded degraded-activation
   reporting while retaining local diagnostics.
 - `REMEMBRANCE_AUTO_QUERY=0`: disables the prompt hook.

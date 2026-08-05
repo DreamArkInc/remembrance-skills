@@ -4345,6 +4345,8 @@ var clientHealthIssueCodeSchema = external_exports.enum([
   "mcp_registration_failed",
   "mcp_authentication_failed",
   "credential_source_mismatch",
+  "api_destination_mismatch",
+  "api_destination_not_observed",
   "plugin_version_mismatch",
   "lifecycle_marker_stale",
   "invalid_lifecycle_marker",
@@ -4483,10 +4485,319 @@ function isUnsafeDestinationHostname(hostname) {
   return false;
 }
 
+// ../core/src/connection-doctor.ts
+function buildConnectionDoctorReport(input) {
+  const status = record(input.connection_status);
+  const transport = record(status.transport);
+  const registry = record(status.registry);
+  const authentication = record(registry.authentication);
+  const capabilities = record(authentication.capabilities);
+  const sharedConfig = record(transport.shared_config);
+  const pluginHealth = record(status.plugin_health);
+  const identity = record(status.local_signing_identity);
+  const destination = destinationFromTransport(transport);
+  const credentialSource = stringValue(transport.credential_source) ?? "none";
+  const scope = scopeValue(authentication.scope);
+  const registryReady = status.status !== "error" && registry.status === "ready";
+  const queryAuthorized = capabilities.query === true;
+  const submitAuthorized = capabilities.submit === true;
+  const configuredCredential = ["environment", "shared_config"].includes(
+    credentialSource
+  ) || [
+    "authorization_bearer",
+    "x_remembrance_api_key",
+    "request_header"
+  ].includes(credentialSource);
+  const checks = [];
+  checks.push(
+    input.host_registration_observed ? pass("mcp_transport", "The active MCP transport executed the doctor.") : warning(
+      "mcp_transport",
+      "Registry diagnostics ran outside the host, so MCP registration is not observable.",
+      "verify_host_registration",
+      "Open the host, confirm that run_connection_doctor is available, and run it there. If it is absent, update or reinstall the host-specific Remembrance plugin and fully restart the host."
+    )
+  );
+  const configurationInvalid = ["unusable_environment", "unusable_shared_config"].includes(
+    stringValue(transport.api_url_source) ?? ""
+  ) || ["unusable_shared_config", "unusable_destination_binding"].includes(
+    credentialSource
+  );
+  checks.push(
+    configurationInvalid ? fail(
+      "configuration",
+      "The configured credential or registry destination is invalid.",
+      "repair_configuration",
+      "Repair or intentionally remove the invalid Remembrance setting, then rerun the doctor. Remembrance will not silently change scope or destination."
+    ) : pass(
+      "configuration",
+      configuredCredential ? "A credential source is configured." : "No credential is configured; public anonymous access is intentional."
+    )
+  );
+  const containsKey = sharedConfig.api_key_present === true;
+  const sharedConfigPermissionCommand = sharedConfig.location === "default_shared_config" ? "chmod 600 ~/.config/remembrance/config.json" : void 0;
+  checks.push(
+    containsKey && sharedConfig.secure_permissions === false ? fail(
+      "credential_security",
+      "The shared credential file is readable by other local users.",
+      "restrict_shared_config_permissions",
+      "Restrict the shared Remembrance config to the current user, then rerun the doctor.",
+      sharedConfigPermissionCommand
+    ) : containsKey && sharedConfig.secure_permissions === null ? warning(
+      "credential_security",
+      "The shared credential file permissions could not be verified.",
+      "verify_shared_config_permissions",
+      "Verify that only the current user can read the shared Remembrance config, then rerun the doctor."
+    ) : sharedConfig.present === true && sharedConfig.secure_permissions === false ? warning(
+      "credential_security",
+      "The shared config is broadly readable, but it contains no API key.",
+      "restrict_shared_config_permissions",
+      "Restrict the shared Remembrance config to the current user.",
+      void 0,
+      false,
+      sharedConfigPermissionCommand
+    ) : pass(
+      "credential_security",
+      containsKey ? "The shared credential file is restricted to the current user." : "No locally stored API key requires a permission check."
+    )
+  );
+  checks.push(
+    registryReady ? pass("registry_connectivity", "The Remembrance registry responded.") : fail(
+      "registry_connectivity",
+      "The Remembrance registry did not return a healthy status response.",
+      "retry_registry_connection",
+      "Check network access and the configured registry destination, then rerun the doctor."
+    )
+  );
+  checks.push(
+    configuredCredential && scope !== "organization" ? fail(
+      "authentication",
+      "A credential is configured, but the registry did not authenticate an organization scope.",
+      "repair_organization_credential",
+      "Create or select an active organization key, run the one-click setup again, and fully restart the host."
+    ) : pass(
+      "authentication",
+      scope === "organization" ? "The active request is authenticated to an organization." : "The active request is using public anonymous scope."
+    )
+  );
+  checks.push(
+    queryAuthorized ? pass("query_authorization", "The active scope can query skills.") : fail(
+      "query_authorization",
+      "The active scope cannot query skills.",
+      "grant_query_scope",
+      "Use an active key with agent:query permission, or remove the invalid credential to use public anonymous querying."
+    )
+  );
+  checks.push(readProbeCheck(input.active_read_probe));
+  checks.push(
+    !input.check_organization_write_authorization || scope !== "organization" ? notApplicable(
+      "organization_write_authorization",
+      scope === "organization" ? "Organization write authorization was not requested." : "Organization-private submissions require an organization credential."
+    ) : submitAuthorized ? pass(
+      "organization_write_authorization",
+      "The active organization key can create reviewed submissions."
+    ) : warning(
+      "organization_write_authorization",
+      "Querying works, but the active organization key cannot create submissions.",
+      "grant_submission_scope",
+      "Use an organization key with submission:create permission when contributions are required."
+    )
+  );
+  const pluginIssues = issueCodes(pluginHealth.issues);
+  const destinationMismatch = pluginIssues.includes(
+    "api_destination_mismatch"
+  );
+  checks.push(pluginLifecycleCheck(pluginHealth, pluginIssues));
+  checks.push(
+    pluginHealth.expected !== true ? notApplicable(
+      "destination_consistency",
+      "No native plugin lifecycle is declared for this MCP-only connection."
+    ) : destinationMismatch ? warning(
+      "destination_consistency",
+      "The native hooks and bundled MCP resolve different Remembrance registries.",
+      "align_registry_destination",
+      "Configure the native hooks and bundled MCP to use the same Remembrance registry, then fully restart the host.",
+      pluginIssues
+    ) : pluginIssues.includes("api_destination_not_observed") ? warning(
+      "destination_consistency",
+      "The native hook destination has not been observed in the current lifecycle marker.",
+      "refresh_destination_observation",
+      "Fully restart the host, submit one prompt, and rerun the doctor.",
+      pluginIssues
+    ) : pass(
+      "destination_consistency",
+      "Native hooks and bundled MCP resolve the same registry destination."
+    )
+  );
+  checks.push(signingIdentityCheck(identity, input.transport));
+  const blockingIds = /* @__PURE__ */ new Set([
+    "configuration",
+    "credential_security",
+    "registry_connectivity",
+    "authentication",
+    "query_authorization",
+    "active_read_probe"
+  ]);
+  const blocked = checks.some(
+    (check) => check.status === "fail" && blockingIds.has(check.id)
+  );
+  const attention = checks.some(
+    (check) => check.status === "warning" || check.status === "fail"
+  );
+  const readSucceeded = !input.active_read_probe.requested || input.active_read_probe.succeeded === true;
+  return {
+    schema_version: "1",
+    status: blocked ? "blocked" : attention ? "attention" : "healthy",
+    transport: input.transport,
+    scope,
+    destination,
+    safe_to_query: !blocked && registryReady && queryAuthorized && readSucceeded,
+    organization_write_authorized: scope === "organization" && submitAuthorized,
+    signed_contributions_ready: input.transport === "hosted_http_mcp" ? null : identity.status === "ready",
+    active_read_probe: input.active_read_probe,
+    checks
+  };
+}
+function readProbeCheck(probe) {
+  if (!probe.requested) {
+    return notApplicable(
+      "active_read_probe",
+      "The active catalog read probe was disabled."
+    );
+  }
+  return probe.succeeded ? pass(
+    "active_read_probe",
+    `An authorized catalog read succeeded (${probe.item_count ?? 0} item${probe.item_count === 1 ? "" : "s"} returned).`
+  ) : fail(
+    "active_read_probe",
+    "The non-mutating authorized catalog read failed.",
+    "repair_catalog_access",
+    "Confirm agent:query access and registry availability, then rerun the doctor."
+  );
+}
+function pluginLifecycleCheck(pluginHealth, issues) {
+  if (pluginHealth.expected !== true) {
+    return notApplicable(
+      "plugin_lifecycle",
+      "This is an MCP-only registration; native hooks are not expected."
+    );
+  }
+  if (pluginHealth.status === "active") {
+    return pass(
+      "plugin_lifecycle",
+      "The native plugin startup and prompt lifecycle is active."
+    );
+  }
+  if (pluginHealth.status === "partial") {
+    return warning(
+      "plugin_lifecycle",
+      "The core native lifecycle is active; tool or completion events have not occurred yet.",
+      "exercise_plugin_lifecycle",
+      "Use one Remembrance tool, complete one turn, and rerun the doctor.",
+      issues
+    );
+  }
+  return warning(
+    "plugin_lifecycle",
+    "The native plugin lifecycle is only partially active.",
+    "repair_plugin_lifecycle",
+    "Update or reinstall the host-specific Remembrance plugin, fully restart the host, submit one prompt, and rerun the doctor.",
+    issues
+  );
+}
+function signingIdentityCheck(identity, transport) {
+  if (transport === "hosted_http_mcp") {
+    return notApplicable(
+      "signing_identity",
+      "Hosted MCP cannot inspect a signing key on the caller's machine."
+    );
+  }
+  if (identity.status === "ready") {
+    return pass(
+      "signing_identity",
+      "The local signing identity is valid and restricted to the current user."
+    );
+  }
+  if (identity.status === "missing") {
+    return warning(
+      "signing_identity",
+      "No local signing identity exists yet; signed contributions will initialize it on first use.",
+      "initialize_signing_identity",
+      "Call bootstrap_agent_identity for preflight, or allow the first signed contribution to initialize it automatically.",
+      void 0,
+      true
+    );
+  }
+  return warning(
+    "signing_identity",
+    "The local signing identity needs repair before signed contributions can be sent.",
+    "repair_signing_identity",
+    "Call bootstrap_agent_identity and follow its bounded repair guidance. Invalid identity files are never overwritten silently."
+  );
+}
+function destinationFromTransport(transport) {
+  const destination = record(transport.api_destination);
+  const kind = ["remembrance_cloud", "custom"].includes(
+    stringValue(destination.kind) ?? ""
+  ) ? destination.kind : "unknown";
+  return {
+    kind,
+    source: stringValue(destination.source) ?? stringValue(transport.api_url_source) ?? "unknown"
+  };
+}
+function scopeValue(value) {
+  return value === "anonymous" || value === "organization" ? value : "unknown";
+}
+function issueCodes(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(
+    value.map((issue) => stringValue(record(issue).code)).filter((code) => Boolean(code))
+  )].sort();
+}
+function pass(id, summary) {
+  return { id, status: "pass", summary, remediation: null };
+}
+function notApplicable(id, summary) {
+  return { id, status: "not_applicable", summary, remediation: null };
+}
+function warning(id, summary, code, action, issueCodesValue, automatic = false, command) {
+  return {
+    id,
+    status: "warning",
+    summary,
+    ...issueCodesValue && issueCodesValue.length > 0 ? { issue_codes: issueCodesValue } : {},
+    remediation: {
+      code,
+      action,
+      automatic,
+      ...command ? { command } : {}
+    }
+  };
+}
+function fail(id, summary, code, action, command) {
+  return {
+    id,
+    status: "fail",
+    summary,
+    remediation: {
+      code,
+      action,
+      automatic: false,
+      ...command ? { command } : {}
+    }
+  };
+}
+function record(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function stringValue(value) {
+  return typeof value === "string" && value ? value : null;
+}
+
 // ../core/src/agent-guidance.ts
 var REMEMBRANCE_QUERY_TOOL_DESCRIPTION = "Call before non-trivial service, API, tool, library, workflow, UI, review, test, security, or deployment work to find relevant Remembrance skills and resources. For short context-dependent follow-ups, infer the concrete task from the full conversation, preserve any plugin-supplied client_context.directive_id/runtime/trigger_reason, and query anyway. Compare each candidate's bounded why_matched evidence and applicability conditions before opening it; discard stated unlikely or corner-case mismatches. High matches should be fetched before custom work; possible and exploratory matches remain optional. Do not use for broad web search or one-off facts.";
 var REMEMBRANCE_CONNECTION_STATUS_TOOL_DESCRIPTION = "Inspect the active Remembrance transport, credential source, and authenticated registry scope without exposing credentials. Call this before diagnosing authentication, checking environment variables, or making anonymous REST/browser probes. Local or bundled MCP can read REMEMBRANCE_API_KEY or ~/.config/remembrance/config.json; hosted MCP cannot read local files and authenticates from its request header. When a declared native lifecycle is degraded, local MCP may submit bounded, content-free health evidence unless REMEMBRANCE_HEALTH_REPORTING=0. Never infer the plugin's scope from REMEMBRANCE_API_KEY alone.";
-var REMEMBRANCE_MCP_SERVER_INSTRUCTIONS = "Remembrance is shared operational memory for agents. Before claiming that Remembrance is anonymous, unconfigured, or missing an organization key, call get_connection_status for the transport you will actually use. An unset REMEMBRANCE_API_KEY does not prove that a local plugin is anonymous because local hooks and bundled MCP may read ~/.config/remembrance/config.json. Conversely, hosted MCP cannot read that local file. Anonymous curl or browser probes describe only those requests, not plugin authentication. Never print or request the raw key. When the user explicitly names an authorized Remembrance skill or supplies a remembrance://skills/{slug} URI, resolve ambiguous names with list_skills using its normalized slug-prefix filter, then call invoke_skill with an exact returned slug. Never guess a slug. list_skills is catalog resolution, not relevance search; use query_skills when the user wants relevant candidates rather than a known selection. invoke_skill rechecks authorization and organization policy, resolves the current reviewed version, and returns the only full instruction body. Catalog listings and MCP resource reads are lightweight handles, not skill use. Do not run query_skills merely to rediscover that explicit selection, and do not submit query-fit feedback for it. After meaningful direct use, follow the returned task-outcome and post-use feedback instructions once. BEFORE non-trivial service/API/tool/library/workflow/UI/review/test/security/deployment work, call query_skills to reuse proven skills and resources instead of rediscovering them. A local repository change still qualifies when it involves a reusable workflow or lesson; skip only genuinely trivial throwaway edits and one-off facts. For short follow-ups such as 'fix these issues', 'continue', or 'try again', infer the concrete task, domain, and constraints from the full conversation and still call query_skills; do not wait for the current prompt to repeat trigger keywords. Treat match_tier as a decision aid, then inspect why_matched and applicability before opening a result. These fields show bounded matched terms/capabilities, satisfied and missed constraints, qualitative lexical/semantic evidence, declared scope, use conditions, and exclusions without exposing unstable raw ranking scores. Discard an unlikely or irrelevant corner-case result and report fit: poor; do not force its use. For a remaining high match, call get_skill or get_resource before custom work and pass the returned query_id/result_id so the surfaced-to-fetch funnel closes; possible and exploratory matches are optional. The response also includes approximate context tokens, verified uses, risk, tags, permissions, dependencies, and contraindications so you can weigh the detour safely. Honor query_skills.skill_access on every response. When policy is org_only, use only returned organization skills and never substitute bundled or live public skill references; if an organization key is configured and the query is unavailable, fail closed because the policy cannot be confirmed. AFTER query_skills, call submit_query_feedback once with one complete set of explicit good/partial/poor judgments using the returned query_id and result_id values; leave unrated results neutral, and remember that a poor query match is not the same as a globally bad skill. Reuse the same organization or anonymous auth scope as the query. AFTER you actually use a skill or resource, close the post-use loop with submit_feedback (useful true/false plus a one-line lesson and the originating query_id/result_id; it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable. If nothing fit and you built a new workflow, use propose_private_skill for an organization-private candidate. With an organization key, propose_skill_idea also remains organization-private. Never remove, suppress, or bypass that key to force a public submission; submit privately, then use the reviewed public-propagation flow when the organization chooses to share it. When delegating, pass the selected slug, exact version, query_id, and result_id to the subagent; it should invoke/fetch that result or run its own full-context query. The parent reports the terminal outcome unless the subagent creates its own invocation. Before finishing any reusable task, self-check for a missed query. If you catch your own mistake, the user catches one, CI/deploy fails, a security issue appears, or you fix a release/versioning miss, submit a failure_report remembrance even if no skill was used; raw MCP clients have no plugin Stop hook to remind you later. A host privacy or tenant-policy denial happens before Remembrance receives the request. Do not retry private repository content through another transport or claim submission. If the blocked contribution is an organization skill, use the local-only queue_private_skill_import tool or bundled handoff script, then wait for an organization admin import receipt. Attach evidence (reproduction detail, artifact hashes, or an attestation); evidence-less public reports wait in unverified intake until corroborated. Redact secrets, private URLs, credentials, raw logs, and proprietary content; submit summaries and hashes, not raw traces.";
+var REMEMBRANCE_CONNECTION_DOCTOR_TOOL_DESCRIPTION = "Run a bounded, non-mutating Remembrance connection diagnostic. It verifies the active transport, a redacted registry destination, authenticated scope, query authorization, a real catalog read, and organization submission capability. Local MCP also checks shared-config permissions, destination consistency, native plugin lifecycle, and signing identity; hosted MCP marks local-only checks unavailable. It never submits content, creates query demand, opens a review item, or returns credentials, absolute paths, private registry URLs, prompts, or repository data.";
+var REMEMBRANCE_MCP_SERVER_INSTRUCTIONS = "Remembrance is shared operational memory for agents. Before claiming that Remembrance is anonymous, unconfigured, partially active, or missing an organization key, call run_connection_doctor for the transport you will actually use. It performs a safe catalog read and returns exact bounded remediation without submitting content. Use get_connection_status only when you need the underlying transport and lifecycle fields. An unset REMEMBRANCE_API_KEY does not prove that a local plugin is anonymous because local hooks and bundled MCP may read ~/.config/remembrance/config.json. Conversely, hosted MCP cannot read that local file. Anonymous curl or browser probes describe only those requests, not plugin authentication. Never print or request the raw key. When the user explicitly names an authorized Remembrance skill or supplies a remembrance://skills/{slug} URI, resolve ambiguous names with list_skills using its normalized slug-prefix filter, then call invoke_skill with an exact returned slug. Never guess a slug. list_skills is catalog resolution, not relevance search; use query_skills when the user wants relevant candidates rather than a known selection. invoke_skill rechecks authorization and organization policy, resolves the current reviewed version, and returns the only full instruction body. Catalog listings and MCP resource reads are lightweight handles, not skill use. Do not run query_skills merely to rediscover that explicit selection, and do not submit query-fit feedback for it. After meaningful direct use, follow the returned task-outcome and post-use feedback instructions once. BEFORE non-trivial service/API/tool/library/workflow/UI/review/test/security/deployment work, call query_skills to reuse proven skills and resources instead of rediscovering them. A local repository change still qualifies when it involves a reusable workflow or lesson; skip only genuinely trivial throwaway edits and one-off facts. For short follow-ups such as 'fix these issues', 'continue', or 'try again', infer the concrete task, domain, and constraints from the full conversation and still call query_skills; do not wait for the current prompt to repeat trigger keywords. Treat match_tier as a decision aid, then inspect why_matched and applicability before opening a result. These fields show bounded matched terms/capabilities, satisfied and missed constraints, qualitative lexical/semantic evidence, declared scope, use conditions, and exclusions without exposing unstable raw ranking scores. Discard an unlikely or irrelevant corner-case result and report fit: poor; do not force its use. For a remaining high match, call get_skill or get_resource before custom work and pass the returned query_id/result_id so the surfaced-to-fetch funnel closes; possible and exploratory matches are optional. The response also includes approximate context tokens, verified uses, risk, tags, permissions, dependencies, and contraindications so you can weigh the detour safely. Honor query_skills.skill_access on every response. When policy is org_only, use only returned organization skills and never substitute bundled or live public skill references; if an organization key is configured and the query is unavailable, fail closed because the policy cannot be confirmed. AFTER query_skills, call submit_query_feedback once with one complete set of explicit good/partial/poor judgments using the returned query_id and result_id values; leave unrated results neutral, and remember that a poor query match is not the same as a globally bad skill. Reuse the same organization or anonymous auth scope as the query. AFTER you actually use a skill or resource, close the post-use loop with submit_feedback (useful true/false plus a one-line lesson and the originating query_id/result_id; it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable. If nothing fit and you built a new workflow, use propose_private_skill for an organization-private candidate. With an organization key, propose_skill_idea also remains organization-private. Never remove, suppress, or bypass that key to force a public submission; submit privately, then use the reviewed public-propagation flow when the organization chooses to share it. When delegating, pass the selected slug, exact version, query_id, and result_id to the subagent; it should invoke/fetch that result or run its own full-context query. The parent reports the terminal outcome unless the subagent creates its own invocation. Before finishing any reusable task, self-check for a missed query. If you catch your own mistake, the user catches one, CI/deploy fails, a security issue appears, or you fix a release/versioning miss, submit a failure_report remembrance even if no skill was used; raw MCP clients have no plugin Stop hook to remind you later. A host privacy or tenant-policy denial happens before Remembrance receives the request. Do not retry private repository content through another transport or claim submission. If the blocked contribution is an organization skill, use the local-only queue_private_skill_import tool or bundled handoff script, then wait for an organization admin import receipt. Attach evidence (reproduction detail, artifact hashes, or an attestation); evidence-less public reports wait in unverified intake until corroborated. Redact secrets, private URLs, credentials, raw logs, and proprietary content; submit summaries and hashes, not raw traces.";
 
 // ../core/src/redaction.ts
 var SECRET_PATTERN_SPECS = [
@@ -4604,6 +4915,7 @@ function buildOrganizationSkillHandoffBundle(input, createdAt = /* @__PURE__ */ 
 // ../core/src/remembrance-mcp-policy.ts
 var REMEMBRANCE_MCP_READ_TOOLS = [
   "get_connection_status",
+  "run_connection_doctor",
   "query_skills",
   "list_skills",
   "invoke_skill",
@@ -5009,6 +5321,14 @@ var skillCatalogRequestSchema = external_exports.object({
   }
 });
 var connectionStatusRequestSchema = external_exports.object({}).strict();
+var connectionDoctorRequestSchema = external_exports.object({
+  active_read_probe: external_exports.boolean().default(true).describe(
+    "Verify a real authorized catalog read without creating query, feedback, or review records."
+  ),
+  check_organization_write_authorization: external_exports.boolean().default(true).describe(
+    "Report organization submission authorization from the authenticated capability response without sending a write request."
+  )
+}).strict();
 var skillCatalogEntrySchema = external_exports.object({
   slug: boundedString(MAX_SHORT_TEXT_LENGTH),
   name: boundedString(MAX_SHORT_TEXT_LENGTH),
@@ -5610,7 +5930,7 @@ var seedSkills = [
     summary: "Operational setup and troubleshooting workflow for Remembrance across Claude Code, Codex, OpenClaw, Cursor, Gemini, MCP, REST, skill-only installs, enterprise keys, and local agent identity.",
     status: "active",
     visibility: "public",
-    version: "0.1.5",
+    version: "0.1.9",
     domains: ["agent-skills", "mcp", "resource-discovery"],
     tags: [
       "remembrance",
@@ -5661,7 +5981,7 @@ var seedSkills = [
         "gemini",
         "rest"
       ],
-      version: "0.1.5",
+      version: "0.1.9",
       status: "active",
       visibility: "public",
       providers: ["codex", "claude", "cursor", "openclaw", "generic"],
@@ -5743,7 +6063,7 @@ REST/HTTPS, skill-only installs, enterprise org keys, local identity, and common
   Cursor, Gemini, or another agent.
 - The user has an enterprise/org API key and needs to make an agent use
   org-scoped skills or private overlays.
-- MCP tools such as get_connection_status, query_skills, list_skills,
+- MCP tools such as run_connection_doctor, get_connection_status, query_skills, list_skills,
   invoke_skill, submit_query_feedback, submit_feedback, submit_remembrance,
   propose_private_skill, queue_private_skill_import, report_task_outcome,
   get_value_proof, get_skill, get_resource, or bootstrap_agent_identity are
@@ -5861,7 +6181,7 @@ openclaw remembrance setup
 If ClawHub search shows multiple Remembrance matches, use the official package
 that points to "dreamarkinc/remembrance-skills", mentions the Remembrance agent
 skill/resource service, and exposes the expected Remembrance MCP tools such as
-get_connection_status, query_skills, list_skills, invoke_skill,
+run_connection_doctor, get_connection_status, query_skills, list_skills, invoke_skill,
 submit_query_feedback, submit_remembrance, get_skill, and get_resource, plus
 report_task_outcome and get_value_proof. Do not install
 unrelated roots, genealogy, ancestry, or memorial packages.
@@ -5922,9 +6242,11 @@ chmod 600 ~/.config/remembrance/config.json
 ~~~
 
 Do not infer connection scope by checking one environment variable. After
-setup, call MCP \`get_connection_status\`. It names the active transport,
-credential source, verified organization/public scope, and config permission
-status without exposing the key. An anonymous curl or browser probe describes
+setup, run MCP \`run_connection_doctor\`. It performs a non-mutating catalog
+read and names the active transport, credential source, verified
+organization/public scope, and config permission status with one exact
+remediation, without exposing the key, absolute paths, or custom registry URLs.
+Use \`get_connection_status\` only for the underlying fields. An anonymous curl or browser probe describes
 only that request, not the plugin. Raw REST clients do not load this file
 automatically; they must deliberately read it or send a key header.
 
@@ -5935,14 +6257,30 @@ export REMEMBRANCE_API_KEY="YOUR_ORG_KEY"
 export REMEMBRANCE_API_URL="https://remembrance.dev"
 ~~~
 
+For a custom registry, bind the key to that exact destination. Store \`apiKey\`
+and \`apiUrl\` together in the shared config, or bind environment credentials
+explicitly:
+
+~~~bash
+export REMEMBRANCE_API_KEY="YOUR_ORG_KEY"
+export REMEMBRANCE_API_URL="https://registry.example"
+export REMEMBRANCE_API_KEY_ORIGIN="https://registry.example"
+~~~
+
+Every remote registry requires HTTPS; only loopback development may use HTTP.
+An intentionally trusted private or link-local HTTPS registry also requires
+\`REMEMBRANCE_ALLOW_PRIVATE_REGISTRY=true\`. If the destination and credential
+binding do not match exactly, Remembrance pauses remote calls instead of
+forwarding the key.
+
 For Codex Desktop, the packaged plugin now runs a bundled local MCP server.
 The native hooks and MCP process both read the shared file above, so the GUI
 does not need \`launchctl setenv\` for the normal plugin path. Fully quit and
-reopen Codex after installing or updating the plugin, then call
-\`get_connection_status\`. A healthy install reports \`local_stdio_mcp\`, the
+reopen Codex after installing or updating the plugin, then run
+\`run_connection_doctor\`. A healthy install reports \`local_stdio_mcp\`, the
 expected organization scope, and an active \`plugin_health\` lifecycle.
 
-If filesystem skills are visible but \`get_connection_status\` is absent, or if
+If filesystem skills are visible but \`run_connection_doctor\` is absent, or if
 that tool reports missing native hooks, treat the install as partially active.
 Update or reinstall from the Remembrance marketplace, fully restart Codex, and
 run the check again. The plugin records only local component timestamps and
@@ -5950,6 +6288,12 @@ version/source categories; a degraded check may submit those bounded issue
 codes for deduplicated global-admin triage. It never submits prompts, keys,
 paths, or raw logs. Set \`REMEMBRANCE_HEALTH_REPORTING=0\` to disable that
 best-effort report.
+
+If no Remembrance MCP tool is visible, run
+\`npx @remembrance-ai/mcp-server doctor\`. This safely verifies registry,
+credential, and catalog-read access outside the host, but it deliberately
+reports host registration as unobservable. Update or reinstall the native
+plugin, fully restart the host, then rerun \`run_connection_doctor\` inside it.
 
 A manually configured hosted MCP URL is still supported, but hosted MCP cannot
 read the shared file and must receive its own request credential. Only that
@@ -6078,9 +6422,8 @@ overrides \`launchctl\` and the config file.
 For the Claude Code desktop app, prefer the shared mode-0600 config file above.
 The plugin hooks and bundled local MCP server both read it, so the GUI process
 does not need to inherit shell exports or duplicate the key in Claude settings.
-Fully quit and relaunch Claude Code after changing the file, then call
-\`get_connection_status\` and confirm \`shared_config\`, \`local_stdio_mcp\`,
-active plugin health, and the expected organization scope.
+Fully quit and relaunch Claude Code after changing the file, then run
+\`run_connection_doctor\` and require \`safe_to_query: true\`.
 
 For Cursor, prefer the shared config file above. The Cursor plugin-managed MCP
 server and local hooks read it. If using a non-prod Remembrance endpoint, include
@@ -6169,8 +6512,8 @@ The exclusive managed MCP file lives at
 \`/etc/claude-code/managed-mcp.json\` on Linux/WSL, and
 \`C:\\Program Files\\ClaudeCode\\managed-mcp.json\` on Windows. The sandbox
 domain applies to command/REST fallbacks; managed HTTP MCP authorization remains
-the exact server URL plus named tools. Verify with \`claude mcp list\`, then call
-\`get_connection_status\` and confirm organization scope before contribution
+the exact server URL plus named tools. Verify with \`claude mcp list\`, then run
+\`run_connection_doctor\` and require organization scope before contribution
 work. See the official
 [managed MCP](https://code.claude.com/docs/en/managed-mcp),
 [permissions](https://code.claude.com/docs/en/permissions), and
@@ -6207,7 +6550,7 @@ System settings live at \`/Library/Application Support/GeminiCli/settings.json\`
 on macOS, \`/etc/gemini-cli/settings.json\` on Linux, and
 \`C:\\ProgramData\\gemini-cli\\settings.json\` on Windows. Also allow
 \`remembrance.dev\` in the organization's egress policy. Restart Gemini CLI,
-inspect the registered server, then call \`get_connection_status\` and confirm
+inspect the registered server, then run \`run_connection_doctor\` and require
 organization scope before contribution work. See the official
 [enterprise configuration](https://google-gemini.github.io/gemini-cli/docs/cli/enterprise.html)
 and [MCP settings](https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html).
@@ -6269,8 +6612,8 @@ the server's \`toolFilter\`. Merge this separately into \`policy.jsonc\`:
 ~~~
 
 Keep the organization key in the plugin's mode-0600 shared config or another
-approved secret source, not in \`policy.jsonc\`. After the probes, call
-\`get_connection_status\` and confirm organization scope. See the official
+approved secret source, not in \`policy.jsonc\`. After the probes, run
+\`run_connection_doctor\` and require organization scope. See the official
 [plugin policy](https://docs.openclaw.ai/tools/plugin),
 [conversation hook policy](https://docs.openclaw.ai/plugins/hooks),
 [MCP tool filters](https://docs.openclaw.ai/cli/mcp), and
@@ -6288,7 +6631,7 @@ based fallback paths.
 Cursor's current public enterprise documentation does not define a managed
 per-MCP-tool allowlist equivalent to Codex, Claude Code, Gemini CLI, or
 OpenClaw. Keep Cursor's normal tool approvals enabled and do not claim an
-undocumented control exists. Call \`get_connection_status\` and confirm
+undocumented control exists. Run \`run_connection_doctor\` and require
 organization scope on every enabled surface, then verify query, invocation,
 feedback, and private-contribution receipts; local plugin hooks and cloud-agent
 hooks can differ. See the official
@@ -6305,8 +6648,8 @@ tool list above when the client supports tool filtering. Keep normal approval
 behavior for non-read-only calls unless unattended organization-private
 contribution is explicitly approved. A client with no server/tool policy must
 use its existing destination control or the zero-network handoff. Supply the
-organization key through the client's secret/header mechanism, then call
-\`get_connection_status\` and confirm organization scope before private writes.
+organization key through the client's secret/header mechanism, then run
+\`run_connection_doctor\` and require organization scope before private writes.
 
 If any host still denies the export, that denial remains authoritative. The
 portable local handoff and dashboard import work identically for Codex, Claude
@@ -6336,6 +6679,16 @@ Local stdio MCP server:
 ~~~bash
 npx @remembrance-ai/mcp-server
 ~~~
+
+Independent setup check when the host does not expose Remembrance tools:
+
+~~~bash
+npx @remembrance-ai/mcp-server doctor
+~~~
+
+This verifies registry, credential, and catalog-read access without submitting
+content. It cannot prove host MCP registration; after repair, rerun
+\`run_connection_doctor\` inside the host.
 
 Cursor MCP fallback config (use this only when plugin install is unavailable):
 
@@ -6400,16 +6753,17 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
 
 1. Start a fresh agent session.
 2. Check whether Remembrance MCP tools are visible. Expected tools include
-   get_connection_status, query_skills, list_skills, invoke_skill, get_skill,
+   run_connection_doctor, get_connection_status, query_skills, list_skills, invoke_skill, get_skill,
    get_resource, submit_query_feedback, submit_feedback, submit_remembrance,
    propose_private_skill, report_task_outcome, get_value_proof, and
    bootstrap_agent_identity. Local MCP also exposes
    queue_private_skill_import. Clients
    with MCP resource discovery should also expose paginated
    \`remembrance://skills/{slug}\` handles.
-3. Call get_connection_status and confirm the active transport, credential
-   source, and expected public/organization scope before inspecting environment
-   variables or making a raw probe.
+3. Call run_connection_doctor and require \`safe_to_query: true\`. Confirm the
+   active transport and expected public/organization scope before inspecting
+   environment variables or making a raw probe. Follow its exact remediation
+   for any warning or failure.
 4. Ask the agent to query Remembrance for a known task, for example:
    "Query Remembrance for web UI QA before reviewing a responsive dashboard."
 5. Follow with a context-only prompt such as "fix these issues". Confirm the
@@ -6453,8 +6807,10 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
    queue_private_skill_import instead, upload its JSON in the dashboard, and
    verify the agent reports a local queue receipt separately from the server
    import receipt.
-14. If using local MCP, run bootstrap_agent_identity once when verified TOFU
-   contributions are needed.
+14. If using local MCP, verify local_signing_identity in get_connection_status.
+   A missing opaque identity initializes automatically on the first signed
+   contribution; bootstrap_agent_identity with no arguments is an optional
+   preflight or recovery action.
 
 ## Troubleshooting matrix
 
@@ -7255,12 +7611,11 @@ var verifierOutputSchema = external_exports.object({
 });
 
 // src/server.ts
-import { existsSync as existsSync2 } from "node:fs";
-import { mkdir as mkdir2, readFile as readFile2, writeFile as writeFile2 } from "node:fs/promises";
-import { homedir as homedir3 } from "node:os";
-import { dirname, join as join3 } from "node:path";
+import { existsSync as existsSync3 } from "node:fs";
+import { mkdir as mkdir2, writeFile as writeFile2 } from "node:fs/promises";
+import { dirname as dirname2 } from "node:path";
 import {
-  createPrivateKey,
+  createPrivateKey as createPrivateKey2,
   generateKeyPairSync,
   sign as signPayload
 } from "node:crypto";
@@ -8559,7 +8914,9 @@ var getValueProofSchema = external_exports.object({
   id: external_exports.string().min(1).describe("Value proof id returned with potential_savings.")
 });
 var bootstrapAgentIdentitySchema = external_exports.object({
-  subject: external_exports.string().min(1).describe("Stable agent identity, for example codex:user@example.com."),
+  subject: external_exports.string().min(1).optional().describe(
+    "Optional stable agent identity. Omit it to generate a private opaque subject from the new public-key fingerprint."
+  ),
   provider: external_exports.enum(["other", "codex", "cursor", "claude_code"]).default("other").describe(
     "Use other for independent TOFU keys. Use codex/cursor/claude_code only for Remembrance-registered plugin keys."
   ),
@@ -8569,7 +8926,7 @@ var bootstrapAgentIdentitySchema = external_exports.object({
 });
 var feedbackToolSchema = agentFeedbackRequestBaseSchema.extend({
   verified_attestation: external_exports.boolean().default(false).describe(
-    "When true, sign the feedback with the local TOFU key. Run bootstrap_agent_identity once before using this option."
+    "When true, sign the feedback with the local TOFU key. Missing local identity is initialized automatically; bootstrap_agent_identity remains available for preflight or recovery."
   )
 }).superRefine((value, ctx) => {
   if (Boolean(value.query_id) !== Boolean(value.result_id)) {
@@ -8582,7 +8939,7 @@ var feedbackToolSchema = agentFeedbackRequestBaseSchema.extend({
 });
 var remembranceToolSchema = remembrancePayloadSchema.extend({
   verified_attestation: external_exports.boolean().default(false).describe(
-    "When true, sign the remembrance with the local TOFU key. Run bootstrap_agent_identity once before using this option; skill.slug is also required."
+    "When true, sign the remembrance with the local TOFU key. Missing local identity is initialized automatically; skill.slug is also required."
   )
 });
 var toolDefinitions = [
@@ -8591,6 +8948,13 @@ var toolDefinitions = [
     REMEMBRANCE_CONNECTION_STATUS_TOOL_DESCRIPTION,
     "/api/v1/agent/connection-status",
     connectionStatusRequestSchema,
+    "GET"
+  ),
+  tool(
+    "run_connection_doctor",
+    REMEMBRANCE_CONNECTION_DOCTOR_TOOL_DESCRIPTION,
+    "/api/v1/agent/connection-status",
+    connectionDoctorRequestSchema,
     "GET"
   ),
   tool(
@@ -8628,7 +8992,7 @@ var toolDefinitions = [
   ),
   localTool(
     "bootstrap_agent_identity",
-    "Create or reuse a local Ed25519 TOFU key and register it with Remembrance. Use once per agent installation; rerun to re-bootstrap if the local agent-key.json was lost.",
+    "Create or reuse a local Ed25519 TOFU key and register it with Remembrance. No arguments are required. Rerun to repair permissions or re-bootstrap if the local agent-key.json was lost.",
     "bootstrap_agent_identity",
     bootstrapAgentIdentitySchema
   ),
@@ -8734,7 +9098,7 @@ function localTool(name, description, local, schema) {
   };
 }
 function annotationsForTool(name) {
-  const readOnly = name === "list_skills" || name === "get_value_proof";
+  const readOnly = name === "list_skills" || name === "get_value_proof" || name === "run_connection_doctor";
   const openWorld = name === "submit_feedback" || name === "submit_remembrance" || name === "propose_skill_idea" || name === "submit_suggestion" || name === "submit_resource" || name === "submit_resource_review";
   return {
     readOnlyHint: readOnly,
@@ -8812,9 +9176,296 @@ function isAlreadyExistsError(error) {
 }
 
 // src/connection-status.ts
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { homedir as homedir2, tmpdir } from "node:os";
+import { existsSync as existsSync2 } from "node:fs";
+import { createHash as createHash2 } from "node:crypto";
+import { isIP } from "node:net";
+import { homedir as homedir3 } from "node:os";
+import { join as join3 } from "node:path";
+
+// src/local-agent-identity.ts
+import { createPrivateKey, createPublicKey as createPublicKey2 } from "node:crypto";
+import { existsSync } from "node:fs";
+import { homedir as homedir2 } from "node:os";
 import { join as join2 } from "node:path";
+
+// src/secure-local-file.ts
+import {
+  closeSync,
+  constants,
+  fchmodSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  opendirSync,
+  readSync
+} from "node:fs";
+import { dirname } from "node:path";
+var MAX_LOCAL_CONFIG_BYTES = 64 * 1024;
+var MAX_LOCAL_IDENTITY_BYTES = 64 * 1024;
+var MAX_LOCAL_LIFECYCLE_MARKER_BYTES = 16 * 1024;
+var MAX_LOCAL_LIFECYCLE_MARKERS = 64;
+var MAX_LOCAL_DIRECTORY_ENTRIES = 256;
+function readSecureLocalText(path, options) {
+  assertSecureParentDirectory(dirname(path));
+  const before = lstatSync(path);
+  assertRegularFile(before, path, options.maxBytes);
+  const descriptor = openSync(
+    path,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)
+  );
+  try {
+    let opened = fstatSync(descriptor);
+    assertRegularFile(opened, path, options.maxBytes);
+    if (before.dev !== opened.dev || before.ino !== opened.ino) {
+      throw new Error("Local state file changed while it was being opened.");
+    }
+    assertCurrentUserOwner(opened.uid, path);
+    if (isPosix() && (opened.mode & 63) !== 0) {
+      if (options.allowInsecurePermissions) {
+      } else if (!options.repairPermissions) {
+        throw new Error("Local state file permissions are not private.");
+      } else {
+        fchmodSync(descriptor, 384);
+        opened = fstatSync(descriptor);
+        if ((opened.mode & 63) !== 0) {
+          throw new Error("Local state file permissions could not be repaired.");
+        }
+      }
+    }
+    return readBoundedDescriptor(descriptor, options.maxBytes);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+function secureLocalFileMode(path) {
+  return lstatSync(path).mode;
+}
+function listSecureLocalDirectory(path) {
+  assertSecureDirectory(path);
+  const directory = opendirSync(path);
+  const entries = [];
+  try {
+    while (entries.length < MAX_LOCAL_DIRECTORY_ENTRIES) {
+      const entry = directory.readSync();
+      if (!entry) break;
+      entries.push(entry.name);
+    }
+  } finally {
+    directory.closeSync();
+  }
+  return entries;
+}
+function assertSecureParentDirectory(path) {
+  const metadata = lstatSync(path);
+  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+    throw new Error("Local state parent is not a regular directory.");
+  }
+  assertCurrentUserOwner(metadata.uid, path);
+  if (isPosix() && (metadata.mode & 18) !== 0) {
+    throw new Error("Local state parent is writable by another user.");
+  }
+}
+function assertSecureDirectory(path) {
+  assertSecureParentDirectory(path);
+}
+function assertRegularFile(metadata, path, maxBytes) {
+  if (metadata.isSymbolicLink() || !metadata.isFile()) {
+    throw new Error(`Local state path is not a regular file: ${path}`);
+  }
+  if (metadata.size > maxBytes) {
+    throw new Error("Local state file exceeds its size limit.");
+  }
+}
+function assertCurrentUserOwner(uid, path) {
+  if (isPosix() && uid !== process.getuid()) {
+    throw new Error(`Local state path is not owned by the current user: ${path}`);
+  }
+}
+function readBoundedDescriptor(descriptor, maxBytes) {
+  const chunks = [];
+  let total = 0;
+  while (total <= maxBytes) {
+    const chunk = Buffer.allocUnsafe(Math.min(8 * 1024, maxBytes + 1 - total));
+    const bytesRead = readSync(descriptor, chunk, 0, chunk.length, null);
+    if (bytesRead === 0) break;
+    chunks.push(chunk.subarray(0, bytesRead));
+    total += bytesRead;
+  }
+  if (total > maxBytes) {
+    throw new Error("Local state file exceeds its size limit.");
+  }
+  return Buffer.concat(chunks, total).toString("utf8");
+}
+function isPosix() {
+  return typeof process.getuid === "function";
+}
+
+// src/local-agent-identity.ts
+var nodeFileSystem = {
+  exists: existsSync,
+  read: (path, maxBytes = MAX_LOCAL_IDENTITY_BYTES) => readSecureLocalText(path, {
+    maxBytes,
+    allowInsecurePermissions: true
+  }),
+  mode: secureLocalFileMode
+};
+var supportedProviders = /* @__PURE__ */ new Set([
+  "other",
+  "codex",
+  "cursor",
+  "claude_code"
+]);
+function localAgentIdentityPath(env = process.env, homeDirectory = homedir2()) {
+  const explicit = env.REMEMBRANCE_AGENT_KEY_PATH?.trim();
+  if (explicit) return explicit;
+  return join2(
+    env.XDG_CONFIG_HOME ?? join2(homeDirectory, ".config"),
+    "remembrance",
+    "agent-key.json"
+  );
+}
+function parseStoredIdentity(value) {
+  if (!isRecord(value)) return null;
+  if (!supportedProviders.has(value.provider)) {
+    return null;
+  }
+  for (const field of [
+    "subject",
+    "key_id",
+    "public_key",
+    "private_key",
+    "created_at"
+  ]) {
+    if (typeof value[field] !== "string" || !value[field].trim()) return null;
+  }
+  if (!Number.isFinite(Date.parse(value.created_at))) return null;
+  try {
+    const publicDer = createPublicKey2(value.public_key).export({
+      type: "spki",
+      format: "der"
+    });
+    const derivedPublicDer = createPublicKey2(
+      createPrivateKey(value.private_key)
+    ).export({ type: "spki", format: "der" });
+    if (!publicDer.equals(derivedPublicDer)) return null;
+  } catch {
+    return null;
+  }
+  return value;
+}
+function localAgentIdentityStatus(env = process.env, fileSystem = nodeFileSystem) {
+  const path = localAgentIdentityPath(env);
+  if (!fileSystem.exists(path)) {
+    return identityStatus({
+      status: "missing",
+      present: false,
+      valid: null,
+      nextAction: {
+        code: "bootstrap_agent_identity",
+        arguments: {},
+        automatic: true,
+        confirmation: false
+      }
+    });
+  }
+  let mode = null;
+  let securePermissions = null;
+  try {
+    const permissionBits = fileSystem.mode(path) & 511;
+    mode = permissionBits.toString(8).padStart(4, "0");
+    securePermissions = (permissionBits & 63) === 0;
+  } catch {
+  }
+  let identity = null;
+  try {
+    identity = parseStoredIdentity(
+      JSON.parse(fileSystem.read(path, MAX_LOCAL_IDENTITY_BYTES))
+    );
+  } catch {
+  }
+  if (!identity) {
+    return identityStatus({
+      status: "invalid",
+      present: true,
+      valid: false,
+      mode,
+      securePermissions,
+      nextAction: {
+        code: "restore_or_rotate_agent_identity",
+        arguments: { force_rotate: true },
+        automatic: false,
+        confirmation: true
+      }
+    });
+  }
+  if (securePermissions === false) {
+    return identityStatus({
+      status: "insecure_permissions",
+      present: true,
+      valid: true,
+      mode,
+      securePermissions,
+      identity,
+      nextAction: {
+        code: "repair_agent_identity_permissions",
+        arguments: {},
+        automatic: true,
+        confirmation: false
+      }
+    });
+  }
+  if (securePermissions === null) {
+    return identityStatus({
+      status: "permissions_unknown",
+      present: true,
+      valid: true,
+      mode,
+      securePermissions,
+      identity,
+      nextAction: {
+        code: "repair_agent_identity_permissions",
+        arguments: {},
+        automatic: true,
+        confirmation: false
+      }
+    });
+  }
+  return identityStatus({
+    status: "ready",
+    present: true,
+    valid: true,
+    mode,
+    securePermissions,
+    identity,
+    nextAction: null
+  });
+}
+function identityStatus(args) {
+  return {
+    status: args.status,
+    present: args.present,
+    valid: args.valid,
+    mode: args.mode ?? null,
+    secure_permissions: args.securePermissions ?? null,
+    provider: args.identity?.provider ?? null,
+    key_id: args.identity?.key_id ?? null,
+    created_at: args.identity?.created_at ?? null,
+    signed_contributions_ready: args.status === "ready",
+    next_action: args.nextAction ? {
+      code: args.nextAction.code,
+      tool: "bootstrap_agent_identity",
+      arguments: args.nextAction.arguments,
+      automatic_on_first_signed_submission: args.nextAction.automatic,
+      requires_confirmation: args.nextAction.confirmation
+    } : null
+  };
+}
+function isRecord(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+// src/connection-status.ts
+var DEFAULT_API_URL = "https://remembrance.dev";
 var PLUGIN_HEALTH_COMPONENTS = [
   "session_start",
   "prompt_hook",
@@ -8823,83 +9474,125 @@ var PLUGIN_HEALTH_COMPONENTS = [
 ];
 var PLUGIN_HEALTH_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var PLUGIN_HEALTH_MAX_FUTURE_SKEW_MS = 5 * 60 * 1e3;
-var nodeFileSystem = {
-  exists: existsSync,
-  read: (path) => readFileSync(path, "utf8"),
-  mode: (path) => statSync(path).mode,
-  list: (path) => readdirSync(path)
+var nodeFileSystem2 = {
+  exists: existsSync2,
+  read: (path, maxBytes = MAX_LOCAL_CONFIG_BYTES) => readSecureLocalText(path, { maxBytes }),
+  mode: secureLocalFileMode,
+  list: listSecureLocalDirectory
 };
-function remembranceConfigPath(env = process.env, homeDirectory = homedir2()) {
-  const configRoot = env.REMEMBRANCE_PLUGIN_HOST?.trim().toLowerCase() === "openclaw" ? join2(homeDirectory, ".config") : env.XDG_CONFIG_HOME ?? join2(homeDirectory, ".config");
-  return join2(configRoot, "remembrance", "config.json");
+function remembranceConfigPath(env = process.env, homeDirectory = homedir3()) {
+  const configRoot = env.REMEMBRANCE_PLUGIN_HOST?.trim().toLowerCase() === "openclaw" ? join3(homeDirectory, ".config") : env.XDG_CONFIG_HOME ?? join3(homeDirectory, ".config");
+  return join3(configRoot, "remembrance", "config.json");
 }
-function resolveApiCredential(env = process.env, fileSystem = nodeFileSystem) {
+function resolveApiCredential(env = process.env, fileSystem = nodeFileSystem2) {
+  const apiConfiguration2 = resolveApiConfiguration(env, fileSystem);
   const environmentKey = env.REMEMBRANCE_API_KEY?.trim();
   if (environmentKey) {
-    return { apiKey: environmentKey, source: "environment" };
+    const explicitBinding = env.REMEMBRANCE_API_KEY_ORIGIN?.trim();
+    const binding = explicitBinding ? normalizeApiUrl(explicitBinding, env) : { baseUrl: DEFAULT_API_URL, issue: null };
+    if (!binding.baseUrl || binding.issue) {
+      return unusableDestinationBinding();
+    }
+    return credentialForDestination(
+      {
+        apiKey: environmentKey,
+        source: "environment",
+        boundBaseUrl: binding.baseUrl
+      },
+      apiConfiguration2
+    );
   }
   const path = remembranceConfigPath(env);
   if (!fileSystem.exists(path)) {
     return { apiKey: "", source: "none" };
   }
   try {
-    const parsed = JSON.parse(fileSystem.read(path));
-    if (!isRecord(parsed)) {
-      return { apiKey: "", source: "unusable_shared_config" };
+    const parsed = JSON.parse(
+      fileSystem.read(path, MAX_LOCAL_CONFIG_BYTES)
+    );
+    if (!isRecord2(parsed)) {
+      return unusableSharedConfig();
     }
     if (Object.prototype.hasOwnProperty.call(parsed, "apiKey") && (typeof parsed.apiKey !== "string" || !parsed.apiKey.trim())) {
-      return { apiKey: "", source: "unusable_shared_config" };
+      return unusableSharedConfig();
     }
-    const apiKey = normalizeConfig(parsed).apiKey;
-    return apiKey ? { apiKey, source: "shared_config" } : { apiKey: "", source: "none" };
+    const config = normalizeConfig(parsed);
+    if (!config.apiKey) {
+      return { apiKey: "", source: "none" };
+    }
+    const binding = config.apiUrl ? normalizeApiUrl(config.apiUrl, env) : { baseUrl: DEFAULT_API_URL, issue: null };
+    if (!binding.baseUrl || binding.issue) {
+      return unusableSharedConfig();
+    }
+    return credentialForDestination(
+      {
+        apiKey: config.apiKey,
+        source: "shared_config",
+        boundBaseUrl: binding.baseUrl
+      },
+      apiConfiguration2
+    );
   } catch {
-    return { apiKey: "", source: "unusable_shared_config" };
+    return unusableSharedConfig();
   }
 }
-function resolveApiKey(env = process.env, fileSystem = nodeFileSystem) {
+function resolveApiKey(env = process.env, fileSystem = nodeFileSystem2) {
   return resolveApiCredential(env, fileSystem).apiKey;
 }
-function resolveApiConfiguration(env = process.env, fileSystem = nodeFileSystem) {
+function resolveApiConfiguration(env = process.env, fileSystem = nodeFileSystem2) {
   const environmentUrl = env.REMEMBRANCE_API_URL?.trim();
   if (environmentUrl) {
-    const normalized = normalizeApiUrl(environmentUrl);
-    return normalized ? { baseUrl: normalized, source: "environment" } : {
-      baseUrl: "https://remembrance.dev",
-      source: "unusable_environment"
+    const normalized = normalizeApiUrl(environmentUrl, env);
+    if (normalized.baseUrl !== null) {
+      return { baseUrl: normalized.baseUrl, source: "environment" };
+    }
+    return {
+      baseUrl: DEFAULT_API_URL,
+      source: "unusable_environment",
+      issue: normalized.issue
     };
   }
   const path = remembranceConfigPath(env);
   if (!fileSystem.exists(path)) {
-    return { baseUrl: "https://remembrance.dev", source: "default" };
+    return { baseUrl: DEFAULT_API_URL, source: "default" };
   }
   try {
-    const parsed = JSON.parse(fileSystem.read(path));
-    if (!isRecord(parsed)) {
+    const parsed = JSON.parse(
+      fileSystem.read(path, MAX_LOCAL_CONFIG_BYTES)
+    );
+    if (!isRecord2(parsed)) {
       return {
-        baseUrl: "https://remembrance.dev",
-        source: "unusable_shared_config"
+        baseUrl: DEFAULT_API_URL,
+        source: "unusable_shared_config",
+        issue: "invalid_url"
       };
     }
     if (!Object.prototype.hasOwnProperty.call(parsed, "apiUrl")) {
-      return { baseUrl: "https://remembrance.dev", source: "default" };
+      return { baseUrl: DEFAULT_API_URL, source: "default" };
     }
-    const normalized = normalizeApiUrl(parsed.apiUrl);
-    return normalized ? { baseUrl: normalized, source: "shared_config" } : {
-      baseUrl: "https://remembrance.dev",
-      source: "unusable_shared_config"
+    const normalized = normalizeApiUrl(parsed.apiUrl, env);
+    if (normalized.baseUrl !== null) {
+      return { baseUrl: normalized.baseUrl, source: "shared_config" };
+    }
+    return {
+      baseUrl: DEFAULT_API_URL,
+      source: "unusable_shared_config",
+      issue: normalized.issue
     };
   } catch {
     return {
-      baseUrl: "https://remembrance.dev",
-      source: "unusable_shared_config"
+      baseUrl: DEFAULT_API_URL,
+      source: "unusable_shared_config",
+      issue: "invalid_url"
     };
   }
 }
-function sharedConfigStatus(env = process.env, fileSystem = nodeFileSystem) {
+function sharedConfigStatus(env = process.env, fileSystem = nodeFileSystem2) {
   const path = remembranceConfigPath(env);
+  const location = env.REMEMBRANCE_PLUGIN_HOST?.trim().toLowerCase() !== "openclaw" && Boolean(env.XDG_CONFIG_HOME) ? "custom_shared_config" : "default_shared_config";
   if (!fileSystem.exists(path)) {
     return {
-      path,
+      location,
       present: false,
       valid_json: null,
       api_key_present: false,
@@ -8919,13 +9612,15 @@ function sharedConfigStatus(env = process.env, fileSystem = nodeFileSystem) {
   let validJson = false;
   let config = {};
   try {
-    const parsed = JSON.parse(fileSystem.read(path));
-    validJson = isRecord(parsed);
+    const parsed = JSON.parse(
+      fileSystem.read(path, MAX_LOCAL_CONFIG_BYTES)
+    );
+    validJson = isRecord2(parsed);
     config = normalizeConfig(parsed);
   } catch {
   }
   return {
-    path,
+    location,
     present: true,
     valid_json: validJson,
     api_key_present: Boolean(config.apiKey),
@@ -8935,36 +9630,50 @@ function sharedConfigStatus(env = process.env, fileSystem = nodeFileSystem) {
   };
 }
 function localConnectionStatus(result, options) {
-  const response = isRecord(result) ? result : {};
+  const response = isRecord2(result) ? result : {};
   const env = options.env ?? process.env;
-  const fileSystem = options.fileSystem ?? nodeFileSystem;
+  const fileSystem = options.fileSystem ?? nodeFileSystem2;
   const credential = resolveApiCredential(env, fileSystem);
+  const sharedConfig = sharedConfigStatus(env, fileSystem);
+  const apiDestination = apiDestinationStatus(
+    options.apiBase,
+    options.apiUrlSource
+  );
   const pluginHealth = localPluginLifecycleHealth({
     env,
     fileSystem,
     credentialSource: credential.source,
     pluginVersion: options.pluginVersion,
+    apiDestinationFingerprint: apiDestination.fingerprint,
+    apiDestinationSource: options.apiUrlSource,
     now: options.now
   });
   const registryReady = response.ok === true;
+  const insecureCredential = sharedConfig.api_key_present && sharedConfig.secure_permissions === false;
+  const unknownCredentialPermissions = sharedConfig.api_key_present && sharedConfig.secure_permissions === null;
   return {
-    status: registryReady && pluginHealth.status === "degraded" ? "degraded" : registryReady && pluginHealth.status === "partial" ? "partial" : registryReady ? "ready" : "error",
+    status: registryReady && (pluginHealth.status === "degraded" || insecureCredential) ? "degraded" : registryReady && (pluginHealth.status === "partial" || unknownCredentialPermissions) ? "partial" : registryReady ? "ready" : "error",
     http_status: typeof response.status === "number" ? response.status : null,
     transport: {
       kind: "local_stdio_mcp",
       credential_source: credential.source,
-      api_url: options.apiBase,
+      api_url: apiDestination.kind === "remembrance_cloud" ? "https://remembrance.dev" : null,
       api_url_source: options.apiUrlSource,
-      shared_config: sharedConfigStatus(env, fileSystem),
-      credential_boundary: credential.source === "unusable_shared_config" || options.apiUrlSource === "unusable_shared_config" ? "The shared Remembrance config exists but is unreadable or invalid. Remote tools fail locally until it is fixed or intentionally removed; no request silently falls back to anonymous scope." : options.apiUrlSource === "unusable_environment" ? "REMEMBRANCE_API_URL is invalid. Remote tools fail locally until it is set to an absolute HTTP(S) registry URL or intentionally removed." : "This local MCP process resolves REMEMBRANCE_API_KEY first, then the shared config file. Anonymous curl or browser probes do not test this process."
+      api_destination: {
+        kind: apiDestination.kind,
+        source: apiDestination.source
+      },
+      shared_config: sharedConfig,
+      credential_boundary: credential.source === "unusable_shared_config" || options.apiUrlSource === "unusable_shared_config" ? "The shared Remembrance config exists but is unreadable or invalid. Remote tools fail locally until it is fixed or intentionally removed; no request silently falls back to anonymous scope." : credential.source === "unusable_destination_binding" ? "The configured API key is not bound to this registry destination. Remote tools remain paused so a credential cannot be forwarded to an unintended origin." : options.apiUrlSource === "unusable_environment" ? "REMEMBRANCE_API_URL is invalid or unsafe. Remote tools remain paused until it uses HTTPS (except loopback), any private destination is explicitly allowed, and the credential is bound to the same origin." : "This local MCP process resolves REMEMBRANCE_API_KEY first, then the shared config file. Anonymous curl or browser probes do not test this process."
     },
     registry: response.body ?? (response.error ? { error: String(response.error) } : null),
+    local_signing_identity: localAgentIdentityStatus(env, fileSystem),
     plugin_health: pluginHealth
   };
 }
 function localPluginLifecycleHealth(options) {
   const env = options.env ?? process.env;
-  const fileSystem = options.fileSystem ?? nodeFileSystem;
+  const fileSystem = options.fileSystem ?? nodeFileSystem2;
   const rawSurface = String(env.REMEMBRANCE_PLUGIN_HOST ?? "").trim().toLowerCase();
   if (!rawSurface) {
     return {
@@ -8991,7 +9700,7 @@ function localPluginLifecycleHealth(options) {
   }
   const surface = rawSurface;
   const host = agentHostBySurface(surface);
-  const healthDir = env.REMEMBRANCE_PLUGIN_HEALTH_DIR ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR) : join2(tmpdir(), "remembrance-plugin-health");
+  const healthDir = env.REMEMBRANCE_PLUGIN_HEALTH_DIR ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR) : join3(homedir3(), ".cache", "remembrance", "plugin-health");
   const paths = lifecycleMarkerPaths(surface, healthDir, fileSystem);
   if (paths.length === 0) {
     return missingPluginLifecycleHealth(surface);
@@ -9000,8 +9709,10 @@ function localPluginLifecycleHealth(options) {
   let newestMarkerMs = Number.NEGATIVE_INFINITY;
   for (const path of paths) {
     try {
-      const parsed = JSON.parse(fileSystem.read(path));
-      if (!isRecord(parsed) || parsed.surface !== surface) {
+      const parsed = JSON.parse(
+        fileSystem.read(path, MAX_LOCAL_LIFECYCLE_MARKER_BYTES)
+      );
+      if (!isRecord2(parsed) || parsed.surface !== surface) {
         continue;
       }
       const candidateMs = typeof parsed.last_seen_at === "string" ? Date.parse(parsed.last_seen_at) : Number.NEGATIVE_INFINITY;
@@ -9023,7 +9734,7 @@ function localPluginLifecycleHealth(options) {
       ]
     };
   }
-  const componentRecord = isRecord(marker.components) ? marker.components : {};
+  const componentRecord = isRecord2(marker.components) ? marker.components : {};
   const nowMs = (options.now ?? /* @__PURE__ */ new Date()).getTime();
   const sessionStartMs = validLifecycleTimestamp(
     componentRecord.session_start,
@@ -9088,6 +9799,19 @@ function localPluginLifecycleHealth(options) {
       action: "Use the shared Remembrance config for both hooks and local MCP, or give both processes the same REMEMBRANCE_API_KEY, then restart the host."
     });
   }
+  const markerDestinationFingerprint = typeof marker.api_destination_fingerprint === "string" && /^[a-f0-9]{16}$/.test(marker.api_destination_fingerprint) ? marker.api_destination_fingerprint : null;
+  const markerDestinationSource = typeof marker.api_destination_source === "string" ? marker.api_destination_source : null;
+  if (options.apiDestinationFingerprint && !markerDestinationFingerprint) {
+    issues.push({
+      code: "api_destination_not_observed",
+      action: "Fully restart the host, submit one prompt, and call run_connection_doctor again so both destinations can be compared."
+    });
+  } else if (options.apiDestinationFingerprint && markerDestinationFingerprint && options.apiDestinationFingerprint !== markerDestinationFingerprint) {
+    issues.push({
+      code: "api_destination_mismatch",
+      action: "Configure native hooks and bundled MCP to use the same Remembrance registry, fully restart the host, and rerun the doctor."
+    });
+  }
   const onlyAwaitingEligibleEvents = issues.length > 0 && issues.every(
     (issue) => ["tool_observer_not_observed", "completion_hook_not_observed"].includes(
       issue.code
@@ -9101,9 +9825,22 @@ function localPluginLifecycleHealth(options) {
     host_version: typeof marker.host_version === "string" && marker.host_version ? marker.host_version : null,
     last_seen_at: lastSeenAt,
     credential_source: markerCredential,
+    api_destination: {
+      source: markerDestinationSource,
+      matches_mcp: markerDestinationFingerprint && options.apiDestinationFingerprint ? markerDestinationFingerprint === options.apiDestinationFingerprint : null,
+      mcp_source: options.apiDestinationSource ?? null
+    },
     components,
     issues,
     explanation: "Each host session is tracked independently. SessionStart and the prompt hook must run first; tool and completion observations appear after those lifecycle events become eligible."
+  };
+}
+function apiDestinationStatus(baseUrl, source) {
+  const normalized = baseUrl.replace(/\/+$/, "");
+  return {
+    kind: normalized === "https://remembrance.dev" ? "remembrance_cloud" : "custom",
+    source,
+    fingerprint: createHash2("sha256").update(normalized, "utf8").digest("hex").slice(0, 16)
   };
 }
 function missingPluginLifecycleHealth(surface) {
@@ -9129,7 +9866,7 @@ function emptyPluginComponents() {
   );
 }
 function lifecycleMarkerPaths(surface, healthDir, fileSystem) {
-  const legacyPath = join2(healthDir, `${surface}.json`);
+  const legacyPath = join3(healthDir, `${surface}.json`);
   const listed = fileSystem.list ? (() => {
     try {
       return fileSystem.list(healthDir);
@@ -9139,12 +9876,12 @@ function lifecycleMarkerPaths(surface, healthDir, fileSystem) {
   })() : [];
   const sessionPaths = listed.filter(
     (name) => name.startsWith(`${surface}.`) && name.endsWith(".json") && /^[a-z_]+\.[a-f0-9]{24}\.json$/.test(name)
-  ).map((name) => join2(healthDir, name));
+  ).slice(0, MAX_LOCAL_LIFECYCLE_MARKERS).map((name) => join3(healthDir, name));
   if (fileSystem.exists(legacyPath)) sessionPaths.push(legacyPath);
-  return [...new Set(sessionPaths)];
+  return [...new Set(sessionPaths)].slice(0, MAX_LOCAL_LIFECYCLE_MARKERS);
 }
 function normalizeConfig(value) {
-  if (!isRecord(value)) return {};
+  if (!isRecord2(value)) return {};
   const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim() : "";
   const apiUrl = typeof value.apiUrl === "string" ? value.apiUrl.trim() : "";
   return {
@@ -9152,18 +9889,80 @@ function normalizeConfig(value) {
     ...apiUrl ? { apiUrl } : {}
   };
 }
-function normalizeApiUrl(value) {
-  if (typeof value !== "string" || !value.trim()) return null;
+function normalizeApiUrl(value, env) {
+  if (typeof value !== "string" || !value.trim()) {
+    return { baseUrl: null, issue: "invalid_url" };
+  }
   const candidate = value.trim();
   try {
     const parsed = new URL(candidate);
     if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
-      return null;
+      return { baseUrl: null, issue: "invalid_url" };
     }
-    return candidate.replace(/\/+$/, "");
+    const loopback = isLoopbackHostname(parsed.hostname);
+    const privateDestination = isPrivateDestinationHostname(parsed.hostname);
+    if (parsed.protocol === "http:" && !loopback) {
+      return { baseUrl: null, issue: "insecure_remote_http" };
+    }
+    if (!loopback && privateDestination && env.REMEMBRANCE_ALLOW_PRIVATE_REGISTRY !== "true") {
+      return {
+        baseUrl: null,
+        issue: "private_destination_requires_opt_in"
+      };
+    }
+    return { baseUrl: candidate.replace(/\/+$/, ""), issue: null };
   } catch {
-    return null;
+    return { baseUrl: null, issue: "invalid_url" };
   }
+}
+function credentialForDestination(credential, configuration) {
+  if (configuration.source.startsWith("unusable_")) {
+    return unusableDestinationBinding();
+  }
+  return credential.boundBaseUrl === configuration.baseUrl ? { apiKey: credential.apiKey, source: credential.source } : unusableDestinationBinding();
+}
+function unusableSharedConfig() {
+  return {
+    apiKey: "",
+    source: "unusable_shared_config"
+  };
+}
+function unusableDestinationBinding() {
+  return {
+    apiKey: "",
+    source: "unusable_destination_binding"
+  };
+}
+function isLoopbackHostname(hostname) {
+  const normalized = normalizeHostname(hostname);
+  if (normalized === "localhost" || normalized.endsWith(".localhost")) {
+    return true;
+  }
+  if (normalized === "::1") return true;
+  if (isIP(normalized) === 4) {
+    return Number(normalized.split(".")[0]) === 127;
+  }
+  return false;
+}
+function isPrivateDestinationHostname(hostname) {
+  const normalized = normalizeHostname(hostname);
+  if (normalized.endsWith(".local") || normalized.endsWith(".internal") || normalized === "localhost") {
+    return true;
+  }
+  const version = isIP(normalized);
+  if (version === 4) return isNonPublicIpv4(normalized);
+  if (version === 6) {
+    const compact = normalized.toLowerCase();
+    return compact === "::" || compact === "::1" || compact.startsWith("fc") || compact.startsWith("fd") || /^fe[89ab]/.test(compact);
+  }
+  return false;
+}
+function isNonPublicIpv4(address) {
+  const [a = -1, b = -1] = address.split(".").map(Number);
+  return a === 0 || a === 10 || a === 127 || a === 100 && b >= 64 && b <= 127 || a === 169 && b === 254 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168 || a === 198 && (b === 18 || b === 19) || a >= 224;
+}
+function normalizeHostname(hostname) {
+  return hostname.replace(/^\[|\]$/g, "").toLowerCase();
 }
 function validLifecycleTimestamp(value, nowMs) {
   if (typeof value !== "string") return Number.NaN;
@@ -9173,28 +9972,33 @@ function validLifecycleTimestamp(value, nowMs) {
   }
   return parsed;
 }
-function isRecord(value) {
+function isRecord2(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 // src/server.ts
 var apiConfiguration = resolveApiConfiguration();
 var apiBase = apiConfiguration.baseUrl;
-var SERVER_VERSION = true ? "0.1.47" : "0.0.0-dev";
+var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
+var DOCTOR_PROBE_TIMEOUT_MS = 7500;
+var SERVER_VERSION = true ? "0.1.48" : "0.0.0-dev";
 var tools = toolDefinitions;
+var doctorCliRequested = process.argv[2] === "doctor";
 var inputBuffer = Buffer.alloc(0);
 var clientFraming = "ndjson";
 var cachedEconomicsSession = null;
 var cachedValueProofKeys = null;
-process.stdin.on("data", (chunk) => {
-  inputBuffer = Buffer.concat([inputBuffer, chunk]);
-  processMessages().catch(() => {
-    writeResponse(null, null, {
-      code: -32603,
-      message: "Internal MCP error."
+if (!doctorCliRequested) {
+  process.stdin.on("data", (chunk) => {
+    inputBuffer = Buffer.concat([inputBuffer, chunk]);
+    processMessages().catch(() => {
+      writeResponse(null, null, {
+        code: -32603,
+        message: "Internal MCP error."
+      });
     });
   });
-});
+}
 async function processMessages() {
   const parsed = readJsonRpcMessages(inputBuffer);
   inputBuffer = parsed.remaining;
@@ -9393,6 +10197,9 @@ async function callTool(definition, rawArguments) {
   if (definition.local === "queue_private_skill_import") {
     return queuePrivateSkillHandoff(payload, { uploadBaseUrl: apiBase });
   }
+  if (definition.name === "run_connection_doctor") {
+    return runLocalConnectionDoctor(payload);
+  }
   if (definition.name === "submit_feedback") {
     return submitFeedback(payload);
   }
@@ -9401,7 +10208,8 @@ async function callTool(definition, rawArguments) {
   }
   const localConfigurationError = remoteConfigurationError(
     apiConfiguration.source,
-    resolveApiCredential().source
+    resolveApiCredential().source,
+    apiConfiguration.issue
   );
   const result = definition.name === "get_connection_status" && localConfigurationError ? { ok: false, status: 0, error: localConfigurationError } : await callRemembrance(definition, payload);
   if (definition.name === "get_connection_status") {
@@ -9417,17 +10225,29 @@ async function callTool(definition, rawArguments) {
   }
   return result;
 }
-function remoteConfigurationError(apiUrlSource, credentialSource) {
+function remoteConfigurationError(apiUrlSource, credentialSource, apiUrlIssue) {
+  if (credentialSource === "unusable_destination_binding") {
+    return "The Remembrance API key is not bound to the configured registry destination. For a custom registry, store apiKey and apiUrl together in the shared config, or set REMEMBRANCE_API_KEY_ORIGIN to the exact REMEMBRANCE_API_URL value. Remote tools remain paused so the key cannot be forwarded elsewhere.";
+  }
   if (apiUrlSource === "unusable_environment") {
-    return "REMEMBRANCE_API_URL is invalid. Set it to an absolute HTTP(S) registry URL or intentionally remove it before using remote Remembrance tools.";
+    return apiConfigurationErrorMessage(apiUrlIssue, "REMEMBRANCE_API_URL");
   }
   if (apiUrlSource === "unusable_shared_config" || credentialSource === "unusable_shared_config") {
     return "The shared Remembrance config exists but is unreadable or invalid. Fix or intentionally remove ~/.config/remembrance/config.json before using remote Remembrance tools.";
   }
   return null;
 }
+function apiConfigurationErrorMessage(issue, setting) {
+  if (issue === "insecure_remote_http") {
+    return `${setting} may use HTTP only for a loopback registry. Use HTTPS for every remote registry before using remote Remembrance tools.`;
+  }
+  if (issue === "private_destination_requires_opt_in") {
+    return `${setting} targets a private or link-local registry. Set REMEMBRANCE_ALLOW_PRIVATE_REGISTRY=true only for an intentionally trusted HTTPS self-hosted registry.`;
+  }
+  return `${setting} is invalid. Set it to an absolute HTTP(S) registry URL without credentials, query parameters, or fragments, or intentionally remove it before using remote Remembrance tools.`;
+}
 function clientHealthReportFromConnectionStatus(status) {
-  const health = isRecord2(status.plugin_health) ? status.plugin_health : null;
+  const health = isRecord3(status.plugin_health) ? status.plugin_health : null;
   if (!health || health.expected !== true || health.status !== "degraded") {
     return null;
   }
@@ -9437,9 +10257,9 @@ function clientHealthReportFromConnectionStatus(status) {
   }
   const host = agentHostBySurface(surface);
   if (!host || !host.plugin) return null;
-  const components = isRecord2(health.components) ? health.components : {};
-  const observed = (name) => isRecord2(components[name]) && components[name]?.observed === true ? "active" : "not_observed";
-  const issueCodes = Array.isArray(health.issues) ? health.issues.map((issue) => isRecord2(issue) ? issue.code : null).filter((code) => typeof code === "string") : [];
+  const components = isRecord3(health.components) ? health.components : {};
+  const observed = (name) => isRecord3(components[name]) && components[name]?.observed === true ? "active" : "not_observed";
+  const issueCodes2 = Array.isArray(health.issues) ? health.issues.map((issue) => isRecord3(issue) ? issue.code : null).filter((code) => typeof code === "string") : [];
   const allowedIssueCodes = /* @__PURE__ */ new Set([
     "native_hooks_not_observed",
     "session_start_not_observed",
@@ -9447,12 +10267,14 @@ function clientHealthReportFromConnectionStatus(status) {
     "completion_hook_not_observed",
     "tool_observer_not_observed",
     "credential_source_mismatch",
+    "api_destination_mismatch",
+    "api_destination_not_observed",
     "plugin_version_mismatch",
     "lifecycle_marker_stale",
     "invalid_lifecycle_marker",
     "unsupported_plugin_host"
   ]);
-  const boundedIssues = issueCodes.filter(
+  const boundedIssues = issueCodes2.filter(
     (code) => allowedIssueCodes.has(code)
   );
   const candidate = {
@@ -9547,12 +10369,7 @@ async function submitFeedback(payload) {
   if (!verifiedAttestation) {
     return callRemembrance(mustFindTool("submit_feedback"), request);
   }
-  const identity = await readIdentity();
-  if (!identity) {
-    throw new McpPublicError(
-      "No local Remembrance agent identity found. Run bootstrap_agent_identity first."
-    );
-  }
+  const identity = await ensureSigningIdentity();
   const agent = request.agent ?? {
     provider: agentProviderForIdentity(identity.provider),
     agent_id: identity.subject
@@ -9597,12 +10414,7 @@ async function submitFeedback(payload) {
   });
 }
 async function signedRemembranceAttestation(remembrancePayload, skillSlug) {
-  const identity = await readIdentity();
-  if (!identity) {
-    throw new McpPublicError(
-      "No local Remembrance agent identity found. Run bootstrap_agent_identity first."
-    );
-  }
+  const identity = await ensureSigningIdentity();
   const evidenceHash = attestationEvidenceHashForRemembrance(remembrancePayload);
   const challenge = await callRemembrance(
     mustFindTool("request_attestation_challenge"),
@@ -9623,7 +10435,7 @@ async function signedRemembranceAttestation(remembrancePayload, skillSlug) {
   const signature = signPayload(
     null,
     Buffer.from(signingPayload),
-    createPrivateKey(identity.private_key)
+    createPrivateKey2(identity.private_key)
   ).toString("base64url");
   return {
     version: "v2",
@@ -9642,8 +10454,13 @@ async function signedRemembranceAttestation(remembrancePayload, skillSlug) {
 }
 async function bootstrapAgentIdentity(args) {
   const keyPath = identityPath(args.key_path);
-  const reusedExistingIdentity = !args.force_rotate && existsSync2(keyPath);
-  const identity = reusedExistingIdentity ? await readIdentity(keyPath) : await createAndPersistIdentity(args, keyPath);
+  let reusedExistingIdentity = !args.force_rotate && existsSync3(keyPath);
+  let identity = reusedExistingIdentity ? await readIdentity(keyPath) : null;
+  if (!identity) {
+    const created = await createAndPersistIdentity(args, keyPath);
+    identity = created.identity;
+    reusedExistingIdentity = created.reusedExistingIdentity;
+  }
   if (!identity) {
     throw new McpPublicError(
       "Unable to create or read the local Remembrance agent identity. Check the configured key path and file permissions, then retry bootstrap_agent_identity."
@@ -9652,10 +10469,10 @@ async function bootstrapAgentIdentity(args) {
   const mismatchedFields = [];
   if (reusedExistingIdentity) {
     if (typeof args.subject === "string" && args.subject !== identity.subject) {
-      mismatchedFields.push(`subject "${args.subject}"`);
+      mismatchedFields.push("subject");
     }
     if (typeof args.key_id === "string" && args.key_id !== identity.key_id) {
-      mismatchedFields.push(`key_id "${args.key_id}"`);
+      mismatchedFields.push("key_id");
     }
   }
   const signedAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -9669,7 +10486,7 @@ async function bootstrapAgentIdentity(args) {
   const proofSignature = signPayload(
     null,
     Buffer.from(proofPayload),
-    createPrivateKey(identity.private_key)
+    createPrivateKey2(identity.private_key)
   ).toString("base64url");
   const registration = await callRemembrance(
     mustFindTool("register_agent_key"),
@@ -9688,14 +10505,18 @@ async function bootstrapAgentIdentity(args) {
       }
     }
   );
+  if (registration.ok !== true) {
+    throw new McpPublicError(
+      `The local Remembrance identity is secure, but registration failed${registration.status ? ` (${registration.status})` : ""}. Check get_connection_status, then retry bootstrap_agent_identity.`
+    );
+  }
   return {
-    key_path: keyPath,
+    storage: args.key_path ? "custom_path" : "default_local_config",
     provider: identity.provider,
-    subject: identity.subject,
     key_id: identity.key_id,
     reused_existing_identity: reusedExistingIdentity,
     ...mismatchedFields.length > 0 ? {
-      warning: `An existing identity (subject "${identity.subject}", key_id "${identity.key_id}") was reused; the requested ${mismatchedFields.join(" and ")} ${mismatchedFields.length > 1 ? "were" : "was"} ignored. Pass force_rotate: true to mint a new identity.`
+      warning: `The existing local identity was reused; the requested ${mismatchedFields.join(" and ")} ${mismatchedFields.length > 1 ? "were" : "was"} ignored. Pass force_rotate: true only when intentionally replacing its trust history.`
     } : {},
     registration
   };
@@ -9705,28 +10526,79 @@ async function createAndPersistIdentity(args, keyPath) {
   const publicKeyPem = String(
     publicKey.export({ type: "spki", format: "pem" })
   );
+  const keyId = args.key_id ?? defaultAgentKeyIdForPublicKey(publicKeyPem);
   const identity = {
     provider: args.provider ?? "other",
-    subject: args.subject,
-    key_id: args.key_id ?? defaultAgentKeyIdForPublicKey(publicKeyPem),
+    subject: args.subject ?? `local:${keyId}`,
+    key_id: keyId,
     public_key: publicKeyPem,
     private_key: String(privateKey.export({ type: "pkcs8", format: "pem" })),
     created_at: (/* @__PURE__ */ new Date()).toISOString()
   };
-  await mkdir2(dirname(keyPath), { recursive: true, mode: 448 });
-  await writeFile2(keyPath, `${JSON.stringify(identity, null, 2)}
+  await mkdir2(dirname2(keyPath), { recursive: true, mode: 448 });
+  try {
+    await writeFile2(keyPath, `${JSON.stringify(identity, null, 2)}
 `, {
-    mode: 384
-  });
-  return identity;
+      mode: 384,
+      flag: args.force_rotate ? "w" : "wx"
+    });
+    return { identity, reusedExistingIdentity: false };
+  } catch (error) {
+    if (!args.force_rotate && isFileAlreadyExistsError(error)) {
+      const existing = await readIdentity(keyPath);
+      if (existing) {
+        return { identity: existing, reusedExistingIdentity: true };
+      }
+    }
+    throw error;
+  }
 }
 async function readIdentity(path = identityPath()) {
-  if (!existsSync2(path)) {
+  if (!existsSync3(path)) {
     return null;
   }
-  return JSON.parse(await readFile2(path, "utf8"));
+  try {
+    const identity = parseStoredIdentity(
+      JSON.parse(
+        readSecureLocalText(path, {
+          maxBytes: MAX_LOCAL_IDENTITY_BYTES,
+          repairPermissions: true
+        })
+      )
+    );
+    if (!identity) {
+      throw new Error("invalid identity");
+    }
+    return identity;
+  } catch {
+    throw new McpPublicError(
+      "The local Remembrance agent identity is unreadable, invalid, or cannot be secured. Restore the original key file, or explicitly run bootstrap_agent_identity with force_rotate: true to start a new trust history."
+    );
+  }
 }
-async function callRemembrance(definition, rawArguments) {
+var automaticIdentityBootstrap = null;
+async function ensureSigningIdentity() {
+  if (automaticIdentityBootstrap) return automaticIdentityBootstrap;
+  const existing = await readIdentity();
+  if (automaticIdentityBootstrap) return automaticIdentityBootstrap;
+  if (existing) return existing;
+  if (!automaticIdentityBootstrap) {
+    automaticIdentityBootstrap = (async () => {
+      await bootstrapAgentIdentity({});
+      const created = await readIdentity();
+      if (!created) {
+        throw new McpPublicError(
+          "Remembrance could not initialize the local signing identity. Run bootstrap_agent_identity and retry."
+        );
+      }
+      return created;
+    })().finally(() => {
+      automaticIdentityBootstrap = null;
+    });
+  }
+  return automaticIdentityBootstrap;
+}
+async function callRemembrance(definition, rawArguments, options = {}) {
   const parsed = definition.schema.parse(rawArguments ?? {});
   const payload = definition.name === "query_skills" || definition.name === "invoke_skill" ? {
     ...parsed,
@@ -9741,7 +10613,8 @@ async function callRemembrance(definition, rawArguments) {
   const credential = resolveApiCredential();
   const configurationError = remoteConfigurationError(
     apiConfiguration.source,
-    credential.source
+    credential.source,
+    apiConfiguration.issue
   );
   if (configurationError && definition.name !== "get_connection_status") {
     throw new McpPublicError(configurationError);
@@ -9750,7 +10623,7 @@ async function callRemembrance(definition, rawArguments) {
   if (apiKey) {
     headers["x-remembrance-api-key"] = apiKey;
   }
-  if (definition.name !== "bootstrap_agent_identity" && definition.name !== "get_connection_status") {
+  if (!options.skipEconomicsSession && definition.name !== "register_agent_key" && definition.name !== "request_attestation_challenge" && definition.name !== "get_connection_status") {
     const economicsSession = await ensureEconomicsSessionToken().catch(
       () => null
     );
@@ -9760,8 +10633,12 @@ async function callRemembrance(definition, rawArguments) {
   }
   const endpoint = endpointFor(definition, payload);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), apiTimeoutMs());
+  const timeout = setTimeout(
+    () => controller.abort(),
+    options.timeoutMs ?? apiTimeoutMs()
+  );
   let response;
+  let body;
   try {
     response = await fetch(`${apiBase}${endpoint}`, {
       method: definition.method ?? "POST",
@@ -9769,6 +10646,20 @@ async function callRemembrance(definition, rawArguments) {
       body: definition.method === "GET" ? void 0 : JSON.stringify(payload),
       signal: controller.signal
     });
+    try {
+      body = await readBoundedResponseJson(response);
+    } catch {
+      if (controller.signal.aborted) {
+        return {
+          ok: false,
+          status: 0,
+          error: "Remembrance API request timed out."
+        };
+      }
+      body = {
+        error: response.ok ? "Remembrance API returned an unreadable or oversized response." : "Remembrance API request failed."
+      };
+    }
   } catch (error) {
     return {
       ok: false,
@@ -9778,9 +10669,6 @@ async function callRemembrance(definition, rawArguments) {
   } finally {
     clearTimeout(timeout);
   }
-  const body = await response.json().catch(() => ({
-    error: response.ok ? "Remembrance API returned an unreadable response." : "Remembrance API request failed."
-  }));
   const verifiedBody = definition.name === "get_value_proof" && response.ok ? await verifySignedValueProofWithKeyRefresh(body, fetchValueProofKeySet) : body;
   return {
     ok: response.ok,
@@ -9790,6 +10678,115 @@ async function callRemembrance(definition, rawArguments) {
     etag: response.headers.get("etag"),
     body: verifiedBody
   };
+}
+async function runLocalConnectionDoctor(options, execution = "mcp_tool") {
+  const connectionDefinition = mustFindTool("get_connection_status");
+  const localConfigurationError = remoteConfigurationError(
+    apiConfiguration.source,
+    resolveApiCredential().source,
+    apiConfiguration.issue
+  );
+  const connectionPromise = localConfigurationError ? Promise.resolve({
+    ok: false,
+    status: 0,
+    error: localConfigurationError
+  }) : callDoctorReadProbe(connectionDefinition, {});
+  const catalogPromise = options.active_read_probe && !localConfigurationError ? callDoctorReadProbe(mustFindTool("list_skills"), { limit: 1 }) : Promise.resolve(null);
+  const [connectionResult, catalogResult] = await Promise.all([
+    connectionPromise,
+    catalogPromise
+  ]);
+  const connectionStatus = localConnectionStatus(connectionResult, {
+    apiBase,
+    apiUrlSource: apiConfiguration.source,
+    pluginVersion: SERVER_VERSION
+  });
+  const activeReadProbe = {
+    requested: options.active_read_probe,
+    succeeded: null,
+    item_count: null
+  };
+  if (options.active_read_probe && !localConfigurationError) {
+    const resultRecord = isRecord3(catalogResult) ? catalogResult : {};
+    const body = isRecord3(resultRecord.body) ? resultRecord.body : {};
+    const skills = Array.isArray(body.skills) ? body.skills : null;
+    activeReadProbe.succeeded = resultRecord.ok === true && skills !== null;
+    activeReadProbe.item_count = skills ? skills.length : null;
+  } else if (options.active_read_probe) {
+    activeReadProbe.succeeded = false;
+  }
+  return buildConnectionDoctorReport({
+    connection_status: connectionStatus,
+    transport: execution === "standalone_cli" ? "standalone_cli" : "local_stdio_mcp",
+    host_registration_observed: execution === "mcp_tool",
+    active_read_probe: activeReadProbe,
+    check_organization_write_authorization: options.check_organization_write_authorization
+  });
+}
+async function callDoctorReadProbe(definition, payload) {
+  const first = await callRemembrance(definition, payload, {
+    skipEconomicsSession: true,
+    timeoutMs: DOCTOR_PROBE_TIMEOUT_MS
+  });
+  return isTransientDoctorProbeFailure(first) ? callRemembrance(definition, payload, {
+    skipEconomicsSession: true,
+    timeoutMs: DOCTOR_PROBE_TIMEOUT_MS
+  }) : first;
+}
+function isTransientDoctorProbeFailure(result) {
+  if (!isRecord3(result) || result.ok === true) return false;
+  const status = typeof result.status === "number" ? result.status : 0;
+  return status === 0 || status === 408 || status === 425 || status >= 500;
+}
+function formatConnectionDoctorReport(report) {
+  const lines = [
+    `Remembrance connection doctor: ${report.status.toUpperCase()}`,
+    `Transport: ${report.transport}`,
+    `Scope: ${report.scope}`,
+    `Destination: ${report.destination.kind}`,
+    `Query ready: ${report.safe_to_query ? "yes" : "no"}`,
+    `Organization submissions: ${report.organization_write_authorized ? "authorized" : "not authorized"}`,
+    `Signed contributions: ${report.signed_contributions_ready === null ? "not observable" : report.signed_contributions_ready ? "ready" : "not ready"}`,
+    ""
+  ];
+  for (const check of report.checks) {
+    lines.push(`[${check.status.toUpperCase()}] ${check.id}: ${check.summary}`);
+    if (check.remediation) {
+      lines.push(`  Fix: ${check.remediation.action}`);
+      if (check.remediation.command) {
+        lines.push(`  Command: ${check.remediation.command}`);
+      }
+    }
+  }
+  return `${lines.join("\n")}
+`;
+}
+async function runConnectionDoctorCli(args = process.argv.slice(3)) {
+  if (args.includes("--help") || args.includes("-h")) {
+    process.stdout.write(
+      "Usage: remembrance-mcp doctor [--json] [--no-probe] [--skip-write-check]\n"
+    );
+    return 0;
+  }
+  const allowed = /* @__PURE__ */ new Set(["--json", "--no-probe", "--skip-write-check"]);
+  const unknown = args.find((argument) => !allowed.has(argument));
+  if (unknown) {
+    process.stderr.write(`Unknown doctor option: ${unknown}
+`);
+    return 2;
+  }
+  const report = await runLocalConnectionDoctor(
+    {
+      active_read_probe: !args.includes("--no-probe"),
+      check_organization_write_authorization: !args.includes("--skip-write-check")
+    },
+    "standalone_cli"
+  );
+  process.stdout.write(
+    args.includes("--json") ? `${JSON.stringify(report, null, 2)}
+` : formatConnectionDoctorReport(report)
+  );
+  return report.status === "blocked" ? 1 : 0;
 }
 async function fetchValueProofKeySet(forceRefresh) {
   const now = Date.now();
@@ -9811,7 +10808,7 @@ async function fetchValueProofKeySet(forceRefresh) {
         `Value proof verification keys are unavailable (${response.status}).`
       );
     }
-    const value = await response.json();
+    const value = await readBoundedResponseJson(response);
     cachedValueProofKeys = {
       value,
       expiresAt: now + valueProofKeyCacheTtlMs(response.headers)
@@ -9834,7 +10831,34 @@ function apiTimeoutMs() {
     process.env.REMEMBRANCE_API_TIMEOUT_MS ?? "",
     10
   );
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3e4;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 6e4) : 3e4;
+}
+async function readBoundedResponseJson(response) {
+  if (!response.body) return {};
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_REMOTE_RESPONSE_BYTES) {
+    throw new Error("Remembrance API response exceeded its size limit.");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_REMOTE_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new Error("Remembrance API response exceeded its size limit.");
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+    return text ? JSON.parse(text) : {};
+  } finally {
+    reader.releaseLock();
+  }
 }
 function endpointFor(definition, payload) {
   if (!definition.endpoint) {
@@ -9922,7 +10946,7 @@ async function ensureEconomicsSessionToken() {
   const signature = signPayload(
     null,
     Buffer.from(challenge.signing_payload),
-    createPrivateKey(identity.private_key)
+    createPrivateKey2(identity.private_key)
   ).toString("base64url");
   const exchangeResponse = await directEconomicsSessionRequest({
     action: "exchange",
@@ -9963,21 +10987,14 @@ function mustFindTool(name) {
   }
   return tool2;
 }
-function isRecord2(value) {
+function isRecord3(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 function identityPath(explicit) {
-  if (explicit) {
-    return explicit;
-  }
-  if (process.env.REMEMBRANCE_AGENT_KEY_PATH) {
-    return process.env.REMEMBRANCE_AGENT_KEY_PATH;
-  }
-  return join3(
-    process.env.XDG_CONFIG_HOME ?? join3(homedir3(), ".config"),
-    "remembrance",
-    "agent-key.json"
-  );
+  return explicit?.trim() || localAgentIdentityPath();
+}
+function isFileAlreadyExistsError(error) {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
 }
 function agentProviderForIdentity(provider) {
   if (provider === "codex" || provider === "cursor") {
@@ -10005,13 +11022,26 @@ ${body}`;
   return `${body}
 `;
 }
+if (doctorCliRequested) {
+  void runConnectionDoctorCli().then((code) => {
+    process.exitCode = code;
+  }).catch(() => {
+    process.stderr.write(
+      "Remembrance connection doctor could not complete safely.\n"
+    );
+    process.exitCode = 1;
+  });
+}
 export {
   callTool,
   clientHealthReportFromConnectionStatus,
   dispatchJsonRpcRequest,
+  formatConnectionDoctorReport,
   formatJsonRpcResponse,
   readJsonRpcMessages,
   remoteConfigurationError,
   reportDegradedClientHealth,
-  resetValueProofKeyCacheForTests
+  resetValueProofKeyCacheForTests,
+  runConnectionDoctorCli,
+  runLocalConnectionDoctor
 };

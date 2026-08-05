@@ -559,7 +559,7 @@ const plugin = definePluginEntry({
         : `${credential.source.replace("_", " ")} organization credential`;
     if (activatesRuntime) {
       api?.logger?.info?.(
-        `Remembrance lifecycle hooks registered; MCP should report the same ${auth} through get_connection_status.`,
+        `Remembrance lifecycle hooks registered; run_connection_doctor should verify the same ${auth}.`,
       );
     }
     registerSetupCli(api);

@@ -34,7 +34,7 @@ describe("Codex SessionStart health hook", () => {
       "bundled local MCP server",
     );
     expect(output.hookSpecificOutput.additionalContext).toContain(
-      "get_connection_status",
+      "run_connection_doctor",
     );
     expect(output.hookSpecificOutput.additionalContext).toContain(
       "partial activation",

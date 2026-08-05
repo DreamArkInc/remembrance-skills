@@ -59,6 +59,7 @@ describe("Cursor sessionStart hook", () => {
     writeFileSync(
       join(configHome, "remembrance", "config.json"),
       JSON.stringify({ apiKey: "rk_cursor_shared" }),
+      { mode: 0o600 },
     );
     const env = {
       XDG_CONFIG_HOME: configHome,
@@ -70,9 +71,9 @@ describe("Cursor sessionStart hook", () => {
       source: "shared_config",
     });
     const notice = sharedConfigCredentialNotice(env);
-    expect(notice).toContain("get_connection_status");
+    expect(notice).toContain("run_connection_doctor");
     expect(notice).not.toContain("rk_cursor_shared");
-    expect(CURSOR_REMEMBRANCE_CONTEXT).toContain("get_connection_status");
+    expect(CURSOR_REMEMBRANCE_CONTEXT).toContain("run_connection_doctor");
     expect(CURSOR_REMEMBRANCE_CONTEXT).toContain(
       "anonymous REST/browser probe",
     );

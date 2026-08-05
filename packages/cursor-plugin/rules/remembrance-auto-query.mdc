@@ -3,10 +3,11 @@ description: Query Remembrance before reusable service, API, tool, workflow, UI,
 alwaysApply: true
 ---
 
-Before diagnosing Remembrance authentication, call `get_connection_status` for
+Before diagnosing Remembrance authentication, run `run_connection_doctor` for
 Cursor's MCP process. Local MCP may use `~/.config/remembrance/config.json` even
 when `REMEMBRANCE_API_KEY` is unset. Never use an anonymous REST/browser probe
-to infer the plugin's scope, and never request or print the raw key.
+to infer the plugin's scope, and never request or print the raw key. Use
+`get_connection_status` only when the lower-level fields are needed.
 
 When a person explicitly names a Remembrance skill or supplies a `remembrance://skills/{slug}` URI, do not run a relevance query merely to rediscover it. If the name is ambiguous, resolve it with `list_skills`; otherwise use the exact returned/provided slug. Then call `invoke_skill`, which rechecks current authorization and organization policy before loading the active reviewed version. Never guess a slug. Catalog browsing and resource-handle reads do not count as skill use, and direct selections use post-use feedback rather than query-fit feedback.
 

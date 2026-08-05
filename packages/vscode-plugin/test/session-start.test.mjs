@@ -29,7 +29,7 @@ describe("VS Code SessionStart health hook", () => {
       hookEventName: "SessionStart",
     });
     expect(output.hookSpecificOutput.additionalContext).toContain(
-      "get_connection_status",
+      "run_connection_doctor",
     );
     expect(output.hookSpecificOutput.additionalContext).toContain("VS Code");
     expect(JSON.stringify(output)).not.toContain("rk_never_print");

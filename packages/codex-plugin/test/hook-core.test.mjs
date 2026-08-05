@@ -1,13 +1,15 @@
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   autoQueryTimeoutMs,
@@ -99,6 +101,7 @@ describe("native plugin lifecycle health markers", () => {
   it("records content-free component observations and preserves version metadata", () => {
     const env = {
       REMEMBRANCE_PLUGIN_HEALTH_DIR: join(tempRoot, "plugin-health"),
+      XDG_CONFIG_HOME: join(tempRoot, "empty-config"),
     };
     expect(
       recordPluginLifecycleHealth(
@@ -124,6 +127,8 @@ describe("native plugin lifecycle health markers", () => {
       plugin_version: "0.1.37",
       host_version: "0.145.0",
       credential_source: "shared_config",
+      api_destination_source: "default",
+      api_destination_fingerprint: expect.stringMatching(/^[a-f0-9]{16}$/),
       components: {
         session_start: expect.any(String),
         prompt_hook: expect.any(String),
@@ -137,6 +142,7 @@ describe("native plugin lifecycle health markers", () => {
   it("starts each host session without stale component observations", () => {
     const env = {
       REMEMBRANCE_PLUGIN_HEALTH_DIR: join(tempRoot, "reset-plugin-health"),
+      XDG_CONFIG_HOME: join(tempRoot, "empty-config"),
     };
     expect(
       recordPluginLifecycleHealth(
@@ -165,6 +171,7 @@ describe("native plugin lifecycle health markers", () => {
   it("keeps concurrent host-session lifecycle evidence isolated", () => {
     const env = {
       REMEMBRANCE_PLUGIN_HEALTH_DIR: join(tempRoot, "concurrent-plugin-health"),
+      XDG_CONFIG_HOME: join(tempRoot, "empty-config"),
     };
     for (const component of ["session_start", "prompt_hook"]) {
       expect(
@@ -212,6 +219,7 @@ describe("native plugin lifecycle health markers", () => {
   it("fails open for invalid surfaces, components, and unreadable markers", () => {
     const env = {
       REMEMBRANCE_PLUGIN_HEALTH_DIR: join(tempRoot, "invalid-plugin-health"),
+      XDG_CONFIG_HOME: join(tempRoot, "empty-config"),
     };
     expect(
       recordPluginLifecycleHealth(
@@ -569,6 +577,7 @@ describe("hook-core trigger + payload helpers", () => {
     const env = markerEnv({
       REMEMBRANCE_API_URL: "https://registry.example",
       REMEMBRANCE_API_KEY: "org_test_key",
+      REMEMBRANCE_API_KEY_ORIGIN: "https://registry.example",
     });
     const sessionId = "value-outcome-session";
     const episode = valueEpisodeFromResponse({
@@ -689,6 +698,7 @@ describe("hook-core trigger + payload helpers", () => {
     const env = markerEnv({
       REMEMBRANCE_API_URL: "https://registry.example",
       REMEMBRANCE_API_KEY: "org_bundle_key",
+      REMEMBRANCE_API_KEY_ORIGIN: "https://registry.example",
     });
     const sessionId = "value-bundle-outcome-session";
     const episode = valueEpisodeFromResponse({
@@ -1229,6 +1239,7 @@ describe("hook-core marker round-trip", () => {
     const env = markerEnv({
       REMEMBRANCE_API_URL: "https://registry.example",
       REMEMBRANCE_API_KEY: "org_direct_outcome_key",
+      REMEMBRANCE_API_KEY_ORIGIN: "https://registry.example",
     });
     const sessionId = "direct-outcome-session";
     const episode = valueEpisodeFromResponse({
@@ -1507,10 +1518,11 @@ describe("hook-core org key resolution", () => {
     counter += 1;
     const dir = join(tempRoot, `cfg-${counter}`);
     if (config !== undefined) {
-      mkdirSync(join(dir, "remembrance"), { recursive: true });
+      mkdirSync(join(dir, "remembrance"), { recursive: true, mode: 0o700 });
       writeFileSync(
         join(dir, "remembrance", "config.json"),
         typeof config === "string" ? config : JSON.stringify(config),
+        { mode: 0o600 },
       );
     }
     return { XDG_CONFIG_HOME: dir, ...extra };
@@ -1553,7 +1565,7 @@ describe("hook-core org key resolution", () => {
     const notice = sharedConfigCredentialNotice(env);
     expect(notice).toContain("shared Remembrance config file");
     expect(notice).toContain("REMEMBRANCE_API_KEY may be unset");
-    expect(notice).toContain("get_connection_status");
+    expect(notice).toContain("run_connection_doctor");
     expect(notice).not.toContain("rmb_file_key");
     // `.mcp.json` injects an empty string when the var is unset — treat as unset.
     expect(
@@ -1615,6 +1627,7 @@ describe("hook-core org key resolution", () => {
       expect(resolveApiConfiguration(env)).toEqual({
         apiUrl: "https://remembrance.dev",
         source: "unusable_shared_config",
+        issue: "invalid_url",
       });
       expect(resolveApiCredential(env)).toEqual({
         apiKey: "",
@@ -1629,18 +1642,20 @@ describe("hook-core org key resolution", () => {
     expect(resolveApiConfiguration(invalidEnvironment)).toEqual({
       apiUrl: "https://remembrance.dev",
       source: "unusable_environment",
+      issue: "invalid_url",
     });
     expect(resolveApiCredential(invalidEnvironment)).toEqual({
       apiKey: "",
       source: "unusable_environment",
     });
     expect(sharedConfigCredentialNotice(invalidEnvironment)).toContain(
-      "absolute HTTP(S) registry URL",
+      "HTTPS registry URL",
     );
 
     const completeEnvironment = configEnv("{not json", {
       REMEMBRANCE_API_KEY: "rk_environment",
       REMEMBRANCE_API_URL: "https://registry.example/",
+      REMEMBRANCE_API_KEY_ORIGIN: "https://registry.example",
     });
     expect(resolveApiConfiguration(completeEnvironment)).toEqual({
       apiUrl: "https://registry.example",
@@ -1649,6 +1664,69 @@ describe("hook-core org key resolution", () => {
     expect(resolveApiCredential(completeEnvironment)).toEqual({
       apiKey: "rk_environment",
       source: "environment",
+    });
+  });
+
+  it("binds custom credentials and rejects unsafe or insecure local config", () => {
+    const unbound = configEnv(undefined, {
+      REMEMBRANCE_API_KEY: "rk_environment",
+      REMEMBRANCE_API_URL: "https://registry.example",
+    });
+    expect(resolveApiCredential(unbound)).toEqual({
+      apiKey: "",
+      source: "unusable_destination_binding",
+    });
+
+    const insecureHttp = configEnv(undefined, {
+      REMEMBRANCE_API_KEY: "rk_environment",
+      REMEMBRANCE_API_URL: "http://registry.example",
+      REMEMBRANCE_API_KEY_ORIGIN: "http://registry.example",
+    });
+    expect(resolveApiCredential(insecureHttp)).toEqual({
+      apiKey: "",
+      source: "unusable_environment",
+    });
+
+    const privateRegistry = configEnv(undefined, {
+      REMEMBRANCE_API_KEY: "rk_environment",
+      REMEMBRANCE_API_URL: "https://10.0.0.8",
+      REMEMBRANCE_API_KEY_ORIGIN: "https://10.0.0.8",
+    });
+    expect(resolveApiCredential(privateRegistry)).toEqual({
+      apiKey: "",
+      source: "unusable_environment",
+    });
+    expect(
+      resolveApiCredential({
+        ...privateRegistry,
+        REMEMBRANCE_ALLOW_PRIVATE_REGISTRY: "true",
+      }),
+    ).toEqual({ apiKey: "rk_environment", source: "environment" });
+
+    const broad = configEnv({ apiKey: "rk_broad" });
+    chmodSync(remembranceConfigPath(broad), 0o644);
+    expect(resolveApiCredential(broad)).toEqual({
+      apiKey: "",
+      source: "unusable_shared_config",
+    });
+
+    const oversized = configEnv("x".repeat(64 * 1024 + 1));
+    expect(resolveApiCredential(oversized)).toEqual({
+      apiKey: "",
+      source: "unusable_shared_config",
+    });
+
+    const linked = configEnv();
+    const linkedPath = remembranceConfigPath(linked);
+    mkdirSync(dirname(linkedPath), { recursive: true, mode: 0o700 });
+    const target = join(dirname(linkedPath), "target.json");
+    writeFileSync(target, JSON.stringify({ apiKey: "rk_symlink" }), {
+      mode: 0o600,
+    });
+    symlinkSync(target, linkedPath);
+    expect(resolveApiCredential(linked)).toEqual({
+      apiKey: "",
+      source: "unusable_shared_config",
     });
   });
 });
