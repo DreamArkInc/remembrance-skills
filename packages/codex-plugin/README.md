@@ -57,7 +57,7 @@ restart, and MCP registration are fixed.
 If you prefer not to use the marketplace, wire the hooks into
 `~/.codex/config.toml` directly. Replace `/abs/path/to/codex-plugin` with the
 absolute path to this package. The bundled `hooks/hooks.json` uses
-`${CODEX_PLUGIN_ROOT}` (the plugin-root variable Codex sets for
+`${PLUGIN_ROOT}` (the plugin-root variable Codex sets for
 marketplace-installed plugins), so a manual hook install must use a literal
 absolute path instead.
 

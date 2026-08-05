@@ -2288,9 +2288,20 @@ export function contributeDisabled(value) {
 }
 
 function pluginHealthDir(env = process.env) {
-  return env?.REMEMBRANCE_PLUGIN_HEALTH_DIR
-    ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR)
-    : join(homedir(), ".cache", "remembrance", "plugin-health");
+  if (env?.REMEMBRANCE_PLUGIN_HEALTH_DIR) {
+    return String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR);
+  }
+  // Hook adapters are exercised directly by several Vitest suites. Keep those
+  // observations out of the real user health directory even when a test passes
+  // a deliberately minimal env object that omits Vitest's process variables.
+  if (process.env.VITEST) {
+    return join(
+      tmpdir(),
+      "remembrance-plugin-health-tests",
+      String(process.pid),
+    );
+  }
+  return join(homedir(), ".cache", "remembrance", "plugin-health");
 }
 
 function normalizedPluginHealthSurface(value) {
@@ -2361,6 +2372,28 @@ export function recordPluginLifecycleHealth(
     !PLUGIN_HEALTH_COMPONENTS.has(normalizedComponent)
   ) {
     return false;
+  }
+  // Codex currently gives SessionStart a thread identifier while prompt/tool/
+  // completion hooks use turn identifiers. Preserve the specific startup
+  // marker for diagnostics, but also publish a generic startup observation so
+  // the first turn-specific marker can inherit it. Other hosts with stable
+  // session ids remain correct and gain the same conservative fallback.
+  if (
+    normalizedComponent === "session_start" &&
+    sessionId &&
+    sessionId !== "unknown"
+  ) {
+    recordPluginLifecycleHealth(
+      {
+        surface: normalizedSurface,
+        component: normalizedComponent,
+        pluginVersion,
+        hostVersion,
+        credentialSource,
+        sessionId: null,
+      },
+      env,
+    );
   }
   const path = pluginHealthSessionPath(normalizedSurface, sessionId, env);
   if (!path) return false;

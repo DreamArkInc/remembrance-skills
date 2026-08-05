@@ -8,7 +8,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
@@ -30,6 +30,7 @@ import {
   inferDomain,
   parseCodexMcpRegistration,
   parseCodexMcpUrl,
+  pluginHealthPath,
   markValueEpisodeSelection,
   readDirectSelectionSurface,
   readDirectSelectionSurfaces,
@@ -98,6 +99,20 @@ describe("autoQueryTimeoutMs", () => {
 });
 
 describe("native plugin lifecycle health markers", () => {
+  it("keeps implicit Vitest observations out of the real user health directory", () => {
+    const path = pluginHealthPath("codex", {});
+    expect(path).toContain(
+      join(
+        tmpdir(),
+        "remembrance-plugin-health-tests",
+        String(process.pid),
+      ),
+    );
+    expect(path).not.toContain(
+      join(homedir(), ".cache", "remembrance", "plugin-health"),
+    );
+  });
+
   it("records content-free component observations and preserves version metadata", () => {
     const env = {
       REMEMBRANCE_PLUGIN_HEALTH_DIR: join(tempRoot, "plugin-health"),
@@ -168,6 +183,44 @@ describe("native plugin lifecycle health markers", () => {
     });
   });
 
+  it("carries startup health across different host startup and turn ids", () => {
+    const env = {
+      REMEMBRANCE_PLUGIN_HEALTH_DIR: join(tempRoot, "split-host-ids-health"),
+      XDG_CONFIG_HOME: join(tempRoot, "empty-config"),
+    };
+    expect(
+      recordPluginLifecycleHealth(
+        {
+          surface: "codex",
+          component: "session_start",
+          pluginVersion: "0.1.49",
+          hostVersion: "0.147.0",
+          sessionId: "thread-id",
+        },
+        env,
+      ),
+    ).toBe(true);
+    expect(
+      recordPluginLifecycleHealth(
+        {
+          surface: "codex",
+          component: "prompt_hook",
+          sessionId: "turn-id",
+        },
+        env,
+      ),
+    ).toBe(true);
+
+    expect(readPluginLifecycleHealth("codex", env, "turn-id")).toMatchObject({
+      plugin_version: "0.1.49",
+      host_version: "0.147.0",
+      components: {
+        session_start: expect.any(String),
+        prompt_hook: expect.any(String),
+      },
+    });
+  });
+
   it("keeps concurrent host-session lifecycle evidence isolated", () => {
     const env = {
       REMEMBRANCE_PLUGIN_HEALTH_DIR: join(tempRoot, "concurrent-plugin-health"),
@@ -211,7 +264,7 @@ describe("native plugin lifecycle health markers", () => {
     });
     expect(
       readdirSync(env.REMEMBRANCE_PLUGIN_HEALTH_DIR).filter((name) =>
-        name.startsWith("codex."),
+        /^codex\.[a-f0-9]{24}\.json$/.test(name),
       ),
     ).toHaveLength(2);
   });

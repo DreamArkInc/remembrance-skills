@@ -667,7 +667,7 @@ describe("Codex query-on-prompt adapter", () => {
       "query-on-prompt.mjs",
     );
     expect(hooks.hooks.UserPromptSubmit[0].hooks[0].command).toContain(
-      "${CODEX_PLUGIN_ROOT}",
+      "${PLUGIN_ROOT}",
     );
     expect(hooks.hooks.Stop[0].hooks[0].command).toContain(
       "contribute-on-stop.mjs",
@@ -679,8 +679,9 @@ describe("Codex query-on-prompt adapter", () => {
       "record-detail-open.mjs",
     );
     expect(hooks.hooks.SessionStart[0].hooks[0].command).toContain(
-      "${CODEX_PLUGIN_ROOT}",
+      "${PLUGIN_ROOT}",
     );
+    expect(JSON.stringify(hooks)).not.toContain("CODEX_PLUGIN_ROOT");
     // Hooks and bundled MCP both run from the installed plugin package. The MCP
     // process resolves the same shared config as the native lifecycle hooks.
     expect(mcp.mcpServers.remembrance).toMatchObject({

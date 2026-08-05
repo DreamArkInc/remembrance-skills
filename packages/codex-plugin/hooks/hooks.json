@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CODEX_PLUGIN_ROOT}/scripts/session-start.mjs\""
+            "command": "node \"${PLUGIN_ROOT}/scripts/session-start.mjs\""
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CODEX_PLUGIN_ROOT}/scripts/query-on-prompt.mjs\""
+            "command": "node \"${PLUGIN_ROOT}/scripts/query-on-prompt.mjs\""
           }
         ]
       }
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CODEX_PLUGIN_ROOT}/scripts/record-detail-open.mjs\""
+            "command": "node \"${PLUGIN_ROOT}/scripts/record-detail-open.mjs\""
           }
         ]
       }
@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CODEX_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\""
+            "command": "node \"${PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\""
           }
         ]
       }
