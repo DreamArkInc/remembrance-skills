@@ -1,6 +1,6 @@
 {
   "name": "remembrance",
-  "version": "0.1.49",
+  "version": "0.1.50",
   "description": "Discover or directly invoke authorized Remembrance skills in Claude Code, then close the outcome and feedback loop.",
   "author": {
     "name": "Remembrance"

@@ -5930,7 +5930,7 @@ var seedSkills = [
     summary: "Operational setup and troubleshooting workflow for Remembrance across Claude Code, Codex, OpenClaw, Cursor, Gemini, MCP, REST, skill-only installs, enterprise keys, and local agent identity.",
     status: "active",
     visibility: "public",
-    version: "0.1.9",
+    version: "0.1.10",
     domains: ["agent-skills", "mcp", "resource-discovery"],
     tags: [
       "remembrance",
@@ -5981,7 +5981,7 @@ var seedSkills = [
         "gemini",
         "rest"
       ],
-      version: "0.1.9",
+      version: "0.1.10",
       status: "active",
       visibility: "public",
       providers: ["codex", "claude", "cursor", "openclaw", "generic"],
@@ -6160,16 +6160,18 @@ claude plugin install remembrance@remembrance
 Codex:
 
 ~~~bash
-codex plugin marketplace add dreamarkinc/remembrance-skills
-codex plugin add remembrance@remembrance
+CODEX_CLI="\${CODEX_CLI:-$(command -v codex || true)}"
+[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/ChatGPT.app/Contents/Resources/codex"
+[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/Codex.app/Contents/Resources/codex"
+[ -x "$CODEX_CLI" ] || { printf '%s\\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, then try again." >&2; exit 1; }
+"$CODEX_CLI" plugin marketplace add dreamarkinc/remembrance-skills &&
+  "$CODEX_CLI" plugin marketplace upgrade remembrance &&
+  "$CODEX_CLI" plugin add remembrance@remembrance
 ~~~
 
-If zsh says "codex: command not found" on macOS, try the desktop app CLI path:
-
-~~~bash
-/Applications/Codex.app/Contents/Resources/codex plugin marketplace add dreamarkinc/remembrance-skills
-/Applications/Codex.app/Contents/Resources/codex plugin add remembrance@remembrance
-~~~
+This command handles both first install and update. If zsh says
+"codex: command not found", it discovers the current ChatGPT desktop bundle or
+the legacy Codex app bundle without requiring a shell alias.
 
 OpenClaw:
 
@@ -6826,9 +6828,9 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
   standing instructions proactively. If tools are still not visible, use the
   REST fallback and emit REMEMBRANCE_SUBMISSION_PAYLOAD only when the API is
   unavailable.
-- "codex: command not found": use
-  "/Applications/Codex.app/Contents/Resources/codex" on macOS, or add the
-  Codex CLI to PATH.
+- "codex: command not found": use the complete Codex setup above. It checks
+  the current "/Applications/ChatGPT.app/Contents/Resources/codex" bundle,
+  then the legacy "/Applications/Codex.app/Contents/Resources/codex" path.
 - "401 or 403": the key is missing, expired, revoked, scoped to a different
   environment, or not visible to the agent process. Check config file vs env
   precedence and regenerate a key from the dashboard if needed.
@@ -9981,7 +9983,7 @@ var apiConfiguration = resolveApiConfiguration();
 var apiBase = apiConfiguration.baseUrl;
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.1.49" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.50" : "0.0.0-dev";
 var tools = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var inputBuffer = Buffer.alloc(0);

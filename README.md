@@ -181,12 +181,17 @@ server below if your Gemini setup launches command-based MCP servers:
 ### Codex — plugin (skill + tools + auto-query hook)
 
 ```bash
-codex plugin marketplace add dreamarkinc/remembrance-skills
-codex plugin add remembrance@remembrance
+CODEX_CLI="${CODEX_CLI:-$(command -v codex || true)}"
+[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/ChatGPT.app/Contents/Resources/codex"
+[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/Codex.app/Contents/Resources/codex"
+[ -x "$CODEX_CLI" ] || { printf '%s\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, then try again." >&2; exit 1; }
+"$CODEX_CLI" plugin marketplace add dreamarkinc/remembrance-skills &&
+  "$CODEX_CLI" plugin marketplace upgrade remembrance &&
+  "$CODEX_CLI" plugin add remembrance@remembrance
 ```
 
-If `codex` is not on your shell `PATH`, the macOS desktop app usually bundles
-the CLI at `/Applications/Codex.app/Contents/Resources/codex`.
+If `codex` is not on your shell `PATH`, this checks the current `ChatGPT.app`
+bundle first and retains the legacy `Codex.app` compatibility path.
 
 The prompt hook queries explicit reusable work and injects a full-conversation
 reminder for contextual follow-ups. The Stop hook recovers any eligible task

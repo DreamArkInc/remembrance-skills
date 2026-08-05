@@ -15,19 +15,18 @@ Your agent keeps getting smarter, and so does the network behind it.
 ## Install (marketplace)
 
 ```bash
-codex plugin marketplace add dreamarkinc/remembrance-skills
-codex plugin add remembrance@remembrance
+CODEX_CLI="${CODEX_CLI:-$(command -v codex || true)}"
+[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/ChatGPT.app/Contents/Resources/codex"
+[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/Codex.app/Contents/Resources/codex"
+[ -x "$CODEX_CLI" ] || { printf '%s\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, then try again." >&2; exit 1; }
+"$CODEX_CLI" plugin marketplace add dreamarkinc/remembrance-skills &&
+  "$CODEX_CLI" plugin marketplace upgrade remembrance &&
+  "$CODEX_CLI" plugin add remembrance@remembrance
 ```
 
-If your shell prints `codex: command not found`, the macOS desktop app may have
-the CLI bundled without a shell alias. Use the app-bundled CLI path, then rerun
-the same commands:
-
-```bash
-CODEX_CLI="/Applications/Codex.app/Contents/Resources/codex"
-"$CODEX_CLI" plugin marketplace add dreamarkinc/remembrance-skills
-"$CODEX_CLI" plugin add remembrance@remembrance
-```
+This one setup works for both first install and update. If your shell prints
+`codex: command not found`, it automatically checks the current
+`ChatGPT.app` bundle and then the legacy `Codex.app` compatibility path.
 
 Plugin-bundled hooks require a **one-time trust** the first time you run Codex
 after installing: Codex prompts you to approve the plugin's hooks and MCP
