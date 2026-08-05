@@ -44,13 +44,16 @@ describe("Codex SessionStart health hook", () => {
 
   it("falls back to anonymous public access without failing startup", () => {
     const recordHealth = vi.fn(() => false);
+    const env = {
+      XDG_CONFIG_HOME: `/tmp/remembrance-codex-session-test-${process.pid}`,
+    };
     const output = handleSessionStart(
       {},
-      { env: {}, pluginVersion: "unknown", recordHealth },
+      { env, pluginVersion: "unknown", recordHealth },
     );
     expect(recordHealth).toHaveBeenCalledWith(
       expect.objectContaining({ credentialSource: "none" }),
-      {},
+      env,
     );
     expect(output.hookSpecificOutput.additionalContext).toContain(
       "public anonymous registry access",

@@ -20,9 +20,10 @@ afterAll(() => {
 describe("Cursor sessionStart hook", () => {
   it("injects compact Remembrance operating context", () => {
     const recordHealth = vi.fn();
+    const env = { XDG_CONFIG_HOME: join(tempRoot, "empty-xdg") };
     const output = handleSessionStart(
       { session_id: "session_1", cursor_version: "1.7.0" },
-      { env: {}, pluginVersion: "0.1.37", recordHealth },
+      { env, pluginVersion: "0.1.37", recordHealth },
     );
     expect(output.additional_context).toBe(CURSOR_REMEMBRANCE_CONTEXT);
     expect(output.additional_context).toContain("query_skills");
@@ -36,7 +37,7 @@ describe("Cursor sessionStart hook", () => {
         hostVersion: "1.7.0",
         credentialSource: "none",
       }),
-      {},
+      env,
     );
   });
 

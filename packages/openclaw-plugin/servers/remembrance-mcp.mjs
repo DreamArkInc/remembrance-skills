@@ -8569,7 +8569,7 @@ var bootstrapAgentIdentitySchema = external_exports.object({
 });
 var feedbackToolSchema = agentFeedbackRequestBaseSchema.extend({
   verified_attestation: external_exports.boolean().default(false).describe(
-    "When true, sign the feedback with the local TOFU key if present."
+    "When true, sign the feedback with the local TOFU key. Run bootstrap_agent_identity once before using this option."
   )
 }).superRefine((value, ctx) => {
   if (Boolean(value.query_id) !== Boolean(value.result_id)) {
@@ -8582,7 +8582,7 @@ var feedbackToolSchema = agentFeedbackRequestBaseSchema.extend({
 });
 var remembranceToolSchema = remembrancePayloadSchema.extend({
   verified_attestation: external_exports.boolean().default(false).describe(
-    "When true, sign the remembrance with the local TOFU key if present. Requires skill.slug."
+    "When true, sign the remembrance with the local TOFU key. Run bootstrap_agent_identity once before using this option; skill.slug is also required."
   )
 });
 var toolDefinitions = [
@@ -9180,7 +9180,7 @@ function isRecord(value) {
 // src/server.ts
 var apiConfiguration = resolveApiConfiguration();
 var apiBase = apiConfiguration.baseUrl;
-var SERVER_VERSION = true ? "0.1.46" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.47" : "0.0.0-dev";
 var tools = toolDefinitions;
 var inputBuffer = Buffer.alloc(0);
 var clientFraming = "ndjson";
@@ -9520,7 +9520,7 @@ async function submitRemembrance(payload) {
   }
   const skillSlug = request.skill?.slug;
   if (!skillSlug) {
-    throw new Error("verified_attestation requires skill.slug.");
+    throw new McpPublicError("verified_attestation requires skill.slug.");
   }
   const evidence = {
     trace_hash: request.evidence.trace_hash ?? null,
@@ -9549,7 +9549,7 @@ async function submitFeedback(payload) {
   }
   const identity = await readIdentity();
   if (!identity) {
-    throw new Error(
+    throw new McpPublicError(
       "No local Remembrance agent identity found. Run bootstrap_agent_identity first."
     );
   }
@@ -9599,7 +9599,7 @@ async function submitFeedback(payload) {
 async function signedRemembranceAttestation(remembrancePayload, skillSlug) {
   const identity = await readIdentity();
   if (!identity) {
-    throw new Error(
+    throw new McpPublicError(
       "No local Remembrance agent identity found. Run bootstrap_agent_identity first."
     );
   }
@@ -9645,7 +9645,9 @@ async function bootstrapAgentIdentity(args) {
   const reusedExistingIdentity = !args.force_rotate && existsSync2(keyPath);
   const identity = reusedExistingIdentity ? await readIdentity(keyPath) : await createAndPersistIdentity(args, keyPath);
   if (!identity) {
-    throw new Error("Unable to create or read Remembrance agent identity.");
+    throw new McpPublicError(
+      "Unable to create or read the local Remembrance agent identity. Check the configured key path and file permissions, then retry bootstrap_agent_identity."
+    );
   }
   const mismatchedFields = [];
   if (reusedExistingIdentity) {
