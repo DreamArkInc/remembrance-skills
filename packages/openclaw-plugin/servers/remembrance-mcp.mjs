@@ -4486,6 +4486,10 @@ function isUnsafeDestinationHostname(hostname) {
 }
 
 // ../core/src/connection-doctor.ts
+var CODEX_HOOK_REVIEW_COMMAND = `CODEX_CLI="\${CODEX_CLI:-$(command -v codex || true)}"; [ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/ChatGPT.app/Contents/Resources/codex"; [ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/Codex.app/Contents/Resources/codex"; [ -x "$CODEX_CLI" ] || { printf '%s\\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, then try again." >&2; exit 1; }; "$CODEX_CLI"`;
+function codexHookReviewAction(followupTool) {
+  return `Open Terminal and launch Codex with the command below. On the automatic Hooks need review screen, choose Review hooks and trust only the Remembrance SessionStart, UserPromptSubmit, PostToolUse, and Stop hooks. If the review screen does not appear, exit Codex, update or reinstall Remembrance, and launch the command again. Then fully restart Codex, submit one prompt, and call ${followupTool} again.`;
+}
 function buildConnectionDoctorReport(input) {
   const status = record(input.connection_status);
   const transport = record(status.transport);
@@ -4501,9 +4505,7 @@ function buildConnectionDoctorReport(input) {
   const registryReady = status.status !== "error" && registry.status === "ready";
   const queryAuthorized = capabilities.query === true;
   const submitAuthorized = capabilities.submit === true;
-  const configuredCredential = ["environment", "shared_config"].includes(
-    credentialSource
-  ) || [
+  const configuredCredential = ["environment", "shared_config"].includes(credentialSource) || [
     "authorization_bearer",
     "x_remembrance_api_key",
     "request_header"
@@ -4603,9 +4605,7 @@ function buildConnectionDoctorReport(input) {
     )
   );
   const pluginIssues = issueCodes(pluginHealth.issues);
-  const destinationMismatch = pluginIssues.includes(
-    "api_destination_mismatch"
-  );
+  const destinationMismatch = pluginIssues.includes("api_destination_mismatch");
   checks.push(pluginLifecycleCheck(pluginHealth, pluginIssues));
   checks.push(
     pluginHealth.expected !== true ? notApplicable(
@@ -4693,8 +4693,10 @@ function pluginLifecycleCheck(pluginHealth, issues) {
       "plugin_lifecycle",
       "The core native lifecycle is active; tool or completion events have not occurred yet.",
       "exercise_plugin_lifecycle",
-      codex ? "Use one Remembrance tool, complete one turn, and rerun the doctor. If this warning remains, open /hooks; confirm the Remembrance PostToolUse and Stop hooks are Active, trust any marked Needs review, restart Codex, and retry." : "Use one Remembrance tool, complete one turn, and rerun the doctor.",
-      issues
+      codex ? `Use one Remembrance tool, complete one turn, and rerun the doctor. If this warning remains, ${codexHookReviewAction("run_connection_doctor")}` : "Use one Remembrance tool, complete one turn, and rerun the doctor.",
+      issues,
+      false,
+      codex ? CODEX_HOOK_REVIEW_COMMAND : void 0
     );
   }
   if (stringValue(pluginHealth.surface) === "codex") {
@@ -4702,8 +4704,10 @@ function pluginLifecycleCheck(pluginHealth, issues) {
       "plugin_lifecycle",
       "The Codex plugin lifecycle is not active.",
       "review_codex_hook_trust",
-      "In Codex, open /hooks. Confirm the Remembrance SessionStart, UserPromptSubmit, PostToolUse, and Stop hooks are Active; trust any marked Needs review. Codex skips new or changed hook definitions until they are trusted again. If the hooks are absent, update or reinstall Remembrance. Then fully quit and reopen Codex, submit one prompt, and rerun the doctor.",
-      issues
+      codexHookReviewAction("run_connection_doctor"),
+      issues,
+      false,
+      CODEX_HOOK_REVIEW_COMMAND
     );
   }
   return warning(
@@ -4759,9 +4763,11 @@ function scopeValue(value) {
 }
 function issueCodes(value) {
   if (!Array.isArray(value)) return [];
-  return [...new Set(
-    value.map((issue) => stringValue(record(issue).code)).filter((code) => Boolean(code))
-  )].sort();
+  return [
+    ...new Set(
+      value.map((issue) => stringValue(record(issue).code)).filter((code) => Boolean(code))
+    )
+  ].sort();
 }
 function pass(id, summary) {
   return { id, status: "pass", summary, remediation: null };
@@ -5940,7 +5946,7 @@ var seedSkills = [
     summary: "Operational setup and troubleshooting workflow for Remembrance across Claude Code, Codex, OpenClaw, Cursor, Gemini, MCP, REST, skill-only installs, enterprise keys, and local agent identity.",
     status: "active",
     visibility: "public",
-    version: "0.1.11",
+    version: "0.1.13",
     domains: ["agent-skills", "mcp", "resource-discovery"],
     tags: [
       "remembrance",
@@ -5991,7 +5997,7 @@ var seedSkills = [
         "gemini",
         "rest"
       ],
-      version: "0.1.11",
+      version: "0.1.13",
       status: "active",
       visibility: "public",
       providers: ["codex", "claude", "cursor", "openclaw", "generic"],
@@ -6176,19 +6182,22 @@ CODEX_CLI="\${CODEX_CLI:-$(command -v codex || true)}"
 [ -x "$CODEX_CLI" ] || { printf '%s\\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, then try again." >&2; exit 1; }
 "$CODEX_CLI" plugin marketplace add dreamarkinc/remembrance-skills &&
   "$CODEX_CLI" plugin marketplace upgrade remembrance &&
-  "$CODEX_CLI" plugin add remembrance@remembrance
+  "$CODEX_CLI" plugin add remembrance@remembrance &&
+  "$CODEX_CLI"
 ~~~
 
 This command handles both first install and update. If zsh says
 "codex: command not found", it discovers the current ChatGPT desktop bundle or
-the legacy Codex app bundle without requiring a shell alias.
+the legacy Codex app bundle without requiring a shell alias. The final command
+opens Codex CLI so its secure hook review can be completed immediately.
 
 Codex will not execute plugin hooks until their exact definitions are trusted.
-After installing or updating, fully open Codex, enter \`/hooks\`, and confirm the
-Remembrance \`SessionStart\`, \`UserPromptSubmit\`, \`PostToolUse\`, and \`Stop\` hooks
-all show **Active**. Trust any marked **Needs review**. Changed hook definitions
-require review again; never use
-the automation-only trust bypass for normal installation.
+In the Codex window opened by the installer, choose **Review hooks** on the
+automatic **Hooks need review** screen and trust only the Remembrance
+\`SessionStart\`, \`UserPromptSubmit\`, \`PostToolUse\`, and \`Stop\` hooks.
+Changed hook definitions show the same review screen again; never use the
+automation-only trust bypass for normal installation. Exit that window, then
+fully restart Codex.
 
 OpenClaw:
 
@@ -6246,9 +6255,10 @@ Integrations & MCP**, and verify query, invocation, feedback, and contribution
 receipts in both local and cloud runs.
 
 After installing any native plugin, restart the agent app/session and approve
-the runtime's trust request. For Codex, use the exact \`/hooks\` check above;
-changed hook definitions require review again. A currently running Codex or
-Claude thread usually cannot hot-load newly installed plugin tools.
+the runtime's trust request. For Codex, complete the automatic hook review
+above; changed hook definitions show the same review screen again. A currently
+running Codex or Claude thread usually cannot hot-load newly installed plugin
+tools.
 
 ## Enterprise/org key setup
 
@@ -6835,9 +6845,11 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
 ## Troubleshooting matrix
 
 - "Plugin installed, but no tools": restart the agent app/session; confirm the
-  plugin is enabled and contains the runtime-specific manifest. In Codex, open
-  \`/hooks\`, confirm all four Remembrance hooks show **Active**, and trust any
-  marked **Needs review**; updates that change hooks require review again.
+  plugin is enabled and contains the runtime-specific manifest. For Codex,
+  launch the installer-provided command, choose **Review hooks** on the
+  automatic review screen, and trust only the listed Remembrance hooks. Exit
+  that window and fully restart Codex; updates that change hooks show the same
+  review screen again.
 - "Agent has tools but does not use them": first verify a concrete query receipt,
   then test a short contextual follow-up such as "fix these issues". Native
   prompt hooks should inject a full-conversation query reminder, and completion
@@ -9750,10 +9762,7 @@ function localPluginLifecycleHealth(options) {
       issues: [
         {
           code: "invalid_lifecycle_marker",
-          action: nativeLifecycleRepairAction(
-            surface,
-            "get_connection_status"
-          )
+          action: nativeLifecycleRepairAction(surface, "get_connection_status")
         }
       ]
     };
@@ -9792,13 +9801,13 @@ function localPluginLifecycleHealth(options) {
   if (coreLifecycleObserved && !components.tool_observer.observed) {
     issues.push({
       code: "tool_observer_not_observed",
-      action: surface === "codex" ? "Use a Remembrance MCP tool, then call get_connection_status again. If this remains missing, open /hooks; confirm the Remembrance PostToolUse hook is Active, trust it if marked Needs review, restart Codex, and retry." : "No native tool observer has run in this session yet. Use a Remembrance MCP tool, then call get_connection_status again."
+      action: surface === "codex" ? `Use a Remembrance MCP tool, then call get_connection_status again. If this remains missing, ${codexHookReviewAction("get_connection_status")}` : "No native tool observer has run in this session yet. Use a Remembrance MCP tool, then call get_connection_status again."
     });
   }
   if (coreLifecycleObserved && !components.completion_hook.observed) {
     issues.push({
       code: "completion_hook_not_observed",
-      action: surface === "codex" ? "Complete one turn, then call get_connection_status again. If this remains missing, open /hooks; confirm the Remembrance Stop hook is Active, trust it if marked Needs review, restart Codex, and retry." : "No native completion hook has run in this session yet. Complete one turn, then call get_connection_status again."
+      action: surface === "codex" ? `Complete one turn, then call get_connection_status again. If this remains missing, ${codexHookReviewAction("get_connection_status")}` : "No native completion hook has run in this session yet. Complete one turn, then call get_connection_status again."
     });
   }
   const lastSeenMs = validLifecycleTimestamp(marker.last_seen_at, nowMs);
@@ -9883,7 +9892,7 @@ function missingPluginLifecycleHealth(surface) {
 }
 function nativeLifecycleRepairAction(surface, followupTool) {
   if (surface === "codex") {
-    return `In Codex, open /hooks. Confirm the Remembrance SessionStart, UserPromptSubmit, PostToolUse, and Stop hooks are Active; trust any marked Needs review. Codex skips new or changed hook definitions until they are trusted again. If the hooks are absent, update or reinstall Remembrance. Then fully quit and reopen Codex, submit one prompt, and call ${followupTool} again.`;
+    return codexHookReviewAction(followupTool);
   }
   return `Update or reinstall the Remembrance plugin, fully restart the host, and confirm native hooks are enabled. Then call ${followupTool} again. MCP-only access remains available.`;
 }
@@ -10011,7 +10020,7 @@ var apiConfiguration = resolveApiConfiguration();
 var apiBase = apiConfiguration.baseUrl;
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.1.51" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.52" : "0.0.0-dev";
 var tools = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var inputBuffer = Buffer.alloc(0);

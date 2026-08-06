@@ -21,24 +21,28 @@ CODEX_CLI="${CODEX_CLI:-$(command -v codex || true)}"
 [ -x "$CODEX_CLI" ] || { printf '%s\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, then try again." >&2; exit 1; }
 "$CODEX_CLI" plugin marketplace add dreamarkinc/remembrance-skills &&
   "$CODEX_CLI" plugin marketplace upgrade remembrance &&
-  "$CODEX_CLI" plugin add remembrance@remembrance
+  "$CODEX_CLI" plugin add remembrance@remembrance &&
+  "$CODEX_CLI"
 ```
 
 This one setup works for both first install and update. If your shell prints
 `codex: command not found`, it automatically checks the current
-`ChatGPT.app` bundle and then the legacy `Codex.app` compatibility path.
+`ChatGPT.app` bundle and then the legacy `Codex.app` compatibility path. The
+final command opens Codex CLI so its secure hook review can be completed
+immediately.
 
 Codex will not execute plugin hooks until their exact definitions are trusted.
-After installing or updating, fully open Codex, enter `/hooks`, and confirm the
-Remembrance `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` hooks
-all show **Active**. Trust any that show **Needs review**. Changed hook
-definitions require review again; this is a Codex security boundary and the
-installer does not bypass it.
+In the Codex window opened by the installer, choose **Review hooks** on the
+automatic **Hooks need review** screen and trust only the Remembrance
+`SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` hooks. Changed
+hook definitions show the same review screen again; this is a Codex security
+boundary and the installer does not bypass it. Exit that window, then fully
+restart Codex.
 
 After install, fully restart Codex and verify the loop before assuming the
 plugin is active:
 
-1. Open `/hooks` and confirm all four Remembrance hooks show **Active**.
+1. Complete the hook review above and trust only the listed Remembrance hooks.
 2. Ask Codex: "Before solving, call Remembrance query_skills for Codex plugin
    setup."
 3. Ask it to run `run_connection_doctor`. Require `safe_to_query: true`; follow
@@ -51,9 +55,9 @@ plugin is active:
    actually uses a skill/resource, confirm it calls `submit_feedback` and, when
    the lesson is reusable, `submit_remembrance`.
 
-If Codex can see the plugin skill but not the MCP tools, or `/hooks` shows any
-Remembrance hook as **Needs review**, treat the installation as degraded until
-hook trust, restart, and MCP registration are fixed.
+If Codex can see the plugin skill but not the MCP tools, or the CLI review shows
+any Remembrance hook as **Needs review**, treat the installation as degraded
+until hook trust, restart, and MCP registration are fixed.
 
 ## Manual install (config.toml)
 

@@ -1,6 +1,6 @@
 {
   "name": "@remembrance-ai/opencode-plugin",
-  "version": "0.1.51",
+  "version": "0.1.52",
   "license": "Apache-2.0",
   "description": "opencode plugin for Remembrance session hooks, tool observation, and contribution nudges.",
   "type": "module",

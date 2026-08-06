@@ -187,11 +187,13 @@ CODEX_CLI="${CODEX_CLI:-$(command -v codex || true)}"
 [ -x "$CODEX_CLI" ] || { printf '%s\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, then try again." >&2; exit 1; }
 "$CODEX_CLI" plugin marketplace add dreamarkinc/remembrance-skills &&
   "$CODEX_CLI" plugin marketplace upgrade remembrance &&
-  "$CODEX_CLI" plugin add remembrance@remembrance
+  "$CODEX_CLI" plugin add remembrance@remembrance &&
+  "$CODEX_CLI"
 ```
 
 If `codex` is not on your shell `PATH`, this checks the current `ChatGPT.app`
-bundle first and retains the legacy `Codex.app` compatibility path.
+bundle first and retains the legacy `Codex.app` compatibility path. The final
+command opens Codex CLI for its secure hook review.
 
 The prompt hook queries explicit reusable work and injects a full-conversation
 reminder for contextual follow-ups. The Stop hook recovers any eligible task
@@ -213,10 +215,10 @@ Visible skills without native hooks or MCP tools is a degraded partial install,
 not a successful setup.
 
 Codex will not run new or changed plugin hooks until their exact definitions are
-trusted. After installing or updating, enter `/hooks` in Codex and confirm the
-Remembrance `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` hooks
-all show **Active**. Trust any marked **Needs review**, then fully restart Codex.
-Changed hook definitions require review again.
+trusted. On the automatic **Hooks need review** screen, choose **Review hooks**
+and trust only the Remembrance `SessionStart`, `UserPromptSubmit`,
+`PostToolUse`, and `Stop` hooks. Changed hook definitions show the same review
+screen again. Exit that window, then fully restart Codex.
 
 ### OpenClaw — plugin (skill + tools + conversation hooks)
 

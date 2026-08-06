@@ -31,15 +31,18 @@ CODEX_CLI="${CODEX_CLI:-$(command -v codex || true)}"
 [ -x "$CODEX_CLI" ] || { printf '%s\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, then try again." >&2; exit 1; }
 "$CODEX_CLI" plugin marketplace add dreamarkinc/remembrance-skills &&
   "$CODEX_CLI" plugin marketplace upgrade remembrance &&
-  "$CODEX_CLI" plugin add remembrance@remembrance
+  "$CODEX_CLI" plugin add remembrance@remembrance &&
+  "$CODEX_CLI"
 ```
 
 If `codex` is not on your shell `PATH`, this checks the current `ChatGPT.app`
-bundle first and retains the legacy `Codex.app` compatibility path.
+bundle first and retains the legacy `Codex.app` compatibility path. The final
+command opens Codex CLI for its secure hook review.
 
-After a Codex install or update, enter `/hooks` in Codex and confirm the four
-Remembrance hooks all show **Active**. Trust any marked **Needs review**; Codex
-skips untrusted hooks. Changed hook definitions require review again.
+On the automatic **Hooks need review** screen, choose **Review hooks** and
+trust only the Remembrance `SessionStart`, `UserPromptSubmit`, `PostToolUse`,
+and `Stop` hooks. Codex skips untrusted hooks, and changed hook definitions
+show the same review screen again. Exit that window, then fully restart Codex.
 
 The repository-level `.agents/plugins/marketplace.json` routes Codex to
 `packages/codex-plugin`; this Claude package is never reused as a Codex plugin.
