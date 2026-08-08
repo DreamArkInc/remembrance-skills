@@ -65,6 +65,14 @@ function toolName(input) {
     input?.tool?.name ??
     "";
   const value = String(raw).trim();
+  for (const prefix of [
+    "mcp__remembrance",
+    "mcp__plugin_remembrance_remembrance",
+  ]) {
+    if (value.startsWith(prefix)) {
+      return value.slice(prefix.length).replace(/^__/, "");
+    }
+  }
   if (value.includes("__")) {
     const pieces = value.split("__").filter(Boolean);
     return pieces[pieces.length - 1] ?? value;

@@ -54,7 +54,7 @@ describe("native post-tool detail tracking", () => {
     const result = await handlePostToolUse(
       {
         turn_id: "turn_directive",
-        tool_name: "mcp__remembrance__query_skills",
+        tool_name: "mcp__remembrancequery_skills",
         tool_response: {
           content: [
             {
@@ -74,7 +74,7 @@ describe("native post-tool detail tracking", () => {
     });
     expect(recordDirectiveFollowThrough).toHaveBeenCalledWith(
       "turn_directive",
-      "mcp__remembrance__query_skills",
+      "mcp__remembrancequery_skills",
       expect.objectContaining({ content: expect.any(Array) }),
       expect.objectContaining({ env: {} }),
     );

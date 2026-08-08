@@ -28,21 +28,23 @@ CODEX_CLI="${CODEX_CLI:-$(command -v codex || true)}"
 This one setup works for both first install and update. If your shell prints
 `codex: command not found`, it automatically checks the current
 `ChatGPT.app` bundle and then the legacy `Codex.app` compatibility path. The
-final command opens Codex CLI so its secure hook review can be completed
-immediately.
+final command opens Codex CLI so its secure hook review can be completed when
+Codex requires it.
 
 Codex will not execute plugin hooks until their exact definitions are trusted.
-In the Codex window opened by the installer, choose **Review hooks** on the
-automatic **Hooks need review** screen and trust only the Remembrance
-`SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` hooks. Changed
-hook definitions show the same review screen again; this is a Codex security
-boundary and the installer does not bypass it. Exit that window, then fully
-restart Codex.
+In the Codex window opened by the installer, if Codex shows a **Hooks need
+review** screen, choose **Review hooks** and trust only the Remembrance
+`SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` hooks. If no
+review screen appears, continue: Codex may be reusing an existing valid trust
+decision. Changed hook definitions show the same review screen again; this is
+a Codex security boundary and the installer does not bypass it. Fully restart
+Codex before verification.
 
 After install, fully restart Codex and verify the loop before assuming the
 plugin is active:
 
-1. Complete the hook review above and trust only the listed Remembrance hooks.
+1. Complete the hook review above if Codex requests it and trust only the
+   listed Remembrance hooks.
 2. Ask Codex: "Before solving, call Remembrance query_skills for Codex plugin
    setup."
 3. Ask it to run `run_connection_doctor`. Require `safe_to_query: true`; follow

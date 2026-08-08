@@ -80,6 +80,29 @@ describe("OpenClaw after_tool_call hook", () => {
     );
   });
 
+  it("observes collapsed Remembrance MCP tool names defensively", async () => {
+    const recordDirectiveFollowThrough = vi.fn(async () => true);
+    const result = await handleAfterToolCall(
+      {
+        toolName: "mcp__remembrancequery_skills",
+        result: { body: { query_id: "rq_openclaw_collapsed" } },
+        context: { runId: "run_collapsed" },
+      },
+      { env: {}, recordDirectiveFollowThrough },
+    );
+
+    expect(result).toMatchObject({
+      directive_followed: true,
+      why: "directive_followed",
+    });
+    expect(recordDirectiveFollowThrough).toHaveBeenCalledWith(
+      "run_collapsed",
+      "mcp__remembrancequery_skills",
+      { body: { query_id: "rq_openclaw_collapsed" } },
+      expect.objectContaining({ env: {} }),
+    );
+  });
+
   it("records a successful explicit invocation and not a catalog handle", async () => {
     const recordRegistryUse = vi.fn(() => 3);
     const recordDirectSelection = vi.fn();

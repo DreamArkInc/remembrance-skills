@@ -42,19 +42,21 @@ export function handleSessionStart(input, options = {}) {
   const env = options.env ?? process.env;
   const sessionId = cursorSessionId(input, env);
   const recordHealth = options.recordHealth ?? recordPluginLifecycleHealth;
-  recordHealth(
-    {
-      surface: "cursor",
-      component: "session_start",
-      pluginVersion: options.pluginVersion ?? pluginVersion(),
-      hostVersion: String(
-        input?.cursor_version ?? input?.app_version ?? input?.version ?? "",
-      ).trim(),
-      credentialSource: resolveApiCredential(env).source,
-      sessionId,
-    },
-    env,
-  );
+  if (String(input?.source ?? "").trim().toLowerCase() !== "compact") {
+    recordHealth(
+      {
+        surface: "cursor",
+        component: "session_start",
+        pluginVersion: options.pluginVersion ?? pluginVersion(),
+        hostVersion: String(
+          input?.cursor_version ?? input?.app_version ?? input?.version ?? "",
+        ).trim(),
+        credentialSource: resolveApiCredential(env).source,
+        sessionId,
+      },
+      env,
+    );
+  }
   if (disabled(env.REMEMBRANCE_CURSOR_SESSION_CONTEXT)) {
     return {};
   }

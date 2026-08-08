@@ -59,4 +59,18 @@ describe("Codex SessionStart health hook", () => {
       "public anonymous registry access",
     );
   });
+
+  it("does not reset lifecycle health when Codex compacts an active turn", () => {
+    const recordHealth = vi.fn();
+    const output = handleSessionStart(
+      {
+        source: "compact",
+        session_id: "active-task",
+      },
+      { env: {}, pluginVersion: "0.1.53", recordHealth },
+    );
+
+    expect(recordHealth).not.toHaveBeenCalled();
+    expect(output.hookSpecificOutput.hookEventName).toBe("SessionStart");
+  });
 });

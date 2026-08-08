@@ -53,6 +53,16 @@ describe("Cursor sessionStart hook", () => {
     ).toEqual({});
   });
 
+  it("does not reset lifecycle health during context compaction", () => {
+    const recordHealth = vi.fn();
+    const output = handleSessionStart(
+      { source: "compact", session_id: "active-session" },
+      { env: {}, pluginVersion: "0.1.53", recordHealth },
+    );
+    expect(recordHealth).not.toHaveBeenCalled();
+    expect(output.additional_context).toBe(CURSOR_REMEMBRANCE_CONTEXT);
+  });
+
   it("resolves Cursor's shared config and explains how to verify its MCP scope", () => {
     const configHome = join(tempRoot, "xdg");
     mkdirSync(join(configHome, "remembrance"), { recursive: true });

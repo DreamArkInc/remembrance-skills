@@ -121,15 +121,18 @@ CODEX_CLI="${CODEX_CLI:-$(command -v codex || true)}"
 This command handles both first install and update. If zsh says
 "codex: command not found", it discovers the current ChatGPT desktop bundle or
 the legacy Codex app bundle without requiring a shell alias. The final command
-opens Codex CLI so its secure hook review can be completed immediately.
+opens Codex CLI so its secure hook review can be completed immediately when
+Codex requires it.
 
 Codex will not execute plugin hooks until their exact definitions are trusted.
-In the Codex window opened by the installer, choose **Review hooks** on the
-automatic **Hooks need review** screen and trust only the Remembrance
+In the Codex window opened by the installer, if Codex shows a **Hooks need
+review** screen, choose **Review hooks** and trust only the Remembrance
 `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` hooks.
-Changed hook definitions show the same review screen again; never use the
-automation-only trust bypass for normal installation. Exit that window, then
-fully restart Codex.
+If no review screen appears, continue: Codex may be reusing an existing valid
+trust decision. Changed hook definitions show the same review screen again;
+never use the automation-only trust bypass for normal installation. Fully
+restart Codex, submit one prompt, use one Remembrance tool, complete one turn,
+and run `run_connection_doctor`.
 
 OpenClaw:
 
@@ -187,10 +190,11 @@ Integrations & MCP**, and verify query, invocation, feedback, and contribution
 receipts in both local and cloud runs.
 
 After installing any native plugin, restart the agent app/session and approve
-the runtime's trust request. For Codex, complete the automatic hook review
-above; changed hook definitions show the same review screen again. A currently
-running Codex or Claude thread usually cannot hot-load newly installed plugin
-tools.
+the runtime's trust request when one appears. For Codex, complete the hook
+review above if Codex requests it; unchanged, previously trusted definitions
+may not show another review screen. Changed hook definitions show the review
+screen again. A currently running Codex or Claude thread usually cannot
+hot-load newly installed plugin tools.
 
 ## Enterprise/org key setup
 
@@ -843,10 +847,13 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
 
 - "Plugin installed, but no tools": restart the agent app/session; confirm the
   plugin is enabled and contains the runtime-specific manifest. For Codex,
-  launch the installer-provided command, choose **Review hooks** on the
-  automatic review screen, and trust only the listed Remembrance hooks. Exit
-  that window and fully restart Codex; updates that change hooks show the same
-  review screen again.
+  launch the installer-provided command. If Codex shows a hook review, choose
+  **Review hooks** and trust only the listed Remembrance hooks; if it does not,
+  continue because Codex may be reusing an existing valid trust decision.
+  Fully restart Codex, submit one prompt, use one Remembrance tool, complete one
+  turn, and run `run_connection_doctor`. If the lifecycle remains incomplete,
+  update or reinstall the plugin and repeat the check. Updates that change
+  hooks show the review screen again.
 - "Agent has tools but does not use them": first verify a concrete query receipt,
   then test a short contextual follow-up such as "fix these issues". Native
   prompt hooks should inject a full-conversation query reminder, and completion

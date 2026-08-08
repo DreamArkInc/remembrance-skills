@@ -30,4 +30,13 @@ describe("Claude Code SessionStart health hook", () => {
     );
     expect(JSON.stringify(output)).not.toContain("rk_never_print");
   });
+
+  it("preserves current lifecycle health during context compaction", () => {
+    const recordHealth = vi.fn();
+    handleSessionStart(
+      { source: "compact", session_id: "active-session" },
+      { env: {}, pluginVersion: "0.1.53", recordHealth },
+    );
+    expect(recordHealth).not.toHaveBeenCalled();
+  });
 });

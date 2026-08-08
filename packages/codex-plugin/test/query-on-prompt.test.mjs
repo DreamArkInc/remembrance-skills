@@ -678,7 +678,10 @@ describe("Codex query-on-prompt adapter", () => {
     const postToolMatcher = new RegExp(hooks.hooks.PostToolUse[0].matcher);
     for (const toolName of [
       "mcp__remembrance__run_connection_doctor",
+      "mcp__remembrancerun_connection_doctor",
+      "mcp__remembrancequery_skills",
       "mcp__plugin_remembrance_remembrance__get_connection_status",
+      "mcp__plugin_remembrance_remembranceget_connection_status",
       "remembrance.list_skills",
       "report_task_outcome",
     ]) {
@@ -687,6 +690,7 @@ describe("Codex query-on-prompt adapter", () => {
     expect(postToolMatcher.test("mcp__other__run_connection_doctor")).toBe(
       false,
     );
+    expect(postToolMatcher.test("mcp__remembranceevil_tool")).toBe(false);
     expect(hooks.hooks.PostToolUse[0].hooks[0].command).toContain(
       "record-detail-open.mjs",
     );

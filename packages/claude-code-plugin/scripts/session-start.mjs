@@ -24,17 +24,19 @@ export function handleSessionStart(input, options = {}) {
   const credential = resolveApiCredential(env);
   const version = options.pluginVersion ?? pluginVersion();
   const recordHealth = options.recordHealth ?? recordPluginLifecycleHealth;
-  recordHealth(
-    {
-      surface: "claude_code",
-      component: "session_start",
-      pluginVersion: version,
-      hostVersion: String(input?.claude_version ?? input?.version ?? ""),
-      credentialSource: credential.source,
-      sessionId: sessionIdFor(input),
-    },
-    env,
-  );
+  if (String(input?.source ?? "").trim().toLowerCase() !== "compact") {
+    recordHealth(
+      {
+        surface: "claude_code",
+        component: "session_start",
+        pluginVersion: version,
+        hostVersion: String(input?.claude_version ?? input?.version ?? ""),
+        credentialSource: credential.source,
+        sessionId: sessionIdFor(input),
+      },
+      env,
+    );
+  }
   return {
     hookSpecificOutput: {
       hookEventName: "SessionStart",

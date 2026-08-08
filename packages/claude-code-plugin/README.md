@@ -37,12 +37,14 @@ CODEX_CLI="${CODEX_CLI:-$(command -v codex || true)}"
 
 If `codex` is not on your shell `PATH`, this checks the current `ChatGPT.app`
 bundle first and retains the legacy `Codex.app` compatibility path. The final
-command opens Codex CLI for its secure hook review.
+command opens Codex CLI for its secure hook review when Codex requires it.
 
-On the automatic **Hooks need review** screen, choose **Review hooks** and
-trust only the Remembrance `SessionStart`, `UserPromptSubmit`, `PostToolUse`,
-and `Stop` hooks. Codex skips untrusted hooks, and changed hook definitions
-show the same review screen again. Exit that window, then fully restart Codex.
+If Codex shows a **Hooks need review** screen, choose **Review hooks** and trust
+only the Remembrance `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and
+`Stop` hooks. If no review screen appears, continue: Codex may be reusing an
+existing valid trust decision. Codex skips untrusted hooks, and changed hook
+definitions show the same review screen again. Fully restart Codex before
+verification.
 
 The repository-level `.agents/plugins/marketplace.json` routes Codex to
 `packages/codex-plugin`; this Claude package is never reused as a Codex plugin.

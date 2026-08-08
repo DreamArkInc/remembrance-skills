@@ -27,17 +27,19 @@ export function handleSessionStart(input, options = {}) {
     input?.codex_version ?? input?.app_version ?? input?.version ?? "",
   ).trim();
   const recordHealth = options.recordHealth ?? recordPluginLifecycleHealth;
-  recordHealth(
-    {
-      surface: "codex",
-      component: "session_start",
-      pluginVersion: version,
-      hostVersion,
-      credentialSource: credential.source,
-      sessionId: sessionIdFor(input),
-    },
-    env,
-  );
+  if (String(input?.source ?? "").trim().toLowerCase() !== "compact") {
+    recordHealth(
+      {
+        surface: "codex",
+        component: "session_start",
+        pluginVersion: version,
+        hostVersion,
+        credentialSource: credential.source,
+        sessionId: sessionIdFor(input),
+      },
+      env,
+    );
+  }
 
   const auth =
     credential.source === "none"

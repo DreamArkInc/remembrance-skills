@@ -73,6 +73,30 @@ describe("Cursor afterMCPExecution hook", () => {
     expect(recordRegistryUse).toHaveBeenCalledWith("conv_123", {});
   });
 
+  it("normalizes collapsed Remembrance MCP tool names defensively", async () => {
+    const recordRegistryUse = vi.fn(() => 1);
+    const result = await handleMcpUse(
+      {
+        tool_name: "mcp__remembrancequery_skills",
+        conversation_id: "conv_collapsed",
+        result: {
+          body: {
+            skills: [{ slug: "release-review" }],
+            resources: [],
+          },
+        },
+      },
+      { env: {}, recordRegistryUse },
+    );
+
+    expect(result).toMatchObject({
+      recorded: true,
+      kind: "consumption",
+      tool: "query_skills",
+    });
+    expect(recordRegistryUse).toHaveBeenCalledWith("conv_collapsed", {});
+  });
+
   it("keeps an empty query observable without counting registry consumption", async () => {
     const recordRegistryUse = vi.fn();
     const recordDirectiveFollowThrough = vi.fn(async () => true);

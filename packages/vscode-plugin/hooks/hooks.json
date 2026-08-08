@@ -24,7 +24,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "^(?:mcp__(?:remembrance|plugin_remembrance_remembrance)__.*|remembrance[._].*|run_connection_doctor|get_connection_status|query_skills|list_skills|get_skill|get_resource|invoke_skill|get_value_proof|report_task_outcome|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|propose_private_skill|queue_private_skill_import|submit_suggestion|submit_resource|submit_resource_review|bootstrap_agent_identity|register_agent_key|request_attestation_challenge)$",
+        "matcher": "^(?:(?:mcp__(?:remembrance|plugin_remembrance_remembrance)(?:__)?)?(?:run_connection_doctor|get_connection_status|query_skills|list_skills|get_skill|get_resource|invoke_skill|get_value_proof|report_task_outcome|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|propose_private_skill|queue_private_skill_import|submit_suggestion|submit_resource|submit_resource_review|bootstrap_agent_identity|register_agent_key|request_attestation_challenge)|remembrance[._].*)$",
         "hooks": [
           {
             "type": "command",
