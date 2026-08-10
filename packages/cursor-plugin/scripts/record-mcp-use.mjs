@@ -18,6 +18,7 @@ import {
   recordDirectSelectionSurface,
   recordHighMatchSurface,
   recordPluginLifecycleHealth,
+  recordHostPolicyDenial,
   recordRegistryUse,
   recordValueEpisodeSurface,
   queryResponseHasMatches,
@@ -96,6 +97,18 @@ export async function handleMcpUse(input, options = {}) {
   );
   const tool = toolName(input);
   if (toolFailed(input)) {
+    const recordDenial =
+      options.recordHostPolicyDenial ?? recordHostPolicyDenial;
+    recordDenial(
+      {
+        surface: "cursor",
+        sessionId,
+        eventType: "afterMCPExecution",
+        toolName: tool,
+        value: input,
+      },
+      env,
+    );
     return { recorded: false, kind: "failed", tool };
   }
   if (tool === "invoke_skill") {
@@ -134,18 +147,10 @@ export async function handleMcpUse(input, options = {}) {
         userAgent: "@remembrance/cursor-plugin",
       });
       const recordHighMatch = options.recordHighMatch ?? recordHighMatchSurface;
-      recordHighMatch(
-        sessionId,
-        highMatchFromResponse(response),
-        env,
-      );
+      recordHighMatch(sessionId, highMatchFromResponse(response), env);
       const recordValueEpisode =
         options.recordValueEpisode ?? recordValueEpisodeSurface;
-      recordValueEpisode(
-        sessionId,
-        valueEpisodeFromResponse(response),
-        env,
-      );
+      recordValueEpisode(sessionId, valueEpisodeFromResponse(response), env);
       return {
         recorded: matched,
         kind: matched ? "consumption" : "empty_query",

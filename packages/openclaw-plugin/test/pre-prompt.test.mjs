@@ -91,7 +91,9 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
         trigger_reason: "external_service",
       },
     });
-    expect(calls[0].headers["user-agent"]).toBe("@remembrance/openclaw-plugin");
+    expect(calls[0].headers["user-agent"]).toMatch(
+      /^@remembrance\/openclaw-plugin\/\d+\.\d+\.\d+$/,
+    );
     expect(recordHealth).toHaveBeenCalledWith(
       expect.objectContaining({
         surface: "openclaw",

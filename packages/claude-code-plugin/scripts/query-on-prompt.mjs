@@ -26,6 +26,7 @@ import { pathToFileURL } from "node:url";
 import {
   autoQueryTimeoutMs,
   buildQueryPayload as buildSharedQueryPayload,
+  clientUserAgent,
   createContinuationDirective,
   debugLog,
   disabled,
@@ -258,7 +259,7 @@ async function queryRemembrance(payload, options) {
     }
     const headers = {
       "content-type": "application/json",
-      "user-agent": "@remembrance/claude-code-plugin",
+      "user-agent": clientUserAgent("@remembrance/claude-code-plugin"),
     };
     const apiKey = credential.apiKey;
     if (apiKey) {

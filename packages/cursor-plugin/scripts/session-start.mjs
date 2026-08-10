@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
+  checkForClientUpdate,
   disabled,
   recordPluginLifecycleHealth,
   resolveApiCredential,
@@ -38,16 +39,21 @@ function pluginVersion() {
   }
 }
 
-export function handleSessionStart(input, options = {}) {
+export async function handleSessionStart(input, options = {}) {
   const env = options.env ?? process.env;
   const sessionId = cursorSessionId(input, env);
   const recordHealth = options.recordHealth ?? recordPluginLifecycleHealth;
-  if (String(input?.source ?? "").trim().toLowerCase() !== "compact") {
+  const isCompaction =
+    String(input?.source ?? "")
+      .trim()
+      .toLowerCase() === "compact";
+  const version = options.pluginVersion ?? pluginVersion();
+  if (!isCompaction) {
     recordHealth(
       {
         surface: "cursor",
         component: "session_start",
-        pluginVersion: options.pluginVersion ?? pluginVersion(),
+        pluginVersion: version,
         hostVersion: String(
           input?.cursor_version ?? input?.app_version ?? input?.version ?? "",
         ).trim(),
@@ -60,7 +66,21 @@ export function handleSessionStart(input, options = {}) {
   if (disabled(env.REMEMBRANCE_CURSOR_SESSION_CONTEXT)) {
     return {};
   }
-  return { additional_context: CURSOR_REMEMBRANCE_CONTEXT };
+  const clientUpdate = isCompaction
+    ? null
+    : await (options.checkUpdate ?? checkForClientUpdate)(
+        {
+          surface: "cursor",
+          currentVersion: version,
+          fetchImpl: options.fetchImpl ?? fetch,
+        },
+        env,
+      ).catch(() => null);
+  return {
+    additional_context: clientUpdate?.notice
+      ? `${CURSOR_REMEMBRANCE_CONTEXT}\n\n${clientUpdate.notice}`
+      : CURSOR_REMEMBRANCE_CONTEXT,
+  };
 }
 
 async function readStdin() {
@@ -79,7 +99,7 @@ async function main() {
   } catch {
     input = {};
   }
-  process.stdout.write(`${JSON.stringify(handleSessionStart(input))}\n`);
+  process.stdout.write(`${JSON.stringify(await handleSessionStart(input))}\n`);
 }
 
 if (

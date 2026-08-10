@@ -351,7 +351,8 @@ The MCP annotation for `propose_private_skill` is non-read-only and
 closed-world: it makes a network request, but can change only the authenticated
 organization's private review queue and cannot change publicly visible internet
 state. Closed-world does not mean zero-network. Only
-`queue_private_skill_import` is the local, zero-network fallback.
+`queue_private_skill_import` is a local, zero-network handoff tool, and it
+should run only when an organization admin explicitly requests that handoff.
 
 Example text to merge into the tenant-specific guardian policy:
 
@@ -386,12 +387,14 @@ over a user's local `[auto_review].policy`. See the official Codex
 [managed configuration](https://learn.chatgpt.com/docs/enterprise/managed-configuration#configure-automatic-review-policy)
 documentation for the current schema and deployment options.
 
-If the organization does not approve direct egress, keep the host denial. Use
-`queue_private_skill_import` locally, or run the bundled
-`scripts/queue-private-skill-import.mjs` helper, then have an organization
-admin upload the mode-0600 JSON at **Dashboard > Skills > Import**. The handoff
-never contains an API key or organization id, never contacts Remembrance, and
-does not count as submitted until the dashboard returns an import batch receipt.
+If the organization does not approve direct egress, keep the host denial. The
+plugin reports one content-free local alert, does not retry, and does not create
+a handoff automatically. Only when an organization admin explicitly requests a
+handoff, use `queue_private_skill_import` locally or run the bundled
+`scripts/queue-private-skill-import.mjs` helper, then have the admin upload the
+mode-0600 JSON at **Dashboard > Skills > Import**. The handoff never contains an
+API key or organization id, never contacts Remembrance, and does not count as
+submitted until the dashboard returns an import batch receipt.
 
 If Codex still sees `<your org key>` after restart, remove stale
 `REMEMBRANCE_API_KEY` exports from shell profiles such as `~/.zshrc` and
@@ -780,6 +783,17 @@ npx skills add dreamarkinc/remembrance-skills --skill remembrancer
 The entry skill is REST-only and self-contained. The same skill directory can
 be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
 
+## Verified client updates
+
+Native plugins and local MCP check the credential-free public release manifest
+at startup and through `run_connection_doctor`. The check sends no API key,
+fails open when the registry is unavailable, and never runs a command returned
+by the network. When a newer verified release exists, the agent must ask before
+running the update command bundled with its installed client, then tell the user
+which Codex, Claude Code, Cursor, OpenClaw, VS Code, OpenCode, or MCP host must
+be reloaded, reopened, or fully restarted. Set
+`REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable only this advisory check.
+
 ## Validate after setup
 
 1. Start a fresh agent session.
@@ -834,10 +848,12 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
    that should not appear anonymously.
 13. With an organization submission key, submit one disposable redacted skill
    through propose_private_skill and verify it appears only in that
-   organization's review queue. If host policy denies the export, run
-   queue_private_skill_import instead, upload its JSON in the dashboard, and
-   verify the agent reports a local queue receipt separately from the server
-   import receipt.
+   organization's review queue. In a separate negative scenario, simulate a
+   host-policy denial and verify the plugin reports the fixed content-free alert
+   once, persists no blocked content, performs no retry, and creates no handoff.
+   Test queue_private_skill_import only as a separate administrator-requested
+   manual handoff, with its local receipt distinguished from a server import
+   receipt.
 14. If using local MCP, verify local_signing_identity in get_connection_status.
    A missing opaque identity initializes automatically on the first signed
    contribution; bootstrap_agent_identity with no arguments is an optional

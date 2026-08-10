@@ -2,14 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import { handleSessionStart } from "../scripts/session-start.mjs";
 
 describe("VS Code SessionStart health hook", () => {
-  it("records registration under its own surface and never echoes the key", () => {
+  it("records registration under its own surface and never echoes the key", async () => {
     const recordHealth = vi.fn();
-    const output = handleSessionStart(
+    const output = await handleSessionStart(
       { vscode_version: "1.104.0" },
       {
         env: { REMEMBRANCE_API_KEY: "rk_never_print" },
         pluginVersion: "0.1.39",
         recordHealth,
+        checkUpdate: vi.fn(async () => null),
       },
     );
     expect(recordHealth).toHaveBeenCalledWith(
@@ -35,11 +36,16 @@ describe("VS Code SessionStart health hook", () => {
     expect(JSON.stringify(output)).not.toContain("rk_never_print");
   });
 
-  it("falls back to a generic version key when the host omits its own", () => {
+  it("falls back to a generic version key when the host omits its own", async () => {
     const recordHealth = vi.fn();
-    handleSessionStart(
+    await handleSessionStart(
       { version: "1.105.1" },
-      { env: {}, pluginVersion: "0.1.39", recordHealth },
+      {
+        env: {},
+        pluginVersion: "0.1.39",
+        recordHealth,
+        checkUpdate: vi.fn(async () => null),
+      },
     );
     expect(recordHealth).toHaveBeenCalledWith(
       expect.objectContaining({ hostVersion: "1.105.1" }),
@@ -47,12 +53,31 @@ describe("VS Code SessionStart health hook", () => {
     );
   });
 
-  it("does not replace active health markers during compaction", () => {
+  it("does not replace active health markers during compaction", async () => {
     const recordHealth = vi.fn();
-    handleSessionStart(
+    const checkUpdate = vi.fn();
+    await handleSessionStart(
       { source: "compact", session_id: "active-session" },
-      { env: {}, pluginVersion: "0.1.53", recordHealth },
+      { env: {}, pluginVersion: "0.1.53", recordHealth, checkUpdate },
     );
     expect(recordHealth).not.toHaveBeenCalled();
+    expect(checkUpdate).not.toHaveBeenCalled();
+  });
+
+  it("adds the VS Code reload instruction when an update is available", async () => {
+    const output = await handleSessionStart(
+      {},
+      {
+        env: {},
+        pluginVersion: "0.1.54",
+        recordHealth: vi.fn(),
+        checkUpdate: vi.fn(async () => ({
+          notice: "Update Remembrance, then reload the VS Code window.",
+        })),
+      },
+    );
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "reload the VS Code window",
+    );
   });
 });

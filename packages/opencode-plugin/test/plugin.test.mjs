@@ -102,7 +102,10 @@ describe("opencode plugin hooks", () => {
 
   it("records activation health and logs how to verify setup", async () => {
     const { client, messages } = loggingClient();
-    const hooks = await Remembrance({ client });
+    const hooks = await Remembrance({
+      client,
+      clientUpdateCheck: async () => null,
+    });
     await hooks.event({
       event: {
         type: "session.created",
@@ -118,6 +121,7 @@ describe("opencode plugin hooks", () => {
   it("falls back to structured logging when the TUI toast surface fails", async () => {
     const messages = [];
     const hooks = await Remembrance({
+      clientUpdateCheck: async () => null,
       client: {
         tui: {
           showToast: async () => {
@@ -149,7 +153,10 @@ describe("opencode plugin hooks", () => {
     const { client, messages } = loggingClient();
     process.env.REMEMBRANCE_API_KEY = "rk_never_print";
     try {
-      const hooks = await Remembrance({ client });
+      const hooks = await Remembrance({
+        client,
+        clientUpdateCheck: async () => null,
+      });
       await hooks.event({
         event: {
           type: "session.created",
@@ -160,6 +167,35 @@ describe("opencode plugin hooks", () => {
     } finally {
       delete process.env.REMEMBRANCE_API_KEY;
     }
+  });
+
+  it("notifies the user and gives the agent one trusted update instruction", async () => {
+    const { client, messages } = loggingClient();
+    const hooks = await Remembrance({
+      client,
+      clientUpdateCheck: async () => ({
+        current_version: "0.1.54",
+        latest_version: "0.1.55",
+        notice:
+          "Remembrance update available. Ask permission, run the bundled opencode setup command, then restart opencode.",
+      }),
+    });
+    const sessionID = "s-update";
+    await hooks.event({
+      event: {
+        type: "session.created",
+        properties: { info: { id: sessionID } },
+      },
+    });
+    expect(messages[0].message).toContain("0.1.55 is available");
+    const first = { system: [] };
+    await hooks["experimental.chat.system.transform"]({ sessionID }, first);
+    expect(first.system).toEqual([
+      expect.stringContaining("restart opencode"),
+    ]);
+    const second = { system: [] };
+    await hooks["experimental.chat.system.transform"]({ sessionID }, second);
+    expect(second.system).toEqual([]);
   });
 
   it("skips the prompt hook for non-user messages and unreadable payloads", async () => {
@@ -192,7 +228,10 @@ describe("opencode plugin hooks", () => {
         },
       },
     };
-    const hooks = await Remembrance({ client: exploding });
+    const hooks = await Remembrance({
+      client: exploding,
+      clientUpdateCheck: async () => null,
+    });
     await expect(
       hooks.event({
         event: {
@@ -227,7 +266,7 @@ describe("opencode plugin hooks", () => {
   });
 
   it("ignores unknown and malformed general events", async () => {
-    const hooks = await Remembrance({});
+    const hooks = await Remembrance({ clientUpdateCheck: async () => null });
     await expect(hooks.event()).resolves.toBeUndefined();
     await expect(
       hooks.event({ event: { type: "server.connected", properties: {} } }),

@@ -56,6 +56,32 @@ describe("OpenClaw after_tool_call hook", () => {
     expect(clear).not.toHaveBeenCalled();
   });
 
+  it("records a host-policy denial without persisting or returning raw failure details", async () => {
+    const recordHostPolicyDenial = vi.fn(() => ({ id: "policy-1" }));
+    const result = await handleAfterToolCall(
+      {
+        toolName: "mcp__remembrance__propose_private_skill",
+        error: "Blocked by organization data-export policy: private payload",
+        context: { runId: "run_policy" },
+      },
+      { env: {}, recordHostPolicyDenial },
+    );
+    expect(result).toEqual({
+      cleared: false,
+      why: "tool_failed",
+      host_policy_denial: true,
+    });
+    expect(JSON.stringify(result)).not.toContain("private payload");
+    expect(recordHostPolicyDenial).toHaveBeenCalledWith(
+      expect.objectContaining({
+        surface: "openclaw",
+        sessionId: "run_policy",
+        eventType: "after_tool_call",
+      }),
+      {},
+    );
+  });
+
   it("records a successful query against the active directive", async () => {
     const recordDirectiveFollowThrough = vi.fn(async () => true);
     const result = await handleAfterToolCall(

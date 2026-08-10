@@ -36,6 +36,16 @@ For local development against this repo, register the package directory with the
 Reload VS Code, then confirm the plugin's tools appear in agent mode's Tools
 picker.
 
+At session start, Remembrance checks a credential-free public release manifest.
+If a newer verified plugin exists, the agent tells the user to refresh the
+plugin's marketplace or managed source, update Remembrance, and reload the VS
+Code window. Remembrance never updates itself silently. Set
+`REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable the advisory check.
+
+VS Code installations from before this startup check existed still receive a
+command-free update notice on their next successful Remembrance query. The
+notice points to the normal managed plugin source and never invents a command.
+
 ## Organization key
 
 The plugin-managed MCP server reads the same Remembrance config as the other
@@ -93,7 +103,10 @@ Set `REMEMBRANCE_AUTO_QUERY=0` to disable the prompt hook, or
 A tenant or privacy-policy denial in the host happens before Remembrance is
 called, so it is not a Remembrance misconfiguration. This mirrors the Codex
 behavior: a Codex tenant/privacy-policy denial occurs before Remembrance is
-reached and must not be reported as a Remembrance setup failure.
+reached and must not be reported as a Remembrance setup failure. When the host
+reports such a denial to the agent, the agent must say: **Remembrance was
+blocked by host policy before reaching Remembrance. Nothing was sent. Querying
+remains available.** It must not retry or automatically create a handoff.
 
 ## Generated files
 

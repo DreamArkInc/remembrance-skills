@@ -263,11 +263,13 @@ privately, then let an organization admin use the reviewed public-propagation
 flow for a redacted, public-safe version when appropriate.
 
 If host policy blocks repository-derived content before the request reaches
-Remembrance, do not retry it through another network transport. Use local MCP
+Remembrance, do not retry it through another network transport. Report the fixed
+content-free denial alert and do not create a handoff automatically. Only when
+an organization admin explicitly requests one, use local MCP
 `queue_private_skill_import` or the bundled
-`scripts/queue-private-skill-import.mjs` helper, then have an organization admin
-upload the mode-0600 JSON at **Dashboard > Skills > Import**. A local handoff is
-not a server submission receipt.
+`scripts/queue-private-skill-import.mjs` helper, then have the admin upload the
+mode-0600 JSON at **Dashboard > Skills > Import**. A local handoff is not a
+server submission receipt.
 
 ## New skill idea
 

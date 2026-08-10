@@ -40,6 +40,18 @@ decision. Changed hook definitions show the same review screen again; this is
 a Codex security boundary and the installer does not bypass it. Fully restart
 Codex before verification.
 
+On a fresh Codex session, Remembrance checks a credential-free public release
+manifest. When a newer verified plugin exists, Codex receives the trusted local
+update command, asks for permission before running it, and tells the user to
+fully quit and reopen Codex afterward. It never updates silently or treats the
+new version as active before restart. Set
+`REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable this advisory check.
+
+Codex installations from before this startup check existed still learn about a
+verified update on their next successful Remembrance query. The API places a
+command-free notice first in the legacy contribution directive; only this
+installed plugin supplies the trusted local update command.
+
 After install, fully restart Codex and verify the loop before assuming the
 plugin is active:
 
@@ -139,9 +151,12 @@ in `skills/remembrancer/references/remembrance-setup.md`. The same current,
 host-by-host administrator guide is published at
 <https://remembrance.dev/docs/remembrancer#private-repository-policy>.
 
-If the host keeps denying the export, do not retry through curl, browser tools,
-or a different MCP transport. Use the local-only `queue_private_skill_import`
-tool when available. Hosted-only Codex can run the bundled
+If the host denies the export, do not retry through curl, browser tools, or a
+different MCP transport. Remembrance reports one local, content-free alert:
+**Remembrance was blocked by host policy before reaching Remembrance. Nothing
+was sent. Querying remains available.** It does not automatically create a
+handoff. Only when an organization admin explicitly requests one, use the
+local-only `queue_private_skill_import` tool. Hosted-only Codex can run the bundled
 `skills/remembrancer/scripts/queue-private-skill-import.mjs` helper against a
 local request JSON. It writes a mode-0600 file under
 `.remembrance/outbox/`, creates a protective `.gitignore`, and makes no network

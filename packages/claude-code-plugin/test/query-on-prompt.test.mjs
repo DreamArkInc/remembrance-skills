@@ -106,7 +106,7 @@ describe("Remembrance Claude Code prompt hook", () => {
           REMEMBRANCE_AUTO_QUERY_LIMIT: "2",
         },
         fetchImpl: vi.fn(async (url, init) => {
-          calls.push({ url, body: JSON.parse(String(init.body)) });
+          calls.push({ url, init, body: JSON.parse(String(init.body)) });
           return Response.json({
             skills: [
               {
@@ -125,6 +125,11 @@ describe("Remembrance Claude Code prompt hook", () => {
     );
 
     expect(calls).toHaveLength(1);
+    expect(calls[0].init.headers).toMatchObject({
+      "user-agent": expect.stringMatching(
+        /^@remembrance\/claude-code-plugin\/\d+\.\d+\.\d+$/,
+      ),
+    });
     expect(calls[0].url).toBe("https://remembrance.dev/api/v1/agent/query");
     expect(calls[0].body).toMatchObject({
       task: {
@@ -546,6 +551,12 @@ describe("Remembrance Claude Code prompt hook", () => {
       "record-detail-open.mjs",
     );
     expect(hooks.hooks.PostToolUse[0].matcher).toContain("query_skills");
+    for (const event of ["PostToolUseFailure", "PermissionDenied"]) {
+      expect(hooks.hooks[event][0].hooks[0].command).toContain(
+        "report-host-policy-denial.mjs",
+      );
+      expect(hooks.hooks[event][0].matcher).toContain("propose_private_skill");
+    }
     expect(plugin.mcpServers).toBe("./.mcp.json");
     expect(mcp.mcpServers.remembrance).toMatchObject({
       command: "node",

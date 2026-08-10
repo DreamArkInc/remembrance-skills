@@ -53,6 +53,14 @@ const DIRECT_SELECTION_MARKER_LIMIT = 20;
 const DIRECT_SELECTION_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_LOCAL_CONFIG_BYTES = 64 * 1024;
 const MAX_LOCAL_HEALTH_MARKER_BYTES = 16 * 1024;
+const MAX_LOCAL_PLUGIN_ALERT_BYTES = 16 * 1024;
+const MAX_LOCAL_CLIENT_UPDATE_BYTES = 16 * 1024;
+const PLUGIN_ALERT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const PLUGIN_ALERT_LIMIT = 32;
+const CLIENT_UPDATE_CACHE_TTL_MS = 5 * 60 * 1000;
+const CLIENT_UPDATE_TIMEOUT_MS = 1200;
+export const HOST_POLICY_ALERT_TEXT =
+  "Remembrance was blocked by host policy before reaching Remembrance. Nothing was sent. Querying remains available.";
 const PLUGIN_HEALTH_COMPONENTS = new Set([
   "session_start",
   "prompt_hook",
@@ -67,6 +75,63 @@ const PLUGIN_HEALTH_SURFACES = new Set([
   "vs_code",
   "opencode",
 ]);
+const CLIENT_RELEASE_MANIFEST_SURFACES = new Set([
+  ...PLUGIN_HEALTH_SURFACES,
+  "mcp",
+]);
+
+const CLIENT_UPDATE_GUIDANCE = {
+  codex: {
+    command: [
+      'CODEX_CLI="${CODEX_CLI:-$(command -v codex || true)}"',
+      '[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/ChatGPT.app/Contents/Resources/codex"',
+      '[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/Codex.app/Contents/Resources/codex"',
+      '[ -x "$CODEX_CLI" ] || { printf \'%s\\n\' "Codex CLI not found. Install the Codex CLI, or update the ChatGPT desktop app, then try again." >&2; exit 1; }',
+      '"$CODEX_CLI" plugin marketplace upgrade remembrance',
+      '"$CODEX_CLI" plugin add remembrance@remembrance --json',
+    ].join("\n"),
+    update:
+      "Ask the user for permission to update Remembrance. If approved, run the bundled Codex update command exactly as shown.",
+    restart:
+      "After it succeeds, tell the user to fully quit and reopen Codex. The current process remains on the installed version until restart.",
+  },
+  claude_code: {
+    command:
+      "claude plugin marketplace update remembrance\nclaude plugin update remembrance@remembrance",
+    update:
+      "Ask the user for permission to update Remembrance. If approved, run the bundled Claude Code update command exactly as shown.",
+    restart:
+      "After it succeeds, tell the user to run /reload-plugins or fully quit and reopen Claude Code. The current plugin process remains on the installed version until reload or restart.",
+  },
+  cursor: {
+    command: null,
+    update:
+      "Tell the user to open Cursor settings, refresh the marketplace that provides Remembrance, and choose Update for the Remembrance plugin.",
+    restart:
+      "After Cursor reports completion, tell the user to fully quit and reopen Cursor. The current process remains on the installed version until restart.",
+  },
+  openclaw: {
+    command: "openclaw plugins update remembrance\nopenclaw remembrance setup",
+    update:
+      "Ask the user for permission to update Remembrance. If approved, run the bundled OpenClaw update and setup commands exactly as shown.",
+    restart:
+      "After they succeed, tell the user to restart the OpenClaw Gateway unless its managed reload already restarted it, then begin a new agent session.",
+  },
+  vs_code: {
+    command: null,
+    update:
+      "Tell the user to refresh the marketplace or managed source that provides Remembrance and update the Remembrance plugin there.",
+    restart:
+      "After completion, tell the user to reload the VS Code window or fully quit and reopen VS Code. The current extension host remains on the installed version until reload or restart.",
+  },
+  opencode: {
+    command: "npx -y @remembrance-ai/opencode-plugin@latest setup",
+    update:
+      "Ask the user for permission to update Remembrance. If approved, run the bundled opencode setup command exactly as shown.",
+    restart:
+      "After it succeeds, tell the user to fully quit and reopen opencode. The current process remains on the installed version until restart.",
+  },
+};
 
 const SERVICE_PATTERNS = [
   /\b(vercel|heroku|netlify|cloudflare|aws|gcp|azure)\b/i,
@@ -217,6 +282,39 @@ export function redactPrompt(prompt) {
 // options; the Claude adapter builds its own payload with its own identity.
 export const DEFAULT_AGENT_IDENTITY = { provider: "codex", model: "codex" };
 export const DEFAULT_USER_AGENT = "@remembrance/codex-plugin";
+const VERSIONED_CLIENT_USER_AGENTS = new Set([
+  "@remembrance/codex-plugin",
+  "@remembrance/claude-code-plugin",
+  "@remembrance/cursor-plugin",
+  "@remembrance/openclaw-plugin",
+  "@remembrance/vscode-plugin",
+  "@remembrance-ai/opencode-plugin",
+]);
+let cachedInstalledClientVersion;
+
+export function installedClientVersion() {
+  if (cachedInstalledClientVersion !== undefined) {
+    return cachedInstalledClientVersion;
+  }
+  try {
+    const value = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    )?.version;
+    cachedInstalledClientVersion = /^\d+\.\d+\.\d+$/.test(String(value ?? ""))
+      ? String(value)
+      : null;
+  } catch {
+    cachedInstalledClientVersion = null;
+  }
+  return cachedInstalledClientVersion;
+}
+
+export function clientUserAgent(base = DEFAULT_USER_AGENT) {
+  const normalized = String(base || DEFAULT_USER_AGENT).trim();
+  if (!VERSIONED_CLIENT_USER_AGENTS.has(normalized)) return normalized;
+  const version = installedClientVersion();
+  return version ? `${normalized}/${version}` : normalized;
+}
 
 export function buildQueryPayload(
   prompt,
@@ -362,10 +460,7 @@ export function inferConstraints(prompt) {
   for (const [pattern, value] of [
     [/\b(mcp|model context protocol|tool server)\b/i, "mcp"],
     [/\b(install|setup|set up|configure)\b/i, "setup"],
-    [
-      /\b(api key|enterprise key|organization key|credential)\b/i,
-      "api-key",
-    ],
+    [/\b(api key|enterprise key|organization key|credential)\b/i, "api-key"],
     [/\b(troubleshoot|troubleshooting)\b/i, "troubleshooting"],
     [/\b(ci|github actions?|circleci)\b/i, "ci"],
     [/\b(deploy|deployment|vercel|heroku)\b/i, "deployment"],
@@ -401,7 +496,7 @@ export async function queryRemembrance(payload, options = {}) {
     }
     const headers = {
       "content-type": "application/json",
-      "user-agent": options.userAgent ?? DEFAULT_USER_AGENT,
+      "user-agent": clientUserAgent(options.userAgent),
     };
     const apiKey = credential.apiKey;
     if (apiKey) {
@@ -484,7 +579,7 @@ export async function reportDirectiveEvent(event, options = {}) {
     if (isUnusableConfigurationSource(credential.source)) return false;
     const headers = {
       "content-type": "application/json",
-      "user-agent": options.userAgent ?? DEFAULT_USER_AGENT,
+      "user-agent": clientUserAgent(options.userAgent),
     };
     const apiKey = credential.apiKey;
     if (apiKey) headers["x-remembrance-api-key"] = apiKey;
@@ -1100,7 +1195,7 @@ export function contributionReason(
       "Call submit_feedback once for each listed skill with useful true or false and a concise post-use lesson.",
       "If submit_feedback returns next_step.submit_remembrance_payload, submit that reviewed evidence when the lesson is reusable.",
       "Report failed attempts, corrections, security findings, and reusable workflow improvements instead of silently changing the skill.",
-      "If host privacy policy blocks private repository-derived instructions, do not retry through another transport: queue organization skills locally with queue_private_skill_import (or the bundled handoff script) and wait for an admin import receipt.",
+      `If host policy blocks the request, tell the user exactly: "${HOST_POLICY_ALERT_TEXT}" Do not retry the blocked content through another transport.`,
       "Redact secrets, private URLs, credentials, prompts, outputs, source paths, and proprietary content.",
       "If nothing is genuinely worth capturing, say so in one line; you will not be asked again for this use.",
     ]
@@ -1117,7 +1212,7 @@ export function contributionReason(
     "• submit_remembrance — post the ready next_step.submit_remembrance_payload returned by submit_feedback when the lesson is reusable, adding redacted evidence when available.",
     "• propose_private_skill — the default proposal path. Use it for anything repository-derived or organization-specific, after the host and organization approve Remembrance as the destination. It cannot create a public candidate under any credential state, so it stays private even if your key stops resolving.",
     "• propose_skill_idea — only if no existing skill fit, you built a reusable workflow, AND a public candidate is an acceptable outcome. An active organization key keeps it private; intentionally omitting a key makes the call PUBLIC. A supplied invalid/inactive key fails with 401 and an insufficient key fails with 403, creating no candidate. Read `visibility` in a successful response (organization_private or public_candidate) and report where it landed. Never remove or bypass the key to force a public candidate.",
-    "Use the Remembrance MCP tools directly when they are visible. If this runtime has no MCP tools exposed, use the REST endpoints from the query response. A host privacy-policy denial is not API unavailability: never retry private repository content through another transport; queue organization skills locally with queue_private_skill_import (or the bundled handoff script) and wait for an admin import receipt. If the API itself is unavailable, emit REMEMBRANCE_SUBMISSION_PAYLOAD with the redacted JSON you would submit.",
+    `Use the Remembrance MCP tools directly when they are visible. If this runtime has no MCP tools exposed, use the REST endpoints from the query response. If host policy blocks the request, tell the user exactly: "${HOST_POLICY_ALERT_TEXT}" Do not retry the blocked content through another transport. If the API itself is unavailable, emit REMEMBRANCE_SUBMISSION_PAYLOAD with the redacted JSON you would submit.`,
     "Redact secrets, private URLs, and proprietary content; submit redacted summaries and hashes, not raw traces.",
     "Attach evidence: reproduction detail in outcome.failure_modes, artifact hashes of redacted logs/diffs, or an attestation. Evidence-less public reports wait in unverified intake until corroborated; evidence-backed ones verify faster and rank higher.",
     "If nothing is genuinely worth capturing, just say so in one line — you will not be asked again this session.",
@@ -1169,6 +1264,17 @@ export function detectHighValueLessonSignalInText(text) {
   return null;
 }
 
+export function hostPolicyAlertWasReported(input) {
+  const value = String(
+    input?.last_assistant_message ??
+      input?.lastAssistantMessage ??
+      input?.assistant_message ??
+      input?.message ??
+      "",
+  );
+  return value.includes(HOST_POLICY_ALERT_TEXT);
+}
+
 // Pure decision function (unit-tested): compare completed registry use and task
 // eligibility with the last-prompted count. A completed use prompts for a
 // contribution; eligible work with no completed query prompts for full-context
@@ -1181,6 +1287,9 @@ export function decideStop(input, options = {}) {
   }
   if (input?.stop_hook_active) {
     return { allow: true, why: "stop_hook_active" };
+  }
+  if (hostPolicyAlertWasReported(input)) {
+    return { allow: true, why: "host_policy_alert_reported" };
   }
   const sessionId = sessionIdFor(input);
   const readUse = options.readUseCount ?? readRegistryUseCount;
@@ -2146,7 +2255,7 @@ async function postTaskOutcome(payload, options = {}) {
     if (isUnusableConfigurationSource(credential.source)) return false;
     const headers = {
       "content-type": "application/json",
-      "user-agent": options.userAgent ?? DEFAULT_USER_AGENT,
+      "user-agent": clientUserAgent(options.userAgent),
     };
     const apiKey = credential.apiKey;
     if (apiKey) headers["x-remembrance-api-key"] = apiKey;
@@ -2304,6 +2413,549 @@ function pluginHealthDir(env = process.env) {
   return join(homedir(), ".cache", "remembrance", "plugin-health");
 }
 
+function pluginAlertDir(env = process.env) {
+  if (env?.REMEMBRANCE_PLUGIN_ALERT_DIR) {
+    return String(env.REMEMBRANCE_PLUGIN_ALERT_DIR);
+  }
+  if (process.env.VITEST) {
+    return join(
+      tmpdir(),
+      "remembrance-plugin-alert-tests",
+      String(process.pid),
+    );
+  }
+  return join(homedir(), ".cache", "remembrance", "plugin-alerts");
+}
+
+function clientUpdateDir(env = process.env) {
+  if (env?.REMEMBRANCE_CLIENT_UPDATE_DIR) {
+    return String(env.REMEMBRANCE_CLIENT_UPDATE_DIR);
+  }
+  if (process.env.VITEST) {
+    return join(
+      tmpdir(),
+      "remembrance-client-update-tests",
+      String(process.pid),
+    );
+  }
+  return join(homedir(), ".cache", "remembrance", "client-updates");
+}
+
+function clientUpdatePath(surface, env = process.env) {
+  const normalized = normalizedPluginHealthSurface(surface);
+  return normalized ? join(clientUpdateDir(env), `${normalized}.json`) : null;
+}
+
+export async function checkForClientUpdate(
+  {
+    surface,
+    currentVersion,
+    fetchImpl = fetch,
+    now = Date.now(),
+    timeoutMs = CLIENT_UPDATE_TIMEOUT_MS,
+  },
+  env = process.env,
+) {
+  const normalizedSurface = normalizedPluginHealthSurface(surface);
+  if (
+    !normalizedSurface ||
+    disabled(env.REMEMBRANCE_CLIENT_UPDATE_CHECK) ||
+    !parseStableClientVersion(currentVersion)
+  ) {
+    return null;
+  }
+  const configuration = resolveApiConfiguration(env);
+  if (isUnusableConfigurationSource(configuration.source)) return null;
+  const path = clientUpdatePath(normalizedSurface, env);
+  let manifest = readCachedClientRelease(path, now);
+  if (!manifest) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetchImpl(
+        `${configuration.apiUrl.replace(/\/+$/, "")}/.well-known/remembrance-client-release.json`,
+        {
+          headers: { accept: "application/json" },
+          signal: controller.signal,
+        },
+      );
+      if (!response?.ok) return null;
+      const text = await response.text();
+      if (Buffer.byteLength(text, "utf8") > MAX_LOCAL_CLIENT_UPDATE_BYTES) {
+        return null;
+      }
+      try {
+        manifest = parseClientReleaseManifest(JSON.parse(text));
+      } catch {
+        return null;
+      }
+      if (!manifest) return null;
+      writeCachedClientRelease(path, manifest, now);
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  if (
+    !manifest.surfaces.includes(normalizedSurface) ||
+    compareStableClientVersions(manifest.latest_version, currentVersion) <= 0
+  ) {
+    return null;
+  }
+  const guidance = CLIENT_UPDATE_GUIDANCE[normalizedSurface];
+  if (!guidance) return null;
+  const command = guidance.command
+    ? `\nTrusted update command bundled with this installed client:\n${guidance.command}`
+    : "";
+  return {
+    current_version: currentVersion,
+    latest_version: manifest.latest_version,
+    surface: normalizedSurface,
+    notice: [
+      `Remembrance update available: installed ${currentVersion}, published ${manifest.latest_version}.`,
+      guidance.update,
+      command,
+      guidance.restart,
+      "Do not claim the new version is active until a fresh process reports it.",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  };
+}
+
+function readCachedClientRelease(path, now) {
+  if (!path) return null;
+  try {
+    const parsed = JSON.parse(
+      readSecureHookFile(path, MAX_LOCAL_CLIENT_UPDATE_BYTES),
+    );
+    if (
+      parsed?.schema_version !== 1 ||
+      !Number.isFinite(parsed?.checked_at) ||
+      parsed.checked_at > now + 5 * 60 * 1000 ||
+      parsed.checked_at + CLIENT_UPDATE_CACHE_TTL_MS <= now
+    ) {
+      return null;
+    }
+    return parseClientReleaseManifest(parsed.manifest);
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedClientRelease(path, manifest, now) {
+  if (!path) return false;
+  const temporaryPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    ensureSecureHookDirectory(dirname(path));
+    writeFileSync(
+      temporaryPath,
+      `${JSON.stringify({ schema_version: 1, checked_at: now, manifest })}\n`,
+      { mode: 0o600, flag: "wx" },
+    );
+    renameSync(temporaryPath, path);
+    return true;
+  } catch {
+    try {
+      rmSync(temporaryPath, { force: true });
+    } catch {
+      // Update checks are advisory and never break the host lifecycle.
+    }
+    return false;
+  }
+}
+
+function parseClientReleaseManifest(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (value.schema_version !== "1") return null;
+  if (!parseStableClientVersion(value.latest_version)) return null;
+  if (
+    typeof value.published_at !== "string" ||
+    !isCanonicalClientReleaseTimestamp(value.published_at) ||
+    !Array.isArray(value.surfaces)
+  ) {
+    return null;
+  }
+  const surfaces = value.surfaces.filter(
+    (item) =>
+      typeof item === "string" && CLIENT_RELEASE_MANIFEST_SURFACES.has(item),
+  );
+  if (
+    surfaces.length !== value.surfaces.length ||
+    new Set(surfaces).size !== surfaces.length
+  ) {
+    return null;
+  }
+  return {
+    schema_version: "1",
+    latest_version: value.latest_version,
+    published_at: new Date(value.published_at).toISOString(),
+    surfaces,
+  };
+}
+
+function isCanonicalClientReleaseTimestamp(value) {
+  const timestamp = Date.parse(value);
+  return (
+    Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value
+  );
+}
+
+function parseStableClientVersion(value) {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(
+    String(value ?? ""),
+  );
+  if (!match) return null;
+  const parts = match.slice(1).map(Number);
+  return parts.every(
+    (part) => Number.isSafeInteger(part) && part >= 0 && part <= 9_999,
+  )
+    ? parts
+    : null;
+}
+
+function compareStableClientVersions(left, right) {
+  const leftParts = parseStableClientVersion(left);
+  const rightParts = parseStableClientVersion(right);
+  if (!leftParts || !rightParts) return 0;
+  for (let index = 0; index < 3; index += 1) {
+    const difference = leftParts[index] - rightParts[index];
+    if (difference !== 0) return Math.sign(difference);
+  }
+  return 0;
+}
+
+function pluginAlertSessionPath(surface, sessionId, env = process.env) {
+  const normalized = normalizedPluginHealthSurface(surface);
+  if (!normalized) return null;
+  const hash = createHash("sha256")
+    .update(String(sessionId ?? "unknown"), "utf8")
+    .digest("hex")
+    .slice(0, 24);
+  return join(pluginAlertDir(env), `${normalized}.${hash}.json`);
+}
+
+function hostPolicyOperationClass(toolName) {
+  const normalized = String(toolName ?? "").toLowerCase();
+  if (
+    normalized.endsWith("query_skills") ||
+    normalized.endsWith("list_skills") ||
+    normalized.endsWith("get_skill") ||
+    normalized.endsWith("get_resource") ||
+    normalized.endsWith("invoke_skill") ||
+    normalized.endsWith("run_connection_doctor") ||
+    normalized.endsWith("get_connection_status")
+  ) {
+    return "query";
+  }
+  if (
+    normalized.endsWith("propose_private_skill") ||
+    normalized.endsWith("queue_private_skill_import")
+  ) {
+    return "private_contribution";
+  }
+  if (
+    normalized.endsWith("propose_skill_idea") ||
+    normalized.endsWith("submit_remembrance") ||
+    normalized.endsWith("submit_suggestion") ||
+    normalized.endsWith("submit_resource") ||
+    normalized.endsWith("submit_resource_review")
+  ) {
+    return "contribution";
+  }
+  if (
+    normalized.endsWith("submit_query_feedback") ||
+    normalized.endsWith("submit_feedback") ||
+    normalized.endsWith("report_task_outcome")
+  ) {
+    return "feedback";
+  }
+  return "other";
+}
+
+function isRemembranceToolName(toolName) {
+  const normalized = String(toolName ?? "").toLowerCase();
+  return (
+    normalized.includes("remembrance") ||
+    [
+      "run_connection_doctor",
+      "get_connection_status",
+      "query_skills",
+      "list_skills",
+      "get_skill",
+      "get_resource",
+      "invoke_skill",
+      "get_value_proof",
+      "report_task_outcome",
+      "submit_query_feedback",
+      "submit_feedback",
+      "submit_remembrance",
+      "propose_skill_idea",
+      "propose_private_skill",
+      "queue_private_skill_import",
+      "submit_suggestion",
+      "submit_resource",
+      "submit_resource_review",
+    ].some((candidate) => normalized.endsWith(candidate))
+  );
+}
+
+function boundedHostPolicyText(value, depth = 0) {
+  if (depth > 3 || value == null) return "";
+  if (typeof value === "string") return value.slice(0, 2_000);
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, 8)
+      .map((item) => boundedHostPolicyText(item, depth + 1))
+      .join(" ")
+      .slice(0, 4_000);
+  }
+  if (typeof value !== "object") return "";
+  return [
+    value.message,
+    value.reason,
+    value.permission_decision_reason,
+    value.permissionDecisionReason,
+    value.decision,
+    value.response,
+    value.error,
+    value.detail,
+    value.details,
+    value.output,
+    value.result,
+    value.tool_response,
+    value.toolResponse,
+    value.properties?.error,
+    value.properties?.message,
+    value.properties?.reason,
+  ]
+    .map((item) => boundedHostPolicyText(item, depth + 1))
+    .filter(Boolean)
+    .join(" ")
+    .slice(0, 4_000);
+}
+
+export function classifyHostPolicyDenial({
+  eventType = "",
+  toolName = "",
+  value = null,
+} = {}) {
+  if (!isRemembranceToolName(toolName)) return null;
+  const text = boundedHostPolicyText(value);
+  const denied =
+    /\b(?:block(?:ed|ing)?|den(?:y|ied|ial)|disallow(?:ed)?|prohibit(?:ed)?|not permitted|permission refused|cannot (?:send|share|export)|may not (?:send|share|export))\b/i.test(
+      text,
+    );
+  const policyContext =
+    /\b(?:host|tenant|workspace|organization|administrator|admin|privacy|security|policy|data[- ](?:export|egress|loss prevention)|dlp|external service|trusted service)\b/i.test(
+      text,
+    );
+  const normalizedEvent = String(eventType ?? "").toLowerCase();
+  const permissionEvent = normalizedEvent.includes("permission");
+  const explicitPreTransportContext =
+    /\b(?:host(?:ed)?|tenant|workspace)\s+(?:(?:privacy|security|execution|tool|mcp|data[- ](?:export|egress))\s+)?policy\b|\b(?:privacy|security|data[- ](?:export|egress|loss prevention)|dlp)\s+(?:guard|policy|rule|restriction)\b|\bbefore\s+(?:contacting|reaching|calling|sending\s+(?:it\s+)?to)\s+(?:remembrance|the\s+(?:mcp|external service)|an?\s+external service)\b|\b(?:external|trusted)\s+service\b/i.test(
+      text,
+    );
+  // A host permission event is itself pre-transport evidence. Generic failed
+  // tool events need an explicit host/export signal so a Remembrance API 403
+  // such as an organization-policy refusal is never mislabeled as host policy.
+  if (
+    !denied ||
+    !policyContext ||
+    (!permissionEvent && !explicitPreTransportContext)
+  ) {
+    return null;
+  }
+  return {
+    denial_class: permissionEvent
+      ? "host_permission_policy"
+      : "host_execution_policy",
+    operation_class: hostPolicyOperationClass(toolName),
+    before_mcp: permissionEvent ? "yes" : "unknown",
+  };
+}
+
+function readPluginAlertState(surface, sessionId, env = process.env) {
+  const path = pluginAlertSessionPath(surface, sessionId, env);
+  if (!path) return null;
+  try {
+    const parsed = JSON.parse(
+      readSecureHookFile(path, MAX_LOCAL_PLUGIN_ALERT_BYTES),
+    );
+    if (parsed?.schema_version !== 1 || !Array.isArray(parsed?.observations)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writePluginAlertState(surface, sessionId, state, env = process.env) {
+  const path = pluginAlertSessionPath(surface, sessionId, env);
+  if (!path) return false;
+  const temporaryPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    ensureSecureHookDirectory(dirname(path));
+    writeFileSync(temporaryPath, `${JSON.stringify(state)}\n`, {
+      mode: 0o600,
+      flag: "wx",
+    });
+    renameSync(temporaryPath, path);
+    prunePluginAlertFiles(path, env);
+    return true;
+  } catch {
+    try {
+      rmSync(temporaryPath, { force: true });
+    } catch {
+      // Local policy observations are advisory and must never break the host.
+    }
+    return false;
+  }
+}
+
+function prunePluginAlertFiles(keepPath, env) {
+  const directory = pluginAlertDir(env);
+  const cutoff = Date.now() - PLUGIN_ALERT_TTL_MS;
+  try {
+    const candidates = readdirSync(directory)
+      .filter((name) => /^[a-z_]+\.[a-f0-9]{24}\.json$/.test(name))
+      .map((name) => {
+        const path = join(directory, name);
+        return { path, modified: statSync(path).mtimeMs };
+      })
+      .sort((left, right) => right.modified - left.modified);
+    for (const candidate of candidates) {
+      if (
+        candidate.path !== keepPath &&
+        (candidate.modified < cutoff ||
+          candidates.indexOf(candidate) >= PLUGIN_ALERT_LIMIT)
+      ) {
+        rmSync(candidate.path, { force: true });
+      }
+    }
+  } catch {
+    // Pruning is advisory.
+  }
+}
+
+export function recordHostPolicyDenial(
+  {
+    surface,
+    sessionId,
+    eventType = "",
+    toolName = "",
+    value = null,
+    pluginVersion = null,
+    hostVersion = null,
+  },
+  env = process.env,
+) {
+  const normalizedSurface = normalizedPluginHealthSurface(surface);
+  const classification = classifyHostPolicyDenial({
+    eventType,
+    toolName,
+    value,
+  });
+  if (!normalizedSurface || !classification) return null;
+  const now = new Date().toISOString();
+  const sessionHash = createHash("sha256")
+    .update(String(sessionId ?? "unknown"), "utf8")
+    .digest("hex")
+    .slice(0, 24);
+  const id = createHash("sha256")
+    .update(
+      [
+        normalizedSurface,
+        sessionHash,
+        classification.operation_class,
+        classification.denial_class,
+      ].join(":"),
+      "utf8",
+    )
+    .digest("hex")
+    .slice(0, 24);
+  const existing = readPluginAlertState(normalizedSurface, sessionId, env);
+  const current = existing?.observations?.find((item) => item?.id === id);
+  const observation = {
+    id,
+    denial_class: classification.denial_class,
+    operation_class: classification.operation_class,
+    before_mcp: classification.before_mcp,
+    plugin_version: safeText(pluginVersion ?? "", 64),
+    host_version: safeText(hostVersion ?? "", 64),
+    first_seen_at: current?.first_seen_at ?? now,
+    last_seen_at: now,
+    count: Math.min(999, Math.max(0, Number(current?.count) || 0) + 1),
+    alerted_at: current?.alerted_at ?? null,
+  };
+  const observations = [
+    observation,
+    ...(existing?.observations ?? []).filter((item) => item?.id !== id),
+  ]
+    .filter((item) => {
+      const seenAt = Date.parse(item?.last_seen_at ?? "");
+      return (
+        Number.isFinite(seenAt) && Date.now() - seenAt <= PLUGIN_ALERT_TTL_MS
+      );
+    })
+    .slice(0, 12);
+  const state = {
+    schema_version: 1,
+    surface: normalizedSurface,
+    session_hash: sessionHash,
+    observations,
+    updated_at: now,
+  };
+  return writePluginAlertState(normalizedSurface, sessionId, state, env)
+    ? observation
+    : null;
+}
+
+export function readPendingHostPolicyAlert(
+  surface,
+  sessionId,
+  env = process.env,
+) {
+  const state = readPluginAlertState(surface, sessionId, env);
+  return (
+    state?.observations?.find(
+      (item) =>
+        !item?.alerted_at &&
+        Date.now() - Date.parse(item?.last_seen_at ?? "") <=
+          PLUGIN_ALERT_TTL_MS,
+    ) ?? null
+  );
+}
+
+export function markHostPolicyAlertDelivered(
+  surface,
+  sessionId,
+  observationId,
+  env = process.env,
+) {
+  const state = readPluginAlertState(surface, sessionId, env);
+  if (!state) return false;
+  const now = new Date().toISOString();
+  let changed = false;
+  const observations = state.observations.map((item) => {
+    if (item?.id !== observationId || item?.alerted_at) return item;
+    changed = true;
+    return { ...item, alerted_at: now };
+  });
+  if (!changed) return false;
+  return writePluginAlertState(
+    surface,
+    sessionId,
+    { ...state, observations, updated_at: now },
+    env,
+  );
+}
+
 function normalizedPluginHealthSurface(value) {
   const surface = String(value ?? "")
     .trim()
@@ -2439,8 +3091,24 @@ export function recordPluginLifecycleHealth(
     .update(apiConfiguration.apiUrl.replace(/\/+$/, ""), "utf8")
     .digest("hex")
     .slice(0, 16);
+  const configuredEvidenceOrigin = String(
+    env?.REMEMBRANCE_PLUGIN_HEALTH_EVIDENCE_ORIGIN ?? "host_runtime",
+  )
+    .trim()
+    .toLowerCase();
+  const evidenceOrigin = [
+    "host_runtime",
+    "host_process",
+    "direct_adapter",
+  ].includes(configuredEvidenceOrigin)
+    ? configuredEvidenceOrigin
+    : "host_runtime";
+  const releaseRunId =
+    evidenceOrigin === "host_process"
+      ? safeText(env?.REMEMBRANCE_RELEASE_RUN_ID ?? "", 96)
+      : "";
   const payload = {
-    schema_version: 1,
+    schema_version: 2,
     surface: normalizedSurface,
     session_hash:
       sessionId && sessionId !== "unknown"
@@ -2465,6 +3133,8 @@ export function recordPluginLifecycleHealth(
         : "none",
     api_destination_source: apiConfiguration.source,
     api_destination_fingerprint: apiDestinationFingerprint,
+    evidence_origin: evidenceOrigin,
+    release_run_id: releaseRunId || null,
     components: {
       ...currentComponents,
       [normalizedComponent]: now,
@@ -2550,9 +3220,7 @@ export function resolveApiCredential(env = process.env) {
   }
   const environmentKey = String(env.REMEMBRANCE_API_KEY ?? "").trim();
   if (environmentKey) {
-    const explicitBinding = String(
-      env.REMEMBRANCE_API_KEY_ORIGIN ?? "",
-    ).trim();
+    const explicitBinding = String(env.REMEMBRANCE_API_KEY_ORIGIN ?? "").trim();
     const binding = explicitBinding
       ? normalizeApiUrl(explicitBinding, env)
       : { apiUrl: DEFAULT_API_URL, issue: null };
@@ -2572,9 +3240,7 @@ export function resolveApiCredential(env = process.env) {
     return { apiKey: "", source: "none" };
   }
   try {
-    const parsed = JSON.parse(
-      readSecureHookFile(path, MAX_LOCAL_CONFIG_BYTES),
-    );
+    const parsed = JSON.parse(readSecureHookFile(path, MAX_LOCAL_CONFIG_BYTES));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return unusableSharedConfigCredential();
     }
@@ -2670,9 +3336,7 @@ export function resolveApiConfiguration(env = process.env) {
     return { apiUrl: DEFAULT_API_URL, source: "default" };
   }
   try {
-    const parsed = JSON.parse(
-      readSecureHookFile(path, MAX_LOCAL_CONFIG_BYTES),
-    );
+    const parsed = JSON.parse(readSecureHookFile(path, MAX_LOCAL_CONFIG_BYTES));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return {
         apiUrl: DEFAULT_API_URL,
@@ -2737,7 +3401,10 @@ function normalizeApiUrl(value, env = process.env) {
 }
 
 function credentialForApiDestination(credential, configuration) {
-  if (!credential.apiKey || isUnusableConfigurationSource(configuration.source)) {
+  if (
+    !credential.apiKey ||
+    isUnusableConfigurationSource(configuration.source)
+  ) {
     return credential.apiKey
       ? unusableDestinationCredential()
       : { apiKey: "", source: credential.source };
@@ -2810,7 +3477,9 @@ function isPrivateDestinationHostname(hostname) {
 }
 
 function normalizeHostname(hostname) {
-  return String(hostname).replace(/^\[|\]$/g, "").toLowerCase();
+  return String(hostname)
+    .replace(/^\[|\]$/g, "")
+    .toLowerCase();
 }
 
 function readSecureHookFile(path, maxBytes) {

@@ -21,6 +21,17 @@ Restart opencode. Remembrance then appears in its tools list, adds bounded
 matching guidance to eligible model turns, observes completed use, and asks once
 for concise, redacted feedback.
 
+At session creation, the plugin performs a bounded, credential-free release
+check. If a newer verified version exists, opencode shows a notice and gives the
+agent the locally bundled setup command. The agent must ask before running it,
+and the user must restart opencode afterward. Remembrance never updates itself
+silently. Set `REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable the advisory check.
+
+Older opencode installations that predate this startup check still learn about
+a verified update on their next successful Remembrance query. The API places a
+command-free notice first in the legacy contribution directive; only this
+installed package supplies the trusted local setup command.
+
 Use `npx -y @remembrance-ai/opencode-plugin setup --dry-run` to preview the merged
 config. `opencode.json` in this package is a reference config for managed
 deployments.
@@ -74,13 +85,13 @@ link-local self-host also requires `REMEMBRANCE_ALLOW_PRIVATE_REGISTRY=true`.
 
 ## What the plugin does
 
-| Event                                | Behavior                                                      |
-| ------------------------------------ | ------------------------------------------------------------- |
+| Event                                | Behavior                                                        |
+| ------------------------------------ | --------------------------------------------------------------- |
 | `session.created`                    | Reports activation health and how to verify organization scope. |
-| `chat.message`                       | Runs the fail-open query helper for the current user turn.     |
-| `experimental.chat.system.transform` | Adds bounded Remembrance guidance before model dispatch.       |
-| `tool.execute.after`                 | Correlates query, invocation, detail, and contribution calls.  |
-| `session.idle`                       | Shows the contribution nudge once per engagement.              |
+| `chat.message`                       | Runs the fail-open query helper for the current user turn.      |
+| `experimental.chat.system.transform` | Adds bounded Remembrance guidance before model dispatch.        |
+| `tool.execute.after`                 | Correlates query, invocation, detail, and contribution calls.   |
+| `session.idle`                       | Shows the contribution nudge once per engagement.               |
 
 Set `REMEMBRANCE_AUTO_QUERY=0` to disable the query, or
 `REMEMBRANCE_AUTO_CONTRIBUTE=0` to disable the completion nudge.
@@ -90,7 +101,10 @@ Set `REMEMBRANCE_AUTO_QUERY=0` to disable the query, or
 A tenant or privacy-policy denial in the host happens before Remembrance is
 called, so it is not a Remembrance misconfiguration — the same boundary as a
 Codex tenant/privacy-policy denial, which occurs before Remembrance is reached
-and must not be reported as a Remembrance setup failure.
+and must not be reported as a Remembrance setup failure. The plugin reports one
+local, content-free alert: **Remembrance was blocked by host policy before
+reaching Remembrance. Nothing was sent. Querying remains available.** It does
+not retry or automatically create a handoff.
 
 ## Generated files
 

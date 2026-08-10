@@ -8,7 +8,10 @@
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
+  HOST_POLICY_ALERT_TEXT,
   decideStop,
+  markHostPolicyAlertDelivered,
+  readPendingHostPolicyAlert,
   recordPluginLifecycleHealth,
   reportTaskOutcomesOnStop,
   resolveApiCredential,
@@ -20,6 +23,19 @@ import { cursorSessionId } from "./record-mcp-use.mjs";
 export function handleStop(input, options = {}) {
   const env = options.env ?? process.env;
   const sessionId = cursorSessionId(input, env);
+  const readPolicyAlert =
+    options.readPendingHostPolicyAlert ?? readPendingHostPolicyAlert;
+  const policyAlert = readPolicyAlert("cursor", sessionId, env);
+  if (policyAlert) {
+    const markDelivered =
+      options.markHostPolicyAlertDelivered ?? markHostPolicyAlertDelivered;
+    markDelivered("cursor", sessionId, policyAlert.id, env);
+    return {
+      allow: false,
+      why: "host_policy_denial",
+      output: { followup_message: HOST_POLICY_ALERT_TEXT },
+    };
+  }
   const loopCount = Number(input?.loop_count ?? 0);
   const decision = decideStop(
     {

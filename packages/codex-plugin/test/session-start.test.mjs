@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { handleSessionStart } from "../scripts/session-start.mjs";
 
 describe("Codex SessionStart health hook", () => {
-  it("records startup and tells the agent how to verify complete activation", () => {
+  it("records startup and tells the agent how to verify complete activation", async () => {
     const recordHealth = vi.fn(() => true);
-    const output = handleSessionStart(
+    const output = await handleSessionStart(
       {
         codex_version: "0.145.0-alpha.30",
         turn_id: "session-health-check",
@@ -13,6 +13,7 @@ describe("Codex SessionStart health hook", () => {
         env: { REMEMBRANCE_API_KEY: "rk_never_print" },
         pluginVersion: "0.1.37",
         recordHealth,
+        checkUpdate: vi.fn(async () => null),
       },
     );
 
@@ -42,14 +43,19 @@ describe("Codex SessionStart health hook", () => {
     expect(JSON.stringify(output)).not.toContain("rk_never_print");
   });
 
-  it("falls back to anonymous public access without failing startup", () => {
+  it("falls back to anonymous public access without failing startup", async () => {
     const recordHealth = vi.fn(() => false);
     const env = {
       XDG_CONFIG_HOME: `/tmp/remembrance-codex-session-test-${process.pid}`,
     };
-    const output = handleSessionStart(
+    const output = await handleSessionStart(
       {},
-      { env, pluginVersion: "unknown", recordHealth },
+      {
+        env,
+        pluginVersion: "unknown",
+        recordHealth,
+        checkUpdate: vi.fn(async () => null),
+      },
     );
     expect(recordHealth).toHaveBeenCalledWith(
       expect.objectContaining({ credentialSource: "none" }),
@@ -60,17 +66,43 @@ describe("Codex SessionStart health hook", () => {
     );
   });
 
-  it("does not reset lifecycle health when Codex compacts an active turn", () => {
+  it("does not reset lifecycle health when Codex compacts an active turn", async () => {
     const recordHealth = vi.fn();
-    const output = handleSessionStart(
+    const checkUpdate = vi.fn();
+    const output = await handleSessionStart(
       {
         source: "compact",
         session_id: "active-task",
       },
-      { env: {}, pluginVersion: "0.1.53", recordHealth },
+      { env: {}, pluginVersion: "0.1.53", recordHealth, checkUpdate },
     );
 
     expect(recordHealth).not.toHaveBeenCalled();
+    expect(checkUpdate).not.toHaveBeenCalled();
     expect(output.hookSpecificOutput.hookEventName).toBe("SessionStart");
+  });
+
+  it("gives the agent a locally authored update command and restart boundary", async () => {
+    const output = await handleSessionStart(
+      { session_id: "update-session" },
+      {
+        env: { REMEMBRANCE_API_KEY: "rk_never_print" },
+        pluginVersion: "0.1.54",
+        recordHealth: vi.fn(),
+        checkUpdate: vi.fn(async (input) => ({
+          current_version: input.currentVersion,
+          latest_version: "0.1.55",
+          notice:
+            "Remembrance update available. Ask permission, run the trusted local command, then fully quit and reopen Codex.",
+        })),
+      },
+    );
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "Remembrance update available",
+    );
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "fully quit and reopen Codex",
+    );
+    expect(JSON.stringify(output)).not.toContain("rk_never_print");
   });
 });

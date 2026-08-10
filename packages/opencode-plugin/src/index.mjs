@@ -37,6 +37,8 @@
 import { readFileSync } from "node:fs";
 import process from "node:process";
 import {
+  HOST_POLICY_ALERT_TEXT,
+  checkForClientUpdate,
   clearHighMatchSurfaceForExplicitSelection,
   clearHighMatchSurfaceIfOpened,
   debugLog,
@@ -44,11 +46,13 @@ import {
   directSelectionFromResponse,
   highMatchFromResponse,
   markCurrentEngagementHandled,
+  markHostPolicyAlertDelivered,
   recordDirectiveFollowThroughForTool,
   recordDirectSelectionSurface,
   recordDirectiveSurface,
   recordHighMatchSurface,
   recordPluginLifecycleHealth,
+  recordHostPolicyDenial,
   recordRegistryUse,
   recordTaskEligibility,
   recordValueEpisodeSurface,
@@ -182,6 +186,12 @@ export function toolNameFromEvent(input, output) {
     input?.toolName,
     output?.tool,
     output?.toolName,
+    input?.properties?.tool,
+    input?.properties?.toolName,
+    input?.properties?.permission,
+    output?.properties?.tool,
+    output?.properties?.toolName,
+    output?.properties?.permission,
   ]) {
     if (typeof candidate === "string" && candidate.trim()) {
       return candidate;
@@ -221,11 +231,36 @@ export const Remembrance = async (context = {}) => {
   const queriedMessages = new Set();
   const messageSessions = new Map();
   const pendingGuidance = new Map();
+  const pendingClientUpdates = new Map();
   const userMessages = new Map();
   const pendingTextParts = new Map();
 
+  async function observeHostPolicyDenial({
+    eventType,
+    sessionId,
+    toolName,
+    value,
+  }) {
+    const observation = recordHostPolicyDenial(
+      {
+        surface: SURFACE,
+        sessionId,
+        eventType,
+        toolName,
+        value,
+        pluginVersion: version,
+      },
+      env,
+    );
+    if (!observation) return false;
+    await notify(client, HOST_POLICY_ALERT_TEXT, "error");
+    markHostPolicyAlertDelivered(SURFACE, sessionId, observation.id, env);
+    return true;
+  }
+
   function clearSessionState(sessionId) {
     pendingGuidance.delete(sessionId);
+    pendingClientUpdates.delete(sessionId);
     for (const [messageId, trackedSessionId] of messageSessions) {
       if (trackedSessionId !== sessionId) continue;
       messageSessions.delete(messageId);
@@ -265,10 +300,24 @@ export const Remembrance = async (context = {}) => {
     try {
       const sessionId = sessionIdFromEvent(event, event);
       recordLifecycle("session_start", sessionId);
+      const clientUpdate = await (
+        context.clientUpdateCheck ?? checkForClientUpdate
+      )(
+        {
+          surface: SURFACE,
+          currentVersion: version,
+        },
+        env,
+      ).catch(() => null);
+      if (clientUpdate?.notice) {
+        pendingClientUpdates.set(sessionId, clientUpdate.notice);
+      }
       await notify(
         client,
-        `Remembrance ${version} is active. Relevant memory is added before eligible turns; ` +
-          "run_connection_doctor verifies the active connection and gives one exact next step without exposing the key.",
+        clientUpdate?.latest_version
+          ? `Remembrance ${version} is active; ${clientUpdate.latest_version} is available. The agent will ask before updating, and the host must be restarted afterward.`
+          : `Remembrance ${version} is active. Relevant memory is added before eligible turns; ` +
+              "run_connection_doctor verifies the active connection and gives one exact next step without exposing the key.",
       );
     } catch (error) {
       debugLog(env, "opencode_session_created_failed", {
@@ -334,7 +383,13 @@ export const Remembrance = async (context = {}) => {
     try {
       const sessionId = sessionIdFromEvent(input, output);
       const guidance = pendingGuidance.get(sessionId);
-      if (!guidance || !Array.isArray(output?.system)) return;
+      const updateNotice = pendingClientUpdates.get(sessionId);
+      if (!Array.isArray(output?.system)) return;
+      if (updateNotice) {
+        output.system.push(updateNotice);
+        pendingClientUpdates.delete(sessionId);
+      }
+      if (!guidance) return;
       output.system.push(guidance.text);
       pendingGuidance.delete(sessionId);
       // Delivery happened: only now is the guidance actually in the model's
@@ -453,6 +508,22 @@ export const Remembrance = async (context = {}) => {
           await handleSessionIdle(event);
           return;
         }
+        if (
+          event.type === "permission.replied" ||
+          event.type === "session.error"
+        ) {
+          const serialized = JSON.stringify(event);
+          const inferredTool = /remembrance/i.test(serialized)
+            ? toolNameFromEvent(event, event) || "remembrance"
+            : toolNameFromEvent(event, event);
+          await observeHostPolicyDenial({
+            eventType: event.type,
+            sessionId: sessionIdFromEvent(event, event),
+            toolName: inferredTool,
+            value: event,
+          });
+          return;
+        }
         if (event.type === "session.deleted") {
           clearSessionState(sessionIdFromEvent(event, event));
         }
@@ -468,11 +539,19 @@ export const Remembrance = async (context = {}) => {
     "tool.execute.after": async (input, output) => {
       try {
         const sessionId = sessionIdFromEvent(input, output);
-        recordLifecycle("tool_observer", sessionId);
         const tool = toolNameFromEvent(input, output);
         if (!tool) return;
         const normalizedTool = tool.toLowerCase();
-        if (toolResponseIndicatesFailure(output)) return;
+        if (toolResponseIndicatesFailure(output)) {
+          await observeHostPolicyDenial({
+            eventType: "tool.execute.after",
+            sessionId,
+            toolName: tool,
+            value: output,
+          });
+          return;
+        }
+        recordLifecycle("tool_observer", sessionId);
         if (normalizedTool.endsWith("query_skills")) {
           if (queryResponseHasMatches(output)) {
             recordRegistryUse(sessionId, env);

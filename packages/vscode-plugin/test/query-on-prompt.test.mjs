@@ -146,7 +146,9 @@ describe("VS Code prompt hook", () => {
       },
     );
     expect(headers[0]).toMatchObject({
-      "user-agent": "@remembrance/vscode-plugin",
+      "user-agent": expect.stringMatching(
+        /^@remembrance\/vscode-plugin\/\d+\.\d+\.\d+$/,
+      ),
     });
   });
 

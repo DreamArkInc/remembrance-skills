@@ -20,6 +20,7 @@ describe("OpenClaw plugin registration health", () => {
     vi.stubEnv("HOME", home);
     vi.stubEnv("USERPROFILE", home);
     vi.stubEnv("REMEMBRANCE_API_KEY", "");
+    vi.stubEnv("REMEMBRANCE_CLIENT_UPDATE_CHECK", "0");
   });
 
   afterEach(() => {
@@ -88,6 +89,31 @@ describe("OpenClaw plugin registration health", () => {
       credential_source: "none",
       components: { session_start: expect.any(String) },
     });
+  });
+
+  it("delivers an available update to the agent once per session", async () => {
+    const on = vi.fn();
+    const clientUpdateCheck = vi.fn(async () => ({
+      current_version: "0.1.54",
+      latest_version: "0.1.55",
+      notice:
+        "Remembrance update available. Ask permission, update OpenClaw, restart the Gateway, and begin a new session.",
+    }));
+    plugin.register({
+      on,
+      logger: { info: vi.fn() },
+      registerCli: vi.fn(),
+      clientUpdateCheck,
+    });
+    const prePrompt = on.mock.calls.find(
+      ([name]) => name === "before_prompt_build",
+    )[1];
+    const event = { prompt: "", context: { sessionId: "update-session" } };
+    await expect(prePrompt(event)).resolves.toMatchObject({
+      appendSystemContext: expect.stringContaining("restart the Gateway"),
+    });
+    await expect(prePrompt(event)).resolves.toBeUndefined();
+    expect(clientUpdateCheck).toHaveBeenCalledOnce();
   });
 
   it("preserves host config while enabling hooks and the installed MCP path", () => {

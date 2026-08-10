@@ -50,6 +50,8 @@ import { accessSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import process from "node:process";
 import {
+  HOST_POLICY_ALERT_TEXT,
+  checkForClientUpdate,
   clearHighMatchSurfaceIfOpened,
   clearHighMatchSurfaceForExplicitSelection,
   contributionReason,
@@ -58,6 +60,8 @@ import {
   directSelectionFromResponse,
   highMatchFromResponse,
   markCurrentEngagementHandled,
+  markHostPolicyAlertDelivered,
+  readPendingHostPolicyAlert,
   readRegistryUseCount,
   readTaskEligibilityCount,
   recordDirectiveFollowThroughForTool,
@@ -65,6 +69,7 @@ import {
   recordDirectiveSurface,
   recordHighMatchSurface,
   recordPluginLifecycleHealth,
+  recordHostPolicyDenial,
   recordRegistryUse,
   queryResponseHasMatches,
   recordTaskEligibility,
@@ -179,6 +184,21 @@ export async function handlePrePrompt(event, options = {}) {
     env,
   );
   try {
+    let updateNotice = null;
+    if (
+      options.clientUpdatePromise &&
+      !options.updateDeliveredSessions?.has(sessionId)
+    ) {
+      const clientUpdate = await options.clientUpdatePromise.catch(() => null);
+      if (clientUpdate?.notice) {
+        updateNotice = clientUpdate.notice;
+        options.updateDeliveredSessions?.add(sessionId);
+        if (options.updateDeliveredSessions?.size > 512) {
+          const oldest = options.updateDeliveredSessions.values().next().value;
+          if (oldest) options.updateDeliveredSessions.delete(oldest);
+        }
+      }
+    }
     const prompt = promptFromEvent(event);
     const result = await runPromptHook(prompt, {
       env,
@@ -190,7 +210,7 @@ export async function handlePrePrompt(event, options = {}) {
       userAgent: "@remembrance/openclaw-plugin",
     });
     if (!result) {
-      return undefined;
+      return updateNotice ? { appendSystemContext: updateNotice } : undefined;
     }
     if (result.eligible) {
       const recordEligibility =
@@ -210,7 +230,11 @@ export async function handlePrePrompt(event, options = {}) {
     }
     // OpenClaw injects extra system context via appendSystemContext on the
     // before_prompt_build / before_model_resolve result.
-    return { appendSystemContext: result.context };
+    return {
+      appendSystemContext: updateNotice
+        ? `${updateNotice}\n\n${result.context}`
+        : result.context,
+    };
   } catch (error) {
     debugLog(env, "pre_prompt_error", { error: errorName(error) }, options);
     return undefined;
@@ -240,7 +264,25 @@ export async function handleAfterToolCall(event, options = {}) {
     event?.result?.isError ||
     toolResponseIndicatesFailure(response)
   ) {
-    return { cleared: false, why: "tool_failed" };
+    const toolName = event?.toolName ?? event?.tool_name ?? "";
+    const recordDenial =
+      options.recordHostPolicyDenial ?? recordHostPolicyDenial;
+    const observation = recordDenial(
+      {
+        surface: "openclaw",
+        sessionId,
+        eventType: "after_tool_call",
+        toolName,
+        value: event,
+        pluginVersion: pluginVersion(),
+      },
+      env,
+    );
+    return {
+      cleared: false,
+      why: "tool_failed",
+      ...(observation ? { host_policy_denial: true } : {}),
+    };
   }
   const toolName = event?.toolName ?? event?.tool_name ?? "";
   const normalizedToolName = String(toolName).toLowerCase();
@@ -360,6 +402,20 @@ export function handleCompletion(event, options = {}) {
   const env = options.env ?? process.env;
   try {
     const sessionId = sessionIdFromEvent(event);
+    const readPolicyAlert =
+      options.readPendingHostPolicyAlert ?? readPendingHostPolicyAlert;
+    const policyAlert = readPolicyAlert("openclaw", sessionId, env);
+    if (policyAlert) {
+      const markDelivered =
+        options.markHostPolicyAlertDelivered ?? markHostPolicyAlertDelivered;
+      markDelivered("openclaw", sessionId, policyAlert.id, env);
+      return {
+        action: "revise",
+        reason: HOST_POLICY_ALERT_TEXT,
+        retry: { instruction: HOST_POLICY_ALERT_TEXT, maxAttempts: 1 },
+        why: "host_policy_denial",
+      };
+    }
     // Reuse the shared decideStop by mapping the OpenClaw event onto the input
     // shape the core expects. OpenClaw has no "stop_hook_active" flag; loop
     // safety comes from the prompted-count sentinel the core already applies
@@ -553,6 +609,16 @@ const plugin = definePluginEntry({
         process.env,
       );
     }
+    const clientUpdatePromise = activatesRuntime
+      ? (api?.clientUpdateCheck ?? checkForClientUpdate)(
+          {
+            surface: "openclaw",
+            currentVersion: pluginVersion(),
+          },
+          process.env,
+        ).catch(() => null)
+      : Promise.resolve(null);
+    const updateDeliveredSessions = new Set();
     const auth =
       credential.source === "none"
         ? "public registry access"
@@ -564,9 +630,15 @@ const plugin = definePluginEntry({
     }
     registerSetupCli(api);
     // PRE-prompt: inject matching skills/resources before the model turn.
-    api.on("before_prompt_build", async (event) => handlePrePrompt(event), {
-      priority: 50,
-    });
+    api.on(
+      "before_prompt_build",
+      async (event) =>
+        handlePrePrompt(event, {
+          clientUpdatePromise,
+          updateDeliveredSessions,
+        }),
+      { priority: 50 },
+    );
     api.on("after_tool_call", async (event) => handleAfterToolCall(event), {
       priority: 50,
     });

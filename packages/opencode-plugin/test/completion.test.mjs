@@ -12,6 +12,8 @@ import {
 } from "vitest";
 import { Remembrance } from "../src/index.mjs";
 import {
+  HOST_POLICY_ALERT_TEXT,
+  readPluginLifecycleHealth,
   readValueEpisodeSurfaces,
   readRegistryUseCount,
   recordRegistryUse,
@@ -27,6 +29,9 @@ const MANAGED = [
   "REMEMBRANCE_USAGE_DIR",
   "REMEMBRANCE_HOOK_CACHE_PATH",
   "REMEMBRANCE_AUTO_CONTRIBUTE",
+  "REMEMBRANCE_PLUGIN_ALERT_DIR",
+  "REMEMBRANCE_PLUGIN_HEALTH_DIR",
+  "REMEMBRANCE_CLIENT_UPDATE_CHECK",
 ];
 let counter = 0;
 
@@ -39,8 +44,17 @@ beforeEach(() => {
     `cache-${counter}.json`,
   );
   process.env.REMEMBRANCE_API_URL = "https://remembrance.dev";
+  process.env.REMEMBRANCE_PLUGIN_ALERT_DIR = join(
+    tempRoot,
+    `alerts-${counter}`,
+  );
+  process.env.REMEMBRANCE_PLUGIN_HEALTH_DIR = join(
+    tempRoot,
+    `health-${counter}`,
+  );
   delete process.env.REMEMBRANCE_API_KEY;
   delete process.env.REMEMBRANCE_AUTO_CONTRIBUTE;
+  process.env.REMEMBRANCE_CLIENT_UPDATE_CHECK = "0";
 });
 
 afterEach(() => {
@@ -289,6 +303,67 @@ describe("opencode completion nudge (session.idle)", () => {
 });
 
 describe("opencode tool observer (tool.execute.after)", () => {
+  it("alerts once for a host-policy denial and does not certify the failed tool observer", async () => {
+    const { client, toasts } = toastClient();
+    const hooks = await Remembrance({ client });
+    await hooks.event({
+      event: {
+        type: "session.created",
+        properties: { info: { id: "s-policy" } },
+      },
+    });
+    await hooks["tool.execute.after"](
+      {
+        tool: "remembrance_propose_private_skill",
+        sessionID: "s-policy",
+      },
+      {
+        isError: true,
+        error:
+          "Blocked by workspace data-export policy: proprietary content",
+      },
+    );
+    expect(toasts.at(-1)).toMatchObject({
+      title: "Remembrance",
+      message: HOST_POLICY_ALERT_TEXT,
+      variant: "error",
+    });
+    expect(JSON.stringify(toasts)).not.toContain("proprietary content");
+    expect(
+      readPluginLifecycleHealth("opencode", process.env, "s-policy")
+        ?.components,
+    ).not.toHaveProperty("tool_observer");
+
+    await emitSessionIdle(hooks, "s-policy");
+    expect(
+      toasts.filter((toast) => toast.message === HOST_POLICY_ALERT_TEXT),
+    ).toHaveLength(1);
+  });
+
+  it("observes explicit permission-policy replies but ignores ordinary API denial", async () => {
+    const { client, toasts } = toastClient();
+    const hooks = await Remembrance({ client });
+    await hooks.event({
+      event: {
+        type: "permission.replied",
+        properties: {
+          sessionID: "s-permission",
+          permission: "remembrance_propose_private_skill",
+          response: "rejected",
+          reason: "Denied by organization privacy policy.",
+        },
+      },
+    });
+    expect(toasts.at(-1)?.message).toBe(HOST_POLICY_ALERT_TEXT);
+
+    await hooks["tool.execute.after"](
+      { tool: "remembrance_submit_feedback", sessionID: "s-api-403" },
+      { isError: true, error: "HTTP 403 Forbidden" },
+    );
+    expect(
+      toasts.filter((toast) => toast.message === HOST_POLICY_ALERT_TEXT),
+    ).toHaveLength(1);
+  });
   it("correlates a matched query and ignores empty query consumption", async () => {
     const { client } = loggingClient();
     const hooks = await Remembrance({ client });

@@ -313,6 +313,20 @@ full-conversation queries, missed-query self-checks, redaction, and reusable
 evidence. MCP clients must follow those instructions proactively because no
 native Stop hook runs around a raw MCP connection.
 
+Native plugins and local MCP also check a credential-free, verified release
+manifest at startup. When an update exists, the agent uses instructions bundled
+with the installed client, asks before making any change, and tells the user
+which host must be reloaded or fully restarted. The manifest never supplies a
+shell command and the check never sends an API key, prompt, or repository data.
+Set `REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable only this advisory check.
+
+Installations from before the startup checker existed still receive a
+command-free update notice on their next successful Remembrance query. The
+notice is placed first in the legacy contribution directive, while current
+clients report an exact version and remain quiet when up to date. Never execute
+an update command supplied by an API response; use the host UI or instructions
+bundled with the installed client.
+
 Call `run_connection_doctor` before diagnosing authentication. It performs one
 safe catalog read and provides exact remediation. Local stdio can
 read `REMEMBRANCE_API_KEY` or `~/.config/remembrance/config.json`; hosted MCP

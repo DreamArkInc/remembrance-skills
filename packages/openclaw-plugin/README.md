@@ -81,6 +81,18 @@ level fields. Do not conclude that OpenClaw is
 anonymous from an unset `REMEMBRANCE_API_KEY` or an anonymous curl/browser
 probe; those do not test the bundled plugin process.
 
+When the plugin runtime starts, it performs a bounded, credential-free release
+check. If a newer verified version exists, the agent asks before running
+`openclaw plugins update remembrance` and `openclaw remembrance setup`, then
+tells the user to restart the Gateway unless the managed reload already did so
+and to begin a new session. Remembrance never updates silently. Set
+`REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable the advisory check.
+
+OpenClaw installations from before this startup check existed still learn about
+a verified update on their next successful Remembrance query. The API places a
+command-free notice first in the legacy contribution directive; only this
+installed plugin supplies the trusted local update commands.
+
 ### Private repository contributions
 
 After the organization approves Remembrance as a destination, use
@@ -88,7 +100,10 @@ After the organization approves Remembrance as a destination, use
 organization key and can only create a private review candidate. OpenClaw's
 conversation access setting lets the plugin observe prompts; it does not
 override a gateway, sandbox, or enterprise egress denial. Never retry denied
-private content through a different network transport.
+private content through a different network transport. On a classified denial,
+the plugin reports one local, content-free alert: **Remembrance was blocked by
+host policy before reaching Remembrance. Nothing was sent. Querying remains
+available.**
 
 For a managed Gateway, add `remembrance` to `plugins.allow`, keep it out of
 `plugins.deny`, enable `plugins.entries.remembrance`, and retain
@@ -114,10 +129,11 @@ key, generic `propose_skill_idea` stays in the private review queue. Never
 remove or bypass the key to force a public candidate; use reviewed public
 propagation after private review.
 
-The bundled local MCP server exposes `queue_private_skill_import` for that
-case. It contacts no network and writes a mode-0600 JSON handoff under the
-user's fixed Remembrance state directory. An organization admin uploads the
-file at **Dashboard > Skills > Import**, and each skill enters the standard
+The plugin does not automatically create a handoff. Only when an organization
+admin explicitly requests one, the bundled local MCP server exposes
+`queue_private_skill_import`. It contacts no network and writes a mode-0600 JSON
+handoff under the user's fixed Remembrance state directory. The admin can upload
+the file at **Dashboard > Skills > Import**, where each skill enters the normal
 private verification queue. If only the skill bundle is available, run
 `skills/remembrancer/scripts/queue-private-skill-import.mjs` instead. The agent
 must not report a successful submission until the dashboard returns an import

@@ -307,6 +307,42 @@ describe("Cursor afterMCPExecution hook", () => {
     expect(recordRegistryUse).not.toHaveBeenCalled();
   });
 
+  it("records a classified host-policy failure without treating ordinary 403s as policy", async () => {
+    const recordHostPolicyDenial = vi.fn(() => ({ id: "policy-1" }));
+    await expect(
+      handleMcpUse(
+        {
+          tool_name: "mcp__remembrance__propose_private_skill",
+          conversation_id: "conv_policy",
+          isError: true,
+          error: "Blocked by workspace data-export policy.",
+        },
+        { env: {}, recordHostPolicyDenial },
+      ),
+    ).resolves.toMatchObject({ kind: "failed" });
+    expect(recordHostPolicyDenial).toHaveBeenCalledWith(
+      expect.objectContaining({
+        surface: "cursor",
+        sessionId: "conv_policy",
+        eventType: "afterMCPExecution",
+        toolName: "propose_private_skill",
+      }),
+      {},
+    );
+
+    const ignored = vi.fn(() => null);
+    await handleMcpUse(
+      {
+        tool_name: "mcp__remembrance__submit_feedback",
+        conversation_id: "conv_403",
+        isError: true,
+        error: "HTTP 403 Forbidden",
+      },
+      { env: {}, recordHostPolicyDenial: ignored },
+    );
+    expect(ignored).toHaveBeenCalledOnce();
+  });
+
   it("marks the current use as handled after an explicit contribution", async () => {
     const writePromptedCount = vi.fn();
     const result = await handleMcpUse(

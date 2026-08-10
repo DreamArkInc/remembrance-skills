@@ -90,7 +90,14 @@ var AGENT_HOSTS = [
     public_mirror: true,
     client_release: true,
     release_smoke: true,
-    release_gate: "host",
+    release_evidence: [
+      "artifact_exact",
+      "adapter_contract",
+      "transport_contract",
+      "host_discovery",
+      "host_process",
+      "authenticated_tool"
+    ],
     plugin: true,
     hooks: {
       session_start: true,
@@ -110,7 +117,12 @@ var AGENT_HOSTS = [
     public_mirror: true,
     client_release: true,
     release_smoke: true,
-    release_gate: "host",
+    release_evidence: [
+      "artifact_exact",
+      "adapter_contract",
+      "transport_contract",
+      "host_discovery"
+    ],
     plugin: true,
     hooks: {
       session_start: true,
@@ -130,7 +142,12 @@ var AGENT_HOSTS = [
     public_mirror: true,
     client_release: true,
     release_smoke: true,
-    release_gate: "source_contract",
+    release_evidence: [
+      "artifact_exact",
+      "adapter_contract",
+      "transport_contract",
+      "source_contract"
+    ],
     plugin: true,
     hooks: {
       session_start: true,
@@ -150,7 +167,12 @@ var AGENT_HOSTS = [
     public_mirror: true,
     client_release: true,
     release_smoke: true,
-    release_gate: "host",
+    release_evidence: [
+      "artifact_exact",
+      "adapter_contract",
+      "transport_contract",
+      "host_discovery"
+    ],
     plugin: true,
     hooks: {
       session_start: true,
@@ -170,7 +192,12 @@ var AGENT_HOSTS = [
     public_mirror: true,
     client_release: true,
     release_smoke: true,
-    release_gate: "source_contract",
+    release_evidence: [
+      "artifact_exact",
+      "adapter_contract",
+      "transport_contract",
+      "source_contract"
+    ],
     plugin: true,
     hooks: {
       session_start: true,
@@ -190,7 +217,14 @@ var AGENT_HOSTS = [
     public_mirror: true,
     client_release: true,
     release_smoke: true,
-    release_gate: "host",
+    release_evidence: [
+      "artifact_exact",
+      "adapter_contract",
+      "transport_contract",
+      "host_discovery",
+      "host_process",
+      "authenticated_tool"
+    ],
     plugin: true,
     hooks: {
       session_start: true,
@@ -210,7 +244,7 @@ var AGENT_HOSTS = [
     public_mirror: false,
     client_release: true,
     release_smoke: true,
-    release_gate: "transport",
+    release_evidence: ["artifact_exact", "transport_contract"],
     plugin: false,
     hooks: {
       session_start: false,
@@ -230,7 +264,7 @@ var AGENT_HOSTS = [
     public_mirror: false,
     client_release: false,
     release_smoke: true,
-    release_gate: "transport",
+    release_evidence: ["transport_contract"],
     plugin: false,
     hooks: {
       session_start: false,
@@ -4397,6 +4431,182 @@ var clientHealthReportSchema = external_exports.object({
   }
 });
 
+// ../core/src/client-release.ts
+var CLIENT_RELEASE_SCHEMA_VERSION = "1";
+var CODEX_UPDATE_COMMAND = [
+  'CODEX_CLI="${CODEX_CLI:-$(command -v codex || true)}"',
+  '[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/ChatGPT.app/Contents/Resources/codex"',
+  '[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/Codex.app/Contents/Resources/codex"',
+  `[ -x "$CODEX_CLI" ] || { printf '%s\\n' "Codex CLI not found. Install the Codex CLI, or update the ChatGPT desktop app, then try again." >&2; exit 1; }`,
+  '"$CODEX_CLI" plugin marketplace upgrade remembrance',
+  '"$CODEX_CLI" plugin add remembrance@remembrance --json'
+].join("\n");
+var CLIENT_UPDATE_GUIDANCE = {
+  codex: {
+    surface: "codex",
+    host_name: "Codex",
+    command: CODEX_UPDATE_COMMAND,
+    update_action: "Ask the user for permission to update Remembrance. If approved, run the bundled Codex update command exactly as shown.",
+    restart_action: "After the command succeeds, tell the user to fully quit and reopen Codex. The current process continues using the installed version until restart."
+  },
+  claude_code: {
+    surface: "claude_code",
+    host_name: "Claude Code",
+    command: "claude plugin marketplace update remembrance\nclaude plugin update remembrance@remembrance",
+    update_action: "Ask the user for permission to update Remembrance. If approved, run the bundled Claude Code update command exactly as shown.",
+    restart_action: "After the command succeeds, tell the user to run /reload-plugins or fully quit and reopen Claude Code. The current plugin process remains on the installed version until reload or restart."
+  },
+  cursor: {
+    surface: "cursor",
+    host_name: "Cursor",
+    command: null,
+    update_action: "Tell the user to open Cursor settings, refresh the marketplace that provides Remembrance, and choose Update for the Remembrance plugin.",
+    restart_action: "After Cursor reports that the update completed, tell the user to fully quit and reopen Cursor. The current process continues using the installed version until restart."
+  },
+  openclaw: {
+    surface: "openclaw",
+    host_name: "OpenClaw",
+    command: "openclaw plugins update remembrance\nopenclaw remembrance setup",
+    update_action: "Ask the user for permission to update Remembrance. If approved, run the bundled OpenClaw update and setup commands exactly as shown.",
+    restart_action: "After the commands succeed, tell the user to restart the OpenClaw Gateway unless its managed reload already restarted it, then begin a new agent session."
+  },
+  vs_code: {
+    surface: "vs_code",
+    host_name: "VS Code",
+    command: null,
+    update_action: "Tell the user to refresh the marketplace or managed source that provides Remembrance and update the Remembrance plugin there.",
+    restart_action: "After the update completes, tell the user to reload the VS Code window or fully quit and reopen VS Code. The current extension host continues using the installed version until reload or restart."
+  },
+  opencode: {
+    surface: "opencode",
+    host_name: "opencode",
+    command: "npx -y @remembrance-ai/opencode-plugin@latest setup",
+    update_action: "Ask the user for permission to update Remembrance. If approved, run the bundled opencode setup command exactly as shown.",
+    restart_action: "After the command succeeds, tell the user to fully quit and reopen opencode. The current process continues using the installed version until restart."
+  },
+  mcp: {
+    surface: "mcp",
+    host_name: "MCP client",
+    command: null,
+    update_action: "Ask the user for permission to update the Remembrance MCP registration. If approved, inspect only that registration: an unpinned npx @remembrance-ai/mcp-server command needs no edit, while a pinned package version should be changed to the published latest version. Do not edit unrelated MCP configuration.",
+    restart_action: "After updating the registration, tell the user to fully restart the host that launches the MCP server. The current MCP process continues using the installed version until restart."
+  }
+};
+var CLIENT_RELEASE_SURFACES = AGENT_HOSTS.filter(
+  (host) => host.client_release
+).map((host) => host.surface);
+function parseStableClientVersion(value) {
+  if (typeof value !== "string") return null;
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(value);
+  if (!match) return null;
+  const parts = match.slice(1).map(Number);
+  if (parts.length !== 3 || parts.some((part) => !Number.isSafeInteger(part) || part > 9999)) {
+    return null;
+  }
+  return parts;
+}
+function compareClientVersions(left, right) {
+  const leftParts = parseStableClientVersion(left);
+  const rightParts = parseStableClientVersion(right);
+  if (!leftParts || !rightParts) {
+    throw new Error(
+      "Client versions must use stable major.minor.patch syntax."
+    );
+  }
+  for (let index = 0; index < 3; index += 1) {
+    const difference = leftParts[index] - rightParts[index];
+    if (difference !== 0) return Math.sign(difference);
+  }
+  return 0;
+}
+function parseClientReleaseManifest(value) {
+  if (!isRecord(value)) return null;
+  if (value.schema_version !== CLIENT_RELEASE_SCHEMA_VERSION) return null;
+  const latestVersion = value.latest_version;
+  if (typeof latestVersion !== "string" || !parseStableClientVersion(latestVersion)) {
+    return null;
+  }
+  if (typeof value.published_at !== "string" || !isCanonicalIsoTimestamp(value.published_at)) {
+    return null;
+  }
+  if (!Array.isArray(value.surfaces)) return null;
+  const validSurfaces = new Set(CLIENT_RELEASE_SURFACES);
+  const surfaces = value.surfaces.filter(
+    (surface) => typeof surface === "string" && validSurfaces.has(surface)
+  );
+  if (surfaces.length !== value.surfaces.length || new Set(surfaces).size !== surfaces.length) {
+    return null;
+  }
+  return {
+    schema_version: CLIENT_RELEASE_SCHEMA_VERSION,
+    latest_version: latestVersion,
+    published_at: new Date(value.published_at).toISOString(),
+    surfaces
+  };
+}
+function resolveClientUpdateStatus(input) {
+  if (!parseStableClientVersion(input.currentVersion)) {
+    return {
+      status: "unavailable",
+      current_version: input.currentVersion,
+      reason: "invalid_current_version"
+    };
+  }
+  const manifest = parseClientReleaseManifest(input.manifest);
+  if (!manifest) {
+    return {
+      status: "unavailable",
+      current_version: input.currentVersion,
+      reason: "invalid_manifest"
+    };
+  }
+  if (!manifest.surfaces.includes(input.surface)) {
+    return {
+      status: "unavailable",
+      current_version: input.currentVersion,
+      reason: "surface_not_published"
+    };
+  }
+  if (compareClientVersions(manifest.latest_version, input.currentVersion) <= 0) {
+    return {
+      status: "current",
+      current_version: input.currentVersion,
+      latest_version: manifest.latest_version
+    };
+  }
+  const guidance = CLIENT_UPDATE_GUIDANCE[input.surface];
+  return {
+    status: "update_available",
+    current_version: input.currentVersion,
+    latest_version: manifest.latest_version,
+    guidance,
+    notice: clientUpdateNotice({
+      currentVersion: input.currentVersion,
+      latestVersion: manifest.latest_version,
+      guidance
+    })
+  };
+}
+function clientUpdateNotice(input) {
+  const command = input.guidance.command ? `
+Trusted update command bundled with this installed client:
+${input.guidance.command}` : "";
+  return [
+    `Remembrance update available: installed ${input.currentVersion}, published ${input.latestVersion}.`,
+    input.guidance.update_action,
+    command,
+    input.guidance.restart_action,
+    "Do not claim the new version is active until a fresh process reports it."
+  ].filter(Boolean).join("\n");
+}
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function isCanonicalIsoTimestamp(value) {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
 // ../core/src/client-health-alerts.ts
 var secureWebhookUrlSchema = external_exports.string().trim().url().max(2048).superRefine((value, context) => {
   let parsed;
@@ -4486,6 +4696,13 @@ function isUnsafeDestinationHostname(hostname) {
 }
 
 // ../core/src/connection-doctor.ts
+var HOST_POLICY_OPERATION_CLASSES = /* @__PURE__ */ new Set([
+  "query",
+  "private_contribution",
+  "contribution",
+  "feedback",
+  "other"
+]);
 var CODEX_HOOK_REVIEW_COMMAND = `CODEX_CLI="\${CODEX_CLI:-$(command -v codex || true)}"; [ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/ChatGPT.app/Contents/Resources/codex"; [ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/Codex.app/Contents/Resources/codex"; [ -x "$CODEX_CLI" ] || { printf '%s\\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, then try again." >&2; exit 1; }; "$CODEX_CLI"`;
 function codexHookReviewAction(followupTool) {
   return `Open Terminal and launch Codex with the command below. If Codex shows a Hooks need review screen, choose Review hooks and trust only the Remembrance SessionStart, UserPromptSubmit, PostToolUse, and Stop hooks. If no review screen appears, continue: Codex may be reusing an existing valid trust decision. Fully restart Codex, submit one prompt, use one Remembrance tool, complete one turn, and call ${followupTool} again. If the lifecycle warning remains, update or reinstall Remembrance and repeat this check.`;
@@ -4498,6 +4715,7 @@ function buildConnectionDoctorReport(input) {
   const capabilities = record(authentication.capabilities);
   const sharedConfig = record(transport.shared_config);
   const pluginHealth = record(status.plugin_health);
+  const hostPolicy = record(pluginHealth.host_policy);
   const identity = record(status.local_signing_identity);
   const destination = destinationFromTransport(transport);
   const credentialSource = stringValue(transport.credential_source) ?? "none";
@@ -4629,6 +4847,22 @@ function buildConnectionDoctorReport(input) {
     )
   );
   checks.push(signingIdentityCheck(identity, input.transport));
+  checks.push(clientUpdateCheck(input.client_update ?? null));
+  const hostPolicyStatus = hostPolicyStatusValue(hostPolicy.status);
+  checks.push(
+    hostPolicyStatus === "recent_denial" ? warning(
+      "host_policy_observability",
+      "The host recently blocked a Remembrance operation before transport; no content was sent.",
+      "review_host_policy",
+      "Review the host's trusted-service or data-export policy. Querying remains available."
+    ) : hostPolicyStatus === "no_recent_denial" ? pass(
+      "host_policy_observability",
+      "This plugin can observe host policy denials; none were observed recently. This does not grant permission for future submissions."
+    ) : notApplicable(
+      "host_policy_observability",
+      "This host does not expose a reliable pre-transport policy-denial event to the plugin."
+    )
+  );
   const blockingIds = /* @__PURE__ */ new Set([
     "configuration",
     "credential_security",
@@ -4644,6 +4878,7 @@ function buildConnectionDoctorReport(input) {
     (check) => check.status === "warning" || check.status === "fail"
   );
   const readSucceeded = !input.active_read_probe.requested || input.active_read_probe.succeeded === true;
+  const registrySubmissionAuthorized = scope === "organization" && submitAuthorized;
   return {
     schema_version: "1",
     status: blocked ? "blocked" : attention ? "attention" : "healthy",
@@ -4651,11 +4886,87 @@ function buildConnectionDoctorReport(input) {
     scope,
     destination,
     safe_to_query: !blocked && registryReady && queryAuthorized && readSucceeded,
-    organization_write_authorized: scope === "organization" && submitAuthorized,
+    registry_submission_authorized: registrySubmissionAuthorized,
+    organization_write_authorized: registrySubmissionAuthorized,
+    host_policy: {
+      status: hostPolicyStatus,
+      observable: hostPolicy.observable === true,
+      ...hostPolicyOperationClassValue(hostPolicy.operation_class) ? {
+        operation_class: hostPolicyOperationClassValue(
+          hostPolicy.operation_class
+        )
+      } : {},
+      ...isoTimestampValue(hostPolicy.last_denial_at) ? { last_denial_at: isoTimestampValue(hostPolicy.last_denial_at) } : {}
+    },
+    client_update: clientUpdateSummary(input.client_update ?? null),
     signed_contributions_ready: input.transport === "hosted_http_mcp" ? null : identity.status === "ready",
     active_read_probe: input.active_read_probe,
     checks
   };
+}
+function clientUpdateCheck(update) {
+  if (!update) {
+    return notApplicable(
+      "client_update",
+      "The published client release could not be checked. This does not affect querying."
+    );
+  }
+  if (update.status === "update_available") {
+    return warning(
+      "client_update",
+      `Remembrance ${update.latest_version} is published; this process is running ${update.current_version}.`,
+      "update_remembrance_client",
+      `${update.guidance.update_action} ${update.guidance.restart_action} Do not claim the new version is active until a fresh process reports it.`,
+      void 0,
+      false,
+      update.guidance.command ?? void 0
+    );
+  }
+  if (update.status === "current") {
+    return pass(
+      "client_update",
+      `This process is current at Remembrance ${update.current_version}.`
+    );
+  }
+  return notApplicable(
+    "client_update",
+    "The installed or published client version could not be compared safely."
+  );
+}
+function clientUpdateSummary(update) {
+  if (!update) {
+    return {
+      status: "unavailable",
+      current_version: null,
+      latest_version: null
+    };
+  }
+  if (update.status === "current" || update.status === "update_available") {
+    return {
+      status: update.status,
+      current_version: update.current_version,
+      latest_version: update.latest_version
+    };
+  }
+  return {
+    status: "unavailable",
+    current_version: update.current_version,
+    latest_version: null
+  };
+}
+function hostPolicyOperationClassValue(value) {
+  if (typeof value !== "string" || !HOST_POLICY_OPERATION_CLASSES.has(value)) {
+    return void 0;
+  }
+  return value;
+}
+function isoTimestampValue(value) {
+  if (typeof value !== "string") return void 0;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : void 0;
+}
+function hostPolicyStatusValue(value) {
+  return value === "recent_denial" || value === "no_recent_denial" ? value : "not_observable";
 }
 function readProbeCheck(probe) {
   if (!probe.requested) {
@@ -4813,7 +5124,7 @@ function stringValue(value) {
 var REMEMBRANCE_QUERY_TOOL_DESCRIPTION = "Call before non-trivial service, API, tool, library, workflow, UI, review, test, security, or deployment work to find relevant Remembrance skills and resources. For short context-dependent follow-ups, infer the concrete task from the full conversation, preserve any plugin-supplied client_context.directive_id/runtime/trigger_reason, and query anyway. Compare each candidate's bounded why_matched evidence and applicability conditions before opening it; discard stated unlikely or corner-case mismatches. High matches should be fetched before custom work; possible and exploratory matches remain optional. Do not use for broad web search or one-off facts.";
 var REMEMBRANCE_CONNECTION_STATUS_TOOL_DESCRIPTION = "Inspect the active Remembrance transport, credential source, and authenticated registry scope without exposing credentials. Call this before diagnosing authentication, checking environment variables, or making anonymous REST/browser probes. Local or bundled MCP can read REMEMBRANCE_API_KEY or ~/.config/remembrance/config.json; hosted MCP cannot read local files and authenticates from its request header. When a declared native lifecycle is degraded, local MCP may submit bounded, content-free health evidence unless REMEMBRANCE_HEALTH_REPORTING=0. Never infer the plugin's scope from REMEMBRANCE_API_KEY alone.";
 var REMEMBRANCE_CONNECTION_DOCTOR_TOOL_DESCRIPTION = "Run a bounded, non-mutating Remembrance connection diagnostic. It verifies the active transport, a redacted registry destination, authenticated scope, query authorization, a real catalog read, and organization submission capability. Local MCP also checks shared-config permissions, destination consistency, native plugin lifecycle, and signing identity; hosted MCP marks local-only checks unavailable. It never submits content, creates query demand, opens a review item, or returns credentials, absolute paths, private registry URLs, prompts, or repository data.";
-var REMEMBRANCE_MCP_SERVER_INSTRUCTIONS = "Remembrance is shared operational memory for agents. Before claiming that Remembrance is anonymous, unconfigured, partially active, or missing an organization key, call run_connection_doctor for the transport you will actually use. It performs a safe catalog read and returns exact bounded remediation without submitting content. Use get_connection_status only when you need the underlying transport and lifecycle fields. An unset REMEMBRANCE_API_KEY does not prove that a local plugin is anonymous because local hooks and bundled MCP may read ~/.config/remembrance/config.json. Conversely, hosted MCP cannot read that local file. Anonymous curl or browser probes describe only those requests, not plugin authentication. Never print or request the raw key. When the user explicitly names an authorized Remembrance skill or supplies a remembrance://skills/{slug} URI, resolve ambiguous names with list_skills using its normalized slug-prefix filter, then call invoke_skill with an exact returned slug. Never guess a slug. list_skills is catalog resolution, not relevance search; use query_skills when the user wants relevant candidates rather than a known selection. invoke_skill rechecks authorization and organization policy, resolves the current reviewed version, and returns the only full instruction body. Catalog listings and MCP resource reads are lightweight handles, not skill use. Do not run query_skills merely to rediscover that explicit selection, and do not submit query-fit feedback for it. After meaningful direct use, follow the returned task-outcome and post-use feedback instructions once. BEFORE non-trivial service/API/tool/library/workflow/UI/review/test/security/deployment work, call query_skills to reuse proven skills and resources instead of rediscovering them. A local repository change still qualifies when it involves a reusable workflow or lesson; skip only genuinely trivial throwaway edits and one-off facts. For short follow-ups such as 'fix these issues', 'continue', or 'try again', infer the concrete task, domain, and constraints from the full conversation and still call query_skills; do not wait for the current prompt to repeat trigger keywords. Treat match_tier as a decision aid, then inspect why_matched and applicability before opening a result. These fields show bounded matched terms/capabilities, satisfied and missed constraints, qualitative lexical/semantic evidence, declared scope, use conditions, and exclusions without exposing unstable raw ranking scores. Discard an unlikely or irrelevant corner-case result and report fit: poor; do not force its use. For a remaining high match, call get_skill or get_resource before custom work and pass the returned query_id/result_id so the surfaced-to-fetch funnel closes; possible and exploratory matches are optional. The response also includes approximate context tokens, verified uses, risk, tags, permissions, dependencies, and contraindications so you can weigh the detour safely. Honor query_skills.skill_access on every response. When policy is org_only, use only returned organization skills and never substitute bundled or live public skill references; if an organization key is configured and the query is unavailable, fail closed because the policy cannot be confirmed. AFTER query_skills, call submit_query_feedback once with one complete set of explicit good/partial/poor judgments using the returned query_id and result_id values; leave unrated results neutral, and remember that a poor query match is not the same as a globally bad skill. Reuse the same organization or anonymous auth scope as the query. AFTER you actually use a skill or resource, close the post-use loop with submit_feedback (useful true/false plus a one-line lesson and the originating query_id/result_id; it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable. If nothing fit and you built a new workflow, use propose_private_skill for an organization-private candidate. With an organization key, propose_skill_idea also remains organization-private. Never remove, suppress, or bypass that key to force a public submission; submit privately, then use the reviewed public-propagation flow when the organization chooses to share it. When delegating, pass the selected slug, exact version, query_id, and result_id to the subagent; it should invoke/fetch that result or run its own full-context query. The parent reports the terminal outcome unless the subagent creates its own invocation. Before finishing any reusable task, self-check for a missed query. If you catch your own mistake, the user catches one, CI/deploy fails, a security issue appears, or you fix a release/versioning miss, submit a failure_report remembrance even if no skill was used; raw MCP clients have no plugin Stop hook to remind you later. A host privacy or tenant-policy denial happens before Remembrance receives the request. Do not retry private repository content through another transport or claim submission. If the blocked contribution is an organization skill, use the local-only queue_private_skill_import tool or bundled handoff script, then wait for an organization admin import receipt. Attach evidence (reproduction detail, artifact hashes, or an attestation); evidence-less public reports wait in unverified intake until corroborated. Redact secrets, private URLs, credentials, raw logs, and proprietary content; submit summaries and hashes, not raw traces.";
+var REMEMBRANCE_MCP_SERVER_INSTRUCTIONS = "Remembrance is shared operational memory for agents. Before claiming that Remembrance is anonymous, unconfigured, partially active, or missing an organization key, call run_connection_doctor for the transport you will actually use. It performs a safe catalog read and returns exact bounded remediation without submitting content. Use get_connection_status only when you need the underlying transport and lifecycle fields. An unset REMEMBRANCE_API_KEY does not prove that a local plugin is anonymous because local hooks and bundled MCP may read ~/.config/remembrance/config.json. Conversely, hosted MCP cannot read that local file. Anonymous curl or browser probes describe only those requests, not plugin authentication. Never print or request the raw key. When the user explicitly names an authorized Remembrance skill or supplies a remembrance://skills/{slug} URI, resolve ambiguous names with list_skills using its normalized slug-prefix filter, then call invoke_skill with an exact returned slug. Never guess a slug. list_skills is catalog resolution, not relevance search; use query_skills when the user wants relevant candidates rather than a known selection. invoke_skill rechecks authorization and organization policy, resolves the current reviewed version, and returns the only full instruction body. Catalog listings and MCP resource reads are lightweight handles, not skill use. Do not run query_skills merely to rediscover that explicit selection, and do not submit query-fit feedback for it. After meaningful direct use, follow the returned task-outcome and post-use feedback instructions once. BEFORE non-trivial service/API/tool/library/workflow/UI/review/test/security/deployment work, call query_skills to reuse proven skills and resources instead of rediscovering them. A local repository change still qualifies when it involves a reusable workflow or lesson; skip only genuinely trivial throwaway edits and one-off facts. For short follow-ups such as 'fix these issues', 'continue', or 'try again', infer the concrete task, domain, and constraints from the full conversation and still call query_skills; do not wait for the current prompt to repeat trigger keywords. Treat match_tier as a decision aid, then inspect why_matched and applicability before opening a result. These fields show bounded matched terms/capabilities, satisfied and missed constraints, qualitative lexical/semantic evidence, declared scope, use conditions, and exclusions without exposing unstable raw ranking scores. Discard an unlikely or irrelevant corner-case result and report fit: poor; do not force its use. For a remaining high match, call get_skill or get_resource before custom work and pass the returned query_id/result_id so the surfaced-to-fetch funnel closes; possible and exploratory matches are optional. The response also includes approximate context tokens, verified uses, risk, tags, permissions, dependencies, and contraindications so you can weigh the detour safely. Honor query_skills.skill_access on every response. When policy is org_only, use only returned organization skills and never substitute bundled or live public skill references; if an organization key is configured and the query is unavailable, fail closed because the policy cannot be confirmed. AFTER query_skills, call submit_query_feedback once with one complete set of explicit good/partial/poor judgments using the returned query_id and result_id values; leave unrated results neutral, and remember that a poor query match is not the same as a globally bad skill. Reuse the same organization or anonymous auth scope as the query. AFTER you actually use a skill or resource, close the post-use loop with submit_feedback (useful true/false plus a one-line lesson and the originating query_id/result_id; it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable. If nothing fit and you built a new workflow, use propose_private_skill for an organization-private candidate. With an organization key, propose_skill_idea also remains organization-private. Never remove, suppress, or bypass that key to force a public submission; submit privately, then use the reviewed public-propagation flow when the organization chooses to share it. When delegating, pass the selected slug, exact version, query_id, and result_id to the subagent; it should invoke/fetch that result or run its own full-context query. The parent reports the terminal outcome unless the subagent creates its own invocation. Before finishing any reusable task, self-check for a missed query. If you catch your own mistake, the user catches one, CI/deploy fails, a security issue appears, or you fix a release/versioning miss, submit a failure_report remembrance even if no skill was used; raw MCP clients have no plugin Stop hook to remind you later. A host privacy or tenant-policy denial happens before Remembrance receives the request. Tell the user: 'Remembrance was blocked by host policy before reaching Remembrance. Nothing was sent. Querying remains available.' Do not retry the blocked content through another transport or claim submission. Attach evidence (reproduction detail, artifact hashes, or an attestation); evidence-less public reports wait in unverified intake until corroborated. Redact secrets, private URLs, credentials, raw logs, and proprietary content; submit summaries and hashes, not raw traces.";
 
 // ../core/src/redaction.ts
 var SECRET_PATTERN_SPECS = [
@@ -5946,7 +6257,7 @@ var seedSkills = [
     summary: "Operational setup and troubleshooting workflow for Remembrance across Claude Code, Codex, OpenClaw, Cursor, Gemini, MCP, REST, skill-only installs, enterprise keys, and local agent identity.",
     status: "active",
     visibility: "public",
-    version: "0.1.14",
+    version: "0.1.17",
     domains: ["agent-skills", "mcp", "resource-discovery"],
     tags: [
       "remembrance",
@@ -5997,7 +6308,7 @@ var seedSkills = [
         "gemini",
         "rest"
       ],
-      version: "0.1.14",
+      version: "0.1.17",
       status: "active",
       visibility: "public",
       providers: ["codex", "claude", "cursor", "openclaw", "generic"],
@@ -6406,7 +6717,8 @@ The MCP annotation for \`propose_private_skill\` is non-read-only and
 closed-world: it makes a network request, but can change only the authenticated
 organization's private review queue and cannot change publicly visible internet
 state. Closed-world does not mean zero-network. Only
-\`queue_private_skill_import\` is the local, zero-network fallback.
+\`queue_private_skill_import\` is a local, zero-network handoff tool, and it
+should run only when an organization admin explicitly requests that handoff.
 
 Example text to merge into the tenant-specific guardian policy:
 
@@ -6441,12 +6753,14 @@ over a user's local \`[auto_review].policy\`. See the official Codex
 [managed configuration](https://learn.chatgpt.com/docs/enterprise/managed-configuration#configure-automatic-review-policy)
 documentation for the current schema and deployment options.
 
-If the organization does not approve direct egress, keep the host denial. Use
-\`queue_private_skill_import\` locally, or run the bundled
-\`scripts/queue-private-skill-import.mjs\` helper, then have an organization
-admin upload the mode-0600 JSON at **Dashboard > Skills > Import**. The handoff
-never contains an API key or organization id, never contacts Remembrance, and
-does not count as submitted until the dashboard returns an import batch receipt.
+If the organization does not approve direct egress, keep the host denial. The
+plugin reports one content-free local alert, does not retry, and does not create
+a handoff automatically. Only when an organization admin explicitly requests a
+handoff, use \`queue_private_skill_import\` locally or run the bundled
+\`scripts/queue-private-skill-import.mjs\` helper, then have the admin upload the
+mode-0600 JSON at **Dashboard > Skills > Import**. The handoff never contains an
+API key or organization id, never contacts Remembrance, and does not count as
+submitted until the dashboard returns an import batch receipt.
 
 If Codex still sees \`<your org key>\` after restart, remove stale
 \`REMEMBRANCE_API_KEY\` exports from shell profiles such as \`~/.zshrc\` and
@@ -6783,6 +7097,17 @@ npx skills add dreamarkinc/remembrance-skills --skill remembrancer
 The entry skill is REST-only and self-contained. The same skill directory can
 be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
 
+## Verified client updates
+
+Native plugins and local MCP check the credential-free public release manifest
+at startup and through \`run_connection_doctor\`. The check sends no API key,
+fails open when the registry is unavailable, and never runs a command returned
+by the network. When a newer verified release exists, the agent must ask before
+running the update command bundled with its installed client, then tell the user
+which Codex, Claude Code, Cursor, OpenClaw, VS Code, OpenCode, or MCP host must
+be reloaded, reopened, or fully restarted. Set
+\`REMEMBRANCE_CLIENT_UPDATE_CHECK=0\` to disable only this advisory check.
+
 ## Validate after setup
 
 1. Start a fresh agent session.
@@ -6837,10 +7162,12 @@ be copied to ".agents/skills/remembrancer/SKILL.md" for compatible providers.
    that should not appear anonymously.
 13. With an organization submission key, submit one disposable redacted skill
    through propose_private_skill and verify it appears only in that
-   organization's review queue. If host policy denies the export, run
-   queue_private_skill_import instead, upload its JSON in the dashboard, and
-   verify the agent reports a local queue receipt separately from the server
-   import receipt.
+   organization's review queue. In a separate negative scenario, simulate a
+   host-policy denial and verify the plugin reports the fixed content-free alert
+   once, persists no blocked content, performs no retry, and creates no handoff.
+   Test queue_private_skill_import only as a separate administrator-requested
+   manual handoff, with its local receipt distinguished from a server import
+   receipt.
 14. If using local MCP, verify local_signing_identity in get_connection_status.
    A missing opaque identity initializes automatically on the first signed
    contribution; bootstrap_agent_identity with no arguments is an optional
@@ -9069,19 +9396,19 @@ var toolDefinitions = [
   ),
   tool(
     "submit_remembrance",
-    "Submit a full remembrance payload with detailed reusable evidence, including high-value self-corrections, user-caught mistakes, CI/deploy failures, and release/versioning misses as type failure_report. Never include credentials, secrets, raw logs, or unrelated repository content. Repository-derived private instructions may be sent only when the user or organization has approved Remembrance as a destination; if the host blocks that export, use the local queue_private_skill_import fallback instead of retrying through another transport.",
+    "Submit a full remembrance payload with detailed reusable evidence, including high-value self-corrections, user-caught mistakes, CI/deploy failures, and release/versioning misses as type failure_report. Never include credentials, secrets, raw logs, or unrelated repository content. Repository-derived private instructions may be sent only when the user or organization has approved Remembrance as a destination. If the host blocks that export, report that nothing was sent and do not retry through another transport or create a handoff unless an organization admin explicitly requests one.",
     "/api/v1/agent/remembrances",
     remembranceToolSchema
   ),
   tool(
     "propose_skill_idea",
-    "Propose a missing reusable skill when query_skills has no useful result. THIS TOOL'S VISIBILITY IS NOT FIXED: an active organization API key keeps the candidate inside that organization's review queue, while intentionally calling without a key creates a PUBLIC candidate. A supplied invalid/inactive key fails with 401 and a valid key without submission:create fails with 403; neither failure creates a candidate. Prefer propose_private_skill for anything repository-derived, organization-specific, or otherwise not intended for the public registry because that endpoint structurally requires organization auth. Use propose_skill_idea only when a public candidate is an acceptable outcome. Check `visibility` (organization_private or public_candidate) and `owner_scope` in the successful response, and report where the candidate landed. Never remove or bypass an organization key to force public submission: submit privately, then use the reviewed public-propagation flow. Send repository-derived private instructions only when Remembrance is an organization-approved destination. If host policy blocks the export, queue_private_skill_import locally and do not claim submission.",
+    "Propose a missing reusable skill when query_skills has no useful result. THIS TOOL'S VISIBILITY IS NOT FIXED: an active organization API key keeps the candidate inside that organization's review queue, while intentionally calling without a key creates a PUBLIC candidate. A supplied invalid/inactive key fails with 401 and a valid key without submission:create fails with 403; neither failure creates a candidate. Prefer propose_private_skill for anything repository-derived, organization-specific, or otherwise not intended for the public registry because that endpoint structurally requires organization auth. Use propose_skill_idea only when a public candidate is an acceptable outcome. Check `visibility` (organization_private or public_candidate) and `owner_scope` in the successful response, and report where the candidate landed. Never remove or bypass an organization key to force public submission: submit privately, then use the reviewed public-propagation flow. Send repository-derived private instructions only when Remembrance is an organization-approved destination. If host policy blocks the export, report that nothing was sent, do not retry, and do not create a handoff unless an organization admin explicitly requests one.",
     "/api/v1/agent/skill-ideas",
     skillIdeaRequestSchema
   ),
   tool(
     "propose_private_skill",
-    "Submit a proposed skill only to the authenticated organization's private review queue. Privacy here is STRUCTURAL, not credential-dependent: this endpoint rejects anonymous use and never creates a public candidate, so unlike propose_skill_idea it cannot silently fall through to public when a key fails to resolve \u2014 it fails closed with 401/403 instead. Prefer it whenever the content is repository-derived, organization-specific, or must not reach the public registry; that preference is about removing the credential from the privacy decision, not about propose_skill_idea being unsafe when a key is present. Use it for repository-derived instructions only when Remembrance is an organization-approved destination. The response reports `visibility` (always organization_private here) \u2014 a rejection means nothing was submitted. If host policy blocks the export, queue_private_skill_import locally instead; never retry through another transport or claim submission without a receipt.",
+    "Submit a proposed skill only to the authenticated organization's private review queue. Privacy here is STRUCTURAL, not credential-dependent: this endpoint rejects anonymous use and never creates a public candidate, so unlike propose_skill_idea it cannot silently fall through to public when a key fails to resolve \u2014 it fails closed with 401/403 instead. Prefer it whenever the content is repository-derived, organization-specific, or must not reach the public registry; that preference is about removing the credential from the privacy decision, not about propose_skill_idea being unsafe when a key is present. Use it for repository-derived instructions only when Remembrance is an organization-approved destination. The response reports `visibility` (always organization_private here) \u2014 a rejection means nothing was submitted. If host policy blocks the export, report that nothing was sent, never retry through another transport, and do not create a handoff unless an organization admin explicitly requests one.",
     "/api/v1/agent/private-skill-ideas",
     skillIdeaRequestSchema
   ),
@@ -9365,7 +9692,7 @@ function localAgentIdentityPath(env = process.env, homeDirectory = homedir2()) {
   );
 }
 function parseStoredIdentity(value) {
-  if (!isRecord(value)) return null;
+  if (!isRecord2(value)) return null;
   if (!supportedProviders.has(value.provider)) {
     return null;
   }
@@ -9500,7 +9827,7 @@ function identityStatus(args) {
     } : null
   };
 }
-function isRecord(value) {
+function isRecord2(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
@@ -9514,6 +9841,20 @@ var PLUGIN_HEALTH_COMPONENTS = [
 ];
 var PLUGIN_HEALTH_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var PLUGIN_HEALTH_MAX_FUTURE_SKEW_MS = 5 * 60 * 1e3;
+var HOST_POLICY_OBSERVATION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
+var HOST_POLICY_OBSERVABLE_SURFACES = /* @__PURE__ */ new Set([
+  "claude_code",
+  "cursor",
+  "openclaw",
+  "opencode"
+]);
+var HOST_POLICY_OPERATION_CLASSES2 = /* @__PURE__ */ new Set([
+  "query",
+  "private_contribution",
+  "contribution",
+  "feedback",
+  "other"
+]);
 var nodeFileSystem2 = {
   exists: existsSync2,
   read: (path, maxBytes = MAX_LOCAL_CONFIG_BYTES) => readSecureLocalText(path, { maxBytes }),
@@ -9550,7 +9891,7 @@ function resolveApiCredential(env = process.env, fileSystem = nodeFileSystem2) {
     const parsed = JSON.parse(
       fileSystem.read(path, MAX_LOCAL_CONFIG_BYTES)
     );
-    if (!isRecord2(parsed)) {
+    if (!isRecord3(parsed)) {
       return unusableSharedConfig();
     }
     if (Object.prototype.hasOwnProperty.call(parsed, "apiKey") && (typeof parsed.apiKey !== "string" || !parsed.apiKey.trim())) {
@@ -9600,7 +9941,7 @@ function resolveApiConfiguration(env = process.env, fileSystem = nodeFileSystem2
     const parsed = JSON.parse(
       fileSystem.read(path, MAX_LOCAL_CONFIG_BYTES)
     );
-    if (!isRecord2(parsed)) {
+    if (!isRecord3(parsed)) {
       return {
         baseUrl: DEFAULT_API_URL,
         source: "unusable_shared_config",
@@ -9655,7 +9996,7 @@ function sharedConfigStatus(env = process.env, fileSystem = nodeFileSystem2) {
     const parsed = JSON.parse(
       fileSystem.read(path, MAX_LOCAL_CONFIG_BYTES)
     );
-    validJson = isRecord2(parsed);
+    validJson = isRecord3(parsed);
     config = normalizeConfig(parsed);
   } catch {
   }
@@ -9670,7 +10011,7 @@ function sharedConfigStatus(env = process.env, fileSystem = nodeFileSystem2) {
   };
 }
 function localConnectionStatus(result, options) {
-  const response = isRecord2(result) ? result : {};
+  const response = isRecord3(result) ? result : {};
   const env = options.env ?? process.env;
   const fileSystem = options.fileSystem ?? nodeFileSystem2;
   const credential = resolveApiCredential(env, fileSystem);
@@ -9686,6 +10027,11 @@ function localConnectionStatus(result, options) {
     pluginVersion: options.pluginVersion,
     apiDestinationFingerprint: apiDestination.fingerprint,
     apiDestinationSource: options.apiUrlSource,
+    now: options.now
+  });
+  const hostPolicy = localHostPolicyStatus({
+    env,
+    fileSystem,
     now: options.now
   });
   const registryReady = response.ok === true;
@@ -9708,7 +10054,79 @@ function localConnectionStatus(result, options) {
     },
     registry: response.body ?? (response.error ? { error: String(response.error) } : null),
     local_signing_identity: localAgentIdentityStatus(env, fileSystem),
-    plugin_health: pluginHealth
+    plugin_health: { ...pluginHealth, host_policy: hostPolicy }
+  };
+}
+function localHostPolicyStatus(options) {
+  const env = options.env ?? process.env;
+  const fileSystem = options.fileSystem ?? nodeFileSystem2;
+  const rawSurface = String(env.REMEMBRANCE_PLUGIN_HOST ?? "").trim().toLowerCase();
+  if (!isPluginHostSurface(rawSurface)) {
+    return {
+      status: "not_observable",
+      observable: false,
+      explanation: "This connection cannot observe a host policy decision made before MCP transport."
+    };
+  }
+  const surface = rawSurface;
+  if (!HOST_POLICY_OBSERVABLE_SURFACES.has(surface)) {
+    return {
+      status: "not_observable",
+      observable: false,
+      explanation: "This host does not expose a reliable failed-tool or permission event to the plugin."
+    };
+  }
+  const directory = env.REMEMBRANCE_PLUGIN_ALERT_DIR ? String(env.REMEMBRANCE_PLUGIN_ALERT_DIR) : join3(homedir3(), ".cache", "remembrance", "plugin-alerts");
+  const names = fileSystem.list ? (() => {
+    try {
+      return fileSystem.list?.(directory) ?? [];
+    } catch {
+      return [];
+    }
+  })() : [];
+  const nowMs = (options.now ?? /* @__PURE__ */ new Date()).getTime();
+  let latest = null;
+  let latestMs = Number.NEGATIVE_INFINITY;
+  for (const name of names.filter(
+    (value) => new RegExp(`^${surface}\\.[a-f0-9]{24}\\.json$`).test(value)
+  ).slice(0, MAX_LOCAL_LIFECYCLE_MARKERS)) {
+    try {
+      const sessionHash = name.split(".")[1];
+      const parsed = JSON.parse(
+        fileSystem.read(
+          join3(directory, name),
+          MAX_LOCAL_LIFECYCLE_MARKER_BYTES
+        )
+      );
+      if (!isRecord3(parsed) || parsed.schema_version !== 1 || parsed.surface !== surface || parsed.session_hash !== sessionHash || !Array.isArray(parsed.observations)) {
+        continue;
+      }
+      for (const candidate of parsed.observations) {
+        if (!isRecord3(candidate)) continue;
+        const seenMs = typeof candidate.last_seen_at === "string" ? Date.parse(candidate.last_seen_at) : Number.NaN;
+        if (Number.isFinite(seenMs) && seenMs <= nowMs + PLUGIN_HEALTH_MAX_FUTURE_SKEW_MS && nowMs - seenMs <= HOST_POLICY_OBSERVATION_MAX_AGE_MS && seenMs > latestMs) {
+          latest = candidate;
+          latestMs = seenMs;
+        }
+      }
+    } catch {
+    }
+  }
+  if (!latest) {
+    return {
+      status: "no_recent_denial",
+      observable: true,
+      explanation: "No recent host policy denial has been observed. This is not proof that future submissions are permitted."
+    };
+  }
+  return {
+    status: "recent_denial",
+    observable: true,
+    operation_class: HOST_POLICY_OPERATION_CLASSES2.has(
+      String(latest.operation_class ?? "")
+    ) ? latest.operation_class : "other",
+    last_denial_at: new Date(latestMs).toISOString(),
+    explanation: "The host recently blocked a Remembrance operation before transport; no content was sent."
   };
 }
 function localPluginLifecycleHealth(options) {
@@ -9752,7 +10170,7 @@ function localPluginLifecycleHealth(options) {
       const parsed = JSON.parse(
         fileSystem.read(path, MAX_LOCAL_LIFECYCLE_MARKER_BYTES)
       );
-      if (!isRecord2(parsed) || parsed.surface !== surface) {
+      if (!isRecord3(parsed) || parsed.surface !== surface) {
         continue;
       }
       const candidateMs = typeof parsed.last_seen_at === "string" ? Date.parse(parsed.last_seen_at) : Number.NEGATIVE_INFINITY;
@@ -9774,7 +10192,7 @@ function localPluginLifecycleHealth(options) {
       ]
     };
   }
-  const componentRecord = isRecord2(marker.components) ? marker.components : {};
+  const componentRecord = isRecord3(marker.components) ? marker.components : {};
   const nowMs = (options.now ?? /* @__PURE__ */ new Date()).getTime();
   const sessionStartMs = validLifecycleTimestamp(
     componentRecord.session_start,
@@ -9927,7 +10345,7 @@ function lifecycleMarkerPaths(surface, healthDir, fileSystem) {
   return [...new Set(sessionPaths)].slice(0, MAX_LOCAL_LIFECYCLE_MARKERS);
 }
 function normalizeConfig(value) {
-  if (!isRecord2(value)) return {};
+  if (!isRecord3(value)) return {};
   const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim() : "";
   const apiUrl = typeof value.apiUrl === "string" ? value.apiUrl.trim() : "";
   return {
@@ -10018,8 +10436,59 @@ function validLifecycleTimestamp(value, nowMs) {
   }
   return parsed;
 }
-function isRecord2(value) {
+function isRecord3(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+// src/client-update.ts
+var MAX_MANIFEST_BYTES = 16 * 1024;
+var DEFAULT_TIMEOUT_MS = 1200;
+var CACHE_TTL_MS = 5 * 60 * 1e3;
+var cache = /* @__PURE__ */ new Map();
+async function checkClientUpdate(input) {
+  const env = input.env ?? process.env;
+  if (/^(0|false|no)$/i.test(env.REMEMBRANCE_CLIENT_UPDATE_CHECK ?? "")) {
+    return null;
+  }
+  if (!parseStableClientVersion(input.currentVersion)) return null;
+  const now = input.now ?? Date.now();
+  const url = `${input.apiBase.replace(/\/+$/, "")}/.well-known/remembrance-client-release.json`;
+  const cached = cache.get(url);
+  let manifest;
+  if (cached && cached.expiresAt > now) {
+    manifest = cached.value;
+  } else {
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      input.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    );
+    try {
+      const response = await (input.fetchImpl ?? fetch)(url, {
+        headers: { accept: "application/json" },
+        signal: controller.signal
+      });
+      if (!response.ok) return null;
+      const text = await response.text();
+      if (Buffer.byteLength(text, "utf8") > MAX_MANIFEST_BYTES) return null;
+      try {
+        manifest = JSON.parse(text);
+      } catch {
+        return null;
+      }
+      cache.set(url, { value: manifest, expiresAt: now + CACHE_TTL_MS });
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  const status = resolveClientUpdateStatus({
+    currentVersion: input.currentVersion,
+    manifest,
+    surface: input.surface
+  });
+  return status.status === "unavailable" ? null : status;
 }
 
 // src/server.ts
@@ -10027,7 +10496,7 @@ var apiConfiguration = resolveApiConfiguration();
 var apiBase = apiConfiguration.baseUrl;
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.1.53" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.55" : "0.0.0-dev";
 var tools = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var inputBuffer = Buffer.alloc(0);
@@ -10123,6 +10592,7 @@ async function handleRequest(request) {
 }
 async function dispatchJsonRpcRequest(request) {
   if (request.method === "initialize") {
+    const clientUpdate = await currentClientUpdate();
     return {
       id: request.id,
       result: {
@@ -10132,7 +10602,9 @@ async function dispatchJsonRpcRequest(request) {
           name: "@remembrance-ai/mcp-server",
           version: SERVER_VERSION
         },
-        instructions: REMEMBRANCE_MCP_SERVER_INSTRUCTIONS
+        instructions: clientUpdate?.status === "update_available" ? `${REMEMBRANCE_MCP_SERVER_INSTRUCTIONS}
+
+${clientUpdate.notice}` : REMEMBRANCE_MCP_SERVER_INSTRUCTIONS
       }
     };
   }
@@ -10293,7 +10765,7 @@ function apiConfigurationErrorMessage(issue, setting) {
   return `${setting} is invalid. Set it to an absolute HTTP(S) registry URL without credentials, query parameters, or fragments, or intentionally remove it before using remote Remembrance tools.`;
 }
 function clientHealthReportFromConnectionStatus(status) {
-  const health = isRecord3(status.plugin_health) ? status.plugin_health : null;
+  const health = isRecord4(status.plugin_health) ? status.plugin_health : null;
   if (!health || health.expected !== true || health.status !== "degraded") {
     return null;
   }
@@ -10303,9 +10775,9 @@ function clientHealthReportFromConnectionStatus(status) {
   }
   const host = agentHostBySurface(surface);
   if (!host || !host.plugin) return null;
-  const components = isRecord3(health.components) ? health.components : {};
-  const observed = (name) => isRecord3(components[name]) && components[name]?.observed === true ? "active" : "not_observed";
-  const issueCodes2 = Array.isArray(health.issues) ? health.issues.map((issue) => isRecord3(issue) ? issue.code : null).filter((code) => typeof code === "string") : [];
+  const components = isRecord4(health.components) ? health.components : {};
+  const observed = (name) => isRecord4(components[name]) && components[name]?.observed === true ? "active" : "not_observed";
+  const issueCodes2 = Array.isArray(health.issues) ? health.issues.map((issue) => isRecord4(issue) ? issue.code : null).filter((code) => typeof code === "string") : [];
   const allowedIssueCodes = /* @__PURE__ */ new Set([
     "native_hooks_not_observed",
     "session_start_not_observed",
@@ -10654,7 +11126,8 @@ async function callRemembrance(definition, rawArguments, options = {}) {
     }
   } : parsed;
   const headers = {
-    "content-type": "application/json"
+    "content-type": "application/json",
+    "user-agent": `@remembrance-ai/mcp-server/${SERVER_VERSION}`
   };
   const credential = resolveApiCredential();
   const configurationError = remoteConfigurationError(
@@ -10738,9 +11211,10 @@ async function runLocalConnectionDoctor(options, execution = "mcp_tool") {
     error: localConfigurationError
   }) : callDoctorReadProbe(connectionDefinition, {});
   const catalogPromise = options.active_read_probe && !localConfigurationError ? callDoctorReadProbe(mustFindTool("list_skills"), { limit: 1 }) : Promise.resolve(null);
-  const [connectionResult, catalogResult] = await Promise.all([
+  const [connectionResult, catalogResult, clientUpdate] = await Promise.all([
     connectionPromise,
-    catalogPromise
+    catalogPromise,
+    currentClientUpdate()
   ]);
   const connectionStatus = localConnectionStatus(connectionResult, {
     apiBase,
@@ -10753,8 +11227,8 @@ async function runLocalConnectionDoctor(options, execution = "mcp_tool") {
     item_count: null
   };
   if (options.active_read_probe && !localConfigurationError) {
-    const resultRecord = isRecord3(catalogResult) ? catalogResult : {};
-    const body = isRecord3(resultRecord.body) ? resultRecord.body : {};
+    const resultRecord = isRecord4(catalogResult) ? catalogResult : {};
+    const body = isRecord4(resultRecord.body) ? resultRecord.body : {};
     const skills = Array.isArray(body.skills) ? body.skills : null;
     activeReadProbe.succeeded = resultRecord.ok === true && skills !== null;
     activeReadProbe.item_count = skills ? skills.length : null;
@@ -10766,7 +11240,17 @@ async function runLocalConnectionDoctor(options, execution = "mcp_tool") {
     transport: execution === "standalone_cli" ? "standalone_cli" : "local_stdio_mcp",
     host_registration_observed: execution === "mcp_tool",
     active_read_probe: activeReadProbe,
-    check_organization_write_authorization: options.check_organization_write_authorization
+    check_organization_write_authorization: options.check_organization_write_authorization,
+    client_update: clientUpdate
+  });
+}
+async function currentClientUpdate() {
+  const configuredSurface = process.env.REMEMBRANCE_PLUGIN_HOST?.trim().toLowerCase();
+  const surface = configuredSurface && isPluginHostSurface(configuredSurface) ? configuredSurface : "mcp";
+  return checkClientUpdate({
+    apiBase,
+    currentVersion: SERVER_VERSION,
+    surface
   });
 }
 async function callDoctorReadProbe(definition, payload) {
@@ -10780,18 +11264,24 @@ async function callDoctorReadProbe(definition, payload) {
   }) : first;
 }
 function isTransientDoctorProbeFailure(result) {
-  if (!isRecord3(result) || result.ok === true) return false;
+  if (!isRecord4(result) || result.ok === true) return false;
   const status = typeof result.status === "number" ? result.status : 0;
   return status === 0 || status === 408 || status === 425 || status >= 500;
 }
 function formatConnectionDoctorReport(report) {
+  const clientUpdate = report.client_update ?? {
+    status: "unavailable",
+    latest_version: null
+  };
   const lines = [
     `Remembrance connection doctor: ${report.status.toUpperCase()}`,
     `Transport: ${report.transport}`,
     `Scope: ${report.scope}`,
     `Destination: ${report.destination.kind}`,
     `Query ready: ${report.safe_to_query ? "yes" : "no"}`,
-    `Organization submissions: ${report.organization_write_authorized ? "authorized" : "not authorized"}`,
+    `Registry submissions: ${report.registry_submission_authorized ? "authorized" : "not authorized"}`,
+    `Host policy observation: ${report.host_policy?.status ?? "not_observable"}`,
+    `Client update: ${clientUpdate.status}${clientUpdate.latest_version ? ` (published ${clientUpdate.latest_version})` : ""}`,
     `Signed contributions: ${report.signed_contributions_ready === null ? "not observable" : report.signed_contributions_ready ? "ready" : "not ready"}`,
     ""
   ];
@@ -11033,7 +11523,7 @@ function mustFindTool(name) {
   }
   return tool2;
 }
-function isRecord3(value) {
+function isRecord4(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 function identityPath(explicit) {

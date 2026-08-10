@@ -21,6 +21,17 @@ claude plugin marketplace add dreamarkinc/remembrance-skills
 claude plugin install remembrance@remembrance
 ```
 
+At session start, Remembrance checks a credential-free public release manifest.
+When a newer verified plugin exists, Claude Code receives the locally bundled
+update command and must ask before running it. After a successful update, run
+`/reload-plugins` or fully restart Claude Code. The plugin never updates itself
+silently. Set `REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable the advisory check.
+
+Claude Code installations from before this startup check existed still learn
+about a verified update on their next successful Remembrance query. The API
+places a command-free notice first in the legacy contribution directive; only
+this installed plugin supplies the trusted local update command.
+
 The same marketplace publishes Codex through a dedicated, independently
 validated package:
 
@@ -129,9 +140,12 @@ organization's review queue. Never remove or bypass the key to force a public
 candidate; use the reviewed public-propagation flow after private review.
 
 If the host denies the export, do not retry the same content through `curl`, a
-browser, or another MCP transport. Local stdio MCP exposes
-`queue_private_skill_import`, which writes an inert mode-0600 JSON handoff and
-does not contact a network. Hosted-only clients can run the bundled
+browser, or another MCP transport. The plugin reports one local, content-free
+alert: **Remembrance was blocked by host policy before reaching Remembrance.
+Nothing was sent. Querying remains available.** It does not automatically
+create a handoff. Only when an organization admin explicitly requests one,
+local stdio MCP exposes `queue_private_skill_import`, which writes an inert
+mode-0600 JSON handoff and does not contact a network. Hosted-only clients can run the bundled
 `skills/remembrancer/scripts/queue-private-skill-import.mjs` script. An
 organization admin uploads the resulting file at **Dashboard > Skills >
 Import**; the skills then enter the normal private review pipeline. Until that

@@ -24,6 +24,17 @@ ln -s /abs/path/to/remembrance/packages/cursor-plugin ~/.cursor/plugins/local/re
 
 Restart Cursor, then open **Customize > Plugins** and enable Remembrance.
 
+At session start, Remembrance checks a credential-free public release manifest.
+If a newer verified plugin exists, the agent tells the user to refresh the
+Remembrance marketplace entry and choose **Update**, then fully quit and reopen
+Cursor. Cursor has no documented scriptable plugin-update command, so
+Remembrance does not invent or remotely supply one. Set
+`REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable the advisory check.
+
+Cursor installations from before this startup check existed still receive a
+command-free update notice on their next successful Remembrance query. The
+notice points to the normal marketplace flow and never invents a remote command.
+
 ## Organization key
 
 The plugin-managed MCP server runs `npx -y @remembrance-ai/mcp-server`, which
@@ -86,14 +97,17 @@ With an organization key, generic `propose_skill_idea` also stays private.
 Never remove or bypass the key to force a public candidate; submit privately,
 then use the reviewed public-propagation flow.
 
-If export remains blocked, use local MCP `queue_private_skill_import`. It writes
-a mode-0600 JSON handoff under the user's fixed Remembrance state directory and
-contacts no network. An organization admin uploads that file at **Dashboard >
-Skills > Import**, where each skill follows the same private verification flow
-as a normal organization skill. Hosted/cloud agents without the local tool can
-run the bundled `skills/remembrancer/scripts/queue-private-skill-import.mjs`
-script in the workspace and hand the resulting file to the admin. A local queue
-receipt is not a server submission receipt.
+If export remains blocked, the plugin reports one local, content-free alert:
+**Remembrance was blocked by host policy before reaching Remembrance. Nothing
+was sent. Querying remains available.** It does not retry or automatically
+create a handoff. Only when an organization admin explicitly requests one, use
+local MCP `queue_private_skill_import`. It writes a mode-0600 JSON handoff under
+the user's fixed Remembrance state directory and contacts no network. The admin
+can upload that file at **Dashboard > Skills > Import**, where each skill
+follows the normal private verification flow. Hosted/cloud agents without the
+local tool can run the bundled
+`skills/remembrancer/scripts/queue-private-skill-import.mjs` script. A local
+queue receipt is not a server submission receipt.
 
 ## What the plugin does
 
@@ -116,8 +130,8 @@ receipt is not a server submission receipt.
   use. If the agent later calls a contribution tool, the hook marks that use as
   already handled.
 - `propose_private_skill` is the explicit organization-only submission path.
-  Local MCP also provides the zero-network `queue_private_skill_import`
-  fallback for host-policy denials.
+  Local MCP also provides the zero-network `queue_private_skill_import` tool
+  for an explicitly requested administrator handoff.
 - When a person explicitly names a skill or supplies a
   `remembrance://skills/{slug}` URI, Cursor resolves ambiguity with
   the indexed, normalized slug-prefix filter in `list_skills`, then calls

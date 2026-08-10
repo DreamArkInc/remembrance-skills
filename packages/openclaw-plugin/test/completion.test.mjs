@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleCompletion, handleFinalize } from "../src/index.mjs";
-import { contributionReason } from "../src/hook-core.mjs";
+import {
+  contributionReason,
+  HOST_POLICY_ALERT_TEXT,
+} from "../src/hook-core.mjs";
 
 // A fake OpenClaw before_agent_finalize event.
 function event(ctx = {}) {
@@ -20,6 +23,29 @@ function base(overrides = {}) {
 }
 
 describe("OpenClaw completion hook (before_agent_finalize)", () => {
+  it("reports a pending local host-policy denial once", () => {
+    const markDelivered = vi.fn(() => true);
+    expect(
+      handleCompletion(
+        event(),
+        base({
+          readPendingHostPolicyAlert: () => ({ id: "policy-1" }),
+          markHostPolicyAlertDelivered: markDelivered,
+        }),
+      ),
+    ).toEqual({
+      action: "revise",
+      reason: HOST_POLICY_ALERT_TEXT,
+      retry: { instruction: HOST_POLICY_ALERT_TEXT, maxAttempts: 1 },
+      why: "host_policy_denial",
+    });
+    expect(markDelivered).toHaveBeenCalledWith(
+      "openclaw",
+      "r1",
+      "policy-1",
+      {},
+    );
+  });
   it("reports the native task outcome before applying the finalize decision", async () => {
     const calls = [];
     const recordHealth = vi.fn();

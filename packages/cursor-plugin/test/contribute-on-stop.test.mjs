@@ -1,7 +1,35 @@
 import { describe, expect, it, vi } from "vitest";
+import { HOST_POLICY_ALERT_TEXT } from "../scripts/hook-core.mjs";
 import { handleStop, handleStopHook } from "../scripts/contribute-on-stop.mjs";
 
 describe("Cursor stop hook", () => {
+  it("surfaces a pending host-policy alert exactly once before normal completion logic", () => {
+    const markDelivered = vi.fn(() => true);
+    const options = {
+      env: {},
+      readPendingHostPolicyAlert: () => ({ id: "policy-1" }),
+      markHostPolicyAlertDelivered: markDelivered,
+      readUseCount: () => 0,
+      readEligibilityCount: () => 0,
+      readPromptedCount: () => 0,
+    };
+    expect(
+      handleStop(
+        { loop_count: 0, conversation_id: "conv-policy" },
+        options,
+      ),
+    ).toEqual({
+      allow: false,
+      why: "host_policy_denial",
+      output: { followup_message: HOST_POLICY_ALERT_TEXT },
+    });
+    expect(markDelivered).toHaveBeenCalledWith(
+      "cursor",
+      "conv-policy",
+      "policy-1",
+      {},
+    );
+  });
   it("reports the native task outcome before applying the stop decision", async () => {
     const reportTaskOutcomes = vi.fn().mockResolvedValue(1);
     const recordHealth = vi.fn();
