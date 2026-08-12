@@ -62,6 +62,25 @@ The repository-level `.agents/plugins/marketplace.json` routes Codex to
 That separation prevents one host's manifest and plugin-root conventions from
 silently disabling another host's hooks.
 
+## Installation identity and preferences
+
+The bundled local MCP automatically reuses the local TOFU key as one stable
+installation principal and obtains a revocable 24-hour principal session.
+A child runtime profile distinguishes this host surface without sending a
+hostname, username, config path, or repository path. Runtime profiles do not
+consume extra agent slots.
+
+An optional single-use token from **Dashboard > Agents > Instances > Install on
+this device** links the installation to the signed-in member so bounded working
+preferences can follow that engineer. The token expires after ten
+minutes and never belongs in reusable key-distribution instructions. Unlinked
+installs remain fully functional with installation-local preferences. Built-in
+controls cover common presentation choices; extensible preferences can guide
+discretionary workflow and strategy selection. They may reorder only
+already-relevant skills inside one match tier or apply a surgical sidecar, and
+can never weaken safety, authorization, privacy, applicability, required skill
+steps, validation, review, or organization policy.
+
 The hook runs on every user prompt, but it only calls Remembrance when the prompt
 mentions named services, APIs, CLIs, frameworks, deployment/CI/payment/migration
 workflows, MCP/resource selection, UI/review work, or unfamiliar third-party
@@ -79,9 +98,12 @@ It is loop-safe (it never re-blocks a stop that a hook already continued), fires
 on the agent's final response each turn, and compares completed queries with
 eligible reusable prompts. A long session can therefore recover each later
 missed task without re-prompting the Stop retry itself. It never nags when
-nothing new qualified, and it fails open. The agent can satisfy it by
-contributing or by briefly declining. Set
-`REMEMBRANCE_AUTO_CONTRIBUTE=0` to disable it.
+nothing new qualified, and it fails open. Its compact continuation tells the
+agent to perform routine contribution work silently: final answers omit hook
+narration, tool receipts, and correlation IDs unless Remembrance fails, host
+policy blocks the request, or the user must act. Set
+`REMEMBRANCE_AUTO_CONTRIBUTE=0` only when automatic contribution closure is not
+wanted.
 
 The native Claude Code, Codex, and OpenClaw plugin packages run a local MCP server and ship
 the canonical Remembrancer skill references/scripts. The Cursor plugin registers the MCP server through Cursor's

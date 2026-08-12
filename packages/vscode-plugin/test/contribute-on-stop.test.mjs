@@ -42,7 +42,13 @@ describe("VS Code completion hook", () => {
     );
     expect(result.allow).toBe(false);
     expect(result.output).toMatchObject({ decision: "block" });
-    expect(String(result.output.reason ?? "")).toMatch(/remembrance|feedback/i);
+    expect(String(result.output.reason ?? "")).toContain(
+      "silently close the pending Remembrance loop",
+    );
+    expect(String(result.output.reason ?? "")).toContain(
+      "Do not mention routine Remembrance calls",
+    );
+    expect(String(result.output.reason ?? "")).toContain("submit_remembrance");
   });
 
   it("records completion health under the VS Code surface", async () => {

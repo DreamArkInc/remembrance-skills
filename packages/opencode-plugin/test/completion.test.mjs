@@ -116,7 +116,11 @@ describe("opencode completion nudge (session.idle)", () => {
     await emitSessionIdle(hooks, sessionId);
     expect(messages).toHaveLength(1);
     expect(messages[0].service).toBe("remembrance");
-    expect(String(messages[0].message)).toMatch(/feedback|remembrance/i);
+    expect(String(messages[0].message)).toContain(
+      "silently close the pending Remembrance loop",
+    );
+    expect(String(messages[0].message)).toContain("submit_remembrance");
+    expect(String(messages[0].message).length).toBeLessThan(1_200);
 
     // opencode cannot ask the agent to revise, so the adapter advances the
     // prompted count itself. A second idle must therefore stay silent.

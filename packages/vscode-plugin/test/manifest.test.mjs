@@ -56,6 +56,7 @@ describe("VS Code agent plugin manifest", () => {
     const mcp = readJson(".mcp.json");
     expect(mcp.mcpServers.remembrance.env).toEqual({
       REMEMBRANCE_PLUGIN_HOST: "vs_code",
+      REMEMBRANCE_HOST_SURFACE: "extension",
     });
     expect(JSON.stringify(mcp)).not.toMatch(/\$\{[^}]+:-/);
     expect(mcp.mcpServers.remembrance.args[0]).toContain(
@@ -96,6 +97,7 @@ describe("VS Code agent plugin manifest", () => {
     );
     expect(mcp.mcpServers.remembrance.env).toEqual({
       REMEMBRANCE_PLUGIN_HOST: "vs_code",
+      REMEMBRANCE_HOST_SURFACE: "extension",
     });
     expect(JSON.stringify(mcp)).not.toMatch(/\$\{[^}]+:-/);
   });

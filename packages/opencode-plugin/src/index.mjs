@@ -65,6 +65,7 @@ import {
   toolResponseIndicatesFailure,
   valueEpisodeFromResponse,
   writePromptedCount,
+  warmPrincipalSession,
 } from "../scripts/hook-core.mjs";
 
 const SURFACE = "opencode";
@@ -300,15 +301,24 @@ export const Remembrance = async (context = {}) => {
     try {
       const sessionId = sessionIdFromEvent(event, event);
       recordLifecycle("session_start", sessionId);
-      const clientUpdate = await (
-        context.clientUpdateCheck ?? checkForClientUpdate
-      )(
-        {
-          surface: SURFACE,
-          currentVersion: version,
-        },
-        env,
-      ).catch(() => null);
+      const [, clientUpdate] = await Promise.all([
+        (context.warmSession ?? warmPrincipalSession)(
+          {
+            runtime: SURFACE,
+            hostSurface: "cli",
+            clientVersion: version,
+            hostVersion: "",
+          },
+          env,
+        ).catch(() => null),
+        (context.clientUpdateCheck ?? checkForClientUpdate)(
+          {
+            surface: SURFACE,
+            currentVersion: version,
+          },
+          env,
+        ).catch(() => null),
+      ]);
       if (clientUpdate?.notice) {
         pendingClientUpdates.set(sessionId, clientUpdate.notice);
       }

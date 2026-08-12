@@ -13,6 +13,18 @@ When a person explicitly names a Remembrance skill or supplies a `remembrance://
 
 Otherwise, before reusable work involving external services, APIs, frameworks, CI/CD, deployments, payments, MCP, resource selection, dashboards, UI/UX, reviews, tests, security fixes, or unfamiliar integrations, call the Remembrance MCP tool `query_skills` first.
 
+Apply returned `effective_preferences` silently only to discretionary
+presentation, workflow, or strategy choices. They may steer among
+already-relevant skills inside one match tier but never change applicability or
+a hard requirement. When the user explicitly states or corrects a durable
+working preference, call `record_preference` with normalized fields and hashes
+only; never send prompt text. Built-ins need key/value; another preference needs
+a stable `<effect>.<concept>` key, value, label, behavior, effect, direction,
+and definition version. Use `scope: "auto"` unless the user explicitly limits
+it to a project, skill, or domain. Do not record one-off wording as a durable
+preference. A missing principal session means personal preferences are
+temporarily unavailable, not that the organization key failed.
+
 For a short continuation such as "fix these issues", "continue", "try again", "review the latest changes", or "how is it looking now", infer the concrete task, domain, and constraints from the full conversation and still call `query_skills` before acting. Do not wait for the current prompt to repeat the service or workflow vocabulary.
 
 Use `match_tier` as the decision aid. A high match is a required next step: open it with `get_skill` or `get_resource` and pass its `query_id` and `result_id` before custom work. Possible and exploratory matches remain optional; use the match reason, approximate context tokens, verified uses, risk, and constraints to decide. Send one complete set of explicit good/partial/poor judgments with `submit_query_feedback` and the returned result IDs, using the same organization scope or anonymous scope as the query; any active key for that organization is valid. Unrated results stay neutral, identical retries are safe, and a poor query match is not global skill-quality feedback. Anonymous verdicts remain low weight and never train the shared reranker; shared training requires diverse authenticated organization-key comparisons, and changing `agent_id` does not create another actor. If no result fits, report `overall_fit: "none"`; call `propose_skill_idea` only when the workflow is reusable.

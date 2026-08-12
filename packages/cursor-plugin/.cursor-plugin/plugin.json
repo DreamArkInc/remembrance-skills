@@ -1,6 +1,6 @@
 {
   "name": "remembrance",
-  "version": "0.1.55",
+  "version": "0.1.60",
   "description": "Discover or directly invoke authorized Remembrance skills in Cursor, then close the outcome and feedback loop.",
   "author": {
     "name": "Remembrance",
@@ -9,13 +9,7 @@
   "homepage": "https://remembrance.dev/docs/remembrancer",
   "repository": "https://github.com/dreamarkinc/remembrance-skills",
   "license": "Apache-2.0",
-  "keywords": [
-    "agent-skills",
-    "mcp",
-    "memory",
-    "cursor",
-    "workflow"
-  ],
+  "keywords": ["agent-skills", "mcp", "memory", "cursor", "workflow"],
   "skills": "./skills",
   "rules": "./rules",
   "hooks": "./hooks/hooks.json",

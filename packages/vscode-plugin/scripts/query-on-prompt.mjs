@@ -24,9 +24,7 @@ import { dirname, join } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
-  autoQueryTimeoutMs,
   buildQueryPayload as buildSharedQueryPayload,
-  clientUserAgent,
   createContinuationDirective,
   debugLog,
   disabled,
@@ -39,10 +37,12 @@ import {
   recordPluginLifecycleHealth,
   recordRegistryUse,
   recordDirectiveSurface,
+  recordExplicitPreferenceObservations,
   recordHighMatchSurface,
   recordTaskEligibility,
   recordValueEpisodeSurface,
   queryResponseHasMatches,
+  queryRemembrance as querySharedRemembrance,
   resolveApiKey,
   resolveApiCredential,
   sessionIdFor,
@@ -132,6 +132,12 @@ export async function handleHookInput(input, options = {}) {
   }
   const prompt = String(input?.prompt ?? "");
   const redacted = redactPrompt(prompt);
+  void recordExplicitPreferenceObservations(redacted, {
+    env,
+    fetchImpl: options.fetchImpl ?? fetch,
+    runtime: "vs_code",
+    userAgent: "@remembrance/vscode-plugin",
+  }).catch(() => 0);
   const decision = shouldQueryPrompt(redacted);
   if (!decision.likely_match) {
     if (isContextualContinuationPrompt(redacted)) {
@@ -248,60 +254,10 @@ function recordUse(input, env, options, highMatch = null, response = null) {
 }
 
 async function queryRemembrance(payload, options) {
-  const env = options.env;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), autoQueryTimeoutMs(env));
-  try {
-    const credential = resolveApiCredential(env);
-    if (credential.source === "unusable_shared_config") {
-      debugLog(env, "shared_config_unusable", {}, options);
-      return null;
-    }
-    const headers = {
-      "content-type": "application/json",
-      "user-agent": clientUserAgent("@remembrance/vscode-plugin"),
-    };
-    const apiKey = credential.apiKey;
-    if (apiKey) {
-      headers["x-remembrance-api-key"] = apiKey;
-    }
-    const response = await options.fetchImpl(
-      `${apiUrl(env)}/api/v1/agent/query`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      },
-    );
-    if (!response.ok) {
-      debugLog(
-        env,
-        "http_error",
-        { status: response.status, api_url: apiUrl(env) },
-        options,
-      );
-      return null;
-    }
-    let body;
-    try {
-      body = await response.json();
-    } catch (error) {
-      debugLog(env, "malformed_response", { error: errorName(error) }, options);
-      return null;
-    }
-    return { body };
-  } catch (error) {
-    debugLog(
-      env,
-      errorName(error) === "AbortError" ? "timeout" : "request_error",
-      { error: errorName(error) },
-      options,
-    );
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
+  return querySharedRemembrance(payload, {
+    ...options,
+    userAgent: "@remembrance/vscode-plugin",
+  });
 }
 
 async function readCachedOutput(cacheKey, env, options = {}) {

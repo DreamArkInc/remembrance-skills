@@ -8,6 +8,7 @@ import {
   recordPluginLifecycleHealth,
   resolveApiCredential,
   sessionIdFor,
+  warmPrincipalSession,
 } from "./hook-core.mjs";
 
 function pluginVersion() {
@@ -46,16 +47,29 @@ export async function handleSessionStart(input, options = {}) {
     `Remembrance plugin health: VS Code SessionStart hook is active for plugin ${version}; ` +
     "the bundled local MCP server resolves the same environment/shared config credential. " +
     "Run run_connection_doctor if setup seems incomplete. It verifies the active connection and gives one exact next step. If that tool is absent, report partial activation, update or reinstall the plugin, and reload VS Code.";
-  const clientUpdate = isCompaction
-    ? null
-    : await (options.checkUpdate ?? checkForClientUpdate)(
-        {
-          surface: "vs_code",
-          currentVersion: version,
-          fetchImpl: options.fetchImpl ?? fetch,
-        },
-        env,
-      ).catch(() => null);
+  const hostVersion = String(input?.vscode_version ?? input?.version ?? "");
+  const [, clientUpdate] = isCompaction
+    ? [null, null]
+    : await Promise.all([
+        (options.warmSession ?? warmPrincipalSession)(
+          {
+            runtime: "vs_code",
+            hostSurface: "extension",
+            clientVersion: version,
+            hostVersion,
+            fetchImpl: options.fetchImpl ?? fetch,
+          },
+          env,
+        ).catch(() => null),
+        (options.checkUpdate ?? checkForClientUpdate)(
+          {
+            surface: "vs_code",
+            currentVersion: version,
+            fetchImpl: options.fetchImpl ?? fetch,
+          },
+          env,
+        ).catch(() => null),
+      ]);
   return {
     hookSpecificOutput: {
       hookEventName: "SessionStart",

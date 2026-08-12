@@ -108,6 +108,7 @@ export async function handleQuery(input, options = {}) {
     env,
     fetchImpl: options.fetchImpl ?? fetch,
     includeSharedConfigCredentialNotice: false,
+    projectPath: input?.cwd ?? null,
     stderr: options.stderr,
   });
   if (!result) {

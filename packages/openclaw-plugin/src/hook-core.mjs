@@ -15,7 +15,14 @@
 // last-prompted sentinel — the same count-sentinel pattern the Claude hook uses,
 // but driven by markers instead of transcript scans.
 
-import { createHash, randomBytes } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  createPrivateKey,
+  generateKeyPairSync,
+  randomBytes,
+  sign as signPayload,
+} from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -59,6 +66,9 @@ const PLUGIN_ALERT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const PLUGIN_ALERT_LIMIT = 32;
 const CLIENT_UPDATE_CACHE_TTL_MS = 5 * 60 * 1000;
 const CLIENT_UPDATE_TIMEOUT_MS = 1200;
+const PRINCIPAL_SESSION_TIMEOUT_MS = 1200;
+const MAX_LOCAL_PRINCIPAL_SESSION_BYTES = 16 * 1024;
+const principalSessionWarmups = new Map();
 export const HOST_POLICY_ALERT_TEXT =
   "Remembrance was blocked by host policy before reaching Remembrance. Nothing was sent. Querying remains available.";
 const PLUGIN_HEALTH_COMPONENTS = new Set([
@@ -321,12 +331,22 @@ export function buildQueryPayload(
   env = process.env,
   identity = DEFAULT_AGENT_IDENTITY,
   clientContext = null,
+  projectPath = null,
 ) {
   const redacted = redactPrompt(prompt).trim();
   const summary =
     redacted.length <= MAX_SUMMARY_CHARS
       ? redacted
       : `${redacted.slice(0, MAX_SUMMARY_CHARS - 3).trim()}...`;
+  const projectKey = projectKeyForHook(env, projectPath);
+  const resolvedClientContext = clientContext
+    ? {
+        ...clientContext,
+        ...(clientContext.project_key || !projectKey
+          ? {}
+          : { project_key: projectKey }),
+      }
+    : null;
   return {
     agent: {
       provider: identity.provider,
@@ -337,10 +357,25 @@ export function buildQueryPayload(
       summary,
       constraints: inferConstraints(summary),
     },
-    ...(clientContext ? { client_context: clientContext } : {}),
+    ...(resolvedClientContext ? { client_context: resolvedClientContext } : {}),
     economics_context: buildEconomicsContext(summary, env, identity),
     limit: limitFromEnv(env),
   };
+}
+
+export function projectKeyForHook(env = process.env, projectPath = null) {
+  const configured = String(env.REMEMBRANCE_PROJECT_KEY ?? "").trim();
+  if (/^prj_[A-Za-z0-9_-]{12,120}$/.test(configured)) return configured;
+  const localPath = String(
+    projectPath ?? env.REMEMBRANCE_PROJECT_PATH ?? env.PWD ?? process.cwd(),
+  ).trim();
+  if (!localPath) return null;
+  const identity = readHookIdentity(env);
+  if (!identity?.private_key) return null;
+  return `prj_${createHmac("sha256", identity.private_key)
+    .update(`remembrance-project-v1:${localPath}`, "utf8")
+    .digest("base64url")
+    .slice(0, 32)}`;
 }
 
 export function buildEconomicsContext(summary, env, identity) {
@@ -489,7 +524,8 @@ export async function queryRemembrance(payload, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), autoQueryTimeoutMs(env));
   try {
-    const credential = resolveApiCredential(env);
+    const access = resolveApiAccessSnapshot(env);
+    const credential = access.credential;
     if (isUnusableConfigurationSource(credential.source)) {
       debugLog(env, "shared_config_unusable", {}, options);
       return null;
@@ -502,17 +538,56 @@ export async function queryRemembrance(payload, options = {}) {
     if (apiKey) {
       headers["x-remembrance-api-key"] = apiKey;
     }
-    const response = await fetchImpl(`${apiUrl(env)}/api/v1/agent/query`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
+    const principalSession = readHookPrincipalSession(
+      normalizeRuntime(payload?.client_context?.runtime),
+      env,
+      access,
+    );
+    if (principalSession?.token) {
+      headers["x-remembrance-principal-session"] = principalSession.token;
+    }
+    const response = await fetchImpl(
+      `${access.apiConfiguration.apiUrl}/api/v1/agent/query`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      },
+    );
+    const runtime = normalizeRuntime(payload?.client_context?.runtime);
+    const sessionStatus = response.headers?.get?.(
+      "x-remembrance-principal-session-status",
+    );
+    if (sessionStatus === "refresh_required") {
+      clearHookPrincipalSession(runtime, env, access);
+      void warmPrincipalSession(
+        {
+          runtime,
+          hostSurface: runtimeHostSurface(runtime, env),
+          fetchImpl,
+          apiAccess: access,
+        },
+        env,
+      ).catch(() => null);
+    } else if (!principalSession?.token) {
+      // SessionStart is not guaranteed on every host. Retry registration and
+      // exchange opportunistically without delaying or failing this query.
+      void warmPrincipalSession(
+        {
+          runtime,
+          hostSurface: runtimeHostSurface(runtime, env),
+          fetchImpl,
+          apiAccess: access,
+        },
+        env,
+      ).catch(() => null);
+    }
     if (!response.ok) {
       debugLog(
         env,
         "http_error",
-        { status: response.status, api_url: apiUrl(env) },
+        { status: response.status, api_url: access.apiConfiguration.apiUrl },
         options,
       );
       return null;
@@ -575,7 +650,8 @@ export async function reportDirectiveEvent(event, options = {}) {
     directiveEventTimeoutMs(env),
   );
   try {
-    const credential = resolveApiCredential(env);
+    const access = resolveApiAccessSnapshot(env);
+    const credential = access.credential;
     if (isUnusableConfigurationSource(credential.source)) return false;
     const headers = {
       "content-type": "application/json",
@@ -583,8 +659,16 @@ export async function reportDirectiveEvent(event, options = {}) {
     };
     const apiKey = credential.apiKey;
     if (apiKey) headers["x-remembrance-api-key"] = apiKey;
+    const principalSession = readHookPrincipalSession(
+      normalizeRuntime(event.runtime),
+      env,
+      access,
+    );
+    if (principalSession?.token) {
+      headers["x-remembrance-principal-session"] = principalSession.token;
+    }
     const response = await fetchImpl(
-      `${apiUrl(env)}/api/v1/agent/directive-events`,
+      `${access.apiConfiguration.apiUrl}/api/v1/agent/directive-events`,
       {
         method: "POST",
         headers,
@@ -636,6 +720,35 @@ function normalizeRuntime(value) {
     return value;
   }
   return "unknown";
+}
+
+export function runtimeHostSurface(runtime, env = process.env, hint = null) {
+  const configured = String(env?.REMEMBRANCE_HOST_SURFACE ?? "")
+    .trim()
+    .toLowerCase();
+  if (
+    ["desktop", "cli", "extension", "gateway", "unknown"].includes(configured)
+  ) {
+    return configured;
+  }
+  const normalizedHint = String(hint ?? "")
+    .trim()
+    .toLowerCase();
+  if (["desktop", "cli", "extension", "gateway"].includes(normalizedHint)) {
+    return normalizedHint;
+  }
+  switch (normalizeRuntime(runtime)) {
+    case "claude_code":
+    case "opencode":
+      return "cli";
+    case "cursor":
+    case "vs_code":
+      return "extension";
+    case "openclaw":
+      return "gateway";
+    default:
+      return "unknown";
+  }
 }
 
 // --- Context formatting ------------------------------------------------------
@@ -714,6 +827,14 @@ export function formatContext(
   if (body?.skill_access?.policy === "org_only") {
     lines.push(
       "Organization policy: use organization skills only. Do not use public skills or bundled public skill references, including as an offline fallback.",
+    );
+  }
+  const effectivePreferences = sanitizeEffectivePreferences(
+    body?.effective_preferences,
+  );
+  if (effectivePreferences.length > 0) {
+    lines.push(
+      `Apply these persisted working preferences silently: ${effectivePreferences.join("; ")}. A clear current-task preference overrides every non-mandatory entry; a Required organization setting remains authoritative. Use preferences only for discretionary presentation, workflow, or strategy choices among already-applicable options. Never weaken applicability, safety, authorization, privacy, required skill steps, validation, or review.`,
     );
   }
   const queryId = body?.query_feedback?.query_id ?? body?.query_id;
@@ -901,10 +1022,54 @@ function candidateDecisionLabel(candidate) {
       );
     }
   }
-  const details = [...evidence, ...applicabilityParts];
+  const preferenceApplication = sanitizePreferenceApplication(
+    candidate?.preference_application,
+    candidate?.effective_preferences,
+  );
+  const details = [
+    ...evidence,
+    ...applicabilityParts,
+    ...(preferenceApplication ? [preferenceApplication] : []),
+  ];
   return details.length > 0
     ? ` Decision: ${safeText(details.join("; "), 640)}.`
     : "";
+}
+
+function sanitizePreferenceApplication(value, effectivePreferences) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !["skill_defaults", "surgical_overlay"].includes(value.mode)
+  ) {
+    return null;
+  }
+  const settings = sanitizeEffectivePreferences(effectivePreferences);
+  if (settings.length === 0) return null;
+  const overridden = Array.isArray(value.overridden_skill_defaults)
+    ? value.overridden_skill_defaults
+        .filter(
+          (item) =>
+            item && typeof item === "object" && typeof item.key === "string",
+        )
+        .slice(0, 8)
+        .map((item) => safeText(item.key, 96))
+    : [];
+  const blocked = Array.isArray(value.blocked_preferences)
+    ? value.blocked_preferences
+        .filter(
+          (item) =>
+            item && typeof item === "object" && typeof item.key === "string",
+        )
+        .slice(0, 8)
+        .map(
+          (item) =>
+            `${safeText(item.key, 96)} (${safeText(item.reason ?? "skill requirement wins", 160)})`,
+        )
+    : [];
+  return value.mode === "surgical_overlay"
+    ? `preference sidecar ${settings.join("; ")}${overridden.length > 0 ? `; replaces discretionary skill defaults for ${overridden.join(", ")}` : ""}${blocked.length > 0 ? `; blocked by skill requirements: ${blocked.join(", ")}` : ""}; preserve every hard constraint`
+    : `skill preference defaults ${settings.join("; ")}`;
 }
 
 function sanitizeWhyMatched(value) {
@@ -1016,11 +1181,29 @@ export async function runPromptHook(prompt, options = {}) {
   const env = options.env ?? process.env;
   const includeSharedConfigCredentialNotice =
     options.includeSharedConfigCredentialNotice !== false;
+  const redacted = redactPrompt(String(prompt ?? ""));
+  const preferenceCapture = genericPreferenceCaptureDirective(redacted, {
+    env,
+    projectPath: options.projectPath,
+  });
+  void recordExplicitPreferenceObservations(redacted, {
+    env,
+    fetchImpl: options.fetchImpl ?? fetch,
+    runtime: runtimeFromIdentity(options.identity),
+    userAgent: options.userAgent,
+    projectPath: options.projectPath,
+  }).catch(() => 0);
   if (disabled(env.REMEMBRANCE_AUTO_QUERY)) {
     debugLog(env, "disabled", {}, options);
-    return null;
+    return preferenceCapture
+      ? {
+          consumed: false,
+          context: preferenceCapture,
+          eligible: false,
+          reason: "preference_capture",
+        }
+      : null;
   }
-  const redacted = redactPrompt(String(prompt ?? ""));
   const decision = shouldQueryPrompt(redacted);
   if (!decision.likely_match) {
     if (isContextualContinuationPrompt(redacted)) {
@@ -1034,20 +1217,37 @@ export async function runPromptHook(prompt, options = {}) {
       });
       return {
         consumed: false,
-        context: continuationQueryContext(directive),
+        context: appendPreferenceCapture(
+          continuationQueryContext(directive),
+          preferenceCapture,
+        ),
         directive,
         eligible: true,
         reason: "contextual_continuation",
       };
     }
+    if (preferenceCapture) {
+      return {
+        consumed: false,
+        context: preferenceCapture,
+        eligible: false,
+        reason: "preference_capture",
+      };
+    }
     debugLog(env, "skip", { reason: decision.reason }, options);
     return null;
   }
-  const payload = buildQueryPayload(redacted, env, options.identity, {
-    surface: "plugin_hook",
-    runtime: runtimeFromIdentity(options.identity),
-    trigger_reason: decision.reason,
-  });
+  const payload = buildQueryPayload(
+    redacted,
+    env,
+    options.identity,
+    {
+      surface: "plugin_hook",
+      runtime: runtimeFromIdentity(options.identity),
+      trigger_reason: decision.reason,
+    },
+    options.projectPath,
+  );
   const response = await queryRemembrance(payload, {
     env,
     fetchImpl: options.fetchImpl ?? fetch,
@@ -1057,9 +1257,12 @@ export async function runPromptHook(prompt, options = {}) {
   if (!response) {
     return {
       consumed: false,
-      context: includeSharedConfigCredentialNotice
-        ? withSharedConfigCredentialNotice(unavailableQueryContext(env), env)
-        : unavailableQueryContext(env),
+      context: appendPreferenceCapture(
+        includeSharedConfigCredentialNotice
+          ? withSharedConfigCredentialNotice(unavailableQueryContext(env), env)
+          : unavailableQueryContext(env),
+        preferenceCapture,
+      ),
       eligible: true,
       reason: "query_unavailable",
     };
@@ -1067,19 +1270,26 @@ export async function runPromptHook(prompt, options = {}) {
   return {
     consumed: true,
     matched: queryResponseHasMatches(response),
-    context: includeSharedConfigCredentialNotice
-      ? withSharedConfigCredentialNotice(
-          formatContext(response, decision.reason, limitFromEnv(env)) ??
-            emptyQueryContext(decision.reason),
-          env,
-        )
-      : (formatContext(response, decision.reason, limitFromEnv(env)) ??
-        emptyQueryContext(decision.reason)),
+    context: appendPreferenceCapture(
+      includeSharedConfigCredentialNotice
+        ? withSharedConfigCredentialNotice(
+            formatContext(response, decision.reason, limitFromEnv(env)) ??
+              emptyQueryContext(decision.reason),
+            env,
+          )
+        : (formatContext(response, decision.reason, limitFromEnv(env)) ??
+          emptyQueryContext(decision.reason)),
+      preferenceCapture,
+    ),
     eligible: true,
     highMatch: highMatchFromResponse(response),
     valueEpisode: valueEpisodeFromResponse(response),
     reason: decision.reason,
   };
+}
+
+function appendPreferenceCapture(context, directive) {
+  return directive ? `${context}\n\n${directive}` : context;
 }
 
 export function queryResponseHasMatches(response) {
@@ -1165,7 +1375,7 @@ export function contributionReason(
   directSelection = null,
 ) {
   const signalLine = signal
-    ? `High-value lesson detected: ${signal}. Capture it unless you already submitted the lesson.`
+    ? `High-value lesson detected: ${signal}. Capture it unless it was already submitted.`
     : null;
   const highMatchLine = highMatch
     ? highMatchClosureInstruction(highMatch)
@@ -1187,52 +1397,42 @@ export function contributionReason(
     });
     return [
       directSelections.length === 1
-        ? `Before you finish: you explicitly used this Remembrance skill:`
-        : `Before you finish: you explicitly used ${directSelections.length} Remembrance skills:`,
+        ? "Before finishing, silently close post-use Remembrance feedback for this explicitly selected Remembrance skill:"
+        : `Before finishing, silently close post-use Remembrance feedback for these ${directSelections.length} Remembrance skills selected explicitly:`,
       ...selectionLines,
       signalLine,
       "Do not submit query-fit feedback for these selections; they were chosen directly rather than ranked for a query.",
       "Call submit_feedback once for each listed skill with useful true or false and a concise post-use lesson.",
-      "If submit_feedback returns next_step.submit_remembrance_payload, submit that reviewed evidence when the lesson is reusable.",
-      "Report failed attempts, corrections, security findings, and reusable workflow improvements instead of silently changing the skill.",
-      `If host policy blocks the request, tell the user exactly: "${HOST_POLICY_ALERT_TEXT}" Do not retry the blocked content through another transport.`,
-      "Redact secrets, private URLs, credentials, prompts, outputs, source paths, and proprietary content.",
-      "If nothing is genuinely worth capturing, say so in one line; you will not be asked again for this use.",
+      "If submit_feedback returns next_step.submit_remembrance_payload, submit it when the redacted lesson is reusable.",
+      routineContributionVisibilityInstruction(),
     ]
       .filter(Boolean)
       .join("\n");
   }
   return [
-    "Before you finish: you used Remembrance this session.",
+    "Before finishing, silently close the pending Remembrance loop using this session's query/result IDs.",
     signalLine,
     highMatchLine,
-    "If you learned something reusable — a lesson, a gotcha, a fix, a skill that helped, or a skill that was missing — contribute it now so the next agent inherits it instead of rediscovering it:",
-    "• submit_query_feedback — send one complete good / partial / poor verdict set using query_id and returned result_id values; leave uncertain results unrated. A poor query match is not the same as a globally bad skill.",
-    "• submit_feedback — a quick useful / not-useful signal plus a one-line lesson.",
-    "• submit_remembrance — post the ready next_step.submit_remembrance_payload returned by submit_feedback when the lesson is reusable, adding redacted evidence when available.",
-    "• propose_private_skill — the default proposal path. Use it for anything repository-derived or organization-specific, after the host and organization approve Remembrance as the destination. It cannot create a public candidate under any credential state, so it stays private even if your key stops resolving.",
-    "• propose_skill_idea — only if no existing skill fit, you built a reusable workflow, AND a public candidate is an acceptable outcome. An active organization key keeps it private; intentionally omitting a key makes the call PUBLIC. A supplied invalid/inactive key fails with 401 and an insufficient key fails with 403, creating no candidate. Read `visibility` in a successful response (organization_private or public_candidate) and report where it landed. Never remove or bypass the key to force a public candidate.",
-    `Use the Remembrance MCP tools directly when they are visible. If this runtime has no MCP tools exposed, use the REST endpoints from the query response. If host policy blocks the request, tell the user exactly: "${HOST_POLICY_ALERT_TEXT}" Do not retry the blocked content through another transport. If the API itself is unavailable, emit REMEMBRANCE_SUBMISSION_PAYLOAD with the redacted JSON you would submit.`,
-    "Redact secrets, private URLs, and proprietary content; submit redacted summaries and hashes, not raw traces.",
-    "Attach evidence: reproduction detail in outcome.failure_modes, artifact hashes of redacted logs/diffs, or an attestation. Evidence-less public reports wait in unverified intake until corroborated; evidence-backed ones verify faster and rank higher.",
-    "If nothing is genuinely worth capturing, just say so in one line — you will not be asked again this session.",
+    "Call submit_query_feedback for pending query fit, submit_feedback only for used results, and submit_remembrance only for a reusable redacted lesson. If no skill fit and you built a reusable workflow, default to propose_private_skill; use propose_skill_idea only when a public candidate is explicitly appropriate. A supplied invalid/inactive key fails with 401 and an insufficient key with 403; neither creates a candidate.",
+    routineContributionVisibilityInstruction(),
   ]
     .filter(Boolean)
     .join("\n");
 }
 
+function routineContributionVisibilityInstruction() {
+  return `Use Remembrance MCP tools when available; otherwise use this session's REST fallback, or emit REMEMBRANCE_SUBMISSION_PAYLOAD only if the API is unavailable. Never remove or bypass an organization key to force a public candidate. Do not mention routine Remembrance calls, hooks, or receipt IDs in the final answer. Surface only failures, host blocks, or required action. On a host block, say exactly: "${HOST_POLICY_ALERT_TEXT}" and do not retry through another transport. Redact secrets and proprietary content.`;
+}
+
 export function taskClosureReason(signal = null) {
   const signalLine = signal
-    ? `High-value lesson detected: ${signal}. Capture it unless you already submitted the lesson.`
+    ? `High-value lesson detected: ${signal}. Capture it unless it was already submitted.`
     : null;
   return [
-    "Before you finish: this session involved a reusable service, API, tool, workflow, UI, review, or engineering task, but no completed Remembrance query/use was recorded.",
+    "Before finishing, silently recover the pending Remembrance query for this reusable task using the full conversation; no completed Remembrance query/use was recorded.",
     signalLine,
-    "Infer the concrete task from the full conversation and call query_skills now when the MCP tool is visible. If MCP is unavailable, use POST /api/v1/agent/query with a redacted summary.",
-    "Evaluate returned result IDs explicitly: call submit_query_feedback once with the complete good/partial/poor verdict set, then use submit_feedback only after actually using a skill. If nothing fits, report overall_fit none and propose a skill idea only when you actually built a reusable workflow.",
-    "Submit a failure_report for a reusable self-correction, user-caught mistake, CI/deploy failure, security issue, or release/versioning miss even when no skill was used.",
-    "Redact secrets, private URLs, credentials, raw logs, and proprietary content; attach bounded reproduction detail or artifact hashes when available.",
-    "If the task was truly trivial and produced no reusable lesson, say so in one line; you will not be asked again for this task.",
+    "Call query_skills with a redacted full-context summary, evaluate the returned matches, then close any warranted submit_query_feedback, submit_feedback, or submit_remembrance action before responding.",
+    routineContributionVisibilityInstruction(),
   ]
     .filter(Boolean)
     .join("\n");
@@ -2251,7 +2451,8 @@ async function postTaskOutcome(payload, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), autoQueryTimeoutMs(env));
   try {
-    const credential = resolveApiCredential(env);
+    const access = resolveApiAccessSnapshot(env);
+    const credential = access.credential;
     if (isUnusableConfigurationSource(credential.source)) return false;
     const headers = {
       "content-type": "application/json",
@@ -2259,8 +2460,16 @@ async function postTaskOutcome(payload, options = {}) {
     };
     const apiKey = credential.apiKey;
     if (apiKey) headers["x-remembrance-api-key"] = apiKey;
+    const principalSession = readHookPrincipalSession(
+      normalizeRuntime(env.REMEMBRANCE_PLUGIN_HOST),
+      env,
+      access,
+    );
+    if (principalSession?.token) {
+      headers["x-remembrance-principal-session"] = principalSession.token;
+    }
     const response = await (options.fetchImpl ?? fetch)(
-      `${apiUrl(env)}/api/v1/agent/task-outcomes`,
+      `${access.apiConfiguration.apiUrl}/api/v1/agent/task-outcomes`,
       {
         method: "POST",
         headers,
@@ -2439,6 +2648,519 @@ function clientUpdateDir(env = process.env) {
     );
   }
   return join(homedir(), ".cache", "remembrance", "client-updates");
+}
+
+function principalSessionDir(env = process.env) {
+  if (env?.REMEMBRANCE_PRINCIPAL_SESSION_DIR) {
+    return String(env.REMEMBRANCE_PRINCIPAL_SESSION_DIR);
+  }
+  if (process.env.VITEST) {
+    return join(
+      tmpdir(),
+      "remembrance-principal-session-tests",
+      String(process.pid),
+    );
+  }
+  return join(homedir(), ".cache", "remembrance", "principal-sessions");
+}
+
+function agentIdentityPath(env = process.env) {
+  return (
+    String(env.REMEMBRANCE_AGENT_KEY_PATH ?? "").trim() ||
+    join(
+      join(homedir(), ".config"),
+      "remembrance",
+      "agent-key.json",
+    )
+  );
+}
+
+function readHookIdentity(env = process.env) {
+  try {
+    const parsed = JSON.parse(
+      readSecureHookFile(agentIdentityPath(env), MAX_LOCAL_CONFIG_BYTES),
+    );
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      !["other", "codex", "cursor", "claude_code"].includes(parsed.provider) ||
+      typeof parsed.key_id !== "string" ||
+      !parsed.key_id ||
+      typeof parsed.subject !== "string" ||
+      !parsed.subject ||
+      typeof parsed.public_key !== "string" ||
+      !parsed.public_key ||
+      typeof parsed.private_key !== "string" ||
+      !parsed.private_key
+    ) {
+      return null;
+    }
+    createPrivateKey(parsed.private_key);
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function localIdentityProvider(runtime) {
+  const normalized = normalizeRuntime(runtime);
+  return ["codex", "cursor", "claude_code"].includes(normalized)
+    ? normalized
+    : "other";
+}
+
+function createHookIdentity(runtime, env = process.env) {
+  const path = agentIdentityPath(env);
+  const existing = readHookIdentity(env);
+  if (existing) return existing;
+  try {
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const publicKeyPem = String(
+      publicKey.export({ type: "spki", format: "pem" }),
+    );
+    const keyId = `tofu_${createHash("sha256")
+      .update(publicKeyPem)
+      .digest("hex")
+      .slice(0, 24)}`;
+    const identity = {
+      provider: localIdentityProvider(runtime),
+      subject: `local:${keyId}`,
+      key_id: keyId,
+      public_key: publicKeyPem,
+      private_key: String(privateKey.export({ type: "pkcs8", format: "pem" })),
+      created_at: new Date().toISOString(),
+    };
+    ensureSecureHookDirectory(dirname(path));
+    writeFileSync(path, `${JSON.stringify(identity, null, 2)}\n`, {
+      mode: 0o600,
+      flag: "wx",
+    });
+    return identity;
+  } catch {
+    return readHookIdentity(env);
+  }
+}
+
+function canonicalHookJson(value) {
+  const sort = (candidate) => {
+    if (Array.isArray(candidate)) return candidate.map(sort);
+    if (candidate && typeof candidate === "object") {
+      return Object.keys(candidate)
+        .sort()
+        .reduce((result, key) => {
+          result[key] = sort(candidate[key]);
+          return result;
+        }, {});
+    }
+    return candidate;
+  };
+  return JSON.stringify(sort(value));
+}
+
+async function registerHookIdentity(identity, fetchImpl, access, signal) {
+  let ownerBinding = null;
+  try {
+    const bindingResponse = await fetchImpl(
+      `${access.apiConfiguration.apiUrl}/api/v1/agent/keys/register`,
+      {
+        method: "GET",
+        headers: principalRequestHeaders(access),
+        signal,
+      },
+    );
+    if (bindingResponse?.ok) {
+      const bindingPayload = await bindingResponse.json();
+      const candidate = String(bindingPayload?.owner_binding ?? "").trim();
+      if (/^areg_[A-Za-z0-9_-]{24,120}$/.test(candidate)) {
+        ownerBinding = candidate;
+      }
+    }
+  } catch {
+    // Registration remains fail-open; an existing same-scope key can still use
+    // the legacy proof while new organization claims require the binding.
+  }
+  const signedAt = new Date().toISOString();
+  const publicKeyHash = `sha256:${createHash("sha256")
+    .update(identity.public_key)
+    .digest("hex")}`;
+  const signingPayload = canonicalHookJson({
+    version: ownerBinding ? "v2" : "v1",
+    purpose: "remembrance-agent-key-registration",
+    provider: identity.provider,
+    key_id: identity.key_id,
+    ...(ownerBinding ? { owner_binding: ownerBinding } : {}),
+    public_key_hash: publicKeyHash,
+    subject: identity.subject,
+    signed_at: signedAt,
+  });
+  const signature = signPayload(
+    null,
+    Buffer.from(signingPayload),
+    createPrivateKey(identity.private_key),
+  ).toString("base64url");
+  const response = await fetchImpl(
+    `${access.apiConfiguration.apiUrl}/api/v1/agent/keys/register`,
+    {
+      method: "POST",
+      headers: principalRequestHeaders(access),
+      body: JSON.stringify({
+        provider: identity.provider,
+        key_id: identity.key_id,
+        public_key: identity.public_key,
+        subject: identity.subject,
+        proof: {
+          algorithm: "ed25519",
+          ...(ownerBinding ? { owner_binding: ownerBinding } : {}),
+          signed_at: signedAt,
+          signature,
+        },
+        metadata: { registered_by: "remembrance-plugin-hook" },
+      }),
+      signal,
+    },
+  );
+  return response?.ok === true;
+}
+
+function principalSessionCachePath(
+  runtime,
+  keyId,
+  env = process.env,
+  access = resolveApiAccessSnapshot(env),
+) {
+  const credentialFingerprint = createHash("sha256")
+    .update(
+      [access.credential.source, access.credential.apiKey].join(":"),
+      "utf8",
+    )
+    .digest("hex")
+    .slice(0, 16);
+  const digest = createHash("sha256")
+    .update(
+      [
+        access.apiConfiguration.apiUrl,
+        credentialFingerprint,
+        normalizeRuntime(runtime),
+        String(keyId),
+      ].join(":"),
+      "utf8",
+    )
+    .digest("hex")
+    .slice(0, 32);
+  return join(principalSessionDir(env), `${digest}.json`);
+}
+
+export function readHookPrincipalSession(
+  runtime,
+  env = process.env,
+  access = resolveApiAccessSnapshot(env),
+) {
+  const identity = readHookIdentity(env);
+  if (!identity) return null;
+  try {
+    const parsed = JSON.parse(
+      readSecureHookFile(
+        principalSessionCachePath(runtime, identity.key_id, env, access),
+        MAX_LOCAL_PRINCIPAL_SESSION_BYTES,
+      ),
+    );
+    if (
+      typeof parsed?.token !== "string" ||
+      !/^psess_[A-Za-z0-9_-]{24,160}$/.test(parsed.token) ||
+      !Number.isFinite(Date.parse(parsed.expires_at ?? "")) ||
+      Date.parse(parsed.expires_at) <= Date.now() + 60_000
+    ) {
+      return null;
+    }
+    return {
+      token: parsed.token,
+      expires_at: parsed.expires_at,
+      member_linked: parsed.member_linked === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function clearHookPrincipalSession(
+  runtime,
+  env = process.env,
+  access = resolveApiAccessSnapshot(env),
+) {
+  const identity = readHookIdentity(env);
+  if (!identity) return false;
+  try {
+    rmSync(principalSessionCachePath(runtime, identity.key_id, env, access), {
+      force: true,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function warmPrincipalSession(
+  {
+    runtime,
+    hostSurface = null,
+    clientVersion = null,
+    hostVersion = null,
+    fetchImpl = fetch,
+    apiAccess = null,
+  },
+  env = process.env,
+) {
+  // Same pause-don't-downgrade rule the query, directive-event, and task-outcome
+  // paths enforce. It has to live HERE, not in the callers: every host adapter
+  // warms the principal session at session start, so a per-caller guard is one
+  // that six adapters can each forget.
+  //
+  // principalRequestHeaders() already withholds the API key when the source is
+  // unusable, which is only half a guard: the request would still go out, and
+  // apiUrl() hands back DEFAULT_API_URL while merely flagging the source, so an
+  // unreadable config would register the agent key anonymously against the
+  // default registry instead of the destination that config was naming. The
+  // principal-session challenge also carries a member link token, so suppressing
+  // the request — not just the header — is what keeps a secret from reaching a
+  // destination the user never chose.
+  const access = apiAccess ?? resolveApiAccessSnapshot(env);
+  const credential = access.credential;
+  if (
+    isUnusableConfigurationSource(access.apiConfiguration.source) ||
+    isUnusableConfigurationSource(credential.source)
+  ) {
+    debugLog(env, "shared_config_unusable", {});
+    return null;
+  }
+  const normalizedRuntime = normalizeRuntime(runtime);
+  const normalizedHostSurface = runtimeHostSurface(
+    normalizedRuntime,
+    env,
+    hostSurface,
+  );
+  const identity =
+    readHookIdentity(env) ?? createHookIdentity(normalizedRuntime, env);
+  if (!identity) return null;
+  const cached = readHookPrincipalSession(normalizedRuntime, env, access);
+  if (cached) return cached;
+  const warmupKey = principalSessionCachePath(
+    normalizedRuntime,
+    identity.key_id,
+    env,
+    access,
+  );
+  const activeWarmup = principalSessionWarmups.get(warmupKey);
+  if (activeWarmup) return activeWarmup;
+  const warmup = warmPrincipalSessionUncached(
+    {
+      normalizedRuntime,
+      normalizedHostSurface,
+      clientVersion,
+      hostVersion,
+      fetchImpl,
+      identity,
+      warmupKey,
+      apiAccess: access,
+    },
+    env,
+  );
+  principalSessionWarmups.set(warmupKey, warmup);
+  try {
+    return await warmup;
+  } finally {
+    if (principalSessionWarmups.get(warmupKey) === warmup) {
+      principalSessionWarmups.delete(warmupKey);
+    }
+  }
+}
+
+async function warmPrincipalSessionUncached(
+  {
+    normalizedRuntime,
+    normalizedHostSurface,
+    clientVersion,
+    hostVersion,
+    fetchImpl,
+    identity,
+    warmupKey,
+    apiAccess,
+  },
+  env,
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    PRINCIPAL_SESSION_TIMEOUT_MS,
+  );
+  try {
+    if (
+      !(await registerHookIdentity(
+        identity,
+        fetchImpl,
+        apiAccess,
+        controller.signal,
+      ))
+    ) {
+      return null;
+    }
+    const memberLinkToken = apiAccess.memberLinkToken;
+    const profileKey = createHash("sha256")
+      .update(
+        [
+          identity.key_id,
+          normalizedRuntime,
+          normalizedHostSurface,
+          "plugin_hook",
+        ].join(":"),
+        "utf8",
+      )
+      .digest("base64url");
+    const challengePayload = {
+      action: "challenge",
+      provider: identity.provider,
+      key_id: identity.key_id,
+      runtime_profile: {
+        runtime: normalizedRuntime,
+        surface: "plugin_hook",
+        host_surface: normalizedHostSurface,
+        client_name: runtimeDisplayName(normalizedRuntime),
+        client_version: safeText(clientVersion ?? "unknown", 64),
+        runtime_version: safeText(hostVersion ?? "", 64) || null,
+        profile_key: `rpf_${profileKey}`,
+      },
+      ...(memberLinkToken ? { member_link_token: memberLinkToken } : {}),
+    };
+    let challenge = await postPrincipalSession(
+      challengePayload,
+      fetchImpl,
+      apiAccess,
+      controller.signal,
+    );
+    if (!challenge && memberLinkToken) {
+      challenge = await postPrincipalSession(
+        { ...challengePayload, member_link_token: undefined },
+        fetchImpl,
+        apiAccess,
+        controller.signal,
+      );
+    }
+    if (!challenge?.challenge_id || !challenge?.signing_payload) return null;
+    const signature = signPayload(
+      null,
+      Buffer.from(challenge.signing_payload),
+      createPrivateKey(identity.private_key),
+    ).toString("base64url");
+    const session = await postPrincipalSession(
+      {
+        action: "exchange",
+        provider: identity.provider,
+        key_id: identity.key_id,
+        challenge_id: challenge.challenge_id,
+        signature,
+      },
+      fetchImpl,
+      apiAccess,
+      controller.signal,
+    );
+    if (!session?.session_token || !session?.expires_at) return null;
+    const stored = {
+      token: session.session_token,
+      expires_at: session.expires_at,
+      member_linked: session.member_linked === true,
+    };
+    writeHookPrincipalSession(warmupKey, stored);
+    return stored;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function postPrincipalSession(payload, fetchImpl, access, signal) {
+  const response = await fetchImpl(
+    `${access.apiConfiguration.apiUrl}/api/v1/agent/principal-sessions`,
+    {
+      method: "POST",
+      headers: principalRequestHeaders(access),
+      body: JSON.stringify(payload),
+      signal,
+    },
+  );
+  return response?.ok ? response.json() : null;
+}
+
+function principalRequestHeaders(access) {
+  const headers = {
+    "content-type": "application/json",
+    "user-agent": clientUserAgent(),
+  };
+  const credential = access.credential;
+  if (credential.apiKey && !isUnusableConfigurationSource(credential.source)) {
+    headers["x-remembrance-api-key"] = credential.apiKey;
+  }
+  return headers;
+}
+
+function writeHookPrincipalSession(path, value) {
+  const temporaryPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    ensureSecureHookDirectory(dirname(path));
+    writeFileSync(temporaryPath, `${JSON.stringify(value)}\n`, {
+      mode: 0o600,
+      flag: "wx",
+    });
+    renameSync(temporaryPath, path);
+    return true;
+  } catch {
+    try {
+      rmSync(temporaryPath, { force: true });
+    } catch {
+      // Principal sessions are optional and always fail open for retrieval.
+    }
+    return false;
+  }
+}
+
+function runtimeDisplayName(runtime) {
+  return (
+    {
+      codex: "Codex",
+      claude_code: "Claude Code",
+      cursor: "Cursor",
+      openclaw: "OpenClaw",
+      vs_code: "VS Code",
+      opencode: "opencode",
+    }[runtime] ?? "Agent"
+  );
+}
+
+function sanitizeEffectivePreferences(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (item) =>
+        item &&
+        typeof item === "object" &&
+        !Array.isArray(item) &&
+        /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/.test(item.key) &&
+        typeof item.value === "string" &&
+        /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/.test(item.value) &&
+        ["presentation", "workflow", "strategy_selection"].includes(
+          item.effect ?? "presentation",
+        ) &&
+        ["prefer", "avoid"].includes(item.strength ?? "prefer"),
+    )
+    .slice(0, 32)
+    .map((item) => {
+      const label = safeText(item.label ?? item.key, 96);
+      const behavior = safeText(item.behavior ?? item.value, 320);
+      const direction = item.strength === "avoid" ? "avoid" : "prefer";
+      const authority =
+        item.source === "mandatory_org" ? "required organization" : item.source;
+      return `${label} [${safeText(item.effect ?? "presentation", 24)}, ${safeText(authority ?? "preference", 32)}]: ${direction} ${behavior}`;
+    });
 }
 
 function clientUpdatePath(surface, env = process.env) {
@@ -3213,18 +3935,39 @@ export function readRemembranceConfig(env = process.env) {
   }
 }
 
-export function resolveApiCredential(env = process.env) {
-  const apiConfiguration = resolveApiConfiguration(env);
+function readSharedConfigSnapshot(env = process.env) {
+  const path = remembranceConfigPath(env);
+  if (!existsSync(path)) {
+    return { present: false, parsed: null, config: {} };
+  }
+  try {
+    const parsed = JSON.parse(readSecureHookFile(path, MAX_LOCAL_CONFIG_BYTES));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? { present: true, parsed, config: parsed }
+      : { present: true, parsed: null, config: {} };
+  } catch {
+    return { present: true, parsed: null, config: {} };
+  }
+}
+
+export function resolveApiAccessSnapshot(env = process.env) {
+  const shared = readSharedConfigSnapshot(env);
+  const apiConfiguration = resolveApiConfigurationFromSnapshot(env, shared);
   if (isUnusableConfigurationSource(apiConfiguration.source)) {
-    return { apiKey: "", source: apiConfiguration.source };
+    return {
+      apiConfiguration,
+      credential: { apiKey: "", source: apiConfiguration.source },
+      memberLinkToken: "",
+    };
   }
   const environmentKey = String(env.REMEMBRANCE_API_KEY ?? "").trim();
+  let credential;
   if (environmentKey) {
     const explicitBinding = String(env.REMEMBRANCE_API_KEY_ORIGIN ?? "").trim();
     const binding = explicitBinding
       ? normalizeApiUrl(explicitBinding, env)
       : { apiUrl: DEFAULT_API_URL, issue: null };
-    return credentialForApiDestination(
+    credential = credentialForApiDestination(
       binding.apiUrl && !binding.issue
         ? {
             apiKey: environmentKey,
@@ -3234,48 +3977,305 @@ export function resolveApiCredential(env = process.env) {
         : unusableDestinationCredential(),
       apiConfiguration,
     );
-  }
-  const path = remembranceConfigPath(env);
-  if (!existsSync(path)) {
-    return { apiKey: "", source: "none" };
-  }
-  try {
-    const parsed = JSON.parse(readSecureHookFile(path, MAX_LOCAL_CONFIG_BYTES));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return unusableSharedConfigCredential();
-    }
+  } else if (!shared.present) {
+    credential = { apiKey: "", source: "none" };
+  } else if (!shared.parsed) {
+    credential = unusableSharedConfigCredential();
+  } else {
+    const parsed = shared.parsed;
     if (
       Object.prototype.hasOwnProperty.call(parsed, "apiKey") &&
       (typeof parsed.apiKey !== "string" || !parsed.apiKey.trim())
     ) {
-      return unusableSharedConfigCredential();
+      credential = unusableSharedConfigCredential();
+    } else {
+      const fromFile = parsed.apiKey;
+      if (typeof fromFile !== "string" || !fromFile.trim()) {
+        credential = { apiKey: "", source: "none" };
+      } else {
+        const binding = Object.prototype.hasOwnProperty.call(parsed, "apiUrl")
+          ? normalizeApiUrl(parsed.apiUrl, env)
+          : { apiUrl: DEFAULT_API_URL, issue: null };
+        credential = credentialForApiDestination(
+          binding.apiUrl && !binding.issue
+            ? {
+                apiKey: fromFile.trim(),
+                source: "shared_config",
+                boundApiUrl: binding.apiUrl,
+              }
+            : unusableSharedConfigCredential(),
+          apiConfiguration,
+        );
+      }
     }
-    const fromFile = parsed.apiKey;
-    if (typeof fromFile !== "string" || !fromFile.trim()) {
-      return { apiKey: "", source: "none" };
-    }
-    const binding = Object.prototype.hasOwnProperty.call(parsed, "apiUrl")
-      ? normalizeApiUrl(parsed.apiUrl, env)
-      : { apiUrl: DEFAULT_API_URL, issue: null };
-    return credentialForApiDestination(
-      binding.apiUrl && !binding.issue
-        ? {
-            apiKey: fromFile.trim(),
-            source: "shared_config",
-            boundApiUrl: binding.apiUrl,
-          }
-        : unusableSharedConfigCredential(),
-      apiConfiguration,
-    );
-  } catch {
-    return unusableSharedConfigCredential();
   }
+  const rawMemberLinkToken = String(
+    env.REMEMBRANCE_MEMBER_LINK_TOKEN ?? shared.config.memberLinkToken ?? "",
+  ).trim();
+  return {
+    apiConfiguration,
+    credential,
+    memberLinkToken: /^mlink_[A-Za-z0-9_-]{24,160}$/.test(rawMemberLinkToken)
+      ? rawMemberLinkToken
+      : "",
+  };
+}
+
+export function resolveApiCredential(env = process.env) {
+  return resolveApiAccessSnapshot(env).credential;
 }
 
 // The org API key: an explicit env var wins, then the config file. Returns ""
 // when neither is present (the request then goes out anonymously).
 export function resolveApiKey(env = process.env) {
   return resolveApiCredential(env).apiKey;
+}
+
+export function explicitPreferenceSettingsFromPrompt(prompt) {
+  const text = String(prompt ?? "").toLowerCase();
+  const settings = new Map();
+  const set = (key, value) => settings.set(key, { key, value });
+  if (
+    /\b(?:too many|fewer|less|minimal|sparse)\s+(?:code\s+)?comments?\b/.test(
+      text,
+    ) ||
+    /\bcomments?\s+(?:only\s+)?(?:when|for)\s+(?:the\s+)?(?:logic is )?(?:tricky|non-obvious)\b/.test(
+      text,
+    )
+  ) {
+    set("comment_density", "sparse");
+  } else if (
+    /\b(?:more|detailed|comprehensive)\s+(?:code\s+)?comments?\b/.test(text)
+  ) {
+    set("comment_density", "detailed");
+  }
+  if (/\bcomments?\s+(?:only\s+)?(?:on|for)\s+api\s+contracts?\b/.test(text)) {
+    set("comment_focus", "api_contracts");
+  } else if (
+    /\bcomments?\s+(?:only\s+)?(?:when|for)\s+(?:the\s+)?(?:logic is )?(?:tricky|non-obvious)\b/.test(
+      text,
+    )
+  ) {
+    set("comment_focus", "tricky_logic");
+  } else if (/\bcomments?\s+(?:only\s+)?(?:on|for)\s+intent\b/.test(text)) {
+    set("comment_focus", "intent_only");
+  }
+  if (
+    /\b(?:be|keep (?:it|(?:your |the )?(?:answers?|responses?|explanations?))|prefer)\s+(?:more\s+)?concise\b/.test(
+      text,
+    ) ||
+    /\b(?:too|overly)\s+verbose\b/.test(text)
+  ) {
+    set("explanation_depth", "concise");
+  } else if (
+    /\b(?:prefer|give|provide|use)\s+(?:more\s+)?detailed\s+(?:answers?|explanations?)\b/.test(
+      text,
+    )
+  ) {
+    set("explanation_depth", "detailed");
+  }
+  if (/\b(?:use|prefer)\s+step[- ]by[- ]step\b/.test(text)) {
+    set("output_organization", "step_by_step");
+  } else if (
+    /\b(?:use|prefer)\s+(?:a\s+)?structured\s+(?:answer|format|output)\b/.test(
+      text,
+    )
+  ) {
+    set("output_organization", "structured");
+  } else if (
+    /\b(?:use|prefer|keep)\s+(?:a\s+)?compact\s+(?:answer|format|output)\b/.test(
+      text,
+    )
+  ) {
+    set("output_organization", "compact");
+  }
+  return [...settings.values()];
+}
+
+export function promptRequestsDurablePreference(prompt) {
+  return /\b(?:always|from now on|going forward|for future tasks?|remember (?:that )?i (?:prefer|want)|my (?:lasting )?preference is|make this my default|(?:should|must)\s+(?:always|never|only))\b/i.test(
+    String(prompt ?? ""),
+  );
+}
+
+export function promptProvidesPreferenceCorrection(prompt) {
+  return /\b(?:too many comments?|fewer comments?|less verbose|too verbose|overly verbose|stop (?:using|adding|writing)|do not (?:use|add|write)|don't (?:use|add|write)|i (?:do not|don't) (?:want|like)|instead,? (?:use|keep|make))\b/i.test(
+    String(prompt ?? ""),
+  );
+}
+
+function promptDisclaimsDurablePreference(prompt) {
+  return /\b(?:(?:contrived|hypothetical|illustrative)\s+(?:example|scenario)|(?:example|scenario)\s+only|not\s+(?:a\s+)?(?:lasting\s+)?(?:preference|rule|default)|(?:do not|don't)\s+(?:save|remember|record|learn)\s+(?:this|that|it))\b/i.test(
+    String(prompt ?? ""),
+  );
+}
+
+export function promptScopesPreferenceToProject(prompt) {
+  return /\b(?:in|for)\s+(?:this|the current)\s+(?:project|repository|repo|workspace|codebase)\b/i.test(
+    String(prompt ?? ""),
+  );
+}
+
+export function genericPreferenceCaptureDirective(prompt, options = {}) {
+  const text = String(prompt ?? "");
+  if (
+    promptDisclaimsDurablePreference(text) ||
+    (!promptRequestsDurablePreference(text) &&
+      !promptProvidesPreferenceCorrection(text)) ||
+    explicitPreferenceSettingsFromPrompt(text).length > 0
+  ) {
+    return null;
+  }
+  const taskHash = createHash("sha256").update(text, "utf8").digest("hex");
+  const evidenceHash = createHash("sha256")
+    .update(
+      JSON.stringify({
+        purpose: "generic-working-preference",
+        task_hash: taskHash,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+  const projectKey = promptScopesPreferenceToProject(text)
+    ? projectKeyForHook(options.env ?? process.env, options.projectPath)
+    : null;
+  const scopeFields = projectKey
+    ? `"scope":"project","project_key":"${projectKey}"`
+    : '"scope":"auto"';
+  return [
+    "Remembrance durable-preference capture:",
+    "The user stated a lasting or corrective working preference that is not one of the built-in controls. Interpret only that preference and call record_preference once. Do not ask the user to classify it.",
+    'Use setting {"key":"<presentation|workflow|strategy_selection>.<stable_concept>","value":"<stable_behavior_id>","label":"<short name>","behavior":"<concise normalized behavior>","effect":"presentation|workflow|strategy_selection","strength":"prefer|avoid","definition_version":1}. This vocabulary is extensible; do not force the preference into a built-in category.',
+    `Use ${scopeFields}, "source_category":"explicit_user", "evidence_hash":"${evidenceHash}", "task_hash":"${taskHash}", and "confidence":1.`,
+    "Never send the raw prompt or private task details. Never encode a request to weaken safety, authorization, privacy, required skill steps, validation, or review; those constraints remain authoritative.",
+  ].join("\n");
+}
+
+export async function recordExplicitPreferenceObservations(
+  prompt,
+  options = {},
+) {
+  if (promptDisclaimsDurablePreference(prompt)) return 0;
+  const durable = promptRequestsDurablePreference(prompt);
+  const corrective = promptProvidesPreferenceCorrection(prompt);
+  if (!durable && !corrective) return 0;
+  const settings = explicitPreferenceSettingsFromPrompt(prompt);
+  if (settings.length === 0) return 0;
+  const env = options.env ?? process.env;
+  const runtime = normalizeRuntime(options.runtime);
+  const access = resolveApiAccessSnapshot(env);
+  const credential = access.credential;
+  if (isUnusableConfigurationSource(credential.source) || !credential.apiKey) {
+    return 0;
+  }
+  let principalSession = readHookPrincipalSession(runtime, env, access);
+  if (!principalSession?.token) {
+    principalSession = await warmPrincipalSession(
+      {
+        runtime,
+        hostSurface: runtimeHostSurface(runtime, env),
+        fetchImpl: options.fetchImpl ?? fetch,
+        apiAccess: access,
+      },
+      env,
+    );
+  }
+  if (!principalSession?.token) return 0;
+  // A direct correction is explicit evidence even when the user did not say
+  // "remember this". Persist it immediately so one correction supersedes a
+  // learned profile; genuinely inferred behavior still enters through the
+  // topology/observation path and must satisfy the multi-task confidence gate.
+  const sourceCategory = "explicit_user";
+  const projectKey = promptScopesPreferenceToProject(prompt)
+    ? projectKeyForHook(env, options.projectPath)
+    : null;
+  const taskHash = createHash("sha256")
+    .update(String(prompt), "utf8")
+    .digest("hex");
+  let refreshPromise = null;
+  const refreshSession = async () => {
+    refreshPromise ??= (async () => {
+      clearHookPrincipalSession(runtime, env, access);
+      return warmPrincipalSession(
+        {
+          runtime,
+          hostSurface: runtimeHostSurface(runtime, env),
+          fetchImpl: options.fetchImpl ?? fetch,
+          apiAccess: access,
+        },
+        env,
+      );
+    })();
+    return refreshPromise;
+  };
+  const results = await Promise.all(
+    settings.map(async (setting) => {
+      const controller = new AbortController();
+      const timeout = setTimeout(
+        () => controller.abort(),
+        DEFAULT_DIRECTIVE_EVENT_TIMEOUT_MS,
+      );
+      timeout.unref?.();
+      try {
+        const evidenceHash = createHash("sha256")
+          .update(
+            JSON.stringify({
+              setting,
+              task_hash: taskHash,
+              source: "hook",
+              source_category: sourceCategory,
+              project_key: projectKey,
+            }),
+            "utf8",
+          )
+          .digest("hex");
+        const submit = (token) =>
+          (options.fetchImpl ?? fetch)(
+            `${access.apiConfiguration.apiUrl}/api/v1/agent/preferences`,
+            {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                "user-agent": clientUserAgent(options.userAgent),
+                "x-remembrance-api-key": credential.apiKey,
+                "x-remembrance-principal-session": token,
+              },
+              body: JSON.stringify({
+                setting,
+                scope: projectKey
+                  ? "project"
+                  : principalSession.member_linked
+                    ? durable
+                      ? "member"
+                      : "member_runtime"
+                    : "installation",
+                source_category: sourceCategory,
+                evidence_hash: evidenceHash,
+                task_hash: taskHash,
+                ...(projectKey ? { project_key: projectKey } : {}),
+                confidence: 1,
+              }),
+              signal: controller.signal,
+            },
+          );
+        let response = await submit(principalSession.token);
+        if (response?.status === 401 || response?.status === 403) {
+          const refreshed = await refreshSession();
+          if (refreshed?.token) {
+            principalSession = refreshed;
+            response = await submit(refreshed.token);
+          }
+        }
+        return response?.ok === true;
+      } catch {
+        // Preference capture is advisory and cannot block the prompt hook.
+        return false;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }),
+  );
+  return results.filter(Boolean).length;
 }
 
 export function sharedConfigCredentialNotice(env = process.env) {
@@ -3320,6 +4320,10 @@ export function sharedConfigCredentialNotice(env = process.env) {
 }
 
 export function resolveApiConfiguration(env = process.env) {
+  return resolveApiAccessSnapshot(env).apiConfiguration;
+}
+
+function resolveApiConfigurationFromSnapshot(env, shared) {
   const environmentUrl = String(env.REMEMBRANCE_API_URL ?? "").trim();
   if (environmentUrl) {
     const normalized = normalizeApiUrl(environmentUrl, env);
@@ -3331,32 +4335,23 @@ export function resolveApiConfiguration(env = process.env) {
           issue: normalized.issue ?? "invalid_url",
         };
   }
-  const path = remembranceConfigPath(env);
-  if (!existsSync(path)) {
+  if (!shared.present) {
     return { apiUrl: DEFAULT_API_URL, source: "default" };
   }
-  try {
-    const parsed = JSON.parse(readSecureHookFile(path, MAX_LOCAL_CONFIG_BYTES));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {
-        apiUrl: DEFAULT_API_URL,
-        source: "unusable_shared_config",
-      };
-    }
-    if (!Object.prototype.hasOwnProperty.call(parsed, "apiUrl")) {
-      return { apiUrl: DEFAULT_API_URL, source: "default" };
-    }
-    const normalized = normalizeApiUrl(parsed.apiUrl, env);
-    return normalized.apiUrl && !normalized.issue
-      ? { apiUrl: normalized.apiUrl, source: "shared_config" }
-      : {
-          apiUrl: DEFAULT_API_URL,
-          source: "unusable_shared_config",
-          issue: normalized.issue ?? "invalid_url",
-        };
-  } catch {
+  if (!shared.parsed) {
     return { apiUrl: DEFAULT_API_URL, source: "unusable_shared_config" };
   }
+  if (!Object.prototype.hasOwnProperty.call(shared.parsed, "apiUrl")) {
+    return { apiUrl: DEFAULT_API_URL, source: "default" };
+  }
+  const normalized = normalizeApiUrl(shared.parsed.apiUrl, env);
+  return normalized.apiUrl && !normalized.issue
+    ? { apiUrl: normalized.apiUrl, source: "shared_config" }
+    : {
+        apiUrl: DEFAULT_API_URL,
+        source: "unusable_shared_config",
+        issue: normalized.issue ?? "invalid_url",
+      };
 }
 
 function apiUrl(env) {

@@ -20,19 +20,33 @@ afterAll(() => {
 
 function testEnv(env = {}) {
   cacheCounter += 1;
+  const testRoot = resolve(tempRoot, `state-${cacheCounter}`);
   return {
     REMEMBRANCE_HOOK_CACHE_PATH: resolve(
       tempRoot,
       `cache-${cacheCounter}.json`,
     ),
     REMEMBRANCE_USAGE_DIR: resolve(tempRoot, `usage-${cacheCounter}`),
+    REMEMBRANCE_AGENT_KEY_PATH: resolve(testRoot, "agent-key.json"),
+    REMEMBRANCE_PRINCIPAL_SESSION_DIR: resolve(testRoot, "sessions"),
     ...env,
   };
 }
 
+function queryCallCount(fetchImpl) {
+  return fetchImpl.mock.calls.filter(([url]) =>
+    String(url).endsWith("/api/v1/agent/query"),
+  ).length;
+}
+
 function skillsResponse(fetchCalls) {
   return vi.fn(async (url, init) => {
-    fetchCalls.push({ url: String(url), body: JSON.parse(String(init.body)) });
+    if (String(url).endsWith("/api/v1/agent/query")) {
+      fetchCalls.push({
+        url: String(url),
+        body: JSON.parse(String(init.body)),
+      });
+    }
     return Response.json({
       skills: [
         {
@@ -261,7 +275,7 @@ describe("VS Code prompt hook", () => {
       recordHealth: vi.fn(),
     });
 
-    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(queryCallCount(fetchImpl)).toBe(1);
     expect(recordUse).not.toHaveBeenCalled();
     expect(first?.hookSpecificOutput.additionalContext).toContain(
       "returned no matching skill",

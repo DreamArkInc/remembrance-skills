@@ -46,14 +46,23 @@ afterAll(() => {
 
 function testEnv(env = {}) {
   cacheCounter += 1;
+  const testRoot = resolve(tempRoot, `state-${cacheCounter}`);
   return {
     REMEMBRANCE_HOOK_CACHE_PATH: resolve(
       tempRoot,
       `cache-${cacheCounter}.json`,
     ),
     REMEMBRANCE_USAGE_DIR: resolve(tempRoot, `usage-${cacheCounter}`),
+    REMEMBRANCE_AGENT_KEY_PATH: resolve(testRoot, "agent-key.json"),
+    REMEMBRANCE_PRINCIPAL_SESSION_DIR: resolve(testRoot, "sessions"),
     ...env,
   };
+}
+
+function queryCallCount(fetchImpl) {
+  return fetchImpl.mock.calls.filter(([url]) =>
+    String(url).endsWith("/api/v1/agent/query"),
+  ).length;
 }
 
 function frame(payload) {
@@ -106,7 +115,9 @@ describe("Remembrance Claude Code prompt hook", () => {
           REMEMBRANCE_AUTO_QUERY_LIMIT: "2",
         },
         fetchImpl: vi.fn(async (url, init) => {
-          calls.push({ url, init, body: JSON.parse(String(init.body)) });
+          if (String(url).endsWith("/api/v1/agent/query")) {
+            calls.push({ url, init, body: JSON.parse(String(init.body)) });
+          }
           return Response.json({
             skills: [
               {
@@ -280,7 +291,7 @@ describe("Remembrance Claude Code prompt hook", () => {
     const first = await handleHookInput({ prompt }, { env, fetchImpl });
     const second = await handleHookInput({ prompt }, { env, fetchImpl });
 
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(queryCallCount(fetchImpl)).toBe(1);
     expect(second).toEqual(first);
     const cache = readFileSync(env.REMEMBRANCE_HOOK_CACHE_PATH, "utf8");
     expect(cache).not.toContain("Vercel Next.js");
@@ -302,7 +313,7 @@ describe("Remembrance Claude Code prompt hook", () => {
     const first = await handleHookInput(input, { env, fetchImpl, recordUse });
     const second = await handleHookInput(input, { env, fetchImpl, recordUse });
 
-    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(queryCallCount(fetchImpl)).toBe(1);
     expect(recordUse).not.toHaveBeenCalled();
     expect(first?.hookSpecificOutput.additionalContext).toContain(
       "returned no matching skill",
@@ -473,7 +484,7 @@ describe("Remembrance Claude Code prompt hook", () => {
         "rk_claude_shared",
       );
     }
-    expect(successFetch).toHaveBeenCalledOnce();
+    expect(queryCallCount(successFetch)).toBe(1);
 
     const failed = await handleHookInput(
       { prompt: "Debug a Stripe API failure.", session_id: "claude-shared-3" },

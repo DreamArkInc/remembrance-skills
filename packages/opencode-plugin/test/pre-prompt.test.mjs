@@ -28,6 +28,8 @@ const MANAGED = [
   "REMEMBRANCE_API_KEY",
   "REMEMBRANCE_USAGE_DIR",
   "REMEMBRANCE_HOOK_CACHE_PATH",
+  "REMEMBRANCE_AGENT_KEY_PATH",
+  "REMEMBRANCE_PRINCIPAL_SESSION_DIR",
   "REMEMBRANCE_AUTO_QUERY",
   "REMEMBRANCE_AUTO_CONTRIBUTE",
 ];
@@ -41,6 +43,14 @@ beforeEach(() => {
   process.env.REMEMBRANCE_HOOK_CACHE_PATH = join(
     tempRoot,
     `cache-${counter}.json`,
+  );
+  process.env.REMEMBRANCE_AGENT_KEY_PATH = join(
+    tempRoot,
+    `agent-key-${counter}.json`,
+  );
+  process.env.REMEMBRANCE_PRINCIPAL_SESSION_DIR = join(
+    tempRoot,
+    `principal-sessions-${counter}`,
   );
   delete process.env.REMEMBRANCE_AUTO_QUERY;
   delete process.env.REMEMBRANCE_AUTO_CONTRIBUTE;
@@ -78,11 +88,13 @@ function stubQuery(
   response = {},
 ) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
-    calls.push({
-      url: String(url),
-      headers: init?.headers,
-      body: init?.body ? JSON.parse(String(init.body)) : null,
-    });
+    if (String(url).endsWith("/api/v1/agent/query")) {
+      calls.push({
+        url: String(url),
+        headers: init?.headers,
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+    }
     return Response.json({
       ...response,
       skills: skills.map((s) => ({

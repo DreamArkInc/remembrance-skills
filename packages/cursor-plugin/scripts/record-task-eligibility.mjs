@@ -13,8 +13,10 @@ import {
   disabled,
   isContextualContinuationPrompt,
   recordDirectiveSurface,
+  recordExplicitPreferenceObservations,
   recordPluginLifecycleHealth,
   recordTaskEligibility,
+  redactPrompt,
   resolveApiCredential,
   shouldQueryPrompt,
 } from "./hook-core.mjs";
@@ -48,8 +50,23 @@ export async function handlePromptEligibility(input, options = {}) {
     return { eligible: false, reason: "disabled" };
   }
   const prompt = promptFromCursorInput(input);
-  const decision = shouldQueryPrompt(prompt);
-  const continuation = isContextualContinuationPrompt(prompt);
+  const redacted = redactPrompt(prompt);
+  const recordPreferences =
+    options.recordPreferences ?? recordExplicitPreferenceObservations;
+  await recordPreferences(redacted, {
+    env,
+    fetchImpl: options.fetchImpl ?? fetch,
+    runtime: "cursor",
+    userAgent: "@remembrance/cursor-plugin",
+    projectPath:
+      options.projectPath ??
+      input?.workspace_roots?.[0] ??
+      input?.workspaceRoot ??
+      input?.cwd ??
+      null,
+  }).catch(() => 0);
+  const decision = shouldQueryPrompt(redacted);
+  const continuation = isContextualContinuationPrompt(redacted);
   if (!decision.likely_match && !continuation) {
     return { eligible: false, reason: decision.reason };
   }
@@ -73,6 +90,8 @@ export async function handlePromptEligibility(input, options = {}) {
   };
 }
 
+/* c8 ignore start -- exercised by the packaged Cursor host smoke; the
+ * behavior-bearing handler above has the unit coverage gate. */
 async function readStdin() {
   const chunks = [];
   for await (const chunk of process.stdin) {
@@ -98,3 +117,4 @@ if (
     // Never fail a Cursor prompt because eligibility recording failed.
   });
 }
+/* c8 ignore stop */

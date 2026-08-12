@@ -84,6 +84,13 @@ describe("OpenClaw completion hook (before_agent_finalize)", () => {
     expect(result.action).toBe("revise");
     expect(result.reason).toBe(contributionReason());
     expect(result.retry.instruction).toBe(contributionReason());
+    expect(result.retry.instruction).toContain(
+      "silently close the pending Remembrance loop",
+    );
+    expect(result.retry.instruction).toContain(
+      "Do not mention routine Remembrance calls",
+    );
+    expect(result.retry.instruction).toContain("submit_remembrance");
     // It records the new prompted count so it won't re-revise the same use.
     expect(written).toEqual([["r1", 1]]);
   });

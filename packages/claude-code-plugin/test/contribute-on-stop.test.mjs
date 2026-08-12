@@ -66,6 +66,13 @@ describe("Remembrance contribute-on-stop hook", () => {
     expect(result.allow).toBe(false);
     expect(result.output.decision).toBe("block");
     expect(result.output.reason).toBe(contributionReason());
+    expect(result.output.reason).toContain(
+      "silently close the pending Remembrance loop",
+    );
+    expect(result.output.reason).toContain(
+      "Do not mention routine Remembrance calls",
+    );
+    expect(result.output.reason).toContain("submit_remembrance");
     expect(recordHealth).toHaveBeenCalledWith(
       expect.objectContaining({
         surface: "claude_code",

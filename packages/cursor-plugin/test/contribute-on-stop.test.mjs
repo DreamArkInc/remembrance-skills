@@ -77,8 +77,13 @@ describe("Cursor stop hook", () => {
     );
 
     expect(result.allow).toBe(false);
-    expect(result.output.followup_message).toContain("Before you finish");
+    expect(result.output.followup_message).toContain(
+      "silently close the pending Remembrance loop",
+    );
     expect(result.output.followup_message).toContain("submit_remembrance");
+    expect(result.output.followup_message).toContain(
+      "Do not mention routine Remembrance calls",
+    );
     expect(writePromptedCount).toHaveBeenCalledWith("conv_123", 1, {});
   });
 

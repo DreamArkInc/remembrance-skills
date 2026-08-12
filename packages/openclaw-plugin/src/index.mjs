@@ -82,6 +82,7 @@ import {
   toolResponseIndicatesFailure,
   writePromptedCount,
   valueEpisodeFromResponse,
+  warmPrincipalSession,
 } from "./hook-core.mjs";
 
 const CONTRIBUTION_TOOLS = [
@@ -618,6 +619,17 @@ const plugin = definePluginEntry({
           process.env,
         ).catch(() => null)
       : Promise.resolve(null);
+    if (activatesRuntime) {
+      void warmPrincipalSession(
+        {
+          runtime: "openclaw",
+          hostSurface: "gateway",
+          clientVersion: pluginVersion(),
+          hostVersion: String(api?.version ?? api?.hostVersion ?? "").trim(),
+        },
+        process.env,
+      ).catch(() => null);
+    }
     const updateDeliveredSessions = new Set();
     const auth =
       credential.source === "none"

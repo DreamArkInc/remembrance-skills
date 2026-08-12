@@ -14,6 +14,7 @@ import {
   disabled,
   recordPluginLifecycleHealth,
   resolveApiCredential,
+  warmPrincipalSession,
 } from "./hook-core.mjs";
 import { cursorSessionId } from "./record-mcp-use.mjs";
 
@@ -66,16 +67,31 @@ export async function handleSessionStart(input, options = {}) {
   if (disabled(env.REMEMBRANCE_CURSOR_SESSION_CONTEXT)) {
     return {};
   }
-  const clientUpdate = isCompaction
-    ? null
-    : await (options.checkUpdate ?? checkForClientUpdate)(
-        {
-          surface: "cursor",
-          currentVersion: version,
-          fetchImpl: options.fetchImpl ?? fetch,
-        },
-        env,
-      ).catch(() => null);
+  const hostVersion = String(
+    input?.cursor_version ?? input?.app_version ?? input?.version ?? "",
+  ).trim();
+  const [, clientUpdate] = isCompaction
+    ? [null, null]
+    : await Promise.all([
+        (options.warmSession ?? warmPrincipalSession)(
+          {
+            runtime: "cursor",
+            hostSurface: "extension",
+            clientVersion: version,
+            hostVersion,
+            fetchImpl: options.fetchImpl ?? fetch,
+          },
+          env,
+        ).catch(() => null),
+        (options.checkUpdate ?? checkForClientUpdate)(
+          {
+            surface: "cursor",
+            currentVersion: version,
+            fetchImpl: options.fetchImpl ?? fetch,
+          },
+          env,
+        ).catch(() => null),
+      ]);
   return {
     additional_context: clientUpdate?.notice
       ? `${CURSOR_REMEMBRANCE_CONTEXT}\n\n${clientUpdate.notice}`

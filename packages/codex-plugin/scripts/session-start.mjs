@@ -8,6 +8,7 @@ import {
   recordPluginLifecycleHealth,
   resolveApiCredential,
   sessionIdFor,
+  warmPrincipalSession,
 } from "./hook-core.mjs";
 
 function pluginVersion() {
@@ -54,16 +55,34 @@ export async function handleSessionStart(input, options = {}) {
     `Remembrance plugin health: Codex SessionStart hook is active for plugin ${version}; ` +
     `the bundled local MCP server uses the same ${auth}. ` +
     "Run run_connection_doctor if setup seems incomplete. It verifies the active connection and gives one exact next step. If that tool is absent, report partial activation, update or reinstall the plugin, and fully restart Codex.";
-  const clientUpdate = isCompaction
-    ? null
-    : await (options.checkUpdate ?? checkForClientUpdate)(
-        {
-          surface: "codex",
-          currentVersion: version,
-          fetchImpl: options.fetchImpl ?? fetch,
-        },
-        env,
-      ).catch(() => null);
+  const [, clientUpdate] = isCompaction
+    ? [null, null]
+    : await Promise.all([
+        (options.warmSession ?? warmPrincipalSession)(
+          {
+            runtime: "codex",
+            hostSurface:
+              input?.host_surface === "desktop" ||
+              input?.host_surface === "cli"
+                ? input.host_surface
+                : input?.app_version || input?.codex_desktop_version
+                  ? "desktop"
+                  : "unknown",
+            clientVersion: version,
+            hostVersion,
+            fetchImpl: options.fetchImpl ?? fetch,
+          },
+          env,
+        ).catch(() => null),
+        (options.checkUpdate ?? checkForClientUpdate)(
+          {
+            surface: "codex",
+            currentVersion: version,
+            fetchImpl: options.fetchImpl ?? fetch,
+          },
+          env,
+        ).catch(() => null),
+      ]);
   return {
     hookSpecificOutput: {
       hookEventName: "SessionStart",

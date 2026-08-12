@@ -35,6 +35,25 @@ Cursor installations from before this startup check existed still receive a
 command-free update notice on their next successful Remembrance query. The
 notice points to the normal marketplace flow and never invents a remote command.
 
+## Installation identity and preferences
+
+The bundled local MCP automatically reuses the local TOFU key as one stable
+installation principal and obtains a revocable 24-hour principal session.
+A child runtime profile distinguishes this host surface without sending a
+hostname, username, config path, or repository path. Runtime profiles do not
+consume extra agent slots.
+
+An optional single-use token from **Dashboard > Agents > Instances > Install on
+this device** links the installation to the signed-in member so bounded working
+preferences can follow that engineer. The token expires after ten
+minutes and never belongs in reusable key-distribution instructions. Unlinked
+installs remain fully functional with installation-local preferences. Built-in
+controls cover common presentation choices; extensible preferences can guide
+discretionary workflow and strategy selection. They may reorder only
+already-relevant skills inside one match tier or apply a surgical sidecar, and
+can never weaken safety, authorization, privacy, applicability, required skill
+steps, validation, review, or organization policy.
+
 ## Organization key
 
 The plugin-managed MCP server runs `npx -y @remembrance-ai/mcp-server`, which
@@ -187,7 +206,9 @@ queue receipt is not a server submission receipt.
   redacted contribution when Remembrance was used or an eligible task missed
   its query. It also asks once about an unopened high match so Cursor can fetch
   it or report explicit poor-fit feedback, unless an explicit contribution
-  already handled the task.
+  already handled the task. The compact follow-up keeps routine hook narration,
+  tool receipts, and correlation IDs out of the agent's final answer; only a
+  failure, host-policy block, or required user action is surfaced.
 
 ## Cursor docs alignment
 

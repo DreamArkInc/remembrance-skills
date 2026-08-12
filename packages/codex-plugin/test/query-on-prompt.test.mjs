@@ -70,7 +70,9 @@ describe("Codex query-on-prompt adapter", () => {
         recordEligibility: (id) => eligible.push(id),
         recordHighMatch: (id, match) => highMatches.push({ id, match }),
         fetchImpl: vi.fn(async (url, init) => {
-          calls.push({ url, body: JSON.parse(String(init.body)) });
+          if (String(url).endsWith("/api/v1/agent/query")) {
+            calls.push({ url, body: JSON.parse(String(init.body)) });
+          }
           return Response.json({
             query_id: "rq_test",
             skills: [
@@ -436,8 +438,10 @@ describe("Codex query-on-prompt adapter", () => {
       {
         env: testEnv({ REMEMBRANCE_API_KEY: "env-key-123" }),
         recordUse: () => {},
-        fetchImpl: vi.fn(async (_url, init) => {
-          headers.push(init.headers);
+        fetchImpl: vi.fn(async (url, init) => {
+          if (String(url).endsWith("/api/v1/agent/query")) {
+            headers.push(init.headers);
+          }
           return Response.json({ skills: [], resources: [] });
         }),
       },
@@ -462,8 +466,10 @@ describe("Codex query-on-prompt adapter", () => {
       {
         env: testEnv({ REMEMBRANCE_API_KEY: "", XDG_CONFIG_HOME: configHome }),
         recordUse: () => {},
-        fetchImpl: vi.fn(async (_url, init) => {
-          headers.push(init.headers);
+        fetchImpl: vi.fn(async (url, init) => {
+          if (String(url).endsWith("/api/v1/agent/query")) {
+            headers.push(init.headers);
+          }
           return Response.json({ skills: [], resources: [] });
         }),
       },
@@ -524,8 +530,10 @@ describe("Codex query-on-prompt adapter", () => {
       {
         env: testEnv({ XDG_CONFIG_HOME: configHome }),
         recordUse: () => {},
-        fetchImpl: vi.fn(async (_url, init) => {
-          headers.push(init.headers);
+        fetchImpl: vi.fn(async (url, init) => {
+          if (String(url).endsWith("/api/v1/agent/query")) {
+            headers.push(init.headers);
+          }
           return Response.json({ skills: [], resources: [] });
         }),
       },
@@ -565,6 +573,24 @@ describe("Codex query-on-prompt adapter", () => {
       { env: testEnv({ REMEMBRANCE_AUTO_QUERY: "0" }), fetchImpl },
     );
     expect(output).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("still asks the agent to persist an arbitrary durable preference when auto-query is disabled", async () => {
+    const fetchImpl = vi.fn();
+    const output = await handleQuery(
+      {
+        prompt: "My default should always use the least disruptive valid rollout.",
+        turn_id: "preference-only",
+      },
+      { env: testEnv({ REMEMBRANCE_AUTO_QUERY: "0" }), fetchImpl },
+    );
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "Remembrance durable-preference capture",
+    );
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      '"scope":"auto"',
+    );
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

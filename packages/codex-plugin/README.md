@@ -73,6 +73,25 @@ If Codex can see the plugin skill but not the MCP tools, or the CLI review shows
 any Remembrance hook as **Needs review**, treat the installation as degraded
 until hook trust, restart, and MCP registration are fixed.
 
+## Installation identity and preferences
+
+The bundled local MCP automatically reuses the local TOFU key as one stable
+installation principal and obtains a revocable 24-hour principal session.
+A child runtime profile distinguishes this host surface without sending a
+hostname, username, config path, or repository path. Runtime profiles do not
+consume extra agent slots.
+
+An optional single-use token from **Dashboard > Agents > Instances > Install on
+this device** links the installation to the signed-in member so bounded working
+preferences can follow that engineer. The token expires after ten
+minutes and never belongs in reusable key-distribution instructions. Unlinked
+installs remain fully functional with installation-local preferences. Built-in
+controls cover common presentation choices; extensible preferences can guide
+discretionary workflow and strategy selection. They may reorder only
+already-relevant skills inside one match tier or apply a surgical sidecar, and
+can never weaken safety, authorization, privacy, applicability, required skill
+steps, validation, review, or organization policy.
+
 ## Manual install (config.toml)
 
 If you prefer not to use the marketplace, wire the hooks into
@@ -191,8 +210,13 @@ no query completed, it returns
 redacted remembrance / feedback / skill idea — so contribution is prompted by
 default instead of relying on the agent to remember. It is loop-safe: Codex sets
 `stop_hook_active=true` on the continuation a Stop-block causes, so it never
-re-blocks a stop it already continued. Codex can satisfy it by contributing or by
-briefly declining. Set `REMEMBRANCE_AUTO_CONTRIBUTE=0` to disable it.
+re-blocks a stop it already continued. The compact continuation tells Codex to
+perform routine contribution work silently: final answers omit hook narration,
+tool receipts, and correlation IDs unless Remembrance fails, host policy blocks
+the request, or the user must act. Codex may still render the compact Stop
+continuation itself because the host exposes blocked-stop reasons as prompts.
+Set `REMEMBRANCE_AUTO_CONTRIBUTE=0` only when automatic contribution closure is
+not wanted.
 
 ### How usage is detected without a transcript
 

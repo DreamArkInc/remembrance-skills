@@ -1,12 +1,25 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   handlePromptEligibility,
   promptFromCursorInput,
 } from "../scripts/record-task-eligibility.mjs";
 
+const tempDirs = [];
+
+afterEach(async () => {
+  vi.unstubAllGlobals();
+  for (const dir of tempDirs.splice(0)) {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 describe("Cursor beforeSubmitPrompt eligibility observer", () => {
   it("records explicit reusable work without changing the prompt", async () => {
     const recordEligibility = vi.fn(() => 1);
+    const recordPreferences = vi.fn(async () => 0);
     const recordHealth = vi.fn();
     const result = await handlePromptEligibility(
       {
@@ -16,6 +29,7 @@ describe("Cursor beforeSubmitPrompt eligibility observer", () => {
       {
         env: {},
         recordEligibility,
+        recordPreferences,
         recordHealth,
         recordDirective: vi.fn(),
         fetchImpl: vi.fn(async () => Response.json({ recorded: true })),
@@ -28,9 +42,37 @@ describe("Cursor beforeSubmitPrompt eligibility observer", () => {
       sessionId: "conv-explicit",
     });
     expect(recordEligibility).toHaveBeenCalledWith("conv-explicit", {});
+    expect(recordPreferences).toHaveBeenCalledWith(
+      "Fix the responsive review-card workflow and run Playwright.",
+      expect.objectContaining({ runtime: "cursor" }),
+    );
     expect(recordHealth).toHaveBeenCalledWith(
       expect.objectContaining({ surface: "cursor", component: "prompt_hook" }),
       {},
+    );
+  });
+
+  it("captures an explicit preference even when the prompt does not trigger retrieval", async () => {
+    const recordPreferences = vi.fn(async () => 1);
+    const result = await handlePromptEligibility(
+      {
+        prompt: "For this project, keep explanations concise.",
+        workspace_roots: ["/private/workspace"],
+      },
+      {
+        env: {},
+        recordPreferences,
+        recordHealth: vi.fn(),
+      },
+    );
+
+    expect(result).toMatchObject({ eligible: false });
+    expect(recordPreferences).toHaveBeenCalledWith(
+      "For this project, keep explanations concise.",
+      expect.objectContaining({
+        runtime: "cursor",
+        projectPath: "/private/workspace",
+      }),
     );
   });
 
@@ -52,6 +94,38 @@ describe("Cursor beforeSubmitPrompt eligibility observer", () => {
       sessionId: "session-followup",
     });
     expect(recordEligibility).toHaveBeenCalledOnce();
+  });
+
+  it("uses the production eligibility, directive, and fetch defaults safely", async () => {
+    const usageDir = await mkdtemp(join(tmpdir(), "cursor-preference-hook-"));
+    tempDirs.push(usageDir);
+    const fetchImpl = vi.fn(async () =>
+      Response.json({
+        directive_id: "dir_cursor_default",
+        runtime: "cursor",
+        trigger_reason: "tool_or_framework",
+        shown_at: new Date().toISOString(),
+      }),
+    );
+    vi.stubGlobal("fetch", fetchImpl);
+
+    const result = await handlePromptEligibility(
+      {
+        prompt: "Review this responsive Cursor plugin workflow.",
+        conversation_id: "cursor-defaults",
+      },
+      {
+        env: { REMEMBRANCE_USAGE_DIR: usageDir },
+        recordHealth: vi.fn(),
+        recordPreferences: vi.fn(async () => 0),
+      },
+    );
+
+    expect(result).toMatchObject({
+      eligible: true,
+      sessionId: "cursor-defaults",
+    });
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("skips one-off facts and honors the disable flag", async () => {
@@ -77,5 +151,17 @@ describe("Cursor beforeSubmitPrompt eligibility observer", () => {
     expect(promptFromCursorInput({ userPrompt: "c" })).toBe("c");
     expect(promptFromCursorInput({ input: { prompt: "d" } })).toBe("d");
     expect(promptFromCursorInput({ message: "e" })).toBe("e");
+    expect(promptFromCursorInput({})).toBe("");
+  });
+
+  it("uses the process environment when a caller does not inject one", async () => {
+    const result = await handlePromptEligibility(
+      { prompt: "What is the capital of France?" },
+      {
+        recordHealth: vi.fn(),
+        recordPreferences: vi.fn(async () => 0),
+      },
+    );
+    expect(result).toMatchObject({ eligible: false });
   });
 });

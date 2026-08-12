@@ -7,6 +7,7 @@
         "args": ["/abs/path/to/openclaw-plugin/servers/remembrance-mcp.mjs"],
         "env": {
           "REMEMBRANCE_PLUGIN_HOST": "openclaw",
+          "REMEMBRANCE_HOST_SURFACE": "gateway",
           "REMEMBRANCE_API_URL": "${REMEMBRANCE_API_URL:-}",
           "REMEMBRANCE_API_KEY": "${REMEMBRANCE_API_KEY:-}",
           "REMEMBRANCE_AGENT_KEY_PATH": "${REMEMBRANCE_AGENT_KEY_PATH:-}"

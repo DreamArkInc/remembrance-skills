@@ -11,6 +11,12 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import {
+  createHash,
+  createPublicKey,
+  generateKeyPairSync,
+  verify as verifySignature,
+} from "node:crypto";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   autoQueryTimeoutMs,
@@ -25,8 +31,10 @@ import {
   detectHighValueLessonSignal,
   detectHighValueLessonSignalInText,
   directSelectionFromResponse,
+  explicitPreferenceSettingsFromPrompt,
   decideStop,
   formatContext,
+  genericPreferenceCaptureDirective,
   HOST_POLICY_ALERT_TEXT,
   highMatchFromResponse,
   hostPolicyAlertWasReported,
@@ -37,11 +45,14 @@ import {
   parseCodexMcpRegistration,
   parseCodexMcpUrl,
   pluginHealthPath,
+  promptProvidesPreferenceCorrection,
+  promptRequestsDurablePreference,
   markValueEpisodeSelection,
   markHostPolicyAlertDelivered,
   readDirectSelectionSurface,
   readDirectSelectionSurfaces,
   readPromptedCount,
+  readHookPrincipalSession,
   readPluginLifecycleHealth,
   readHighMatchSurface,
   readPendingHostPolicyAlert,
@@ -57,19 +68,24 @@ import {
   recordDirectiveSurface,
   recordHighMatchSurface,
   recordHostPolicyDenial,
+  recordExplicitPreferenceObservations,
   recordPluginLifecycleHealth,
   recordTaskEligibility,
   recordValueEpisodeSurface,
   redactPrompt,
   remembranceConfigPath,
   reportTaskOutcomesOnStop,
+  resolveApiAccessSnapshot,
   resolveApiConfiguration,
   resolveApiCredential,
   resolveApiKey,
+  runtimeHostSurface,
   sharedConfigCredentialNotice,
   shouldQueryPrompt,
   classifyHostPolicyDenial,
   valueEpisodeFromResponse,
+  warmPrincipalSession,
+  projectKeyForHook,
   writePromptedCount,
 } from "../scripts/hook-core.mjs";
 
@@ -95,6 +111,613 @@ function isolatedCodexMcpEnv(extra = {}) {
     ...extra,
   };
 }
+
+function isolatedPrincipalEnv(extra = {}) {
+  counter += 1;
+  const root = join(tempRoot, `principal-${counter}`);
+  return {
+    REMEMBRANCE_API_URL: "https://remembrance.dev",
+    REMEMBRANCE_API_KEY: "rk_hook_org_test",
+    REMEMBRANCE_API_KEY_ORIGIN: "https://remembrance.dev",
+    REMEMBRANCE_AGENT_KEY_PATH: join(root, "config", "agent-key.json"),
+    REMEMBRANCE_PRINCIPAL_SESSION_DIR: join(root, "sessions"),
+    XDG_CONFIG_HOME: join(root, "xdg"),
+    ...extra,
+  };
+}
+
+function canonicalTestJson(value) {
+  const sort = (candidate) => {
+    if (Array.isArray(candidate)) return candidate.map(sort);
+    if (candidate && typeof candidate === "object") {
+      return Object.keys(candidate)
+        .sort()
+        .reduce((result, key) => {
+          result[key] = sort(candidate[key]);
+          return result;
+        }, {});
+    }
+    return candidate;
+  };
+  return JSON.stringify(sort(value));
+}
+
+describe("principal-session bootstrap and preference capture", () => {
+  // This pairing is the point. warmPrincipalSession was already covered, and
+  // unusable-config states were already covered, but never in the SAME test —
+  // so the path shipped making network calls on an untrusted config while both
+  // names appeared in this file and a grep read as coverage.
+  //
+  // A header-only reaction is not enough here: principalRequestHeaders drops the
+  // API key on an unusable source, yet apiUrl() still returns the default
+  // destination, so the request would register the agent key anonymously against
+  // a registry the user never named — and the challenge carries a member link
+  // token, so a secret would travel with it. Assert the REQUEST is suppressed.
+  it("makes no principal-session network call when the shared config is unusable", async () => {
+    const env = isolatedPrincipalEnv({
+      // Drop the env key so the shared config file is the credential source —
+      // that is the state whose corruption used to change destination silently.
+      REMEMBRANCE_API_KEY: "",
+      REMEMBRANCE_MEMBER_LINK_TOKEN: "mlink_should_never_leave_this_machine",
+    });
+    mkdirSync(join(env.XDG_CONFIG_HOME, "remembrance"), { recursive: true });
+    writeFileSync(
+      join(env.XDG_CONFIG_HOME, "remembrance", "config.json"),
+      "{ this is not json",
+      { mode: 0o600 },
+    );
+    expect(resolveApiCredential(env).source).toBe("unusable_shared_config");
+
+    const fetchImpl = vi.fn(async () => Response.json({}));
+    const session = await warmPrincipalSession(
+      {
+        runtime: "codex",
+        hostSurface: "desktop",
+        clientVersion: "0.1.57",
+        hostVersion: "0.145.0",
+        fetchImpl,
+      },
+      env,
+    );
+
+    expect(session).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    // Belt and braces: even if a future refactor reintroduces a call, the member
+    // link token must never appear on the wire from this state.
+    expect(JSON.stringify(fetchImpl.mock.calls)).not.toContain(
+      "mlink_should_never_leave_this_machine",
+    );
+  });
+
+  it("creates and registers a signed local identity before caching an authenticated session", async () => {
+    const env = isolatedPrincipalEnv();
+    const requests = [];
+    const fetchImpl = vi.fn(async (url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      requests.push({ url: String(url), init, body });
+      if (
+        String(url).endsWith("/api/v1/agent/keys/register") &&
+        init?.method === "GET"
+      ) {
+        return Response.json({
+          owner_binding: "areg_hook_owner_binding_1234567890",
+        });
+      }
+      if (String(url).endsWith("/api/v1/agent/keys/register")) {
+        return Response.json({ status: "active" }, { status: 201 });
+      }
+      if (body.action === "challenge") {
+        return Response.json({
+          challenge_id: "ach_hook_bootstrap",
+          signing_payload: "remembrance-principal-session-v1:hook",
+        });
+      }
+      return Response.json({
+        session_token: "psess_abcdefghijklmnopqrstuvwxyz123456",
+        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        member_linked: true,
+      });
+    });
+
+    const session = await warmPrincipalSession(
+      {
+        runtime: "codex",
+        hostSurface: "desktop",
+        clientVersion: "0.1.57",
+        hostVersion: "0.145.0",
+        fetchImpl,
+      },
+      env,
+    );
+
+    expect(session).toMatchObject({
+      token: "psess_abcdefghijklmnopqrstuvwxyz123456",
+      member_linked: true,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(requests.map((request) => request.url)).toEqual([
+      "https://remembrance.dev/api/v1/agent/keys/register",
+      "https://remembrance.dev/api/v1/agent/keys/register",
+      "https://remembrance.dev/api/v1/agent/principal-sessions",
+      "https://remembrance.dev/api/v1/agent/principal-sessions",
+    ]);
+    expect(requests.map((request) => request.init?.method)).toEqual([
+      "GET",
+      "POST",
+      "POST",
+      "POST",
+    ]);
+    expect(requests[2].body.runtime_profile).toMatchObject({
+      runtime: "codex",
+      surface: "plugin_hook",
+      host_surface: "desktop",
+      client_name: "Codex",
+    });
+    for (const request of requests) {
+      expect(request.init?.headers).toMatchObject({
+        "content-type": "application/json",
+        "x-remembrance-api-key": "rk_hook_org_test",
+      });
+    }
+
+    const registration = requests[1].body;
+    const publicKeyHash = `sha256:${createHash("sha256")
+      .update(registration.public_key)
+      .digest("hex")}`;
+    const signedPayload = canonicalTestJson({
+      version: "v2",
+      purpose: "remembrance-agent-key-registration",
+      provider: "codex",
+      key_id: registration.key_id,
+      owner_binding: "areg_hook_owner_binding_1234567890",
+      public_key_hash: publicKeyHash,
+      subject: registration.subject,
+      signed_at: registration.proof.signed_at,
+    });
+    expect(registration.proof.owner_binding).toBe(
+      "areg_hook_owner_binding_1234567890",
+    );
+    expect(
+      verifySignature(
+        null,
+        Buffer.from(signedPayload),
+        createPublicKey(registration.public_key),
+        Buffer.from(registration.proof.signature, "base64url"),
+      ),
+    ).toBe(true);
+    expect(statSync(env.REMEMBRANCE_AGENT_KEY_PATH).mode & 0o777).toBe(0o600);
+    expect(readHookPrincipalSession("codex", env)).toEqual(session);
+    const sessionFiles = readdirSync(env.REMEMBRANCE_PRINCIPAL_SESSION_DIR);
+    expect(sessionFiles).toHaveLength(1);
+    expect(
+      statSync(join(env.REMEMBRANCE_PRINCIPAL_SESSION_DIR, sessionFiles[0]))
+        .mode & 0o777,
+    ).toBe(0o600);
+  });
+
+  it("keeps registration and session exchange on one atomic config snapshot", async () => {
+    const env = isolatedPrincipalEnv({
+      REMEMBRANCE_API_URL: "",
+      REMEMBRANCE_API_KEY: "",
+      REMEMBRANCE_API_KEY_ORIGIN: "",
+    });
+    const configPath = join(env.XDG_CONFIG_HOME, "remembrance", "config.json");
+    mkdirSync(dirname(configPath), { recursive: true });
+    const writeConfig = (suffix) =>
+      writeFileSync(
+        configPath,
+        `${JSON.stringify({
+          apiUrl: `https://registry-${suffix}.example`,
+          apiKey: `rk_${suffix}`,
+          memberLinkToken: `mlink_${suffix.padEnd(24, suffix)}`,
+        })}\n`,
+        { mode: 0o600 },
+      );
+    writeConfig("alpha");
+
+    const requests = [];
+    const fetchImpl = vi.fn(async (url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      requests.push({ url: String(url), headers: init?.headers, body });
+      if (requests.length === 1) writeConfig("bravo");
+      if (String(url).endsWith("/api/v1/agent/keys/register")) {
+        return Response.json({ status: "active" }, { status: 201 });
+      }
+      if (body.action === "challenge") {
+        return Response.json({
+          challenge_id: "ach_atomic_config_snapshot",
+          signing_payload: "remembrance-principal-session-v1:atomic",
+        });
+      }
+      return Response.json({
+        session_token: "psess_atomicconfigsnapshot1234567890",
+        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        member_linked: true,
+      });
+    });
+
+    const initialAccess = resolveApiAccessSnapshot(env);
+    const session = await warmPrincipalSession(
+      { runtime: "codex", fetchImpl, apiAccess: initialAccess },
+      env,
+    );
+
+    expect(session?.token).toBe("psess_atomicconfigsnapshot1234567890");
+    expect(requests).toHaveLength(4);
+    expect(
+      requests.every(({ url }) =>
+        url.startsWith("https://registry-alpha.example/"),
+      ),
+    ).toBe(true);
+    expect(
+      requests.every(
+        ({ headers }) => headers?.["x-remembrance-api-key"] === "rk_alpha",
+      ),
+    ).toBe(true);
+    expect(
+      requests.find(({ body }) => body.action === "challenge")?.body
+        .member_link_token,
+    ).toBe(`mlink_${"alpha".padEnd(24, "alpha")}`);
+    expect(resolveApiAccessSnapshot(env).credential.apiKey).toBe("rk_bravo");
+  });
+
+  it("deduplicates concurrent registration and principal-session exchange", async () => {
+    const env = isolatedPrincipalEnv();
+    let releaseRegistration;
+    const registrationBarrier = new Promise((resolve) => {
+      releaseRegistration = resolve;
+    });
+    const fetchImpl = vi.fn(async (url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      if (
+        String(url).endsWith("/api/v1/agent/keys/register") &&
+        init?.method === "GET"
+      ) {
+        return Response.json({
+          owner_binding: "areg_hook_concurrent_123456789012",
+        });
+      }
+      if (String(url).endsWith("/api/v1/agent/keys/register")) {
+        await registrationBarrier;
+        return Response.json({ status: "active" }, { status: 201 });
+      }
+      if (body.action === "challenge") {
+        return Response.json({
+          challenge_id: "ach_hook_concurrent",
+          signing_payload: "remembrance-principal-session-v1:concurrent",
+        });
+      }
+      return Response.json({
+        session_token: "psess_concurrent_abcdefghijklmnopqrstuvwxyz",
+        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        member_linked: false,
+      });
+    });
+
+    const first = warmPrincipalSession(
+      { runtime: "codex", hostSurface: "desktop", fetchImpl },
+      env,
+    );
+    const second = warmPrincipalSession(
+      { runtime: "codex", hostSurface: "desktop", fetchImpl },
+      env,
+    );
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+    releaseRegistration();
+
+    const [firstSession, secondSession] = await Promise.all([first, second]);
+    expect(firstSession).toEqual(secondSession);
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it("records only explicit durable preferences and submits multiple settings concurrently", async () => {
+    const env = isolatedPrincipalEnv();
+    const bootstrapFetch = vi.fn(async (url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      if (String(url).endsWith("/api/v1/agent/keys/register")) {
+        return Response.json({ status: "active" }, { status: 201 });
+      }
+      if (body.action === "challenge") {
+        return Response.json({
+          challenge_id: "ach_hook_preferences",
+          signing_payload: "remembrance-principal-session-v1:preferences",
+        });
+      }
+      return Response.json({
+        session_token: "psess_abcdefghijklmnopqrstuvwxyz654321",
+        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        member_linked: false,
+      });
+    });
+    await warmPrincipalSession(
+      { runtime: "codex", fetchImpl: bootstrapFetch },
+      env,
+    );
+
+    const ignoredFetch = vi.fn();
+    await expect(
+      recordExplicitPreferenceObservations("Be concise for this answer.", {
+        runtime: "codex",
+        env,
+        fetchImpl: ignoredFetch,
+      }),
+    ).resolves.toBe(0);
+    expect(ignoredFetch).not.toHaveBeenCalled();
+    expect(promptRequestsDurablePreference("Be concise for this answer.")).toBe(
+      false,
+    );
+
+    let releaseBarrier;
+    const barrier = new Promise((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const preferenceFetch = vi.fn(async () => {
+      if (preferenceFetch.mock.calls.length === 2) releaseBarrier();
+      await barrier;
+      return Response.json({ ok: true });
+    });
+    const recorded = recordExplicitPreferenceObservations(
+      "From now on, keep your answers concise and use step-by-step output.",
+      { runtime: "codex", env, fetchImpl: preferenceFetch },
+    );
+    await vi.waitFor(() => expect(preferenceFetch).toHaveBeenCalledTimes(2));
+    await expect(recorded).resolves.toBe(2);
+    expect(
+      preferenceFetch.mock.calls.map(([, init]) =>
+        JSON.parse(String(init?.body ?? "{}")),
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          setting: { key: "explanation_depth", value: "concise" },
+          scope: "installation",
+          source_category: "explicit_user",
+          confidence: 1,
+        }),
+        expect.objectContaining({
+          setting: { key: "output_organization", value: "step_by_step" },
+          scope: "installation",
+          source_category: "explicit_user",
+          confidence: 1,
+        }),
+      ]),
+    );
+  });
+
+  it("turns an arbitrary durable preference into a privacy-safe agent directive", () => {
+    const prompt =
+      "Tests should only be run on demand or before a commit task.";
+    expect(promptRequestsDurablePreference(prompt)).toBe(true);
+    expect(explicitPreferenceSettingsFromPrompt(prompt)).toEqual([]);
+
+    const directive = genericPreferenceCaptureDirective(prompt, {
+      env: isolatedPrincipalEnv(),
+    });
+    expect(directive).toContain("call record_preference once");
+    expect(directive).toContain(
+      '"key":"<presentation|workflow|strategy_selection>.<stable_concept>"',
+    );
+    expect(directive).toContain('"scope":"auto"');
+    expect(directive).toMatch(/"evidence_hash":"[a-f0-9]{64}"/);
+    expect(directive).toMatch(/"task_hash":"[a-f0-9]{64}"/);
+    expect(directive).not.toContain(prompt);
+    expect(directive).not.toContain("Tests should only");
+  });
+
+  it("does not capture preferences that the user marks as illustrative", async () => {
+    const customExample =
+      "This is a contrived example only: you should always choose blue icons.";
+    expect(promptRequestsDurablePreference(customExample)).toBe(true);
+    expect(genericPreferenceCaptureDirective(customExample)).toBeNull();
+
+    const explicitExample =
+      "For this hypothetical scenario, from now on keep answers concise. Do not remember this.";
+    const fetchImpl = vi.fn();
+    await expect(
+      recordExplicitPreferenceObservations(explicitExample, {
+        runtime: "codex",
+        env: isolatedPrincipalEnv(),
+        fetchImpl,
+      }),
+    ).resolves.toBe(0);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("applies one clear correction immediately without persisting one-off task wording", async () => {
+    const env = isolatedPrincipalEnv();
+    const bootstrapFetch = vi.fn(async (url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      if (String(url).endsWith("/api/v1/agent/keys/register")) {
+        return Response.json({ status: "active" }, { status: 201 });
+      }
+      if (body.action === "challenge") {
+        return Response.json({
+          challenge_id: "ach_hook_correction",
+          signing_payload: "remembrance-principal-session-v1:correction",
+        });
+      }
+      return Response.json({
+        session_token: "psess_correction_abcdefghijklmnopqrstuvwxyz",
+        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        member_linked: true,
+      });
+    });
+    await warmPrincipalSession(
+      { runtime: "codex", hostSurface: "desktop", fetchImpl: bootstrapFetch },
+      env,
+    );
+    const preferenceBodies = [];
+    const correction =
+      "That answer was too verbose. Keep the explanation concise instead.";
+
+    expect(promptRequestsDurablePreference(correction)).toBe(false);
+    expect(promptProvidesPreferenceCorrection(correction)).toBe(true);
+    await expect(
+      recordExplicitPreferenceObservations(correction, {
+        runtime: "codex",
+        env,
+        fetchImpl: vi.fn(async (_url, init) => {
+          preferenceBodies.push(JSON.parse(String(init?.body ?? "{}")));
+          return Response.json({ ok: true }, { status: 201 });
+        }),
+      }),
+    ).resolves.toBe(1);
+    expect(preferenceBodies).toEqual([
+      expect.objectContaining({
+        setting: { key: "explanation_depth", value: "concise" },
+        scope: "member_runtime",
+        source_category: "explicit_user",
+        confidence: 1,
+      }),
+    ]);
+
+    await expect(
+      recordExplicitPreferenceObservations("Be concise for this answer.", {
+        runtime: "codex",
+        env,
+        fetchImpl: vi.fn(),
+      }),
+    ).resolves.toBe(0);
+  });
+
+  it("records an explicit project preference under an opaque project scope", async () => {
+    const env = isolatedPrincipalEnv();
+    const bootstrapFetch = vi.fn(async (url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      if (String(url).endsWith("/api/v1/agent/keys/register")) {
+        return Response.json({ status: "active" }, { status: 201 });
+      }
+      if (body.action === "challenge") {
+        return Response.json({
+          challenge_id: "ach_hook_project_preference",
+          signing_payload: "principal-project-preference",
+        });
+      }
+      return Response.json({
+        session_token: "psess_project_abcdefghijklmnopqrstuvwxyz",
+        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        member_linked: true,
+      });
+    });
+    await warmPrincipalSession(
+      { runtime: "codex", fetchImpl: bootstrapFetch },
+      env,
+    );
+    const projectPath = "/private/customer/project";
+    const bodies = [];
+    await expect(
+      recordExplicitPreferenceObservations(
+        "For this project, from now on keep explanations concise.",
+        {
+          runtime: "codex",
+          env,
+          projectPath,
+          fetchImpl: vi.fn(async (_url, init) => {
+            bodies.push(JSON.parse(String(init?.body ?? "{}")));
+            return Response.json({ ok: true }, { status: 201 });
+          }),
+        },
+      ),
+    ).resolves.toBe(1);
+    expect(bodies).toEqual([
+      expect.objectContaining({
+        setting: { key: "explanation_depth", value: "concise" },
+        scope: "project",
+        project_key: expect.stringMatching(/^prj_[A-Za-z0-9_-]{32}$/),
+      }),
+    ]);
+    expect(JSON.stringify(bodies)).not.toContain(projectPath);
+  });
+
+  it("refreshes a rejected principal session once before recording a preference", async () => {
+    const env = isolatedPrincipalEnv();
+    let sessionGeneration = 0;
+    const bootstrapFetch = vi.fn(async (url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      if (String(url).endsWith("/api/v1/agent/keys/register")) {
+        return Response.json({ status: "active" }, { status: 201 });
+      }
+      if (body.action === "challenge") {
+        sessionGeneration += 1;
+        return Response.json({
+          challenge_id: `ach_refresh_${sessionGeneration}`,
+          signing_payload: `principal-refresh-${sessionGeneration}`,
+        });
+      }
+      return Response.json({
+        session_token:
+          sessionGeneration === 1
+            ? "psess_refresh_original_abcdefghijklmnop"
+            : "psess_refresh_replaced_abcdefghijklmnop",
+        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        member_linked: false,
+      });
+    });
+    await warmPrincipalSession(
+      { runtime: "codex", fetchImpl: bootstrapFetch },
+      env,
+    );
+    const submittedTokens = [];
+    let preferenceAttempts = 0;
+    const fetchImpl = vi.fn(async (url, init) => {
+      if (String(url).endsWith("/api/v1/agent/preferences")) {
+        preferenceAttempts += 1;
+        submittedTokens.push(
+          init?.headers?.["x-remembrance-principal-session"],
+        );
+        return preferenceAttempts === 1
+          ? Response.json(
+              { error: "Principal session is no longer valid" },
+              { status: 401 },
+            )
+          : Response.json({ ok: true }, { status: 201 });
+      }
+      return bootstrapFetch(url, init);
+    });
+
+    await expect(
+      recordExplicitPreferenceObservations(
+        "From now on, keep your answers concise.",
+        { runtime: "codex", env, fetchImpl },
+      ),
+    ).resolves.toBe(1);
+    expect(submittedTokens).toEqual([
+      "psess_refresh_original_abcdefghijklmnop",
+      "psess_refresh_replaced_abcdefghijklmnop",
+    ]);
+    expect(readHookPrincipalSession("codex", env)?.token).toBe(
+      "psess_refresh_replaced_abcdefghijklmnop",
+    );
+  });
+
+  it("derives privacy-safe host surfaces without using machine identity", () => {
+    expect(runtimeHostSurface("claude_code", {})).toBe("cli");
+    expect(runtimeHostSurface("cursor", {})).toBe("extension");
+    expect(runtimeHostSurface("openclaw", {})).toBe("gateway");
+    expect(runtimeHostSurface("codex", {})).toBe("unknown");
+    expect(
+      runtimeHostSurface("codex", { REMEMBRANCE_HOST_SURFACE: "desktop" }),
+    ).toBe("desktop");
+  });
+
+  it("fails open without caching a principal session when registration is unavailable", async () => {
+    const env = isolatedPrincipalEnv();
+    const methods = [];
+    const fetchImpl = vi.fn(async (_url, init) => {
+      methods.push(init?.method);
+      return Response.json(
+        { error: "temporarily unavailable" },
+        { status: 503 },
+      );
+    });
+    await expect(
+      warmPrincipalSession({ runtime: "codex", fetchImpl }, env),
+    ).resolves.toBeNull();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(methods).toEqual(["GET", "POST"]);
+    expect(readHookPrincipalSession("codex", env)).toBeNull();
+  });
+});
 
 describe("autoQueryTimeoutMs", () => {
   it("keeps the fail-open default while allowing a bounded remote-integration override", () => {
@@ -812,6 +1435,28 @@ describe("hook-core trigger + payload helpers", () => {
               proof_url: "/api/v1/value-proofs/vpr_hook_context",
               caveat: "Estimate, not a guarantee.",
             },
+            effective_preferences: [
+              {
+                key: "explanation_depth",
+                value: "concise",
+                label: "Explanation depth",
+                behavior: "Keep explanations concise and focused.",
+                effect: "presentation",
+                strength: "prefer",
+                source: "mandatory_org",
+              },
+            ],
+            preference_application: {
+              mode: "surgical_overlay",
+              overridden_skill_defaults: [
+                {
+                  key: "explanation_depth",
+                  skill_value: "detailed",
+                  effective_value: "concise",
+                  source: "mandatory_org",
+                },
+              ],
+            },
           },
         ],
         resources: [],
@@ -830,6 +1475,10 @@ describe("hook-core trigger + payload helpers", () => {
     expect(context).toContain("signals lexical strong, semantic moderate");
     expect(context).toContain("applicability likely/general");
     expect(context).toContain("use only when Reusable operational work");
+    expect(context).toContain(
+      "preference sidecar Explanation depth [presentation, required organization]: prefer Keep explanations concise and focused.",
+    );
+    expect(context).toContain("preserve every hard constraint");
     expect(context).toContain(
       "5.2k-8.7k potential tokens saved (grade B signed proof)",
     );
@@ -1251,10 +1900,20 @@ describe("hook-core trigger + payload helpers", () => {
     // "openai" was rejected, silently disabling the codex auto-query.
     expect(payload.agent).toMatchObject({ provider: "codex", model: "codex" });
     expect(
-      buildQueryPayload("Run Playwright QA", {}, undefined, {
-        surface: "plugin_hook",
-        trigger_reason: "ui_or_dashboard_work",
-      }).client_context,
+      buildQueryPayload(
+        "Run Playwright QA",
+        {
+          REMEMBRANCE_AGENT_KEY_PATH: join(
+            tempRoot,
+            "missing-query-payload-key.json",
+          ),
+        },
+        undefined,
+        {
+          surface: "plugin_hook",
+          trigger_reason: "ui_or_dashboard_work",
+        },
+      ).client_context,
     ).toEqual({
       surface: "plugin_hook",
       trigger_reason: "ui_or_dashboard_work",
@@ -1288,6 +1947,42 @@ describe("hook-core trigger + payload helpers", () => {
       provider: "openclaw",
       model: "openclaw",
     });
+  });
+
+  it("derives a stable opaque project key without transmitting the local path", () => {
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const identityPath = join(tempRoot, "project-agent-key.json");
+    writeFileSync(
+      identityPath,
+      JSON.stringify({
+        provider: "codex",
+        subject: "local:tofu_project",
+        key_id: "tofu_project",
+        public_key: publicKey
+          .export({ type: "spki", format: "pem" })
+          .toString(),
+        private_key: privateKey
+          .export({ type: "pkcs8", format: "pem" })
+          .toString(),
+      }),
+      { mode: 0o600 },
+    );
+    const projectPath = "/Users/private/Secret Repository";
+    const env = { REMEMBRANCE_AGENT_KEY_PATH: identityPath };
+    const projectKey = projectKeyForHook(env, projectPath);
+    const payload = buildQueryPayload(
+      "Review the dashboard",
+      env,
+      undefined,
+      { surface: "plugin_hook", runtime: "codex" },
+      projectPath,
+    );
+
+    expect(projectKey).toMatch(/^prj_[A-Za-z0-9_-]{32}$/);
+    expect(projectKeyForHook(env, projectPath)).toBe(projectKey);
+    expect(projectKeyForHook(env, `${projectPath}-other`)).not.toBe(projectKey);
+    expect(payload.client_context.project_key).toBe(projectKey);
+    expect(JSON.stringify(payload)).not.toContain(projectPath);
   });
 
   it("redacts secrets and private URLs", () => {
@@ -1620,9 +2315,12 @@ describe("hook-core marker round-trip", () => {
       query_id: "rinv_episode",
       result_id: "qres_episode",
     });
-    expect(reason).toContain("explicitly used");
+    expect(reason).toContain("silently close post-use Remembrance feedback");
+    expect(reason).toContain("explicitly selected Remembrance skill");
     expect(reason).toContain("Do not submit query-fit feedback");
+    expect(reason).toContain("Do not mention routine Remembrance calls");
     expect(reason).not.toContain("submit_query_feedback");
+    expect(reason.length).toBeLessThan(1_200);
   });
 
   it("reports a directly selected skill outcome exactly once at completion", async () => {
@@ -1844,33 +2542,30 @@ describe("hook-core marker round-trip", () => {
 
   it("exposes a stable contribution reason", () => {
     const reason = contributionReason();
-    expect(reason).toContain("you used Remembrance this session");
+    expect(reason).toContain("silently close the pending Remembrance loop");
     expect(reason).toContain("submit_query_feedback");
+    expect(reason).toContain("submit_feedback");
+    expect(reason).toContain("submit_remembrance");
     expect(reason).toContain("propose_private_skill");
+    expect(reason).toContain("propose_skill_idea");
     // Case-insensitive: this pins the safety CLAIM, not one capitalization of
     // it, so reordering the surrounding sentences cannot break it spuriously.
     expect(reason).toMatch(
-      /never remove or bypass the key to force a public candidate/i,
+      /never remove or bypass an organization key to force a public candidate/i,
     );
     expect(reason).toContain(HOST_POLICY_ALERT_TEXT);
-    expect(reason).toContain("Do not retry the blocked content");
+    expect(reason).toContain("do not retry through another transport");
+    expect(reason).toContain("Do not mention routine Remembrance calls");
+    expect(reason).toContain("receipt IDs");
+    expect(reason.length).toBeLessThan(1_200);
     expect(reason).not.toContain("queue_private_skill_import");
     expect(reason.indexOf("submit_query_feedback")).toBeLessThan(
       reason.indexOf("submit_feedback"),
     );
-    // The menu must state the exact auth boundary: omitting a key is the
-    // intentional public path, while a supplied bad or insufficient key fails
-    // without creating a candidate.
-    expect(reason).toMatch(/active organization key keeps it private/i);
-    expect(reason).toMatch(/invalid\/inactive key fails with 401/i);
-    expect(reason).toMatch(/insufficient key fails with 403/i);
-    expect(reason).toContain("organization_private");
-    expect(reason).toContain("public_candidate");
-    // The safe default must be listed FIRST, because reading order is what made
-    // the credential-dependent tool look like the primary path.
     expect(reason.indexOf("propose_private_skill")).toBeLessThan(
       reason.indexOf("propose_skill_idea"),
     );
+    expect(reason).not.toContain("•");
     expect(contributionReason("release versioning miss")).toContain(
       "High-value lesson detected: release versioning miss",
     );

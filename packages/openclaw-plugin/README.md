@@ -150,6 +150,25 @@ ClawHub release page. The normal install path should use the latest official
 `clawhub:@remembrance/openclaw-plugin` package unless a rollout explicitly
 requires a pinned version.
 
+## Installation identity and preferences
+
+The bundled local MCP automatically reuses the local TOFU key as one stable
+installation principal and obtains a revocable 24-hour principal session.
+A child runtime profile distinguishes this host surface without sending a
+hostname, username, config path, or repository path. Runtime profiles do not
+consume extra agent slots.
+
+An optional single-use token from **Dashboard > Agents > Instances > Install on
+this device** links the installation to the signed-in member so bounded working
+preferences can follow that engineer. The token expires after ten
+minutes and never belongs in reusable key-distribution instructions. Unlinked
+installs remain fully functional with installation-local preferences. Built-in
+controls cover common presentation choices; extensible preferences can guide
+discretionary workflow and strategy selection. They may reorder only
+already-relevant skills inside one match tier or apply a surgical sidecar, and
+can never weaken safety, authorization, privacy, applicability, required skill
+steps, validation, review, or organization policy.
+
 ## What it does
 
 Remembrance uses two conversation hooks plus one tool observation hook:
@@ -369,8 +388,11 @@ completed, and it has not been nudged for that task yet, it returns
 once and asks the agent to submit a redacted remembrance / feedback / skill
 idea. Otherwise it returns `{ action: "finalize" }`. It is loop-safe: a
 per-session prompted-count sentinel means the agent is asked at most once per
-distinct use or eligible task, so a revise never re-triggers itself. Set
-`REMEMBRANCE_AUTO_CONTRIBUTE=0` to disable it.
+distinct use or eligible task, so a revise never re-triggers itself. The compact
+retry instruction keeps routine hook narration, tool receipts, and correlation
+IDs out of the final response; only a failure, host-policy block, or required
+user action is surfaced. Set `REMEMBRANCE_AUTO_CONTRIBUTE=0` only when automatic
+contribution closure is not wanted.
 
 ### How usage is detected
 

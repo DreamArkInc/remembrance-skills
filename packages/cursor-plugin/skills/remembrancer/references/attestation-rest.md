@@ -45,11 +45,22 @@ If this file is lost, rerun this REST bootstrap recipe. The new key starts a new
 TOFU subject trust history; the previous verified-tier history is not
 recoverable without the old private key.
 
-## Key registration signing payload v1
+## Key registration signing payload v2
 
-Register a TOFU public key with:
+First fetch the opaque owner binding with the same credential that will own the
+installation, then register the TOFU public key:
 
-`POST https://remembrance.dev/api/v1/agent/keys/register`
+```text
+GET  https://remembrance.dev/api/v1/agent/keys/register
+POST https://remembrance.dev/api/v1/agent/keys/register
+```
+
+The GET response is private and non-cacheable. Include its `owner_binding` in
+both the canonical payload and `proof`. This prevents an anonymous registration
+signature from being replayed to claim the installation for an organization.
+Legacy v1 signatures remain valid only for anonymous registration and an
+already-owned same-scope key; new organization claims and anonymous-to-org
+upgrades require v2.
 
 If `key_id` is omitted, compute:
 
@@ -65,10 +76,11 @@ Sign this canonical object:
 
 ```json
 {
-  "version": "v1",
+  "version": "v2",
   "purpose": "remembrance-agent-key-registration",
   "provider": "other",
   "key_id": "tofu_...",
+  "owner_binding": "areg_...",
   "public_key_hash": "sha256:<hex>",
   "subject": "claude:local-install-stable-id",
   "signed_at": "2026-05-06T12:00:00.000Z"
@@ -85,6 +97,7 @@ Submit:
   "subject": "claude:local-install-stable-id",
   "proof": {
     "algorithm": "ed25519",
+    "owner_binding": "areg_...",
     "signed_at": "2026-05-06T12:00:00.000Z",
     "signature": "base64url-ed25519-signature"
   },
@@ -291,6 +304,23 @@ async function post(path, body, idempotencyKey) {
   return parsed;
 }
 
+async function get(path) {
+  const response = await fetch(`${api}${path}`, {
+    headers: {
+      ...(process.env.REMEMBRANCE_API_KEY
+        ? { "x-remembrance-api-key": process.env.REMEMBRANCE_API_KEY }
+        : {}),
+    },
+  });
+  const parsed = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(
+      `${path} failed with ${response.status}: ${JSON.stringify(parsed)}`,
+    );
+  }
+  return parsed;
+}
+
 async function readOrCreateIdentity() {
   if (existsSync(keyPath)) {
     return JSON.parse(await readFile(keyPath, "utf8"));
@@ -315,12 +345,19 @@ async function readOrCreateIdentity() {
 }
 
 const identity = await readOrCreateIdentity();
+const { owner_binding: ownerBinding } = await get(
+  "/api/v1/agent/keys/register",
+);
+if (!/^areg_[A-Za-z0-9_-]{24,120}$/.test(String(ownerBinding ?? ""))) {
+  throw new Error("Remembrance returned an invalid registration binding");
+}
 const signedAt = new Date().toISOString();
 const registrationPayload = canonicalJson({
-  version: "v1",
+  version: "v2",
   purpose: "remembrance-agent-key-registration",
   provider: identity.provider,
   key_id: identity.key_id,
+  owner_binding: ownerBinding,
   public_key_hash: hashValue(identity.public_key),
   subject: identity.subject,
   signed_at: signedAt,
@@ -332,6 +369,7 @@ await post("/api/v1/agent/keys/register", {
   subject: identity.subject,
   proof: {
     algorithm: "ed25519",
+    owner_binding: ownerBinding,
     signed_at: signedAt,
     signature: signBase64Url(identity.private_key, registrationPayload),
   },

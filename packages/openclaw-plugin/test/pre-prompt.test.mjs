@@ -15,11 +15,20 @@ let counter = 0;
 
 function testEnv(extra = {}) {
   counter += 1;
+  const testRoot = join(tempRoot, `state-${counter}`);
   return {
     REMEMBRANCE_API_URL: "https://remembrance.dev",
     REMEMBRANCE_USAGE_DIR: join(tempRoot, `usage-${counter}`),
+    REMEMBRANCE_AGENT_KEY_PATH: join(testRoot, "agent-key.json"),
+    REMEMBRANCE_PRINCIPAL_SESSION_DIR: join(testRoot, "sessions"),
     ...extra,
   };
+}
+
+function queryCalls(calls) {
+  return calls.filter((call) =>
+    String(call.url).endsWith("/api/v1/agent/query"),
+  );
 }
 
 // A fake OpenClaw before_prompt_build event.
@@ -74,9 +83,10 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
       },
     );
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe("https://remembrance.dev/api/v1/agent/query");
-    expect(calls[0].body).toMatchObject({
+    const queries = queryCalls(calls);
+    expect(queries).toHaveLength(1);
+    expect(queries[0].url).toBe("https://remembrance.dev/api/v1/agent/query");
+    expect(queries[0].body).toMatchObject({
       // Reports as OpenClaw (an accepted agentProviderSchema value), not the
       // shared-core Codex default — otherwise the query would fail validation.
       agent: { provider: "openclaw", model: "openclaw" },
@@ -91,7 +101,7 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
         trigger_reason: "external_service",
       },
     });
-    expect(calls[0].headers["user-agent"]).toMatch(
+    expect(queries[0].headers["user-agent"]).toMatch(
       /^@remembrance\/openclaw-plugin\/\d+\.\d+\.\d+$/,
     );
     expect(recordHealth).toHaveBeenCalledWith(
@@ -195,8 +205,10 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
       {
         env: testEnv({ REMEMBRANCE_API_KEY: "env-key-123" }),
         recordUse: () => {},
-        fetchImpl: vi.fn(async (_url, init) => {
-          headers.push(init.headers);
+        fetchImpl: vi.fn(async (url, init) => {
+          if (String(url).endsWith("/api/v1/agent/query")) {
+            headers.push(init.headers);
+          }
           return Response.json({ skills: [], resources: [] });
         }),
       },

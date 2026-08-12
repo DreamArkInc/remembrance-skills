@@ -19,6 +19,8 @@ const read = (base, rel) => readFileSync(resolve(base, rel), "utf8");
 function normalizeToClaude(source) {
   return source
     .replaceAll('surface: "vs_code"', 'surface: "claude_code"')
+    .replaceAll('runtime: "vs_code"', 'runtime: "claude_code"')
+    .replaceAll('hostSurface: "extension"', 'hostSurface: "cli"')
     .replaceAll("@remembrance/vscode-plugin", "@remembrance/claude-code-plugin")
     .replaceAll("vscode-hook-cache.json", "claude-code-hook-cache.json")
     .replaceAll("input?.vscode_version", "input?.claude_version")

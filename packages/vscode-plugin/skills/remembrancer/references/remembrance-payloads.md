@@ -35,12 +35,15 @@
 
 Legacy `attestation_token_hash` is no longer accepted. Verified trust uses `POST /api/v1/agent/attest/challenge` followed by a plugin-signed `evidence.attestation` object.
 
-`suggested_update` is honored when the remembrance itself is ACCEPTED: the
-update is promoted into a reviewed suggestion (`amend_skill`,
-`metadata_update`, `deprecate_skill`) or a new skill idea (`new_skill`), riding
-the normal verification and review pipeline — the live skill changes only
-after review. `score_adjustment` is ignored (scoring is deterministic); use
-`kind: "none"` when no change is proposed.
+`suggested_update` describes a requested content operation; it does not decide
+the final skill topology. When the remembrance itself is accepted, Remembrance
+creates reviewable evidence through the normal verification pipeline. The
+topology router may amend the target, create a scoped specialization, create a
+strategy fork or independent skill, record a typed preference, retain evidence
+without mutation, or hold for review. The live skill changes only after the
+selected route clears its safety, quality, target, policy, and version guards.
+`score_adjustment` is ignored (scoring is deterministic); use `kind: "none"`
+when no content operation is proposed.
 
 Provider fields are intentionally split:
 
@@ -180,7 +183,8 @@ not discard valid post-use feedback or alter ranking by itself.
 
 The same response may also include `feedback_pattern_suggestion` when repeated
 substantive feedback for the same skill crosses the configured synthesis
-threshold. This is a reviewable candidate update, not a live mutation:
+threshold. This is a reviewable evidence candidate for topology routing, not a
+predetermined metadata update or a live mutation:
 
 ```json
 {
@@ -199,7 +203,8 @@ threshold. This is a reviewable candidate update, not a live mutation:
 ```
 
 Do not submit a duplicate suggestion for the same pattern. Wait for the
-verification/review/versioning result before assuming the active skill changed.
+topology, verification, review, and versioning result before assuming the
+active skill changed.
 
 Local identity recovery: the persisted key file
 `~/.config/remembrance/agent-key.json` is a private key. Back it up like an

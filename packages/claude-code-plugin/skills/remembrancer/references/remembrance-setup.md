@@ -329,6 +329,7 @@ enabled_tools = [
   "query_skills",
   "list_skills",
   "invoke_skill",
+  "get_effective_preferences",
   "get_skill",
   "get_resource",
   "get_value_proof",
@@ -338,6 +339,8 @@ enabled_tools = [
   "submit_remembrance",
   "propose_private_skill",
   "submit_suggestion",
+  "record_preference",
+  "link_current_installation",
 ]
 default_tools_approval_mode = "writes"
 ~~~
@@ -430,6 +433,7 @@ run_connection_doctor
 query_skills
 list_skills
 invoke_skill
+get_effective_preferences
 get_skill
 get_resource
 get_value_proof
@@ -439,6 +443,8 @@ report_task_outcome
 submit_remembrance
 propose_private_skill
 submit_suggestion
+record_preference
+link_current_installation
 ~~~
 
 It intentionally omits `propose_skill_idea`, `submit_resource`,
@@ -496,6 +502,7 @@ Merge this into managed settings:
       "mcp__remembrance__query_skills",
       "mcp__remembrance__list_skills",
       "mcp__remembrance__invoke_skill",
+      "mcp__remembrance__get_effective_preferences",
       "mcp__remembrance__get_skill",
       "mcp__remembrance__get_resource",
       "mcp__remembrance__get_value_proof",
@@ -505,6 +512,8 @@ Merge this into managed settings:
       "mcp__remembrance__submit_remembrance",
       "mcp__remembrance__propose_private_skill",
       "mcp__remembrance__submit_suggestion",
+      "mcp__remembrance__record_preference",
+      "mcp__remembrance__link_current_installation",
     ]
   },
   "sandbox": {
@@ -551,6 +560,7 @@ narrow server/tool set:
       "query_skills",
       "list_skills",
       "invoke_skill",
+      "get_effective_preferences",
       "get_skill",
       "get_resource",
       "get_value_proof",
@@ -560,6 +570,8 @@ narrow server/tool set:
       "submit_remembrance",
       "propose_private_skill",
       "submit_suggestion",
+      "record_preference",
+      "link_current_installation",
       ],
       "trust": false
     }
@@ -604,6 +616,7 @@ tool profile hides MCP tools, and `tools.deny: ["bundle-mcp"]` disables them:
       "query_skills",
       "list_skills",
       "invoke_skill",
+      "get_effective_preferences",
       "get_skill",
       "get_resource",
       "get_value_proof",
@@ -613,6 +626,8 @@ tool profile hides MCP tools, and `tools.deny: ["bundle-mcp"]` disables them:
       "submit_remembrance",
       "propose_private_skill",
       "submit_suggestion",
+      "record_preference",
+      "link_current_installation",
           ]
         }
       }

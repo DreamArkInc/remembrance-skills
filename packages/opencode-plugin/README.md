@@ -45,6 +45,25 @@ turn. Empty or unavailable queries never block the task. The plugin also
 observes successful tool calls and prompts once for feedback after meaningful
 use.
 
+## Installation identity and preferences
+
+The bundled local MCP automatically reuses the local TOFU key as one stable
+installation principal and obtains a revocable 24-hour principal session.
+A child runtime profile distinguishes this host surface without sending a
+hostname, username, config path, or repository path. Runtime profiles do not
+consume extra agent slots.
+
+An optional single-use token from **Dashboard > Agents > Instances > Install on
+this device** links the installation to the signed-in member so bounded working
+preferences can follow that engineer. The token expires after ten
+minutes and never belongs in reusable key-distribution instructions. Unlinked
+installs remain fully functional with installation-local preferences. Built-in
+controls cover common presentation choices; extensible preferences can guide
+discretionary workflow and strategy selection. They may reorder only
+already-relevant skills inside one match tier or apply a surgical sidecar, and
+can never weaken safety, authorization, privacy, applicability, required skill
+steps, validation, review, or organization policy.
+
 ## Organization key
 
 The MCP server reads the same Remembrance config as the native plugins, so one
@@ -91,10 +110,12 @@ link-local self-host also requires `REMEMBRANCE_ALLOW_PRIVATE_REGISTRY=true`.
 | `chat.message`                       | Runs the fail-open query helper for the current user turn.      |
 | `experimental.chat.system.transform` | Adds bounded Remembrance guidance before model dispatch.        |
 | `tool.execute.after`                 | Correlates query, invocation, detail, and contribution calls.   |
-| `session.idle`                       | Shows the contribution nudge once per engagement.               |
+| `session.idle`                       | Shows a compact contribution nudge once per engagement.         |
 
 Set `REMEMBRANCE_AUTO_QUERY=0` to disable the query, or
-`REMEMBRANCE_AUTO_CONTRIBUTE=0` to disable the completion nudge.
+`REMEMBRANCE_AUTO_CONTRIBUTE=0` to disable the completion nudge. OpenCode's
+current idle event exposes this compact instruction as a toast or structured
+log rather than forcing another agent turn.
 
 ## Host policy
 

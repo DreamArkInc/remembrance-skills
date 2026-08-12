@@ -3,18 +3,13 @@
   "mcp": {
     "remembrance": {
       "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "@remembrance-ai/mcp-server@0.1.55"
-      ],
+      "command": ["npx", "-y", "@remembrance-ai/mcp-server@0.1.60"],
       "enabled": true,
       "environment": {
-        "REMEMBRANCE_PLUGIN_HOST": "opencode"
+        "REMEMBRANCE_PLUGIN_HOST": "opencode",
+        "REMEMBRANCE_HOST_SURFACE": "cli"
       }
     }
   },
-  "plugin": [
-    "@remembrance-ai/opencode-plugin@0.1.55"
-  ]
+  "plugin": ["@remembrance-ai/opencode-plugin@0.1.60"]
 }

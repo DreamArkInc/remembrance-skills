@@ -31,7 +31,7 @@ describe("Codex contribute-on-stop adapter", () => {
     expect(result).toMatchObject({ allow: true, why: "stop_hook_active" });
   });
 
-  it("blocks with the contribution reason on new registry use", () => {
+  it("keeps auto-contribution active with a compact, silent continuation", () => {
     const written = [];
     const result = handleStop(
       { turn_id: "t1", stop_hook_active: false },
@@ -41,9 +41,16 @@ describe("Codex contribute-on-stop adapter", () => {
     expect(result.output.decision).toBe("block");
     expect(result.output.reason).toBe(contributionReason());
     expect(result.output.reason).toContain(
-      "Use the Remembrance MCP tools directly",
+      "Use Remembrance MCP tools when available",
     );
     expect(result.output.reason).toContain("REMEMBRANCE_SUBMISSION_PAYLOAD");
+    expect(result.output.reason).toContain(
+      "Do not mention routine Remembrance calls",
+    );
+    expect(result.output.reason).toContain("submit_remembrance");
+    expect(result.output.reason).toContain("propose_private_skill");
+    expect(result.output.reason).toContain("propose_skill_idea");
+    expect(result.output.reason.length).toBeLessThan(1_200);
     // It records the new prompted count so it won't re-block the same use.
     expect(written).toEqual([["t1", 1]]);
   });
