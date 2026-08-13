@@ -11083,7 +11083,7 @@ async function checkClientUpdate(input) {
 // src/server.ts
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.1.63" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.64" : "0.0.0-dev";
 var tools = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var inputBuffer = Buffer.alloc(0);
@@ -11098,6 +11098,7 @@ var PRINCIPAL_SESSION_REQUIRED_TOOLS = /* @__PURE__ */ new Set([
 ]);
 var PRINCIPAL_SESSION_AWAITED_TOOLS = /* @__PURE__ */ new Set([
   ...PRINCIPAL_SESSION_REQUIRED_TOOLS,
+  "get_effective_preferences",
   "report_task_outcome"
 ]);
 function apiAccessKey(access) {
