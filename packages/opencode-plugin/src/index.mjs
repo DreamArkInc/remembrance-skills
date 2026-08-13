@@ -80,6 +80,9 @@ const CONTRIBUTION_TOOLS = [
   "submit_resource",
   "submit_resource_review",
 ];
+const PREFERENCE_EVIDENCE_TOOLS = [
+  "submit_preference_compatibility_feedback",
+];
 
 export function pluginVersion(readFile = readFileSync) {
   try {
@@ -596,6 +599,13 @@ export const Remembrance = async (context = {}) => {
             selection.slug,
             env,
           );
+          return;
+        }
+        if (
+          PREFERENCE_EVIDENCE_TOOLS.some((candidate) =>
+            normalizedTool.endsWith(candidate),
+          )
+        ) {
           return;
         }
         if (

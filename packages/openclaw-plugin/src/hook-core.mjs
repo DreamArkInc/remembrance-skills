@@ -58,6 +58,33 @@ const VALUE_EPISODE_MARKER_LIMIT = 20;
 const VALUE_EPISODE_MARKER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DIRECT_SELECTION_MARKER_LIMIT = 20;
 const DIRECT_SELECTION_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
+const PREFERENCE_EVIDENCE_SKILL_LIMIT = 2;
+const PREFERENCE_EVIDENCE_SETTING_LIMIT = 4;
+const PREFERENCE_EVIDENCE_CONTEXT_CHARS = 760;
+const EFFECTIVE_PREFERENCE_SOURCES = new Set([
+  "mandatory_org",
+  "explicit_task",
+  "explicit_project",
+  "explicit_member_runtime",
+  "explicit_member",
+  "learned_member_runtime",
+  "learned_member",
+  "explicit_installation",
+  "learned_installation",
+  "recommended_org",
+  "skill_default",
+]);
+const PREFERENCE_EVIDENCE_SOURCES = new Set([
+  "mandatory_org",
+  "explicit_project",
+  "explicit_member_runtime",
+  "explicit_member",
+  "learned_member_runtime",
+  "learned_member",
+  "explicit_installation",
+  "learned_installation",
+  "recommended_org",
+]);
 const MAX_LOCAL_CONFIG_BYTES = 64 * 1024;
 const MAX_LOCAL_HEALTH_MARKER_BYTES = 16 * 1024;
 const MAX_LOCAL_PLUGIN_ALERT_BYTES = 16 * 1024;
@@ -338,14 +365,27 @@ export function buildQueryPayload(
     redacted.length <= MAX_SUMMARY_CHARS
       ? redacted
       : `${redacted.slice(0, MAX_SUMMARY_CHARS - 3).trim()}...`;
-  const projectKey = projectKeyForHook(env, projectPath);
+  const credential = resolveApiCredential(env);
+  const organizationCredentialAvailable =
+    Boolean(credential.apiKey) &&
+    !isUnusableConfigurationSource(credential.source);
+  const projectKey = organizationCredentialAvailable
+    ? projectKeyForHook(env, projectPath)
+    : null;
   const resolvedClientContext = clientContext
-    ? {
-        ...clientContext,
-        ...(clientContext.project_key || !projectKey
-          ? {}
-          : { project_key: projectKey }),
-      }
+    ? (() => {
+        const { project_key: requestedProjectKey, ...publicClientContext } =
+          clientContext;
+        const authorizedProjectKey = organizationCredentialAvailable
+          ? requestedProjectKey || projectKey
+          : null;
+        return {
+          ...publicClientContext,
+          ...(authorizedProjectKey
+            ? { project_key: authorizedProjectKey }
+            : {}),
+        };
+      })()
     : null;
   return {
     agent: {
@@ -834,7 +874,7 @@ export function formatContext(
   );
   if (effectivePreferences.length > 0) {
     lines.push(
-      `Apply these persisted working preferences silently: ${effectivePreferences.join("; ")}. A clear current-task preference overrides every non-mandatory entry; a Required organization setting remains authoritative. Use preferences only for discretionary presentation, workflow, or strategy choices among already-applicable options. Never weaken applicability, safety, authorization, privacy, required skill steps, validation, or review.`,
+      `Apply these persisted working preferences silently: ${effectivePreferences.join("; ")}. Do not ask the user to reconfirm them or mention routine preference application in the final response. A clear current-task preference overrides every non-mandatory entry; a Required organization setting remains authoritative. Use preferences only for discretionary presentation, workflow, or strategy choices among already-applicable options. Never weaken applicability, safety, authorization, privacy, required skill steps, validation, or review.`,
     );
   }
   const queryId = body?.query_feedback?.query_id ?? body?.query_id;
@@ -876,6 +916,12 @@ export function formatContext(
   if (contributionDirective) {
     tailLines.push(
       `After using Remembrance: ${safeText(contributionDirective, MAX_DIRECTIVE_CHARS)}`,
+    );
+  }
+  const preferenceEvidence = preferenceCompatibilityEvidenceFromResponse(body);
+  if (preferenceEvidence.length > 0) {
+    tailLines.push(
+      preferenceCompatibilityEvidenceInstruction(preferenceEvidence),
     );
   }
   if (skills.length > 0 || resources.length > 0) {
@@ -1070,6 +1116,162 @@ function sanitizePreferenceApplication(value, effectivePreferences) {
   return value.mode === "surgical_overlay"
     ? `preference sidecar ${settings.join("; ")}${overridden.length > 0 ? `; replaces discretionary skill defaults for ${overridden.join(", ")}` : ""}${blocked.length > 0 ? `; blocked by skill requirements: ${blocked.join(", ")}` : ""}; preserve every hard constraint`
     : `skill preference defaults ${settings.join("; ")}`;
+}
+
+export function preferenceCompatibilityEvidenceFromResponse(response) {
+  const body = responseBodyFromToolResponse(response);
+  const candidates = [
+    ...(body?.selection_mode === "explicit" && body?.skill
+      ? [
+          {
+            ...body.skill,
+            result_id: body.result_id,
+            effective_preferences: body.effective_preferences,
+            preference_compatibility_feedback:
+              body.preference_compatibility_feedback,
+          },
+        ]
+      : []),
+    ...(Array.isArray(body?.skills) ? body.skills : []),
+  ];
+  const seen = new Set();
+  return candidates
+    .flatMap((candidate) => {
+      const slug = safePreferenceIdentifier(candidate?.slug, 120);
+      if (!slug || seen.has(slug)) return [];
+      const feedback = candidate?.preference_compatibility_feedback;
+      const queryId = safeCorrelationIdentifier(feedback?.query_id, 160);
+      const resultId = safeCorrelationIdentifier(feedback?.result_id, 160);
+      const skillVersionId = safeCorrelationIdentifier(
+        feedback?.skill_version_id,
+        160,
+      );
+      const preferences = sanitizePreferenceFeedbackSettings(
+        feedback?.preferences,
+      );
+      if (
+        feedback?.available !== true ||
+        !queryId ||
+        !resultId ||
+        !skillVersionId ||
+        preferences.length === 0
+      ) {
+        return [];
+      }
+      seen.add(slug);
+      return [
+        {
+          query_id: queryId,
+          result_id: resultId,
+          skill_slug: slug,
+          skill_version_id: skillVersionId,
+          preferences,
+        },
+      ];
+    })
+    .slice(0, PREFERENCE_EVIDENCE_SKILL_LIMIT);
+}
+
+function preferenceCompatibilityEvidenceInstruction(evidence) {
+  const payload = boundedPreferenceEvidencePayload(evidence);
+  if (!payload) return "";
+  return [
+    "Private preference evidence (silent, after actual use only): if the selected skill clearly supports or conflicts with one server-issued working preference below, call submit_preference_compatibility_feedback using its exact query_id, result_id, preference_fingerprint, skill slug, and version id.",
+    'Judge observed behavior independently: selection and an existing classifier label are not new evidence. Skip neutral or uncertain cases. Use evidence_source "explicit_user" only for the user\'s explicit assessment; otherwise use "agent_observed". Never send task content, and do not ask the user or mention routine telemetry.',
+    `Candidates: ${payload}`,
+  ].join(" ");
+}
+
+function boundedPreferenceEvidencePayload(evidence) {
+  const entries = [];
+  for (const candidate of evidence.slice(0, PREFERENCE_EVIDENCE_SKILL_LIMIT)) {
+    for (const preference of candidate.preferences.slice(
+      0,
+      PREFERENCE_EVIDENCE_SETTING_LIMIT,
+    )) {
+      const next = {
+        query_id: candidate.query_id,
+        result_id: candidate.result_id,
+        skill_slug: candidate.skill_slug,
+        skill_version_id: candidate.skill_version_id,
+        preference_fingerprint: preference.preference_fingerprint,
+        setting: preference.setting,
+      };
+      const serialized = JSON.stringify([...entries, next]);
+      if (serialized.length > PREFERENCE_EVIDENCE_CONTEXT_CHARS) {
+        return entries.length > 0 ? JSON.stringify(entries) : null;
+      }
+      entries.push(next);
+    }
+  }
+  return entries.length > 0 ? JSON.stringify(entries) : null;
+}
+
+function sanitizePreferenceFeedbackSettings(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .flatMap((entry) => {
+      const fingerprint =
+        typeof entry?.preference_fingerprint === "string" &&
+        /^sha256:[a-f0-9]{64}$/.test(entry.preference_fingerprint)
+          ? entry.preference_fingerprint
+          : null;
+      const item = entry?.setting;
+      if (
+        !fingerprint ||
+        !item ||
+        typeof item !== "object" ||
+        Array.isArray(item)
+      ) {
+        return [];
+      }
+      const key = safePreferenceIdentifier(item.key, 96);
+      const preferenceValue = safePreferenceIdentifier(item.value, 96);
+      if (!key || !preferenceValue) return [];
+      const setting = { key, value: preferenceValue };
+      if (
+        typeof item.label === "string" &&
+        item.label.trim() &&
+        typeof item.behavior === "string" &&
+        item.behavior.trim() &&
+        ["presentation", "workflow", "strategy_selection"].includes(
+          item.effect,
+        ) &&
+        ["prefer", "avoid"].includes(item.strength) &&
+        Number.isInteger(item.definition_version) &&
+        item.definition_version >= 1 &&
+        item.definition_version <= 1_000_000
+      ) {
+        Object.assign(setting, {
+          label: safeText(item.label, 96),
+          behavior: safeText(item.behavior, 320),
+          effect: item.effect,
+          strength: item.strength,
+          definition_version: item.definition_version,
+        });
+      }
+      return [{ preference_fingerprint: fingerprint, setting }];
+    })
+    .slice(0, PREFERENCE_EVIDENCE_SETTING_LIMIT);
+}
+
+function safeCorrelationIdentifier(value, maxLength) {
+  const text = String(value ?? "").trim();
+  return text.length > 0 &&
+    text.length <= maxLength &&
+    /^[A-Za-z0-9_-]+$/.test(text)
+    ? text
+    : null;
+}
+
+function safePreferenceIdentifier(value, maxLength) {
+  const text = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  return text.length <= maxLength &&
+    /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/.test(text)
+    ? text
+    : null;
 }
 
 function sanitizeWhyMatched(value) {
@@ -1278,7 +1480,7 @@ export async function runPromptHook(prompt, options = {}) {
             env,
           )
         : (formatContext(response, decision.reason, limitFromEnv(env)) ??
-          emptyQueryContext(decision.reason)),
+            emptyQueryContext(decision.reason)),
       preferenceCapture,
     ),
     eligible: true,
@@ -1388,6 +1590,8 @@ export function contributionReason(
         : []
   ).slice(0, DIRECT_SELECTION_MARKER_LIMIT);
   if (directSelections.length > 0) {
+    const preferenceEvidenceLine =
+      directPreferenceCompatibilityInstruction(directSelections);
     const selectionLines = directSelections.map((selection) => {
       const correlation =
         selection.query_id && selection.result_id
@@ -1403,6 +1607,7 @@ export function contributionReason(
       signalLine,
       "Do not submit query-fit feedback for these selections; they were chosen directly rather than ranked for a query.",
       "Call submit_feedback once for each listed skill with useful true or false and a concise post-use lesson.",
+      preferenceEvidenceLine,
       "If submit_feedback returns next_step.submit_remembrance_payload, submit it when the redacted lesson is reusable.",
       routineContributionVisibilityInstruction(),
     ]
@@ -1418,6 +1623,31 @@ export function contributionReason(
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function directPreferenceCompatibilityInstruction(selections) {
+  const evidence = selections.flatMap((selection) =>
+    selection?.query_id &&
+    selection?.result_id &&
+    selection?.version_id &&
+    Array.isArray(selection.preference_feedback_settings) &&
+    selection.preference_feedback_settings.length > 0
+      ? [
+          {
+            query_id: safeText(selection.query_id, 160),
+            result_id: safeText(selection.result_id, 160),
+            skill_slug: safeText(selection.slug, 120),
+            skill_version_id: safeText(selection.version_id, 160),
+            preferences: sanitizeStoredPreferenceFeedbackSettings(
+              selection.preference_feedback_settings,
+            ),
+          },
+        ]
+      : [],
+  );
+  return evidence.length > 0
+    ? preferenceCompatibilityEvidenceInstruction(evidence)
+    : null;
 }
 
 function routineContributionVisibilityInstruction() {
@@ -1567,8 +1797,8 @@ function highMatchClosureInstruction(match) {
 
 // --- Marker mechanism (Codex has no transcript path) -------------------------
 //
-// Three per-session counters and one bounded high-match marker live under
-// os.tmpdir()/remembrance-usage/<hash>:
+// Per-session counters and bounded state markers live under a private,
+// per-user os.tmpdir()/remembrance-usage-<owner>/<hash> directory:
 //   <hash>.use     — incremented every time the query adapter completes a query.
 //   <hash>.eligible — records that a reusable task should be closed out even if
 //                     no query result was consumed.
@@ -1580,10 +1810,20 @@ function highMatchClosureInstruction(match) {
 
 const USAGE_DIR = "remembrance-usage";
 
+function localUsageOwnerId() {
+  if (typeof process.getuid === "function") {
+    return `uid-${process.getuid()}`;
+  }
+  return `home-${createHash("sha256")
+    .update(homedir())
+    .digest("hex")
+    .slice(0, 16)}`;
+}
+
 function usageDir(env = process.env) {
   return env?.REMEMBRANCE_USAGE_DIR
     ? String(env.REMEMBRANCE_USAGE_DIR)
-    : join(tmpdir(), USAGE_DIR);
+    : join(tmpdir(), `${USAGE_DIR}-${localUsageOwnerId()}`);
 }
 
 function sessionHash(sessionId) {
@@ -1631,15 +1871,28 @@ function readCountFile(path) {
   }
 }
 
-function writeCountFile(path, count) {
+function writePrivateUsageMarker(path, value) {
+  const temporaryPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, String(count));
+    ensureSecureHookDirectory(dirname(path));
+    writeFileSync(temporaryPath, String(value), {
+      mode: 0o600,
+      flag: "wx",
+    });
+    renameSync(temporaryPath, path);
     return true;
   } catch {
-    // Non-fatal: fail-open, the stop_hook_active guard still prevents loops.
+    try {
+      rmSync(temporaryPath, { force: true });
+    } catch {
+      // Best-effort cleanup only; marker persistence must remain fail-open.
+    }
     return false;
   }
+}
+
+function writeCountFile(path, count) {
+  return writePrivateUsageMarker(path, String(count));
 }
 
 // Increment (and return) the per-session registry-use counter. Prompt and tool
@@ -1693,8 +1946,7 @@ export function recordDirectiveSurface(
       rmSync(path, { force: true });
       return true;
     }
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(
+    return writePrivateUsageMarker(
       path,
       JSON.stringify({
         directive_id: safeText(directive.directive_id, 96),
@@ -1706,7 +1958,6 @@ export function recordDirectiveSurface(
         shown_at: safeText(directive.shown_at ?? new Date().toISOString(), 40),
       }),
     );
-    return true;
   } catch {
     return false;
   }
@@ -1916,6 +2167,8 @@ export function directSelectionFromResponse(response) {
   ) {
     return null;
   }
+  const preferenceEvidence =
+    preferenceCompatibilityEvidenceFromResponse(body)[0] ?? null;
   return {
     invocation_id:
       typeof body.invocation_id === "string"
@@ -1938,6 +2191,10 @@ export function directSelectionFromResponse(response) {
       typeof skill.source === "string" ? safeText(skill.source, 40) : null,
     feedback_available: body?.feedback?.available === true,
     task_outcome_available: body?.task_outcome?.available === true,
+    preference_feedback_settings:
+      preferenceEvidence?.skill_version_id === skill.version_id
+        ? preferenceEvidence.preferences
+        : [],
     used_at: new Date().toISOString(),
   };
 }
@@ -2014,6 +2271,9 @@ function normalizeDirectSelectionSurface(selection, sessionId, env) {
     source: selection.source ? safeText(selection.source, 40) : null,
     feedback_available: selection.feedback_available === true,
     task_outcome_available: selection.task_outcome_available === true,
+    preference_feedback_settings: sanitizeStoredPreferenceFeedbackSettings(
+      selection.preference_feedback_settings,
+    ),
     prompted_at: selection.prompted_at
       ? safeText(selection.prompted_at, 40)
       : null,
@@ -2041,6 +2301,9 @@ function normalizeStoredDirectSelectionSurface(selection) {
     source: selection.source ? safeText(selection.source, 40) : null,
     feedback_available: selection.feedback_available === true,
     task_outcome_available: selection.task_outcome_available === true,
+    preference_feedback_settings: sanitizeStoredPreferenceFeedbackSettings(
+      selection.preference_feedback_settings,
+    ),
     prompted_at: selection.prompted_at
       ? safeText(selection.prompted_at, 40)
       : null,
@@ -2051,15 +2314,54 @@ function normalizeStoredDirectSelectionSurface(selection) {
   };
 }
 
+function sanitizeStoredPreferenceFeedbackSettings(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .flatMap((entry) => {
+      const fingerprint =
+        typeof entry?.preference_fingerprint === "string" &&
+        /^sha256:[a-f0-9]{64}$/.test(entry.preference_fingerprint)
+          ? entry.preference_fingerprint
+          : null;
+      const setting = entry?.setting;
+      if (!fingerprint || !setting || typeof setting !== "object") return [];
+      const key = safePreferenceIdentifier(setting?.key, 96);
+      const preferenceValue = safePreferenceIdentifier(setting?.value, 96);
+      if (!key || !preferenceValue) return [];
+      const normalized = { key, value: preferenceValue };
+      if (
+        typeof setting?.label === "string" &&
+        setting.label.trim() &&
+        typeof setting?.behavior === "string" &&
+        setting.behavior.trim() &&
+        ["presentation", "workflow", "strategy_selection"].includes(
+          setting.effect,
+        ) &&
+        ["prefer", "avoid"].includes(setting.strength) &&
+        Number.isInteger(setting.definition_version) &&
+        setting.definition_version >= 1 &&
+        setting.definition_version <= 1_000_000
+      ) {
+        Object.assign(normalized, {
+          label: safeText(setting.label, 96),
+          behavior: safeText(setting.behavior, 320),
+          effect: setting.effect,
+          strength: setting.strength,
+          definition_version: setting.definition_version,
+        });
+      }
+      return [{ preference_fingerprint: fingerprint, setting: normalized }];
+    })
+    .slice(0, PREFERENCE_EVIDENCE_SETTING_LIMIT);
+}
+
 function writeDirectSelectionSurfaces(sessionId, records, env) {
   try {
     const path = directSelectionPath(sessionId, env);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(
+    return writePrivateUsageMarker(
       path,
       JSON.stringify(records.slice(-DIRECT_SELECTION_MARKER_LIMIT)),
     );
-    return true;
   } catch {
     return false;
   }
@@ -2109,8 +2411,7 @@ export function recordHighMatchSurface(sessionId, match, env = process.env) {
       rmSync(path, { force: true });
       return true;
     }
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(
+    return writePrivateUsageMarker(
       path,
       JSON.stringify({
         query_id: match.query_id ? safeText(match.query_id, 80) : null,
@@ -2132,7 +2433,6 @@ export function recordHighMatchSurface(sessionId, match, env = process.env) {
         potential_savings: sanitizePotentialSavings(match.potential_savings),
       }),
     );
-    return true;
   } catch {
     return false;
   }
@@ -2488,12 +2788,10 @@ async function postTaskOutcome(payload, options = {}) {
 function writeValueEpisodeSurfaces(sessionId, records, env) {
   try {
     const path = valueEpisodePath(sessionId, env);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(
+    return writePrivateUsageMarker(
       path,
       JSON.stringify(records.slice(-VALUE_EPISODE_MARKER_LIMIT)),
     );
-    return true;
   } catch {
     return false;
   }
@@ -3144,9 +3442,11 @@ function sanitizeEffectivePreferences(value) {
         item &&
         typeof item === "object" &&
         !Array.isArray(item) &&
+        typeof item.key === "string" &&
         /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/.test(item.key) &&
         typeof item.value === "string" &&
         /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/.test(item.value) &&
+        EFFECTIVE_PREFERENCE_SOURCES.has(item.source) &&
         ["presentation", "workflow", "strategy_selection"].includes(
           item.effect ?? "presentation",
         ) &&
@@ -3366,6 +3666,7 @@ function hostPolicyOperationClass(toolName) {
     normalized.endsWith("get_skill") ||
     normalized.endsWith("get_resource") ||
     normalized.endsWith("invoke_skill") ||
+    normalized.endsWith("get_effective_preferences") ||
     normalized.endsWith("run_connection_doctor") ||
     normalized.endsWith("get_connection_status")
   ) {
@@ -3389,6 +3690,8 @@ function hostPolicyOperationClass(toolName) {
   if (
     normalized.endsWith("submit_query_feedback") ||
     normalized.endsWith("submit_feedback") ||
+    normalized.endsWith("submit_preference_compatibility_feedback") ||
+    normalized.endsWith("record_preference") ||
     normalized.endsWith("report_task_outcome")
   ) {
     return "feedback";
@@ -3409,6 +3712,10 @@ function isRemembranceToolName(toolName) {
       "get_resource",
       "invoke_skill",
       "get_value_proof",
+      "get_effective_preferences",
+      "record_preference",
+      "submit_preference_compatibility_feedback",
+      "link_current_installation",
       "report_task_outcome",
       "submit_query_feedback",
       "submit_feedback",

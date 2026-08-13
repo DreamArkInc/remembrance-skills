@@ -5335,6 +5335,81 @@ var skillPreferenceTraitsSchema = external_exports.array(skillPreferenceTraitSch
     seen.add(identity);
   });
 });
+var preferenceCompatibilityRelationshipSchema = external_exports.enum([
+  "supports",
+  "conflicts",
+  "neutral",
+  "uncertain"
+]);
+var preferenceCompatibilitySourceSchema = external_exports.enum([
+  "classifier",
+  "member_feedback",
+  "organization_override",
+  "legacy_trait"
+]);
+var preferenceCompatibilityAssessmentSchema = external_exports.object({
+  preference_fingerprint: external_exports.string().regex(/^sha256:[a-f0-9]{64}$/),
+  preference_key: preferenceKeySchema,
+  preference_value: preferenceValueSchema,
+  relationship: preferenceCompatibilityRelationshipSchema,
+  confidence: external_exports.number().min(0).max(1),
+  rationale: external_exports.string().trim().min(1).max(200).nullable().default(null),
+  classification_version: external_exports.string().trim().min(1).max(96),
+  source: preferenceCompatibilitySourceSchema,
+  locked: external_exports.boolean().default(false)
+}).strict();
+var preferenceCompatibilityAssessmentsSchema = external_exports.array(preferenceCompatibilityAssessmentSchema).max(MAX_EFFECTIVE_PREFERENCES * 2);
+var preferenceCompatibilityClassifierResultSchema = external_exports.object({
+  relationship: preferenceCompatibilityRelationshipSchema,
+  confidence: external_exports.number().min(0).max(1),
+  rationale: external_exports.string().trim().min(1).max(200),
+  // `locked` means the skill declares this behavior as a required step. It
+  // can block surgical application after an explicit invocation, but never
+  // lets a preference bypass a skill or organization requirement.
+  locked: external_exports.boolean()
+}).strict();
+var preferenceCompatibilityFeedbackReasonCodeSchema = external_exports.enum([
+  "workflow_alignment",
+  "strategy_alignment",
+  "presentation_alignment",
+  "task_mismatch",
+  "skill_requirement",
+  "other_observed"
+]);
+var preferenceCompatibilityFeedbackRequestSchema = external_exports.object({
+  query_id: external_exports.string().trim().min(1).max(160),
+  result_id: external_exports.string().trim().min(1).max(160),
+  preference_fingerprint: external_exports.string().regex(/^sha256:[a-f0-9]{64}$/),
+  skill_slug: external_exports.string().trim().toLowerCase().min(1).max(160).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  skill_version_id: external_exports.string().trim().min(1).max(160),
+  relationship: external_exports.enum(["supports", "conflicts"]),
+  evidence_source: external_exports.enum(["explicit_user", "agent_observed"]),
+  reason_code: preferenceCompatibilityFeedbackReasonCodeSchema.nullable().default(null)
+}).strict();
+var REMEMBRANCE_PREFERENCE_COMPATIBILITY_FEEDBACK_TOOL_DESCRIPTION = "After actually opening or invoking a skill, record whether that exact version supports or conflicts with one server-issued active working-preference fingerprint. This is private to the authenticated organization, requires the same verified installation principal that used the correlated query/result, and never changes the skill or another organization's ranking. Use evidence_source explicit_user only for a user's explicit assessment; otherwise use agent_observed. Send only correlation IDs, the returned fingerprint, exact slug/version id, relationship, source, and an optional allowlisted reason_code; never send prompts, source code, paths, free-text feedback, or a caller-generated idempotency hash.";
+var preferenceCompatibilityAdminActionSchema = external_exports.discriminatedUnion(
+  "action",
+  [
+    external_exports.object({
+      action: external_exports.literal("reclassify"),
+      preference_fingerprint: external_exports.string().regex(/^sha256:[a-f0-9]{64}$/),
+      skill_version_id: external_exports.string().trim().min(1).max(160)
+    }).strict(),
+    external_exports.object({
+      action: external_exports.literal("override"),
+      preference_fingerprint: external_exports.string().regex(/^sha256:[a-f0-9]{64}$/),
+      skill_version_id: external_exports.string().trim().min(1).max(160),
+      relationship: external_exports.enum(["supports", "conflicts"]),
+      rationale: external_exports.string().trim().min(1).max(200),
+      locked: external_exports.boolean().default(false)
+    }).strict(),
+    external_exports.object({
+      action: external_exports.literal("reset"),
+      preference_fingerprint: external_exports.string().regex(/^sha256:[a-f0-9]{64}$/),
+      skill_version_id: external_exports.string().trim().min(1).max(160)
+    }).strict()
+  ]
+);
 var INFERRED_MAX_AGE_MS = 180 * 864e5;
 function builtInPreferenceDefinition(key) {
   return BUILT_IN_PREFERENCE_DEFINITIONS[key] ?? null;
@@ -5474,6 +5549,7 @@ var REMEMBRANCE_MCP_READ_TOOLS = [
 var REMEMBRANCE_MCP_FEEDBACK_TOOLS = [
   "submit_query_feedback",
   "submit_feedback",
+  "submit_preference_compatibility_feedback",
   "report_task_outcome"
 ];
 var REMEMBRANCE_MCP_PRIVATE_CONTRIBUTION_TOOLS = [
@@ -6658,7 +6734,7 @@ var seedSkills = [
     summary: "Operational setup and troubleshooting workflow for Remembrance across Claude Code, Codex, OpenClaw, Cursor, Gemini, MCP, REST, skill-only installs, enterprise keys, and local agent identity.",
     status: "active",
     visibility: "public",
-    version: "0.1.18",
+    version: "0.1.19",
     domains: ["agent-skills", "mcp", "resource-discovery"],
     tags: [
       "remembrance",
@@ -6709,7 +6785,7 @@ var seedSkills = [
         "gemini",
         "rest"
       ],
-      version: "0.1.18",
+      version: "0.1.19",
       status: "active",
       visibility: "public",
       providers: ["codex", "claude", "cursor", "openclaw", "generic"],
@@ -9766,6 +9842,12 @@ var toolDefinitions = [
     recordPreferenceRequestSchema
   ),
   tool(
+    "submit_preference_compatibility_feedback",
+    REMEMBRANCE_PREFERENCE_COMPATIBILITY_FEEDBACK_TOOL_DESCRIPTION,
+    "/api/v1/agent/preferences/compatibility-feedback",
+    preferenceCompatibilityFeedbackRequestSchema
+  ),
+  tool(
     "link_current_installation",
     "Link this verified installation to the signed-in organization member using a single-use dashboard token. The token expires after ten minutes and is consumed exactly once. A valid organization principal session is required; this never changes the organization API key or creates another billed agent.",
     "/api/v1/agent/member-links",
@@ -10921,7 +11003,7 @@ async function checkClientUpdate(input) {
 // src/server.ts
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.1.60" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.62" : "0.0.0-dev";
 var tools = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var inputBuffer = Buffer.alloc(0);
@@ -10931,6 +11013,7 @@ var connectedClientInfo = null;
 var cachedValueProofKeys = null;
 var PRINCIPAL_SESSION_REQUIRED_TOOLS = /* @__PURE__ */ new Set([
   "record_preference",
+  "submit_preference_compatibility_feedback",
   "link_current_installation"
 ]);
 var PRINCIPAL_SESSION_AWAITED_TOOLS = /* @__PURE__ */ new Set([
@@ -11730,6 +11813,9 @@ async function callRemembrance(definition, rawArguments, options = {}) {
       if (refreshed && refreshed !== sentPrincipalSession) {
         headers["x-remembrance-principal-session"] = refreshed;
         ({ response, body } = await execute());
+      } else if (!PRINCIPAL_SESSION_REQUIRED_TOOLS.has(definition.name)) {
+        delete headers["x-remembrance-principal-session"];
+        ({ response, body } = await execute());
       }
     }
   } catch (error) {
@@ -11775,7 +11861,7 @@ async function localProjectKey() {
 function principalSessionAuthenticationFailed(response, body) {
   if (response.status !== 401 && response.status !== 403) return false;
   if (!isRecord4(body) || typeof body.error !== "string") return false;
-  return /principal session|economics session|installation session/i.test(
+  return /principal session|economics session|installation session|agent principal|installation principal/i.test(
     body.error
   );
 }

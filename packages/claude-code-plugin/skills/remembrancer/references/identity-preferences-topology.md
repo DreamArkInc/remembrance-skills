@@ -107,12 +107,11 @@ Resolution order is:
 11. recommended organization guidance;
 12. declared skill default.
 
-Organization admins choose Required or Recommended under \*\*Dashboard > Agents
-
-> Preferences\*\*. Required applies to every organization agent. Recommended is a
-> default that a clear task or personal preference may replace. The API field
-> `project_key` is an opaque local project-context hash, not an administrator
-> policy scope.
+Organization admins choose Required or Recommended under **Dashboard > Agents >
+Preferences**. Required applies to every organization agent. Recommended is a
+default that a clear task or personal preference may replace. The API field
+`project_key` is an opaque local project-context hash, not an administrator
+policy scope.
 
 Use `record_preference` or `POST /api/v1/agent/preferences` only for an
 built-in or complete bounded extensible setting. Submit an `evidence_hash`,
@@ -121,13 +120,26 @@ source path, or private task content.
 
 Relevance and preference influence remain separate. The normal ranker first
 establishes applicability and the stable `high`, `possible`, or `exploratory`
-tier. Declared skill preference traits can then reorder candidates only inside
-the same tier. The response reports qualitative matched/conflicted traits plus
+tier. Organization-private compatibility records for the exact skill and
+preference versions can then reorder candidates only inside that same tier.
+The response reports qualitative matched/conflicted relationships plus
 `relevance_rank` and `personalized_rank`; it never exposes the internal bounded
 adjustment. A single selected skill still receives a surgical preference
 sidecar for discretionary behavior. A locked skill requirement blocks an
 incompatible personal preference. A locked conflict with Required organization
 guidance makes the skill ineligible. No preference weakens a hard constraint.
+
+Compatibility is classified asynchronously. Query and invocation do not add a
+generative preference call or a second embedding request. Missing, stale, or
+unavailable coverage is neutral. Preference and policy changes use leased
+catalog sweeps, while an exact skill-version change queues only that skill for
+affected organizations. An ineligible organization is visibly blocked and
+resumes automatically instead of retrying classification work continuously.
+After actual use, submit compatibility
+feedback only with the exact `query_id`, `result_id`, skill/version, evidence
+source, and server-issued preference fingerprint from that result's feedback
+offer. The server derives the evidence identity and rejects expired,
+unfetched, cross-principal, stale-version, or unoffered claims.
 
 - An explicit durable user correction applies immediately.
 - Inferred member or installation values require at least three consistent

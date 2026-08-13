@@ -335,6 +335,7 @@ enabled_tools = [
   "get_value_proof",
   "submit_query_feedback",
   "submit_feedback",
+  "submit_preference_compatibility_feedback",
   "report_task_outcome",
   "submit_remembrance",
   "propose_private_skill",
@@ -439,6 +440,7 @@ get_resource
 get_value_proof
 submit_query_feedback
 submit_feedback
+submit_preference_compatibility_feedback
 report_task_outcome
 submit_remembrance
 propose_private_skill
@@ -508,6 +510,7 @@ Merge this into managed settings:
       "mcp__remembrance__get_value_proof",
       "mcp__remembrance__submit_query_feedback",
       "mcp__remembrance__submit_feedback",
+      "mcp__remembrance__submit_preference_compatibility_feedback",
       "mcp__remembrance__report_task_outcome",
       "mcp__remembrance__submit_remembrance",
       "mcp__remembrance__propose_private_skill",
@@ -566,6 +569,7 @@ narrow server/tool set:
       "get_value_proof",
       "submit_query_feedback",
       "submit_feedback",
+      "submit_preference_compatibility_feedback",
       "report_task_outcome",
       "submit_remembrance",
       "propose_private_skill",
@@ -622,6 +626,7 @@ tool profile hides MCP tools, and `tools.deny: ["bundle-mcp"]` disables them:
       "get_value_proof",
       "submit_query_feedback",
       "submit_feedback",
+      "submit_preference_compatibility_feedback",
       "report_task_outcome",
       "submit_remembrance",
       "propose_private_skill",

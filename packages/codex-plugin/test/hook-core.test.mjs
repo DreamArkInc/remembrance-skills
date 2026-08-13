@@ -45,6 +45,7 @@ import {
   parseCodexMcpRegistration,
   parseCodexMcpUrl,
   pluginHealthPath,
+  preferenceCompatibilityEvidenceFromResponse,
   promptProvidesPreferenceCorrection,
   promptRequestsDurablePreference,
   markValueEpisodeSelection,
@@ -1491,6 +1492,207 @@ describe("hook-core trigger + payload helpers", () => {
     ).toBeNull();
   });
 
+  it("applies organization preferences silently and requests only observed compatibility evidence", () => {
+    const privateRationale = "internal-classifier-rationale-must-not-leak";
+    const response = {
+      body: {
+        query_id: "rq_preference_evidence",
+        effective_preferences: [
+          {
+            key: "explanation_depth",
+            value: "concise",
+            label: "Explanation depth",
+            behavior: "Keep explanations concise and focused.",
+            effect: "presentation",
+            strength: "prefer",
+            definition_version: 1,
+            source: "explicit_member",
+          },
+          {
+            key: "workflow.test_timing",
+            value: "before_commit",
+            label: "Test timing",
+            behavior: "Run tests before a commit rather than after every edit.",
+            effect: "workflow",
+            strength: "prefer",
+            definition_version: 3,
+            source: "learned_member_runtime",
+          },
+          {
+            key: "workflow.one_turn_only",
+            value: "skip_tests",
+            label: "One-turn instruction",
+            behavior: "Skip tests for this one turn.",
+            effect: "workflow",
+            strength: "prefer",
+            definition_version: 1,
+            source: "explicit_task",
+          },
+          {
+            key: "output_organization",
+            value: "structured",
+            label: "Output organization",
+            behavior: "Use sections.",
+            effect: "presentation",
+            strength: "prefer",
+            definition_version: 1,
+            source: "skill_default",
+          },
+          {
+            key: "future_unknown_setting",
+            value: "untrusted_source",
+            source: "future_unknown_source",
+          },
+        ],
+        skills: [
+          {
+            slug: "verified-workflow",
+            version: "3",
+            version_id: "skv_preference_evidence",
+            description: "A reviewed workflow.",
+            result_id: "qres_preference_evidence",
+            match_tier: "possible",
+            effective_preferences: undefined,
+            preference_compatibility_feedback: {
+              available: true,
+              query_id: "rq_preference_evidence",
+              result_id: "qres_preference_evidence",
+              skill_version_id: "skv_preference_evidence",
+              preferences: [
+                {
+                  preference_fingerprint: `sha256:${"a".repeat(64)}`,
+                  setting: {
+                    key: "workflow.test_timing",
+                    value: "before_commit",
+                    label: "Test timing",
+                    behavior:
+                      "Run tests before a commit rather than after every edit.",
+                    effect: "workflow",
+                    strength: "prefer",
+                    definition_version: 3,
+                  },
+                },
+                {
+                  preference_fingerprint: `sha256:${"b".repeat(64)}`,
+                  setting: {
+                    key: "explanation_depth",
+                    value: "concise",
+                    label: "Explanation depth",
+                    behavior: "Keep explanations concise and focused.",
+                    effect: "presentation",
+                    strength: "prefer",
+                    definition_version: 1,
+                  },
+                },
+              ],
+            },
+            preference_influence: {
+              matched: [
+                {
+                  key: "workflow.test_timing",
+                  value: "before_commit",
+                  relationship: "matched",
+                  reason: privateRationale,
+                },
+              ],
+              conflicts: [],
+              compatibility_status: "current",
+              classification_versions: ["private-classifier-v1"],
+            },
+          },
+        ],
+        resources: [],
+      },
+    };
+
+    const context = formatContext(response);
+    expect(context).toContain(
+      "Apply these persisted working preferences silently",
+    );
+    expect(context).toContain("Do not ask the user to reconfirm them");
+    expect(context).toContain("submit_preference_compatibility_feedback");
+    expect(context).toContain("existing classifier label are not new evidence");
+    expect(context).toContain('"skill_slug":"verified-workflow"');
+    expect(context).toContain('"key":"workflow.test_timing"');
+    expect(context).toContain('"definition_version":3');
+    expect(context).not.toContain("workflow.one_turn_only");
+    expect(context).not.toContain('"key":"output_organization"');
+    expect(context).not.toContain("future_unknown_setting");
+    expect(context).not.toContain(privateRationale);
+    expect(context).not.toContain("evidence_hash");
+
+    expect(preferenceCompatibilityEvidenceFromResponse(response)).toEqual([
+      {
+        query_id: "rq_preference_evidence",
+        result_id: "qres_preference_evidence",
+        skill_slug: "verified-workflow",
+        skill_version_id: "skv_preference_evidence",
+        preferences: [
+          {
+            preference_fingerprint: `sha256:${"a".repeat(64)}`,
+            setting: {
+              key: "workflow.test_timing",
+              value: "before_commit",
+              label: "Test timing",
+              behavior:
+                "Run tests before a commit rather than after every edit.",
+              effect: "workflow",
+              strength: "prefer",
+              definition_version: 3,
+            },
+          },
+          {
+            preference_fingerprint: `sha256:${"b".repeat(64)}`,
+            setting: {
+              key: "explanation_depth",
+              value: "concise",
+              label: "Explanation depth",
+              behavior: "Keep explanations concise and focused.",
+              effect: "presentation",
+              strength: "prefer",
+              definition_version: 1,
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("does not invent preference evidence from malformed or non-durable values", () => {
+    const response = {
+      body: {
+        effective_preferences: [
+          {
+            key: "unsafe key",
+            value: "value",
+            source: "explicit_member",
+          },
+          {
+            key: "explanation_depth",
+            value: "concise",
+            source: "explicit_task",
+          },
+          {
+            key: "output_organization",
+            value: "structured",
+            source: "skill_default",
+          },
+        ],
+        skills: [
+          {
+            slug: "candidate",
+            description: "Candidate.",
+            match_tier: "possible",
+          },
+        ],
+      },
+    };
+    expect(preferenceCompatibilityEvidenceFromResponse(response)).toEqual([]);
+    expect(formatContext(response)).not.toContain(
+      "submit_preference_compatibility_feedback",
+    );
+  });
+
   it("filters public candidates from org-only context and high-match selection", () => {
     const response = {
       body: {
@@ -1968,7 +2170,10 @@ describe("hook-core trigger + payload helpers", () => {
       { mode: 0o600 },
     );
     const projectPath = "/Users/private/Secret Repository";
-    const env = { REMEMBRANCE_AGENT_KEY_PATH: identityPath };
+    const env = {
+      REMEMBRANCE_AGENT_KEY_PATH: identityPath,
+      REMEMBRANCE_API_KEY: "rem_project_preference_test_key",
+    };
     const projectKey = projectKeyForHook(env, projectPath);
     const payload = buildQueryPayload(
       "Review the dashboard",
@@ -1983,6 +2188,50 @@ describe("hook-core trigger + payload helpers", () => {
     expect(projectKeyForHook(env, `${projectPath}-other`)).not.toBe(projectKey);
     expect(payload.client_context.project_key).toBe(projectKey);
     expect(JSON.stringify(payload)).not.toContain(projectPath);
+  });
+
+  it("does not send organization-only project context on anonymous queries", () => {
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const identityPath = join(tempRoot, "anonymous-project-agent-key.json");
+    writeFileSync(
+      identityPath,
+      JSON.stringify({
+        provider: "codex",
+        subject: "local:tofu_anonymous_project",
+        key_id: "tofu_anonymous_project",
+        public_key: publicKey
+          .export({ type: "spki", format: "pem" })
+          .toString(),
+        private_key: privateKey
+          .export({ type: "pkcs8", format: "pem" })
+          .toString(),
+      }),
+      { mode: 0o600 },
+    );
+    const env = {
+      REMEMBRANCE_AGENT_KEY_PATH: identityPath,
+      XDG_CONFIG_HOME: join(tempRoot, "anonymous-project-config"),
+    };
+    expect(projectKeyForHook(env, "/private/customer/project")).toMatch(
+      /^prj_[A-Za-z0-9_-]{32}$/,
+    );
+
+    const payload = buildQueryPayload(
+      "Review the dashboard",
+      env,
+      undefined,
+      {
+        surface: "plugin_hook",
+        runtime: "codex",
+        project_key: "prj_caller_supplied_private_context",
+      },
+      "/private/customer/project",
+    );
+
+    expect(payload.client_context).toEqual({
+      surface: "plugin_hook",
+      runtime: "codex",
+    });
   });
 
   it("redacts secrets and private URLs", () => {
@@ -2113,6 +2362,40 @@ describe("hook-core marker round-trip", () => {
               query_id: "rinv_direct",
               result_id: "qres_direct",
               selection_mode: "explicit",
+              effective_preferences: [
+                {
+                  key: "workflow.test_timing",
+                  value: "before_commit",
+                  label: "Test timing",
+                  behavior: "Run tests before a commit rather than every edit.",
+                  effect: "workflow",
+                  strength: "prefer",
+                  definition_version: 2,
+                  source: "explicit_member_runtime",
+                  profile_revision: 9,
+                },
+              ],
+              preference_compatibility_feedback: {
+                available: true,
+                query_id: "rinv_direct",
+                result_id: "qres_direct",
+                skill_version_id: "skv_direct",
+                preferences: [
+                  {
+                    preference_fingerprint: `sha256:${"c".repeat(64)}`,
+                    setting: {
+                      key: "workflow.test_timing",
+                      value: "before_commit",
+                      label: "Test timing",
+                      behavior:
+                        "Run tests before a commit rather than every edit.",
+                      effect: "workflow",
+                      strength: "prefer",
+                      definition_version: 2,
+                    },
+                  },
+                ],
+              },
               skill: {
                 slug: "mongodb-aggregation",
                 version: 4,
@@ -2120,6 +2403,17 @@ describe("hook-core marker round-trip", () => {
                 source: "org_overlay",
                 skill_md: "# Private instructions\nNever persist this body.",
                 task_outcome_eligible: true,
+                preference_influence: {
+                  matched: [
+                    {
+                      key: "workflow.test_timing",
+                      value: "before_commit",
+                      relationship: "matched",
+                      reason: "Private classifier detail.",
+                    },
+                  ],
+                  conflicts: [],
+                },
               },
               feedback: { available: true },
               task_outcome: {
@@ -2140,6 +2434,20 @@ describe("hook-core marker round-trip", () => {
       version_id: "skv_direct",
       feedback_available: true,
       task_outcome_available: true,
+      preference_feedback_settings: [
+        {
+          preference_fingerprint: `sha256:${"c".repeat(64)}`,
+          setting: {
+            key: "workflow.test_timing",
+            value: "before_commit",
+            label: "Test timing",
+            behavior: "Run tests before a commit rather than every edit.",
+            effect: "workflow",
+            strength: "prefer",
+            definition_version: 2,
+          },
+        },
+      ],
     });
     recordRegistryUse("sess-direct", env);
     expect(
@@ -2164,6 +2472,16 @@ describe("hook-core marker round-trip", () => {
     );
     expect(marker).not.toContain("Private instructions");
     expect(marker).not.toContain("skill_md");
+    expect(marker).not.toContain("Private classifier detail");
+    expect(marker).not.toContain("profile_revision");
+
+    const closure = contributionReason(null, null, selection);
+    expect(closure).toContain("submit_preference_compatibility_feedback");
+    expect(closure).toContain('"skill_version_id":"skv_direct"');
+    expect(closure).toContain('"key":"workflow.test_timing"');
+    expect(closure).toContain("existing classifier label are not new evidence");
+    expect(closure).toContain("do not ask the user");
+    expect(closure).not.toContain("Private classifier detail");
 
     recordHighMatchSurface(
       "sess-direct",
@@ -2538,6 +2856,181 @@ describe("hook-core marker round-trip", () => {
         f.endsWith(".eligible"),
       ),
     ).toBe(true);
+  });
+
+  it("hardens the usage directory and atomically writes every marker as private", () => {
+    const env = markerEnv();
+    const sessionId = "sess-private-markers";
+    mkdirSync(env.REMEMBRANCE_USAGE_DIR, { recursive: true, mode: 0o777 });
+    chmodSync(env.REMEMBRANCE_USAGE_DIR, 0o777);
+
+    expect(recordRegistryUse(sessionId, env)).toBe(1);
+    const useMarker = join(
+      env.REMEMBRANCE_USAGE_DIR,
+      readdirSync(env.REMEMBRANCE_USAGE_DIR).find((file) =>
+        file.endsWith(".use"),
+      ),
+    );
+    chmodSync(useMarker, 0o666);
+    expect(recordRegistryUse(sessionId, env)).toBe(2);
+    expect(recordTaskEligibility(sessionId, env)).toBe(1);
+    expect(writePromptedCount(sessionId, 2, env)).toBe(true);
+    expect(
+      recordDirectiveSurface(
+        sessionId,
+        {
+          directive_id: "dir_private_marker_1234567890",
+          runtime: "codex",
+          trigger_reason: "contextual_continuation",
+          shown_at: new Date().toISOString(),
+        },
+        env,
+      ),
+    ).toBe(true);
+    expect(
+      recordHighMatchSurface(
+        sessionId,
+        {
+          query_id: "rq_private_marker",
+          result_id: "qres_private_marker",
+          target_type: "skill",
+          slug: "private-marker-skill",
+        },
+        env,
+      ),
+    ).toBe(true);
+    expect(
+      recordValueEpisodeSurface(
+        sessionId,
+        {
+          query_id: "rq_private_marker",
+          interaction_kind: "query",
+          candidates: [
+            {
+              result_id: "qres_private_marker",
+              value_estimate_id: null,
+            },
+          ],
+          bundles: [],
+          selected_result_ids: [],
+          feedback_available: true,
+          created_at: new Date().toISOString(),
+          reported_at: null,
+        },
+        env,
+      ),
+    ).toBe(true);
+    expect(
+      recordDirectSelectionSurface(
+        sessionId,
+        {
+          query_id: "rinv_private_marker",
+          result_id: "qres_direct_private_marker",
+          slug: "private-marker-skill",
+          version: "1",
+          version_id: "skv_private_marker",
+          feedback_available: true,
+          preference_feedback_settings: [
+            {
+              preference_fingerprint: `sha256:${"a".repeat(64)}`,
+              setting: {
+                key: "workflow.test_timing",
+                value: "before_commit",
+                label: "Test timing",
+                behavior: "Run tests before a commit.",
+                effect: "workflow",
+                strength: "prefer",
+                definition_version: 1,
+              },
+            },
+          ],
+          used_at: new Date().toISOString(),
+        },
+        env,
+      ),
+    ).toBe(true);
+
+    expect(statSync(env.REMEMBRANCE_USAGE_DIR).mode & 0o777).toBe(0o700);
+    const markerFiles = readdirSync(env.REMEMBRANCE_USAGE_DIR);
+    expect(markerFiles).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/\.use$/),
+        expect.stringMatching(/\.prompt$/),
+        expect.stringMatching(/\.eligible$/),
+        expect.stringMatching(/\.directive\.json$/),
+        expect.stringMatching(/\.high-match\.json$/),
+        expect.stringMatching(/\.value-episodes\.json$/),
+        expect.stringMatching(/\.direct-skill\.json$/),
+      ]),
+    );
+    expect(markerFiles.some((file) => file.endsWith(".tmp"))).toBe(false);
+    for (const file of markerFiles) {
+      expect(statSync(join(env.REMEMBRANCE_USAGE_DIR, file)).mode & 0o777).toBe(
+        0o600,
+      );
+    }
+    expect(readFileSync(useMarker, "utf8")).toBe("2");
+  });
+
+  it("fails open when the usage marker directory cannot be secured", () => {
+    const env = markerEnv();
+    writeFileSync(env.REMEMBRANCE_USAGE_DIR, "not a directory", {
+      mode: 0o600,
+    });
+
+    expect(recordRegistryUse("sess-unsafe-markers", env)).toBe(1);
+    expect(recordTaskEligibility("sess-unsafe-markers", env)).toBe(1);
+    expect(writePromptedCount("sess-unsafe-markers", 1, env)).toBe(false);
+    expect(
+      recordDirectiveSurface(
+        "sess-unsafe-markers",
+        {
+          directive_id: "dir_unsafe_marker_1234567890",
+          runtime: "codex",
+        },
+        env,
+      ),
+    ).toBe(false);
+    expect(
+      recordHighMatchSurface(
+        "sess-unsafe-markers",
+        {
+          query_id: "rq_unsafe_marker",
+          result_id: "qres_unsafe_marker",
+          target_type: "skill",
+          slug: "unsafe-marker-skill",
+        },
+        env,
+      ),
+    ).toBe(false);
+    expect(
+      recordValueEpisodeSurface(
+        "sess-unsafe-markers",
+        {
+          query_id: "rq_unsafe_marker",
+          interaction_kind: "query",
+          candidates: [],
+          bundles: [],
+          selected_result_ids: [],
+          feedback_available: true,
+          created_at: new Date().toISOString(),
+          reported_at: null,
+        },
+        env,
+      ),
+    ).toBe(false);
+    expect(
+      recordDirectSelectionSurface(
+        "sess-unsafe-markers",
+        {
+          query_id: "rinv_unsafe_marker",
+          result_id: "qres_unsafe_direct_marker",
+          slug: "unsafe-marker-skill",
+          used_at: new Date().toISOString(),
+        },
+        env,
+      ),
+    ).toBe(false);
   });
 
   it("exposes a stable contribution reason", () => {

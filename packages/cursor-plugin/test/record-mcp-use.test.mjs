@@ -395,6 +395,29 @@ describe("Cursor afterMCPExecution hook", () => {
     expect(writePromptedCount).not.toHaveBeenCalled();
   });
 
+  it("observes preference compatibility feedback without closing post-use contribution", async () => {
+    const writePromptedCount = vi.fn();
+    const result = await handleMcpUse(
+      {
+        tool_name: "submit_preference_compatibility_feedback",
+        session_id: "session_preference_feedback",
+      },
+      {
+        env: {},
+        readRegistryUseCount: () => 1,
+        readTaskEligibilityCount: () => 1,
+        writePromptedCount,
+      },
+    );
+
+    expect(result).toEqual({
+      recorded: true,
+      kind: "preference_compatibility_feedback",
+      tool: "submit_preference_compatibility_feedback",
+    });
+    expect(writePromptedCount).not.toHaveBeenCalled();
+  });
+
   it("does not mark an HTTP-rejected contribution as handled", async () => {
     const writePromptedCount = vi.fn();
     const result = await handleMcpUse(

@@ -85,12 +85,29 @@ An optional single-use token from **Dashboard > Agents > Instances > Install on
 this device** links the installation to the signed-in member so bounded working
 preferences can follow that engineer. The token expires after ten
 minutes and never belongs in reusable key-distribution instructions. Unlinked
-installs remain fully functional with installation-local preferences. Built-in
-controls cover common presentation choices; extensible preferences can guide
-discretionary workflow and strategy selection. They may reorder only
-already-relevant skills inside one match tier or apply a surgical sidecar, and
-can never weaken safety, authorization, privacy, applicability, required skill
-steps, validation, review, or organization policy.
+installs remain fully functional with installation-local preferences. Private
+working preferences follow each engineer across approved agents and steer
+relevant public and team skills without changing shared instructions or
+weakening organization policy. Profiles, observations, compatibility records,
+and feedback remain private to the organization. Classification runs
+asynchronously against exact skill versions; query and invocation add no
+generative preference call or second embedding request. Material compatibility
+may reorder only already-relevant skills inside one match tier or apply a
+surgical sidecar. Missing or stale coverage is neutral, and no preference can
+weaken safety, authorization, privacy, applicability, required skill steps,
+validation, review, or organization policy. Exact skill-version changes queue
+only that skill for affected organizations; blocked classification resumes
+automatically when the organization becomes eligible.
+
+After actual use of an exact skill version, native hooks silently instruct the
+agent to call `submit_preference_compatibility_feedback` only when observed
+behavior clearly supports or conflicts with a normalized preference. The call
+uses the exact correlation IDs and server-issued preference fingerprint from
+that result's feedback offer, which the server verifies against the recorded
+fetch and active preference. Hooks do not ask the user to confirm routine
+telemetry or replay an existing classifier label as new evidence. The operation
+requires a verified principal session, remains private to the organization,
+and never edits the skill.
 
 ## Manual install (config.toml)
 

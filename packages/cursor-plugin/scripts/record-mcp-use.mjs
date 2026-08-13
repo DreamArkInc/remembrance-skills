@@ -44,6 +44,9 @@ const CONTRIBUTION_TOOLS = new Set([
   "submit_resource",
   "submit_resource_review",
 ]);
+const PREFERENCE_EVIDENCE_TOOLS = new Set([
+  "submit_preference_compatibility_feedback",
+]);
 
 export function cursorSessionId(input, env = process.env) {
   return String(
@@ -170,6 +173,13 @@ export async function handleMcpUse(input, options = {}) {
       );
       return { recorded: true, kind: "consumption", tool, count };
     }
+  }
+  if (PREFERENCE_EVIDENCE_TOOLS.has(tool)) {
+    return {
+      recorded: true,
+      kind: "preference_compatibility_feedback",
+      tool,
+    };
   }
   if (CONTRIBUTION_TOOLS.has(tool)) {
     if (

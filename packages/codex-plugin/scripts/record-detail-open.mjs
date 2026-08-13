@@ -32,6 +32,9 @@ const CONTRIBUTION_TOOLS = [
   "submit_resource",
   "submit_resource_review",
 ];
+const PREFERENCE_EVIDENCE_TOOLS = [
+  "submit_preference_compatibility_feedback",
+];
 
 export async function handlePostToolUse(input, options = {}) {
   const env = options.env ?? process.env;
@@ -100,6 +103,15 @@ export async function handlePostToolUse(input, options = {}) {
       cleared,
       why: "direct_skill_invoked",
       count: useCount,
+    };
+  }
+  if (
+    PREFERENCE_EVIDENCE_TOOLS.some((tool) => normalizedName.endsWith(tool))
+  ) {
+    return {
+      recorded: true,
+      cleared: false,
+      why: "preference_compatibility_feedback_recorded",
     };
   }
   if (CONTRIBUTION_TOOLS.some((tool) => normalizedName.endsWith(tool))) {

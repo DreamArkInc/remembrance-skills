@@ -231,6 +231,32 @@ describe("native post-tool detail tracking", () => {
     );
   });
 
+  it("observes preference compatibility feedback without closing post-use contribution", async () => {
+    const markCurrentEngagementHandled = vi.fn();
+    const clearHighMatchSurfaceIfOpened = vi.fn();
+    expect(
+      await handlePostToolUse(
+        {
+          turn_id: "turn_preference_feedback",
+          tool_name:
+            "mcp__remembrance__submit_preference_compatibility_feedback",
+          tool_response: { accepted: true },
+        },
+        {
+          env: {},
+          markCurrentEngagementHandled,
+          clearHighMatchSurfaceIfOpened,
+        },
+      ),
+    ).toEqual({
+      recorded: true,
+      cleared: false,
+      why: "preference_compatibility_feedback_recorded",
+    });
+    expect(markCurrentEngagementHandled).not.toHaveBeenCalled();
+    expect(clearHighMatchSurfaceIfOpened).not.toHaveBeenCalled();
+  });
+
   it("marks an explicit private-skill proposal as a handled contribution", async () => {
     const markCurrentEngagementHandled = vi.fn(() => 1);
     expect(

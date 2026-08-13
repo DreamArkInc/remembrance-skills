@@ -232,6 +232,31 @@ describe("OpenClaw after_tool_call hook", () => {
     });
   });
 
+  it("observes preference compatibility feedback without closing post-use contribution", async () => {
+    const markCurrentEngagementHandled = vi.fn();
+    const clearHighMatchSurfaceIfOpened = vi.fn();
+    expect(
+      await handleAfterToolCall(
+        {
+          toolName: "submit_preference_compatibility_feedback",
+          result: { accepted: true },
+          context: { runId: "run_preference_feedback" },
+        },
+        {
+          env: {},
+          markCurrentEngagementHandled,
+          clearHighMatchSurfaceIfOpened,
+        },
+      ),
+    ).toEqual({
+      recorded: true,
+      cleared: false,
+      why: "preference_compatibility_feedback_recorded",
+    });
+    expect(markCurrentEngagementHandled).not.toHaveBeenCalled();
+    expect(clearHighMatchSurfaceIfOpened).not.toHaveBeenCalled();
+  });
+
   it("does not mark an HTTP-rejected contribution as handled", async () => {
     const markCurrentEngagementHandled = vi.fn();
     expect(

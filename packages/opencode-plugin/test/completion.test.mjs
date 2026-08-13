@@ -449,6 +449,21 @@ describe("opencode tool observer (tool.execute.after)", () => {
     expect(messages).toHaveLength(1);
   });
 
+  it("keeps the post-use reminder open after preference compatibility feedback", async () => {
+    const { client, messages } = loggingClient();
+    const hooks = await Remembrance({ client });
+    recordRegistryUse("s-preference-feedback", process.env);
+    await hooks["tool.execute.after"](
+      {
+        tool: "submit_preference_compatibility_feedback",
+        sessionID: "s-preference-feedback",
+      },
+      { body: { accepted: true } },
+    );
+    await emitSessionIdle(hooks, "s-preference-feedback");
+    expect(messages).toHaveLength(1);
+  });
+
   it("ignores an event with no resolvable tool name", async () => {
     const { client, messages } = loggingClient();
     const hooks = await Remembrance({ client });

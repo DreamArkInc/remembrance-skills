@@ -95,6 +95,9 @@ const CONTRIBUTION_TOOLS = [
   "submit_resource",
   "submit_resource_review",
 ];
+const PREFERENCE_EVIDENCE_TOOLS = [
+  "submit_preference_compatibility_feedback",
+];
 
 // --- definePluginEntry shim --------------------------------------------------
 //
@@ -333,6 +336,17 @@ export async function handleAfterToolCall(event, options = {}) {
       cleared,
       why: "direct_skill_invoked",
       count: useCount,
+    };
+  }
+  if (
+    PREFERENCE_EVIDENCE_TOOLS.some((tool) =>
+      normalizedToolName.endsWith(tool),
+    )
+  ) {
+    return {
+      recorded: true,
+      cleared: false,
+      why: "preference_compatibility_feedback_recorded",
     };
   }
   if (CONTRIBUTION_TOOLS.some((tool) => normalizedToolName.endsWith(tool))) {
