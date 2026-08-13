@@ -4706,7 +4706,17 @@ var HOST_POLICY_OPERATION_CLASSES = /* @__PURE__ */ new Set([
   "other"
 ]);
 var CODEX_HOOK_REVIEW_COMMAND = `CODEX_CLI="\${CODEX_CLI:-$(command -v codex || true)}"; [ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/ChatGPT.app/Contents/Resources/codex"; [ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/Codex.app/Contents/Resources/codex"; [ -x "$CODEX_CLI" ] || { printf '%s\\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, then try again." >&2; exit 1; }; "$CODEX_CLI"`;
-function codexHookReviewAction(followupTool) {
+function codexHookReviewAction(followupTool, reviewEvents = []) {
+  const allowedEvents = /* @__PURE__ */ new Set([
+    "SessionStart",
+    "UserPromptSubmit",
+    "PostToolUse",
+    "Stop"
+  ]);
+  const events = [...new Set(reviewEvents)].filter((event) => allowedEvents.has(event)).slice(0, 4);
+  if (events.length > 0) {
+    return `Open Terminal and run the command below. Choose Review hooks, open only the Remembrance ${events.join(", ")} hook${events.length === 1 ? "" : "s"}, and press t to trust ${events.length === 1 ? "it" : "them"}. Then fully quit and reopen Codex, submit one prompt, use one Remembrance tool, complete one turn, and call ${followupTool} again.`;
+  }
   return `Open Terminal and launch Codex with the command below. If Codex shows a Hooks need review screen, choose Review hooks and trust only the Remembrance SessionStart, UserPromptSubmit, PostToolUse, and Stop hooks. If no review screen appears, continue: Codex may be reusing an existing valid trust decision. Fully restart Codex, submit one prompt, use one Remembrance tool, complete one turn, and call ${followupTool} again. If the lifecycle warning remains, update or reinstall Remembrance and repeat this check.`;
 }
 function buildConnectionDoctorReport(input) {
@@ -4998,6 +5008,28 @@ function pluginLifecycleCheck(pluginHealth, issues) {
     return pass(
       "plugin_lifecycle",
       "The native plugin startup and prompt lifecycle is active."
+    );
+  }
+  if (stringValue(pluginHealth.surface) === "codex" && issues.includes("hook_trust_required")) {
+    const hookTrust = record(pluginHealth.hook_trust);
+    const allowedEvents = /* @__PURE__ */ new Set([
+      "SessionStart",
+      "UserPromptSubmit",
+      "PostToolUse",
+      "Stop"
+    ]);
+    const reviewEvents = Array.isArray(hookTrust.review_events) ? hookTrust.review_events.filter(
+      (event) => typeof event === "string" && allowedEvents.has(event)
+    ).slice(0, 4) : [];
+    const eventSummary = reviewEvents.length > 0 ? `the updated Remembrance ${reviewEvents.join(", ")} hook${reviewEvents.length === 1 ? "" : "s"}` : "updated Remembrance hooks";
+    return warning(
+      "plugin_lifecycle",
+      `Codex is waiting for trust approval for ${eventSummary}.`,
+      "review_codex_hook_trust",
+      codexHookReviewAction("run_connection_doctor", reviewEvents),
+      issues,
+      false,
+      CODEX_HOOK_REVIEW_COMMAND
     );
   }
   if (pluginHealth.status === "partial") {
@@ -10730,13 +10762,23 @@ function localPluginLifecycleHealth(options) {
     });
   }
   const coreLifecycleObserved = components.session_start.observed && components.prompt_hook.observed;
-  if (coreLifecycleObserved && !components.tool_observer.observed) {
+  const hookTrust = normalizedPluginHookTrust(marker.hook_trust);
+  const hookTrustReviewEvents = hookTrust?.status === "review_required" ? new Set(hookTrust.review_events) : /* @__PURE__ */ new Set();
+  if (hookTrustReviewEvents.size > 0) {
+    issues.push({
+      code: "hook_trust_required",
+      action: codexHookReviewAction("get_connection_status", [
+        ...hookTrustReviewEvents
+      ])
+    });
+  }
+  if (coreLifecycleObserved && !components.tool_observer.observed && !hookTrustReviewEvents.has("PostToolUse")) {
     issues.push({
       code: "tool_observer_not_observed",
       action: surface === "codex" ? `Use a Remembrance MCP tool, then call get_connection_status again. If this remains missing, ${codexHookReviewAction("get_connection_status")}` : "No native tool observer has run in this session yet. Use a Remembrance MCP tool, then call get_connection_status again."
     });
   }
-  if (coreLifecycleObserved && !components.completion_hook.observed) {
+  if (coreLifecycleObserved && !components.completion_hook.observed && !hookTrustReviewEvents.has("Stop")) {
     issues.push({
       code: "completion_hook_not_observed",
       action: surface === "codex" ? `Complete one turn, then call get_connection_status again. If this remains missing, ${codexHookReviewAction("get_connection_status")}` : "No native completion hook has run in this session yet. Complete one turn, then call get_connection_status again."
@@ -10795,9 +10837,47 @@ function localPluginLifecycleHealth(options) {
       matches_mcp: markerDestinationFingerprint && options.apiDestinationFingerprint ? markerDestinationFingerprint === options.apiDestinationFingerprint : null,
       mcp_source: options.apiDestinationSource ?? null
     },
+    hook_trust: hookTrust,
     components,
     issues,
     explanation: "Each host session is tracked independently. SessionStart and the prompt hook must run first; tool and completion observations appear after those lifecycle events become eligible."
+  };
+}
+function normalizedPluginHookTrust(value) {
+  if (!isRecord3(value)) return null;
+  const status = value.status;
+  if (status !== "trusted" && status !== "review_required" && status !== "unavailable") {
+    return null;
+  }
+  const allowedEvents = /* @__PURE__ */ new Set([
+    "SessionStart",
+    "UserPromptSubmit",
+    "PostToolUse",
+    "Stop"
+  ]);
+  const allowedStatuses = /* @__PURE__ */ new Set([
+    "managed",
+    "missing",
+    "modified",
+    "trusted",
+    "unknown",
+    "untrusted"
+  ]);
+  const reviewEvents = Array.isArray(value.review_events) ? [...new Set(value.review_events)].filter(
+    (event) => typeof event === "string" && allowedEvents.has(event)
+  ).slice(0, 4) : [];
+  const hooks = Array.isArray(value.hooks) ? value.hooks.filter(isRecord3).filter(
+    (entry) => typeof entry.event === "string" && allowedEvents.has(entry.event)
+  ).slice(0, 4).map((entry) => ({
+    event: String(entry.event),
+    enabled: entry.enabled === true,
+    trust_status: typeof entry.trust_status === "string" && allowedStatuses.has(entry.trust_status) ? entry.trust_status : "unknown"
+  })) : [];
+  return {
+    status,
+    checked_at: typeof value.checked_at === "string" && Number.isFinite(Date.parse(value.checked_at)) ? new Date(value.checked_at).toISOString() : null,
+    review_events: reviewEvents,
+    hooks
   };
 }
 function apiDestinationStatus(baseUrl, source) {
@@ -11003,7 +11083,7 @@ async function checkClientUpdate(input) {
 // src/server.ts
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.1.62" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.63" : "0.0.0-dev";
 var tools = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var inputBuffer = Buffer.alloc(0);

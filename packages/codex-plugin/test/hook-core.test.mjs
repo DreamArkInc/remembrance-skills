@@ -968,6 +968,20 @@ describe("native plugin lifecycle health markers", () => {
           pluginVersion: "0.1.37",
           hostVersion: "0.145.0",
           credentialSource: "shared_config",
+          hookTrust: {
+            status: "review_required",
+            checked_at: "2026-08-13T12:00:00.000Z",
+            review_events: ["PostToolUse", "UnknownHook"],
+            hooks: [
+              {
+                event: "PostToolUse",
+                enabled: true,
+                trust_status: "modified",
+                current_hash: "sha256:do_not_store",
+                command: "/private/plugin/script.mjs",
+              },
+            ],
+          },
         },
         env,
       ),
@@ -988,6 +1002,19 @@ describe("native plugin lifecycle health markers", () => {
       api_destination_fingerprint: expect.stringMatching(/^[a-f0-9]{16}$/),
       evidence_origin: "host_runtime",
       release_run_id: null,
+      hook_trust: {
+        status: "review_required",
+        checked_at: "2026-08-13T12:00:00.000Z",
+        review_events: ["PostToolUse"],
+        hooks: [
+          {
+            event: "PostToolUse",
+            enabled: true,
+            trust_status: "modified",
+          },
+        ],
+        reason: null,
+      },
       components: {
         session_start: expect.any(String),
         prompt_hook: expect.any(String),
@@ -995,6 +1022,9 @@ describe("native plugin lifecycle health markers", () => {
     });
     expect(readPluginLifecycleHealth("codex", env)).not.toHaveProperty(
       "prompt",
+    );
+    expect(JSON.stringify(readPluginLifecycleHealth("codex", env))).not.toMatch(
+      /do_not_store|private\/plugin|sha256/i,
     );
   });
 

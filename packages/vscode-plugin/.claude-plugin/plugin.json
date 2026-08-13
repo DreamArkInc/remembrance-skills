@@ -1,6 +1,6 @@
 {
   "name": "remembrance",
-  "version": "0.1.62",
+  "version": "0.1.63",
   "description": "Discover or directly invoke authorized Remembrance skills in VS Code agent mode, then close the outcome and feedback loop.",
   "author": {
     "name": "Remembrance"

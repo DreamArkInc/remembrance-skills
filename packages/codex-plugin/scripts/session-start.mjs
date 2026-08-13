@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { inspectCodexHookTrust } from "./codex-hook-trust.mjs";
 import {
   checkForClientUpdate,
   recordPluginLifecycleHealth,
@@ -33,20 +34,6 @@ export async function handleSessionStart(input, options = {}) {
     String(input?.source ?? "")
       .trim()
       .toLowerCase() === "compact";
-  if (!isCompaction) {
-    recordHealth(
-      {
-        surface: "codex",
-        component: "session_start",
-        pluginVersion: version,
-        hostVersion,
-        credentialSource: credential.source,
-        sessionId: sessionIdFor(input),
-      },
-      env,
-    );
-  }
-
   const auth =
     credential.source === "none"
       ? "public anonymous registry access"
@@ -55,15 +42,18 @@ export async function handleSessionStart(input, options = {}) {
     `Remembrance plugin health: Codex SessionStart hook is active for plugin ${version}; ` +
     `the bundled local MCP server uses the same ${auth}. ` +
     "Run run_connection_doctor if setup seems incomplete. It verifies the active connection and gives one exact next step. If that tool is absent, report partial activation, update or reinstall the plugin, and fully restart Codex.";
-  const [, clientUpdate] = isCompaction
-    ? [null, null]
+  const [hookTrust, , clientUpdate] = isCompaction
+    ? [null, null, null]
     : await Promise.all([
+        (options.inspectHookTrust ?? inspectCodexHookTrust)({
+          env,
+          cwd: options.cwd,
+        }).catch(() => null),
         (options.warmSession ?? warmPrincipalSession)(
           {
             runtime: "codex",
             hostSurface:
-              input?.host_surface === "desktop" ||
-              input?.host_surface === "cli"
+              input?.host_surface === "desktop" || input?.host_surface === "cli"
                 ? input.host_surface
                 : input?.app_version || input?.codex_desktop_version
                   ? "desktop"
@@ -83,12 +73,32 @@ export async function handleSessionStart(input, options = {}) {
           env,
         ).catch(() => null),
       ]);
+  if (!isCompaction) {
+    recordHealth(
+      {
+        surface: "codex",
+        component: "session_start",
+        pluginVersion: version,
+        hostVersion,
+        credentialSource: credential.source,
+        sessionId: sessionIdFor(input),
+        hookTrust,
+      },
+      env,
+    );
+  }
+  const trustNotice =
+    hookTrust?.status === "review_required"
+      ? `Remembrance hook trust review is required for ${hookTrust.review_events.join(", ")}. Automatic skill-use or completion tracking is paused for those hooks. Run run_connection_doctor and follow its exact Codex review steps before claiming full activation.`
+      : null;
+  const notices = [trustNotice, clientUpdate?.notice].filter(Boolean);
   return {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
-      additionalContext: clientUpdate?.notice
-        ? `${baseContext}\n\n${clientUpdate.notice}`
-        : baseContext,
+      additionalContext:
+        notices.length > 0
+          ? `${baseContext}\n\n${notices.join("\n\n")}`
+          : baseContext,
     },
   };
 }

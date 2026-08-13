@@ -72,6 +72,9 @@ plugin is active:
 If Codex can see the plugin skill but not the MCP tools, or the CLI review shows
 any Remembrance hook as **Needs review**, treat the installation as degraded
 until hook trust, restart, and MCP registration are fixed.
+`run_connection_doctor` reads Codex's own hook trust status and names the exact
+Remembrance hook that needs review. The health marker stores only bounded event
+names and trust states, never hook commands, local paths, or hashes.
 
 ## Installation identity and preferences
 

@@ -2,6 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { handleSessionStart } from "../scripts/session-start.mjs";
 
 describe("Codex SessionStart health hook", () => {
+  const trustedHookTrust = vi.fn(async () => ({
+    status: "trusted",
+    checked_at: "2026-08-13T12:00:00.000Z",
+    review_events: [],
+    hooks: [],
+  }));
+
   it("records startup and tells the agent how to verify complete activation", async () => {
     const recordHealth = vi.fn(() => true);
     const output = await handleSessionStart(
@@ -14,6 +21,7 @@ describe("Codex SessionStart health hook", () => {
         pluginVersion: "0.1.37",
         recordHealth,
         checkUpdate: vi.fn(async () => null),
+        inspectHookTrust: trustedHookTrust,
       },
     );
 
@@ -25,6 +33,7 @@ describe("Codex SessionStart health hook", () => {
         hostVersion: "0.145.0-alpha.30",
         credentialSource: "environment",
         sessionId: "session-health-check",
+        hookTrust: expect.objectContaining({ status: "trusted" }),
       },
       expect.any(Object),
     );
@@ -55,6 +64,7 @@ describe("Codex SessionStart health hook", () => {
         pluginVersion: "unknown",
         recordHealth,
         checkUpdate: vi.fn(async () => null),
+        inspectHookTrust: trustedHookTrust,
       },
     );
     expect(recordHealth).toHaveBeenCalledWith(
@@ -95,6 +105,7 @@ describe("Codex SessionStart health hook", () => {
           notice:
             "Remembrance update available. Ask permission, run the trusted local command, then fully quit and reopen Codex.",
         })),
+        inspectHookTrust: trustedHookTrust,
       },
     );
     expect(output.hookSpecificOutput.additionalContext).toContain(
@@ -104,5 +115,51 @@ describe("Codex SessionStart health hook", () => {
       "fully quit and reopen Codex",
     );
     expect(JSON.stringify(output)).not.toContain("rk_never_print");
+  });
+
+  it("reports exactly which updated hook needs trust without exposing local details", async () => {
+    const recordHealth = vi.fn();
+    const output = await handleSessionStart(
+      { session_id: "trust-review" },
+      {
+        env: {},
+        pluginVersion: "0.1.63",
+        recordHealth,
+        checkUpdate: vi.fn(async () => null),
+        inspectHookTrust: vi.fn(async () => ({
+          status: "review_required",
+          checked_at: "2026-08-13T12:00:00.000Z",
+          review_events: ["PostToolUse"],
+          hooks: [
+            {
+              event: "PostToolUse",
+              enabled: true,
+              trust_status: "modified",
+              current_hash: "sha256:do_not_expose",
+              command: "/private/plugin/script.mjs",
+            },
+          ],
+        })),
+      },
+    );
+
+    expect(recordHealth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hookTrust: expect.objectContaining({
+          status: "review_required",
+          review_events: ["PostToolUse"],
+        }),
+      }),
+      expect.any(Object),
+    );
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "hook trust review is required for PostToolUse",
+    );
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "run_connection_doctor",
+    );
+    expect(JSON.stringify(output)).not.toMatch(
+      /do_not_expose|private\/plugin|sha256/i,
+    );
   });
 });

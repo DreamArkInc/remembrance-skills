@@ -4041,6 +4041,7 @@ export function recordPluginLifecycleHealth(
     hostVersion = null,
     credentialSource = null,
     sessionId = null,
+    hookTrust = null,
   },
   env = process.env,
 ) {
@@ -4072,6 +4073,7 @@ export function recordPluginLifecycleHealth(
         hostVersion,
         credentialSource,
         sessionId: null,
+        hookTrust,
       },
       env,
     );
@@ -4164,6 +4166,10 @@ export function recordPluginLifecycleHealth(
     api_destination_fingerprint: apiDestinationFingerprint,
     evidence_origin: evidenceOrigin,
     release_run_id: releaseRunId || null,
+    hook_trust:
+      sanitizePluginHookTrust(hookTrust) ??
+      sanitizePluginHookTrust(existing.hook_trust) ??
+      null,
     components: {
       ...currentComponents,
       [normalizedComponent]: now,
@@ -4188,6 +4194,73 @@ export function recordPluginLifecycleHealth(
     }
     return false;
   }
+}
+
+function sanitizePluginHookTrust(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const status = String(value.status ?? "")
+    .trim()
+    .toLowerCase();
+  if (!["trusted", "review_required", "unavailable"].includes(status)) {
+    return null;
+  }
+  const allowedEvents = new Set([
+    "SessionStart",
+    "UserPromptSubmit",
+    "PostToolUse",
+    "Stop",
+  ]);
+  const reviewEvents = Array.isArray(value.review_events)
+    ? [...new Set(value.review_events)]
+        .filter((event) => allowedEvents.has(event))
+        .slice(0, 4)
+    : [];
+  const hooks = Array.isArray(value.hooks)
+    ? value.hooks
+        .filter(
+          (entry) =>
+            entry &&
+            typeof entry === "object" &&
+            !Array.isArray(entry) &&
+            allowedEvents.has(entry.event),
+        )
+        .slice(0, 4)
+        .map((entry) => ({
+          event: entry.event,
+          enabled: entry.enabled === true,
+          trust_status: [
+            "managed",
+            "missing",
+            "modified",
+            "trusted",
+            "unknown",
+            "untrusted",
+          ].includes(entry.trust_status)
+            ? entry.trust_status
+            : "unknown",
+        }))
+    : [];
+  return {
+    status,
+    checked_at: safeText(value.checked_at ?? "", 64),
+    review_events: reviewEvents,
+    hooks,
+    reason:
+      status === "unavailable" &&
+      [
+        "app_server_closed",
+        "app_server_initialize_failed",
+        "app_server_unavailable",
+        "check_disabled",
+        "codex_executable_not_found",
+        "hooks_list_failed",
+        "hooks_list_timeout",
+        "hooks_list_too_large",
+        "plugin_hooks_not_listed",
+      ].includes(value.reason)
+        ? value.reason
+        : null,
+  };
 }
 
 function prunePluginHealthSessionMarkers(surface, keepPath, env) {
