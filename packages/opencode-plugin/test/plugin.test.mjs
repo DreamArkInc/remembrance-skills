@@ -105,6 +105,7 @@ describe("opencode plugin hooks", () => {
     const hooks = await Remembrance({
       client,
       clientUpdateCheck: async () => null,
+      warmSession: async () => null,
     });
     await hooks.event({
       event: {
@@ -122,6 +123,7 @@ describe("opencode plugin hooks", () => {
     const messages = [];
     const hooks = await Remembrance({
       clientUpdateCheck: async () => null,
+      warmSession: async () => null,
       client: {
         tui: {
           showToast: async () => {
@@ -156,6 +158,7 @@ describe("opencode plugin hooks", () => {
       const hooks = await Remembrance({
         client,
         clientUpdateCheck: async () => null,
+        warmSession: async () => null,
       });
       await hooks.event({
         event: {
@@ -173,6 +176,7 @@ describe("opencode plugin hooks", () => {
     const { client, messages } = loggingClient();
     const hooks = await Remembrance({
       client,
+      warmSession: async () => null,
       clientUpdateCheck: async () => ({
         current_version: "0.1.54",
         latest_version: "0.1.55",
@@ -231,6 +235,7 @@ describe("opencode plugin hooks", () => {
     const hooks = await Remembrance({
       client: exploding,
       clientUpdateCheck: async () => null,
+      warmSession: async () => null,
     });
     await expect(
       hooks.event({

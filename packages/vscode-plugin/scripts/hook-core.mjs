@@ -3078,6 +3078,7 @@ async function registerHookIdentity(identity, fetchImpl, access, signal) {
     // Registration remains fail-open; an existing same-scope key can still use
     // the legacy proof while new organization claims require the binding.
   }
+  if (signal.aborted) return false;
   const signedAt = new Date().toISOString();
   const publicKeyHash = `sha256:${createHash("sha256")
     .update(identity.public_key)
@@ -3118,7 +3119,7 @@ async function registerHookIdentity(identity, fetchImpl, access, signal) {
       signal,
     },
   );
-  return response?.ok === true;
+  return !signal.aborted && response?.ok === true;
 }
 
 function principalSessionCachePath(
@@ -3287,90 +3288,101 @@ async function warmPrincipalSessionUncached(
   env,
 ) {
   const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    PRINCIPAL_SESSION_TIMEOUT_MS,
-  );
-  try {
-    if (
-      !(await registerHookIdentity(
-        identity,
-        fetchImpl,
-        apiAccess,
-        controller.signal,
-      ))
-    ) {
-      return null;
-    }
-    const memberLinkToken = apiAccess.memberLinkToken;
-    const profileKey = createHash("sha256")
-      .update(
-        [
-          identity.key_id,
-          normalizedRuntime,
-          normalizedHostSurface,
-          "plugin_hook",
-        ].join(":"),
-        "utf8",
-      )
-      .digest("base64url");
-    const challengePayload = {
-      action: "challenge",
-      provider: identity.provider,
-      key_id: identity.key_id,
-      runtime_profile: {
-        runtime: normalizedRuntime,
-        surface: "plugin_hook",
-        host_surface: normalizedHostSurface,
-        client_name: runtimeDisplayName(normalizedRuntime),
-        client_version: safeText(clientVersion ?? "unknown", 64),
-        runtime_version: safeText(hostVersion ?? "", 64) || null,
-        profile_key: `rpf_${profileKey}`,
-      },
-      ...(memberLinkToken ? { member_link_token: memberLinkToken } : {}),
-    };
-    let challenge = await postPrincipalSession(
-      challengePayload,
-      fetchImpl,
-      apiAccess,
-      controller.signal,
-    );
-    if (!challenge && memberLinkToken) {
-      challenge = await postPrincipalSession(
-        { ...challengePayload, member_link_token: undefined },
+  const operation = (async () => {
+    try {
+      if (
+        !(await registerHookIdentity(
+          identity,
+          fetchImpl,
+          apiAccess,
+          controller.signal,
+        ))
+      ) {
+        return null;
+      }
+      if (controller.signal.aborted) return null;
+      const memberLinkToken = apiAccess.memberLinkToken;
+      const profileKey = createHash("sha256")
+        .update(
+          [
+            identity.key_id,
+            normalizedRuntime,
+            normalizedHostSurface,
+            "plugin_hook",
+          ].join(":"),
+          "utf8",
+        )
+        .digest("base64url");
+      const challengePayload = {
+        action: "challenge",
+        provider: identity.provider,
+        key_id: identity.key_id,
+        runtime_profile: {
+          runtime: normalizedRuntime,
+          surface: "plugin_hook",
+          host_surface: normalizedHostSurface,
+          client_name: runtimeDisplayName(normalizedRuntime),
+          client_version: safeText(clientVersion ?? "unknown", 64),
+          runtime_version: safeText(hostVersion ?? "", 64) || null,
+          profile_key: `rpf_${profileKey}`,
+        },
+        ...(memberLinkToken ? { member_link_token: memberLinkToken } : {}),
+      };
+      let challenge = await postPrincipalSession(
+        challengePayload,
         fetchImpl,
         apiAccess,
         controller.signal,
       );
+      if (!challenge && memberLinkToken) {
+        challenge = await postPrincipalSession(
+          { ...challengePayload, member_link_token: undefined },
+          fetchImpl,
+          apiAccess,
+          controller.signal,
+        );
+      }
+      if (controller.signal.aborted) return null;
+      if (!challenge?.challenge_id || !challenge?.signing_payload) return null;
+      const signature = signPayload(
+        null,
+        Buffer.from(challenge.signing_payload),
+        createPrivateKey(identity.private_key),
+      ).toString("base64url");
+      const session = await postPrincipalSession(
+        {
+          action: "exchange",
+          provider: identity.provider,
+          key_id: identity.key_id,
+          challenge_id: challenge.challenge_id,
+          signature,
+        },
+        fetchImpl,
+        apiAccess,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return null;
+      if (!session?.session_token || !session?.expires_at) return null;
+      const stored = {
+        token: session.session_token,
+        expires_at: session.expires_at,
+        member_linked: session.member_linked === true,
+      };
+      writeHookPrincipalSession(warmupKey, stored);
+      return stored;
+    } catch {
+      return null;
     }
-    if (!challenge?.challenge_id || !challenge?.signing_payload) return null;
-    const signature = signPayload(
-      null,
-      Buffer.from(challenge.signing_payload),
-      createPrivateKey(identity.private_key),
-    ).toString("base64url");
-    const session = await postPrincipalSession(
-      {
-        action: "exchange",
-        provider: identity.provider,
-        key_id: identity.key_id,
-        challenge_id: challenge.challenge_id,
-        signature,
-      },
-      fetchImpl,
-      apiAccess,
-      controller.signal,
-    );
-    if (!session?.session_token || !session?.expires_at) return null;
-    const stored = {
-      token: session.session_token,
-      expires_at: session.expires_at,
-      member_linked: session.member_linked === true,
-    };
-    writeHookPrincipalSession(warmupKey, stored);
-    return stored;
-  } catch {
-    return null;
+  })();
+  let timeout;
+  const deadline = new Promise((resolve) => {
+    timeout = setTimeout(() => {
+      controller.abort();
+      resolve(null);
+    }, PRINCIPAL_SESSION_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([operation, deadline]);
   } finally {
     clearTimeout(timeout);
   }

@@ -10702,8 +10702,9 @@ function localPluginLifecycleHealth(options) {
   if (paths.length === 0) {
     return missingPluginLifecycleHealth(surface);
   }
-  let marker = null;
-  let newestMarkerMs = Number.NEGATIVE_INFINITY;
+  const nowMs = (options.now ?? /* @__PURE__ */ new Date()).getTime();
+  const genericPath = join3(healthDir, `${surface}.json`);
+  const markerEntries = [];
   for (const path of paths) {
     try {
       const parsed = JSON.parse(
@@ -10712,15 +10713,20 @@ function localPluginLifecycleHealth(options) {
       if (!isRecord3(parsed) || parsed.surface !== surface) {
         continue;
       }
-      const candidateMs = typeof parsed.last_seen_at === "string" ? Date.parse(parsed.last_seen_at) : Number.NEGATIVE_INFINITY;
-      if (!marker || candidateMs > newestMarkerMs) {
-        marker = parsed;
-        newestMarkerMs = candidateMs;
-      }
+      const components2 = isRecord3(parsed.components) ? parsed.components : {};
+      markerEntries.push({
+        path,
+        marker: parsed,
+        lastSeenMs: validLifecycleTimestamp(parsed.last_seen_at, nowMs),
+        sessionStartMs: validLifecycleTimestamp(
+          components2.session_start,
+          nowMs
+        )
+      });
     } catch {
     }
   }
-  if (!marker) {
+  if (markerEntries.length === 0) {
     return {
       ...missingPluginLifecycleHealth(surface),
       issues: [
@@ -10731,8 +10737,40 @@ function localPluginLifecycleHealth(options) {
       ]
     };
   }
-  const componentRecord = isRecord3(marker.components) ? marker.components : {};
-  const nowMs = (options.now ?? /* @__PURE__ */ new Date()).getTime();
+  const genericEntry = markerEntries.find((entry) => entry.path === genericPath);
+  const currentSessionStartMs = genericEntry?.sessionStartMs;
+  const currentSessionEntries = Number.isFinite(currentSessionStartMs) ? markerEntries.filter(
+    (entry) => entry.sessionStartMs === currentSessionStartMs
+  ) : [];
+  const cohort = currentSessionEntries.length > 0 ? currentSessionEntries : [
+    markerEntries.reduce(
+      (latest, candidate) => candidate.lastSeenMs > latest.lastSeenMs ? candidate : latest
+    )
+  ];
+  const newestEntry = cohort.reduce(
+    (latest, candidate) => candidate.lastSeenMs > latest.lastSeenMs ? candidate : latest
+  );
+  const mergedComponents = {};
+  for (const component of PLUGIN_HEALTH_COMPONENTS) {
+    let latestValue;
+    let latestMs = Number.NEGATIVE_INFINITY;
+    for (const entry of cohort) {
+      const components2 = isRecord3(entry.marker.components) ? entry.marker.components : {};
+      const value = components2[component];
+      const valueMs = validLifecycleTimestamp(value, nowMs);
+      if (valueMs > latestMs) {
+        latestMs = valueMs;
+        latestValue = value;
+      }
+    }
+    if (Number.isFinite(latestMs)) mergedComponents[component] = latestValue;
+  }
+  const marker = {
+    ...newestEntry.marker,
+    components: mergedComponents,
+    last_seen_at: Number.isFinite(newestEntry.lastSeenMs) ? new Date(newestEntry.lastSeenMs).toISOString() : newestEntry.marker.last_seen_at
+  };
+  const componentRecord = mergedComponents;
   const sessionStartMs = validLifecycleTimestamp(
     componentRecord.session_start,
     nowMs
@@ -10840,7 +10878,7 @@ function localPluginLifecycleHealth(options) {
     hook_trust: hookTrust,
     components,
     issues,
-    explanation: "Each host session is tracked independently. SessionStart and the prompt hook must run first; tool and completion observations appear after those lifecycle events become eligible."
+    explanation: "Each host process session is tracked independently. Turn-specific prompt, tool, and completion observations are combined only when they share the current SessionStart marker."
   };
 }
 function normalizedPluginHookTrust(value) {
@@ -10918,6 +10956,7 @@ function emptyPluginComponents() {
 }
 function lifecycleMarkerPaths(surface, healthDir, fileSystem) {
   const legacyPath = join3(healthDir, `${surface}.json`);
+  const paths = fileSystem.exists(legacyPath) ? [legacyPath] : [];
   const listed = fileSystem.list ? (() => {
     try {
       return fileSystem.list(healthDir);
@@ -10927,9 +10966,9 @@ function lifecycleMarkerPaths(surface, healthDir, fileSystem) {
   })() : [];
   const sessionPaths = listed.filter(
     (name) => name.startsWith(`${surface}.`) && name.endsWith(".json") && /^[a-z_]+\.[a-f0-9]{24}\.json$/.test(name)
-  ).slice(0, MAX_LOCAL_LIFECYCLE_MARKERS).map((name) => join3(healthDir, name));
-  if (fileSystem.exists(legacyPath)) sessionPaths.push(legacyPath);
-  return [...new Set(sessionPaths)].slice(0, MAX_LOCAL_LIFECYCLE_MARKERS);
+  ).slice(0, MAX_LOCAL_LIFECYCLE_MARKERS - paths.length).map((name) => join3(healthDir, name));
+  paths.push(...sessionPaths);
+  return [...new Set(paths)].slice(0, MAX_LOCAL_LIFECYCLE_MARKERS);
 }
 function normalizeConfig(value) {
   if (!isRecord3(value)) return {};
@@ -11083,7 +11122,7 @@ async function checkClientUpdate(input) {
 // src/server.ts
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.1.64" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.65" : "0.0.0-dev";
 var tools = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var inputBuffer = Buffer.alloc(0);

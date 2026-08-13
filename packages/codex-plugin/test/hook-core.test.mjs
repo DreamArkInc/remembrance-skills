@@ -718,6 +718,26 @@ describe("principal-session bootstrap and preference capture", () => {
     expect(methods).toEqual(["GET", "POST"]);
     expect(readHookPrincipalSession("codex", env)).toBeNull();
   });
+
+  it("enforces a hard warmup deadline when fetch ignores cancellation", async () => {
+    vi.useFakeTimers();
+    try {
+      const env = isolatedPrincipalEnv();
+      const fetchImpl = vi.fn(() => new Promise(() => {}));
+      const pending = warmPrincipalSession(
+        { runtime: "codex", fetchImpl },
+        env,
+      );
+
+      await vi.advanceTimersByTimeAsync(1_200);
+
+      await expect(pending).resolves.toBeNull();
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(readHookPrincipalSession("codex", env)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("autoQueryTimeoutMs", () => {
