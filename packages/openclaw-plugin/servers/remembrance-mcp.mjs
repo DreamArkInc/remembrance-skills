@@ -13097,7 +13097,7 @@ async function readConcurrentPrivateLessonFallbackKey(path) {
 // src/server.ts
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.1.71" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.72" : "0.0.0-dev";
 var tools = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var inputBuffer = Buffer.alloc(0);
