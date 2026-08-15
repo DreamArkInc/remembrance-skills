@@ -267,6 +267,68 @@ manual override needs a process environment or HTTP header credential. A Codex
 tenant/privacy-policy denial is enforced by Codex before the request reaches
 Remembrance; do not classify it as a Remembrance rejection.
 
+### Organization-private lesson autopilot
+
+Routine organization lessons use one narrow, reviewable write instead of a
+broad remembrance payload. The local plugin first calls
+`prepare_private_lesson_candidate`. That tool generalizes, canonicalizes, and
+redacts a failure, correction, or reusable workflow lesson in memory; encrypts
+only the canonical safe record in a local outbox; and returns a draft ID. It
+never writes the original input to disk, logs, telemetry, or error output. Tags
+use an open, bounded lowercase slug vocabulary; new technical terms survive,
+while malformed or privacy-sensitive tags hold the draft instead of being
+silently removed.
+
+The plugin then calls `submit_private_lesson_candidate` with that draft ID.
+This is the only host-visible network action in the flow. Approve or persist
+approval for this exact action, not every Remembrance write. The server derives
+the organization and private visibility from the authenticated key, verifies a
+signed organization policy plus purpose-bound attestation, and returns a signed
+content-free receipt. The endpoint can never create or automatically propagate
+public content.
+
+If the host denies the action, no candidate content was sent. The encrypted
+draft remains on the device in `awaiting_authorization`; do not retry it
+through REST, hosted MCP, or another transport. Timeouts, 429s, and 5xx
+responses retry with bounded backoff during later plugin lifecycles. A 401,
+403, policy change, or validation failure remains held for explicit repair.
+Drafts never expire or auto-delete. Inspect, retry, or explicitly delete one
+with the local private-lesson tools; deletion requires confirmation.
+
+The signed organization policy pins `private-lesson-redaction-v2` and its exact
+supported redactor digest. If either is unsupported, the finalized
+`private-lesson-outbox-v1` record moves to terminal `superseded_redactor`.
+Terminal drafts are never retried, re-redacted, expired, or automatically
+deleted, and they continue to count toward the 64 MiB outbox ceiling. Outbox
+inspection and the connection doctor report terminal count, retained bytes,
+reason, and explicit deletion guidance without returning lesson content or a
+local path.
+
+When health reporting is enabled, a held draft may submit a content-free
+`held_safety_event` through the same exact action. It contains only the event
+type, held category counts, contract/redactor profile, event and policy
+digests, idempotency key, and a purpose-bound attestation. It never contains
+lesson prose, conditions, tags, correlations, evidence hashes, a candidate
+digest, paths, or draft content. Hold telemetry cannot enter verification,
+review, topology, propagation, or skill materialization. Set
+`REMEMBRANCE_HEALTH_REPORTING=0` to disable this optional report without
+affecting queries or retained drafts; the organization kill switch disables
+the entire private-lesson lane.
+
+Structured metadata and bounded redacted prose are enabled by default for an
+authenticated organization. Raw traces, code blocks, URLs, attachments,
+secrets, paths, identifiers, screenshots, encoded/high-entropy content, and
+ambiguous material remain local. Rich content cannot be sent merely because a
+user confirms it; first generalize it into the safe schema. Organization admins
+can pause the lane or select metadata-only capture under **Dashboard > Settings
+> Private lesson automation**.
+
+Hosted-only MCP and REST clients report `auto_capture_supported: false`
+because they cannot guarantee durable local retention. They must implement the
+same two-stage boundary locally: canonicalize and durably retain the safe draft,
+then invoke only `POST /api/v1/agent/private-lessons`. Querying and the main
+agent task remain available when capture or submission is blocked.
+
 ### Approve private repository contributions in managed Codex
 
 An API key authorizes Remembrance; it does not authorize Codex to export
@@ -330,6 +392,7 @@ enabled_tools = [
   "list_skills",
   "invoke_skill",
   "get_effective_preferences",
+  "get_private_lesson_policy",
   "get_skill",
   "get_resource",
   "get_value_proof",
@@ -342,6 +405,7 @@ enabled_tools = [
   "submit_suggestion",
   "record_preference",
   "link_current_installation",
+  "submit_private_lesson_candidate",
 ]
 default_tools_approval_mode = "writes"
 ~~~
@@ -435,6 +499,7 @@ query_skills
 list_skills
 invoke_skill
 get_effective_preferences
+get_private_lesson_policy
 get_skill
 get_resource
 get_value_proof
@@ -447,6 +512,7 @@ propose_private_skill
 submit_suggestion
 record_preference
 link_current_installation
+submit_private_lesson_candidate
 ~~~
 
 It intentionally omits `propose_skill_idea`, `submit_resource`,
@@ -505,6 +571,7 @@ Merge this into managed settings:
       "mcp__remembrance__list_skills",
       "mcp__remembrance__invoke_skill",
       "mcp__remembrance__get_effective_preferences",
+      "mcp__remembrance__get_private_lesson_policy",
       "mcp__remembrance__get_skill",
       "mcp__remembrance__get_resource",
       "mcp__remembrance__get_value_proof",
@@ -517,6 +584,7 @@ Merge this into managed settings:
       "mcp__remembrance__submit_suggestion",
       "mcp__remembrance__record_preference",
       "mcp__remembrance__link_current_installation",
+      "mcp__remembrance__submit_private_lesson_candidate",
     ]
   },
   "sandbox": {
@@ -564,6 +632,7 @@ narrow server/tool set:
       "list_skills",
       "invoke_skill",
       "get_effective_preferences",
+      "get_private_lesson_policy",
       "get_skill",
       "get_resource",
       "get_value_proof",
@@ -576,6 +645,7 @@ narrow server/tool set:
       "submit_suggestion",
       "record_preference",
       "link_current_installation",
+      "submit_private_lesson_candidate",
       ],
       "trust": false
     }
@@ -621,6 +691,7 @@ tool profile hides MCP tools, and `tools.deny: ["bundle-mcp"]` disables them:
       "list_skills",
       "invoke_skill",
       "get_effective_preferences",
+      "get_private_lesson_policy",
       "get_skill",
       "get_resource",
       "get_value_proof",
@@ -633,6 +704,7 @@ tool profile hides MCP tools, and `tools.deny: ["bundle-mcp"]` disables them:
       "submit_suggestion",
       "record_preference",
       "link_current_installation",
+      "submit_private_lesson_candidate",
           ]
         }
       }

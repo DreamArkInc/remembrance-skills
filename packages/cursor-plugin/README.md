@@ -28,7 +28,8 @@ At session start, Remembrance checks a credential-free public release manifest.
 If a newer verified plugin exists, the agent tells the user to refresh the
 Remembrance marketplace entry and choose **Update**, then fully quit and reopen
 Cursor. Cursor has no documented scriptable plugin-update command, so
-Remembrance does not invent or remotely supply one. Set
+Remembrance does not invent or remotely supply one. Cursor follows its exact
+public-mirror release and does not wait for unrelated npm or ClawHub surfaces. Set
 `REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable the advisory check.
 
 Cursor installations from before this startup check existed still receive a
@@ -51,7 +52,11 @@ installs remain fully functional with installation-local preferences. Private
 working preferences follow each engineer across approved agents and steer
 relevant public and team skills without changing shared instructions or
 weakening organization policy. Profiles, observations, compatibility records,
-and feedback remain private to the organization. Classification runs
+and feedback remain private to the organization. An explicit instruction
+governs the current task immediately. Known built-ins activate durably at once.
+Custom preferences remain pending until automatic normalization and validation
+approves them; unsafe, malformed, or uncertain custom behavior stays inactive
+and is never replayed to an agent. Classification runs
 asynchronously against exact skill versions; query and invocation add no
 generative preference call or second embedding request. Material compatibility
 may reorder only already-relevant skills inside one match tier or apply a
@@ -141,6 +146,31 @@ follows the normal private verification flow. Hosted/cloud agents without the
 local tool can run the bundled
 `skills/remembrancer/scripts/queue-private-skill-import.mjs` script. A local
 queue receipt is not a server submission receipt.
+
+### Private lesson autopilot
+
+Routine organization lessons are prepared locally with
+`prepare_private_lesson_candidate`, which canonicalizes and redacts in memory
+and stores only an encrypted post-redaction draft. The separate
+`submit_private_lesson_candidate` action sends those exact bytes to the private
+organization verifier queue and can never create or automatically propagate
+public content. Drafts never expire or auto-delete.
+
+The signed policy pins the corrected `private-lesson-redaction-v2` profile and
+its exact digest. Unsupported-profile drafts become terminal
+`superseded_redactor`, stay encrypted, and are never retried, re-redacted, or
+automatically deleted. When health reporting is enabled, a held draft may send
+only content-free category/version counts and signed protocol digests through
+the same approved action; that telemetry cannot enter verification, review,
+topology, or skill materialization. Disable it with
+`REMEMBRANCE_HEALTH_REPORTING=0`.
+
+Cursor asks before MCP writes by default. Approve only
+`submit_private_lesson_candidate` for all future invocations when that exact
+tool is shown; do not enable broad Auto-run solely for Remembrance. Local
+preparation, inspection, retry, and confirmed deletion remain local-only.
+Hosted/cloud Cursor without the local plugin reports
+`auto_capture_supported: false` and cannot guarantee durable draft retention.
 
 ## What the plugin does
 

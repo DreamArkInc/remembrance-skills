@@ -85,7 +85,9 @@ When the plugin runtime starts, it performs a bounded, credential-free release
 check. If a newer verified version exists, the agent asks before running
 `openclaw plugins update remembrance` and `openclaw remembrance setup`, then
 tells the user to restart the Gateway unless the managed reload already did so
-and to begin a new session. Remembrance never updates silently. Set
+and to begin a new session. Remembrance never updates silently. OpenClaw is
+advertised only after that exact version is publicly installable from ClawHub;
+pending publication is reconciled automatically by Remembrance. Set
 `REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable the advisory check.
 
 OpenClaw installations from before this startup check existed still learn about
@@ -166,7 +168,11 @@ installs remain fully functional with installation-local preferences. Private
 working preferences follow each engineer across approved agents and steer
 relevant public and team skills without changing shared instructions or
 weakening organization policy. Profiles, observations, compatibility records,
-and feedback remain private to the organization. Classification runs
+and feedback remain private to the organization. An explicit instruction
+governs the current task immediately. Known built-ins activate durably at once.
+Custom preferences remain pending until automatic normalization and validation
+approves them; unsafe, malformed, or uncertain custom behavior stays inactive
+and is never replayed to an agent. Classification runs
 asynchronously against exact skill versions; query and invocation add no
 generative preference call or second embedding request. Material compatibility
 may reorder only already-relevant skills inside one match tier or apply a
@@ -231,6 +237,31 @@ server gives OpenClaw direct tools such as `run_connection_doctor`, `get_connect
 `get_value_proof`, plus `list_skills`, `invoke_skill`, and the
 organization-only `propose_private_skill`. Local MCP also includes
 `queue_private_skill_import`, which never contacts Remembrance.
+
+### Private lesson autopilot
+
+Routine organization lessons use local `prepare_private_lesson_candidate` to
+canonicalize and redact in memory and retain only an encrypted post-redaction
+draft. The separately approved `submit_private_lesson_candidate` action sends
+those exact bytes to the organization's private verifier queue and can never
+create or automatically propagate public content. Drafts never expire or
+auto-delete; retryable failures resume later and held drafts remain local.
+
+The signed policy pins the corrected `private-lesson-redaction-v2` profile and
+its exact digest. Unsupported-profile drafts become terminal
+`superseded_redactor`, stay encrypted, and are never retried, re-redacted, or
+automatically deleted. When health reporting is enabled, a held draft may send
+only content-free category/version counts and signed protocol digests through
+the same approved action; that telemetry cannot enter verification, review,
+topology, or skill materialization. Disable it with
+`REMEMBRANCE_HEALTH_REPORTING=0`.
+
+Expose this exact optional tool through `tools.allow`/`tools.alsoAllow`, then use
+the plugin approval flow for the network action. Choosing `allow-always` is
+durable only because the Remembrance plugin persists trust for this exact
+action after `onResolution`; it does not trust other Remembrance or host tools.
+Preparation, inspection, retry, and confirmed deletion remain local-only. A
+host denial is never retried through another transport.
 
 When a person explicitly names a Remembrance skill or supplies a
 `remembrance://skills/{slug}` URI, OpenClaw resolves ambiguous names with

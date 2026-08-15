@@ -84,6 +84,13 @@ import {
   valueEpisodeFromResponse,
   warmPrincipalSession,
 } from "./hook-core.mjs";
+import {
+  handlePrivateLessonSubmitApproval,
+  persistPrivateLessonSubmitApproval,
+  privateLessonSubmitApproved,
+} from "./private-lesson-approval.mjs";
+
+export { handlePrivateLessonSubmitApproval } from "./private-lesson-approval.mjs";
 
 const CONTRIBUTION_TOOLS = [
   "submit_query_feedback",
@@ -645,6 +652,7 @@ const plugin = definePluginEntry({
       ).catch(() => null);
     }
     const updateDeliveredSessions = new Set();
+    let privateLessonApprovalPersisted = privateLessonSubmitApproved(api);
     const auth =
       credential.source === "none"
         ? "public registry access"
@@ -655,6 +663,22 @@ const plugin = definePluginEntry({
       );
     }
     registerSetupCli(api);
+    api.on(
+      "before_tool_call",
+      async (event) =>
+        handlePrivateLessonSubmitApproval(event, {
+          approved: privateLessonApprovalPersisted,
+          onAllowAlways() {
+            privateLessonApprovalPersisted = true;
+            void persistPrivateLessonSubmitApproval(api).catch((error) => {
+              api?.logger?.warn?.(
+                `Remembrance could not persist private lesson approval: ${errorName(error)}`,
+              );
+            });
+          },
+        }),
+      { priority: 60 },
+    );
     // PRE-prompt: inject matching skills/resources before the model turn.
     api.on(
       "before_prompt_build",

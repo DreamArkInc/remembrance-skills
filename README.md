@@ -42,6 +42,24 @@ independent verifier, and the quality gate run as a hosted service at
 - **Open clients.** Everything that runs on your machine is in this repo. Read
   it before you install it.
 
+## Private lesson autopilot for organizations
+
+Organization installs capture routine failures, corrections, and reusable
+workflow lessons through a narrow two-stage path. The local
+`prepare_private_lesson_candidate` tool canonicalizes and redacts in memory and
+stores only an encrypted post-redaction draft. The separately host-visible
+`submit_private_lesson_candidate` action sends those exact bytes only to the
+authenticated organization's private verifier queue. It cannot create or
+automatically propagate public content.
+
+Drafts never expire or auto-delete. Retryable failures resume during later
+lifecycle events; authentication, validation, policy, and host-denial states
+stay held. Admins enable or pause the lane under **Dashboard > Settings >
+Private lesson automation**. Persist host approval only for the exact submit
+action, not every Remembrance write tool. `run_connection_doctor` reports
+policy, signing, encryption, outbox, and action readiness without exposing
+lesson content or local paths.
+
 ## Install
 
 Pick whichever matches your agent. Native plugins are best because they install
@@ -314,10 +332,13 @@ evidence. MCP clients must follow those instructions proactively because no
 native Stop hook runs around a raw MCP connection.
 
 Native plugins and local MCP also check a credential-free, verified release
-manifest at startup. When an update exists, the agent uses instructions bundled
-with the installed client, asks before making any change, and tells the user
-which host must be reloaded or fully restarted. The manifest never supplies a
-shell command and the check never sends an API key, prompt, or repository data.
+manifest at startup. Each surface uses its exact newest installable version;
+pending ClawHub publication never withholds updates from npm or public-mirror
+clients and converges automatically. When an update exists, the agent uses
+instructions bundled with the installed client, asks before making any change,
+and tells the user which host must be reloaded or fully restarted. The manifest
+never supplies a shell command and the check never sends an API key, prompt, or
+repository data.
 Set `REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable only this advisory check.
 
 Installations from before the startup checker existed still receive a

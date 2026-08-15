@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { handleStop, handleStopHook } from "../scripts/contribute-on-stop.mjs";
 import { contributionReason } from "../scripts/hook-core.mjs";
 
 // Injectable base: no FS, no network. useCount/promptedCount are stubbed.
 function base(overrides = {}) {
   return {
-    env: {},
+    env: {
+      XDG_CONFIG_HOME: join(tmpdir(), "remembrance-codex-stop-no-config"),
+    },
     readUseCount: () => 1,
     readEligibilityCount: () => 0,
     readPromptedCount: () => 0,
@@ -53,6 +57,31 @@ describe("Codex contribute-on-stop adapter", () => {
     expect(result.output.reason.length).toBeLessThan(1_200);
     // It records the new prompted count so it won't re-block the same use.
     expect(written).toEqual([["t1", 1]]);
+  });
+
+  it("routes new organization lessons through the exact private two-stage action", () => {
+    const result = handleStop(
+      { turn_id: "t-private-lesson", stop_hook_active: false },
+      base({
+        env: {
+          XDG_CONFIG_HOME: join(
+            tmpdir(),
+            "remembrance-codex-stop-private-lesson",
+          ),
+          REMEMBRANCE_API_KEY: "rk_private_lesson_adapter",
+        },
+      }),
+    );
+    expect(result).toMatchObject({
+      allow: false,
+      why: "prompt_contribution",
+    });
+    expect(result.output.reason).toContain("prepare_private_lesson_candidate");
+    expect(result.output.reason).toContain("submit_private_lesson_candidate");
+    expect(result.output.reason).toContain("with exactly its draft_id");
+    expect(result.output.reason).toContain(
+      "Do not mention routine Remembrance calls",
+    );
   });
 
   it("repeats a high-match fetch-or-explain obligation once at completion", () => {

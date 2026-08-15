@@ -39,7 +39,9 @@ picker.
 At session start, Remembrance checks a credential-free public release manifest.
 If a newer verified plugin exists, the agent tells the user to refresh the
 plugin's marketplace or managed source, update Remembrance, and reload the VS
-Code window. Remembrance never updates itself silently. Set
+Code window. Remembrance never updates itself silently. VS Code follows its
+exact public-mirror release and does not wait for unrelated npm or ClawHub
+surfaces. Set
 `REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable the advisory check.
 
 VS Code installations from before this startup check existed still receive a
@@ -62,7 +64,11 @@ installs remain fully functional with installation-local preferences. Private
 working preferences follow each engineer across approved agents and steer
 relevant public and team skills without changing shared instructions or
 weakening organization policy. Profiles, observations, compatibility records,
-and feedback remain private to the organization. Classification runs
+and feedback remain private to the organization. An explicit instruction
+governs the current task immediately. Known built-ins activate durably at once.
+Custom preferences remain pending until automatic normalization and validation
+approves them; unsafe, malformed, or uncertain custom behavior stays inactive
+and is never replayed to an agent. Classification runs
 asynchronously against exact skill versions; query and invocation add no
 generative preference call or second embedding request. Material compatibility
 may reorder only already-relevant skills inside one match tier or apply a
@@ -143,6 +149,29 @@ reached and must not be reported as a Remembrance setup failure. When the host
 reports such a denial to the agent, the agent must say: **Remembrance was
 blocked by host policy before reaching Remembrance. Nothing was sent. Querying
 remains available.** It must not retry or automatically create a handoff.
+
+### Private lesson autopilot
+
+The local `prepare_private_lesson_candidate` tool canonicalizes and redacts a
+routine organization lesson in memory, then stores only an encrypted
+post-redaction draft. The separate `submit_private_lesson_candidate` tool sends
+those exact bytes to the private verifier queue and can never create or
+automatically propagate public content. Drafts never expire or auto-delete.
+
+The signed policy pins the corrected `private-lesson-redaction-v2` profile and
+its exact digest. Unsupported-profile drafts become terminal
+`superseded_redactor`, stay encrypted, and are never retried, re-redacted, or
+automatically deleted. When health reporting is enabled, a held draft may send
+only content-free category/version counts and signed protocol digests through
+the same approved action; that telemetry cannot enter verification, review,
+topology, or skill materialization. Disable it with
+`REMEMBRANCE_HEALTH_REPORTING=0`.
+
+In **Chat: Manage Tool Approval**, approve only the Remembrance
+`submit_private_lesson_candidate` tool for all future invocations. Keep broad
+global auto-approval off. The local preparation, inspection, retry, and
+confirmed-delete tools remain local-only; hosted MCP alone reports
+`auto_capture_supported: false`.
 
 ## Generated files
 

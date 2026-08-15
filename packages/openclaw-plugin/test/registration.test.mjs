@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "../src/index.mjs";
-import { configureOpenClawRemembrance } from "../src/index.mjs";
+import {
+  configureOpenClawRemembrance,
+  handlePrivateLessonSubmitApproval,
+} from "../src/index.mjs";
 import { readPluginLifecycleHealth } from "../src/hook-core.mjs";
 
 describe("OpenClaw plugin registration health", () => {
@@ -65,6 +68,7 @@ describe("OpenClaw plugin registration health", () => {
     plugin.register({ on, logger: { info }, registerCli, version: "1.2.3" });
 
     expect(on.mock.calls.map(([name]) => name)).toEqual([
+      "before_tool_call",
       "before_prompt_build",
       "after_tool_call",
       "before_agent_finalize",
@@ -89,6 +93,65 @@ describe("OpenClaw plugin registration health", () => {
       credential_source: "none",
       components: { session_start: expect.any(String) },
     });
+  });
+
+  it("requests and persists approval only for the private lesson submit action", async () => {
+    const onAllowAlways = vi.fn();
+    expect(
+      handlePrivateLessonSubmitApproval(
+        { toolName: "remembrance_submit_private_lesson_candidate" },
+        { onAllowAlways },
+      ),
+    ).toMatchObject({
+      requireApproval: {
+        title: "Submit private Remembrance lesson",
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+      },
+    });
+    const approval = handlePrivateLessonSubmitApproval(
+      { tool_name: "submit_private_lesson_candidate" },
+      { onAllowAlways },
+    );
+    approval.requireApproval.onResolution("allow-once");
+    expect(onAllowAlways).not.toHaveBeenCalled();
+    approval.requireApproval.onResolution("allow-always");
+    expect(onAllowAlways).toHaveBeenCalledOnce();
+    expect(
+      handlePrivateLessonSubmitApproval(
+        { toolName: "submit_private_lesson_candidate" },
+        { approved: true },
+      ),
+    ).toBeUndefined();
+    expect(
+      handlePrivateLessonSubmitApproval({ toolName: "submit_remembrance" }),
+    ).toBeUndefined();
+
+    const on = vi.fn();
+    const mutateConfigFile = vi.fn(async ({ mutate }) => {
+      const draft = { plugins: { entries: { remembrance: { config: {} } } } };
+      mutate(draft);
+      expect(draft.plugins.entries.remembrance.config).toEqual({
+        privateLessonSubmitApproval: true,
+      });
+    });
+    plugin.register({
+      on,
+      logger: { info: vi.fn(), warn: vi.fn() },
+      registerCli: vi.fn(),
+      pluginConfig: {},
+      runtime: { config: { mutateConfigFile } },
+    });
+    const beforeToolCall = on.mock.calls.find(
+      ([name]) => name === "before_tool_call",
+    )[1];
+    const registeredApproval = await beforeToolCall({
+      toolName: "submit_private_lesson_candidate",
+    });
+    registeredApproval.requireApproval.onResolution("allow-always");
+    await vi.waitFor(() => expect(mutateConfigFile).toHaveBeenCalledOnce());
+    await expect(
+      beforeToolCall({ toolName: "submit_private_lesson_candidate" }),
+    ).resolves.toBeUndefined();
   });
 
   it("delivers an available update to the agent once per session", async () => {

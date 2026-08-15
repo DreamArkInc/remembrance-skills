@@ -54,13 +54,15 @@ const MAX_SUMMARY_CHARS = 1200;
 const MAX_CONTEXT_CHARS = 4000;
 const MAX_CONTEXT_FIELD_CHARS = 280;
 const MAX_DIRECTIVE_CHARS = 900;
+const MAX_PREFERENCE_CONTEXT_CHARS = 520;
+const MAX_MANDATORY_PREFERENCE_CONTEXT_CHARS = 1200;
 const VALUE_EPISODE_MARKER_LIMIT = 20;
 const VALUE_EPISODE_MARKER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DIRECT_SELECTION_MARKER_LIMIT = 20;
 const DIRECT_SELECTION_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
 const PREFERENCE_EVIDENCE_SKILL_LIMIT = 2;
 const PREFERENCE_EVIDENCE_SETTING_LIMIT = 4;
-const PREFERENCE_EVIDENCE_CONTEXT_CHARS = 760;
+const PREFERENCE_EVIDENCE_CONTEXT_CHARS = 520;
 const EFFECTIVE_PREFERENCE_SOURCES = new Set([
   "mandatory_org",
   "explicit_task",
@@ -89,6 +91,7 @@ const MAX_LOCAL_CONFIG_BYTES = 64 * 1024;
 const MAX_LOCAL_HEALTH_MARKER_BYTES = 16 * 1024;
 const MAX_LOCAL_PLUGIN_ALERT_BYTES = 16 * 1024;
 const MAX_LOCAL_CLIENT_UPDATE_BYTES = 16 * 1024;
+const MAX_PRIVATE_LESSON_ENVELOPE_BYTES = 64 * 1024;
 const PLUGIN_ALERT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const PLUGIN_ALERT_LIMIT = 32;
 const CLIENT_UPDATE_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -98,6 +101,10 @@ const MAX_LOCAL_PRINCIPAL_SESSION_BYTES = 16 * 1024;
 const principalSessionWarmups = new Map();
 export const HOST_POLICY_ALERT_TEXT =
   "Remembrance was blocked by host policy before reaching Remembrance. Nothing was sent. Querying remains available.";
+export const PRIVATE_LESSON_HOST_POLICY_ALERT_TEXT =
+  "Remembrance was blocked by host policy before reaching Remembrance. No lesson or candidate content was sent. The private draft remains on this device and will be submitted after authorization. Querying remains available.";
+export const PRIVATE_LESSON_AUTHORIZATION_REQUEST_TEXT =
+  "Allow Remembrance to submit this retained private lesson to your organization?";
 const PLUGIN_HEALTH_COMPONENTS = new Set([
   "session_start",
   "prompt_hook",
@@ -869,14 +876,10 @@ export function formatContext(
       "Organization policy: use organization skills only. Do not use public skills or bundled public skill references, including as an offline fallback.",
     );
   }
-  const effectivePreferences = sanitizeEffectivePreferences(
+  const effectivePreferenceLines = effectivePreferencesContextLines(
     body?.effective_preferences,
   );
-  if (effectivePreferences.length > 0) {
-    lines.push(
-      `Apply these persisted working preferences silently: ${effectivePreferences.join("; ")}. Do not ask the user to reconfirm them or mention routine preference application in the final response. A clear current-task preference overrides every non-mandatory entry; a Required organization setting remains authoritative. Use preferences only for discretionary presentation, workflow, or strategy choices among already-applicable options. Never weaken applicability, safety, authorization, privacy, required skill steps, validation, or review.`,
-    );
-  }
+  lines.push(...effectivePreferenceLines);
   const queryId = body?.query_feedback?.query_id ?? body?.query_id;
   const highMatch = highMatchFromResponse(body);
   if (queryId) {
@@ -1381,6 +1384,13 @@ export function emptyQueryContext(reason = "trigger_match") {
 // the current credential is allowed to use.
 export async function runPromptHook(prompt, options = {}) {
   const env = options.env ?? process.env;
+  // This is the master switch for prompt-hook automation. Check it before
+  // preference detection, session warming, or any network-capable work.
+  if (disabled(env.REMEMBRANCE_AUTO_QUERY)) {
+    debugLog(env, "disabled", {}, options);
+    return null;
+  }
+  const privateLessonRecovery = privateLessonLifecycleRecoveryInstruction(env);
   const includeSharedConfigCredentialNotice =
     options.includeSharedConfigCredentialNotice !== false;
   const redacted = redactPrompt(String(prompt ?? ""));
@@ -1395,17 +1405,6 @@ export async function runPromptHook(prompt, options = {}) {
     userAgent: options.userAgent,
     projectPath: options.projectPath,
   }).catch(() => 0);
-  if (disabled(env.REMEMBRANCE_AUTO_QUERY)) {
-    debugLog(env, "disabled", {}, options);
-    return preferenceCapture
-      ? {
-          consumed: false,
-          context: preferenceCapture,
-          eligible: false,
-          reason: "preference_capture",
-        }
-      : null;
-  }
   const decision = shouldQueryPrompt(redacted);
   if (!decision.likely_match) {
     if (isContextualContinuationPrompt(redacted)) {
@@ -1420,7 +1419,10 @@ export async function runPromptHook(prompt, options = {}) {
       return {
         consumed: false,
         context: appendPreferenceCapture(
-          continuationQueryContext(directive),
+          appendPrivateLessonLifecycleRecovery(
+            continuationQueryContext(directive),
+            privateLessonRecovery,
+          ),
           preferenceCapture,
         ),
         directive,
@@ -1431,9 +1433,20 @@ export async function runPromptHook(prompt, options = {}) {
     if (preferenceCapture) {
       return {
         consumed: false,
-        context: preferenceCapture,
+        context: appendPrivateLessonLifecycleRecovery(
+          preferenceCapture,
+          privateLessonRecovery,
+        ),
         eligible: false,
         reason: "preference_capture",
+      };
+    }
+    if (privateLessonRecovery) {
+      return {
+        consumed: false,
+        context: privateLessonRecovery,
+        eligible: false,
+        reason: "private_lesson_lifecycle_recovery",
       };
     }
     debugLog(env, "skip", { reason: decision.reason }, options);
@@ -1460,9 +1473,15 @@ export async function runPromptHook(prompt, options = {}) {
     return {
       consumed: false,
       context: appendPreferenceCapture(
-        includeSharedConfigCredentialNotice
-          ? withSharedConfigCredentialNotice(unavailableQueryContext(env), env)
-          : unavailableQueryContext(env),
+        appendPrivateLessonLifecycleRecovery(
+          includeSharedConfigCredentialNotice
+            ? withSharedConfigCredentialNotice(
+                unavailableQueryContext(env),
+                env,
+              )
+            : unavailableQueryContext(env),
+          privateLessonRecovery,
+        ),
         preferenceCapture,
       ),
       eligible: true,
@@ -1473,14 +1492,17 @@ export async function runPromptHook(prompt, options = {}) {
     consumed: true,
     matched: queryResponseHasMatches(response),
     context: appendPreferenceCapture(
-      includeSharedConfigCredentialNotice
-        ? withSharedConfigCredentialNotice(
-            formatContext(response, decision.reason, limitFromEnv(env)) ??
-              emptyQueryContext(decision.reason),
-            env,
-          )
-        : (formatContext(response, decision.reason, limitFromEnv(env)) ??
-            emptyQueryContext(decision.reason)),
+      appendPrivateLessonLifecycleRecovery(
+        includeSharedConfigCredentialNotice
+          ? withSharedConfigCredentialNotice(
+              formatContext(response, decision.reason, limitFromEnv(env)) ??
+                emptyQueryContext(decision.reason),
+              env,
+            )
+          : (formatContext(response, decision.reason, limitFromEnv(env)) ??
+              emptyQueryContext(decision.reason)),
+        privateLessonRecovery,
+      ),
       preferenceCapture,
     ),
     eligible: true,
@@ -1492,6 +1514,10 @@ export async function runPromptHook(prompt, options = {}) {
 
 function appendPreferenceCapture(context, directive) {
   return directive ? `${context}\n\n${directive}` : context;
+}
+
+function appendPrivateLessonLifecycleRecovery(context, instruction) {
+  return instruction ? `${context}\n\n${instruction}` : context;
 }
 
 export function queryResponseHasMatches(response) {
@@ -1529,6 +1555,7 @@ const TASK_ELIGIBILITY_MARKERS =
 
 const CONTRIBUTION_SUBMITTED_PATTERNS = [
   /\brpub_[a-f0-9]{16,}\b/i,
+  /\baccepted_private_candidate\b/i,
   /\bsubmitted (?:it|this|the lesson|the failure|the remembrance) (?:to|as) Remembrance\b/i,
   /\bsubmit_remembrance\b/i,
   /\bREMEMBRANCE_SUBMISSION_PAYLOAD\b/,
@@ -1575,6 +1602,7 @@ export function contributionReason(
   signal = null,
   highMatch = null,
   directSelection = null,
+  options = {},
 ) {
   const signalLine = signal
     ? `High-value lesson detected: ${signal}. Capture it unless it was already submitted.`
@@ -1589,6 +1617,12 @@ export function contributionReason(
         ? [directSelection]
         : []
   ).slice(0, DIRECT_SELECTION_MARKER_LIMIT);
+  const privateLessonGuidance = options.privateLessonAuthorized
+    ? privateLessonCompletionGuidance({
+        includeLifecycleRecovery: options.includeLifecycleRecovery !== false,
+        env: options.env,
+      })
+    : null;
   if (directSelections.length > 0) {
     const preferenceEvidenceLine =
       directPreferenceCompatibilityInstruction(directSelections);
@@ -1609,6 +1643,7 @@ export function contributionReason(
       "Call submit_feedback once for each listed skill with useful true or false and a concise post-use lesson.",
       preferenceEvidenceLine,
       "If submit_feedback returns next_step.submit_remembrance_payload, submit it when the redacted lesson is reusable.",
+      privateLessonGuidance,
       routineContributionVisibilityInstruction(),
     ]
       .filter(Boolean)
@@ -1618,7 +1653,10 @@ export function contributionReason(
     "Before finishing, silently close the pending Remembrance loop using this session's query/result IDs.",
     signalLine,
     highMatchLine,
-    "Call submit_query_feedback for pending query fit, submit_feedback only for used results, and submit_remembrance only for a reusable redacted lesson. If no skill fit and you built a reusable workflow, default to propose_private_skill; use propose_skill_idea only when a public candidate is explicitly appropriate. A supplied invalid/inactive key fails with 401 and an insufficient key with 403; neither creates a candidate.",
+    options.privateLessonAuthorized
+      ? "Call submit_query_feedback for pending query fit and submit_feedback only for used results. Honor an exact next_step.submit_remembrance_payload returned by submit_feedback; route a compact organization evidence lesson through the private lesson lane below. If no skill fit and you built a complete reusable skill or playbook, default to propose_private_skill; use propose_skill_idea only when a public candidate is explicitly appropriate."
+      : "Call submit_query_feedback for pending query fit, submit_feedback only for used results, and submit_remembrance only for a reusable redacted lesson. If no skill fit and you built a complete reusable skill or playbook, default to propose_private_skill; use propose_skill_idea only when a public candidate is explicitly appropriate. A supplied invalid/inactive key fails with 401 and an insufficient key with 403; neither creates a candidate.",
+    privateLessonGuidance,
     routineContributionVisibilityInstruction(),
   ]
     .filter(Boolean)
@@ -1651,10 +1689,30 @@ function directPreferenceCompatibilityInstruction(selections) {
 }
 
 function routineContributionVisibilityInstruction() {
-  return `Use Remembrance MCP tools when available; otherwise use this session's REST fallback, or emit REMEMBRANCE_SUBMISSION_PAYLOAD only if the API is unavailable. Never remove or bypass an organization key to force a public candidate. Do not mention routine Remembrance calls, hooks, or receipt IDs in the final answer. Surface only failures, host blocks, or required action. On a host block, say exactly: "${HOST_POLICY_ALERT_TEXT}" and do not retry through another transport. Redact secrets and proprietary content.`;
+  return `Use Remembrance MCP tools when available; otherwise use this session's REST fallback, or emit REMEMBRANCE_SUBMISSION_PAYLOAD only if the API is unavailable. Never remove or bypass an organization key to force a public candidate. Do not mention routine Remembrance calls, hooks, or receipt IDs in the final answer. Surface only failures, host blocks, or required action. For a host block unrelated to a private-lesson submit/retry action, say exactly: "${HOST_POLICY_ALERT_TEXT}" and do not retry through another transport. Redact secrets and proprietary content.`;
 }
 
-export function taskClosureReason(signal = null) {
+export function privateLessonCompletionGuidance({
+  includeLifecycleRecovery = true,
+  env = process.env,
+} = {}) {
+  const recovery = includeLifecycleRecovery
+    ? privateLessonLifecycleRecoveryInstruction(env)
+    : null;
+  return [
+    "For a new compact failure, correction, or evidence lesson that is not already a complete skill, silently generalize it without raw repository content, then call prepare_private_lesson_candidate. If it returns next_action, immediately call submit_private_lesson_candidate with exactly its draft_id; do not substitute submit_remembrance, REST, or another transport.",
+    "If the work produced a complete reusable procedure, playbook, or actionable instructions, follow the separate skill-proposal guidance instead; do not compress a finished skill into the private lesson contract.",
+    "Let the host's exact submit_private_lesson_candidate approval be the only authorization prompt. If the host cannot present it, ask once: \"" +
+      PRIVATE_LESSON_AUTHORIZATION_REQUEST_TEXT +
+      '\"',
+    `If the host denies the action, say exactly: "${PRIVATE_LESSON_HOST_POLICY_ALERT_TEXT}" Do not retry that draft through another transport. Never auto-delete a draft.`,
+    recovery,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function taskClosureReason(signal = null, options = {}) {
   const signalLine = signal
     ? `High-value lesson detected: ${signal}. Capture it unless it was already submitted.`
     : null;
@@ -1662,6 +1720,9 @@ export function taskClosureReason(signal = null) {
     "Before finishing, silently recover the pending Remembrance query for this reusable task using the full conversation; no completed Remembrance query/use was recorded.",
     signalLine,
     "Call query_skills with a redacted full-context summary, evaluate the returned matches, then close any warranted submit_query_feedback, submit_feedback, or submit_remembrance action before responding.",
+    options.privateLessonAuthorized
+      ? privateLessonCompletionGuidance({ env: options.env })
+      : null,
     routineContributionVisibilityInstruction(),
   ]
     .filter(Boolean)
@@ -1702,7 +1763,10 @@ export function hostPolicyAlertWasReported(input) {
       input?.message ??
       "",
   );
-  return value.includes(HOST_POLICY_ALERT_TEXT);
+  return (
+    value.includes(HOST_POLICY_ALERT_TEXT) ||
+    value.includes(PRIVATE_LESSON_HOST_POLICY_ALERT_TEXT)
+  );
 }
 
 // Pure decision function (unit-tested): compare completed registry use and task
@@ -1745,16 +1809,33 @@ export function decideStop(input, options = {}) {
   const hasUnclosedEligibility =
     eligibilityCount > useCount && newDirectSelections.length === 0;
   const highValueSignal = detectHighValueLessonSignal(input);
-  if (newDirectSelections.length > 0 && feedbackDirectSelections.length === 0) {
+  const privateLessonAuthorized = organizationPrivateLessonAuthorized(env);
+  const privateLessonRecovery = privateLessonAuthorized
+    ? privateLessonLifecycleRecoveryInstruction(env)
+    : null;
+  if (
+    newDirectSelections.length > 0 &&
+    feedbackDirectSelections.length === 0 &&
+    !privateLessonRecovery
+  ) {
     return { allow: true, why: "direct_feedback_unavailable" };
   }
-  if (engagementCount === 0 && !highValueSignal) {
+  if (engagementCount === 0 && !highValueSignal && !privateLessonRecovery) {
     return { allow: true, why: "registry_not_used" };
+  }
+  if (
+    privateLessonRecovery &&
+    promptedCount > 0 &&
+    engagementCount <= promptedCount &&
+    !highValueSignal
+  ) {
+    return { allow: true, why: "no_new_usage" };
   }
   if (
     engagementCount <= promptedCount &&
     newDirectSelections.length === 0 &&
-    !highValueSignal
+    !highValueSignal &&
+    !privateLessonRecovery
   ) {
     return { allow: true, why: "no_new_usage" };
   }
@@ -1771,17 +1852,36 @@ export function decideStop(input, options = {}) {
       ? "prompt_high_value_lesson_contribution"
       : hasUnclosedEligibility
         ? "prompt_task_closure"
-        : "prompt_contribution",
-    reason: hasUnclosedEligibility
-      ? taskClosureReason(highValueSignal)
-      : contributionReason(
-          highValueSignal,
-          highMatch,
-          feedbackDirectSelections.length > 0 ? feedbackDirectSelections : null,
-        ),
-    useCount: highValueSignal
-      ? Math.max(engagementCount, promptedCount + 1, 1)
-      : engagementCount,
+        : privateLessonRecovery && engagementCount === 0
+          ? "prompt_private_lesson_retry"
+          : "prompt_contribution",
+    reason:
+      privateLessonRecovery && engagementCount === 0 && !highValueSignal
+        ? [
+            privateLessonRecovery,
+            routineContributionVisibilityInstruction(),
+          ].join("\n")
+        : hasUnclosedEligibility
+          ? taskClosureReason(highValueSignal, {
+              env,
+              privateLessonAuthorized,
+            })
+          : contributionReason(
+              highValueSignal,
+              highMatch,
+              feedbackDirectSelections.length > 0
+                ? feedbackDirectSelections
+                : null,
+              {
+                env,
+                privateLessonAuthorized,
+                includeLifecycleRecovery: true,
+              },
+            ),
+    useCount:
+      highValueSignal || privateLessonRecovery
+        ? Math.max(engagementCount, promptedCount + 1, 1)
+        : engagementCount,
   };
 }
 
@@ -2134,6 +2234,8 @@ export function toolResponseIndicatesFailure(value, depth = 0) {
     value.ok === false ||
     value.isError === true ||
     value.is_error === true ||
+    value.status === "not_submitted" ||
+    value.status === "held_safety" ||
     (typeof value.status === "number" && value.status >= 400)
   ) {
     return true;
@@ -2486,6 +2588,16 @@ export function clearHighMatchSurfaceIfOpened(
   const normalizedTool = String(toolName ?? "")
     .trim()
     .toLowerCase();
+  if (
+    normalizedTool.endsWith("submit_private_lesson_candidate") ||
+    normalizedTool.endsWith("retry_private_lesson_candidate")
+  ) {
+    // The PostToolUse adapter calls this function only after a successful tool
+    // response. Clear the content-free denial suppression so future retained
+    // drafts can resume normal lifecycle recovery after exact-action approval.
+    clearPrivateLessonHostPolicyDenials(env);
+    return false;
+  }
   const targetType = normalizedTool.endsWith("get_resource")
     ? "resource"
     : normalizedTool.endsWith("get_skill")
@@ -2901,6 +3013,125 @@ export function disabled(value) {
 
 export function contributeDisabled(value) {
   return /^(0|false|no)$/i.test(String(value ?? "").trim());
+}
+
+function organizationPrivateLessonAuthorized(env = process.env) {
+  if (contributeDisabled(env?.REMEMBRANCE_AUTO_CONTRIBUTE)) return false;
+  const credential = resolveApiCredential(env);
+  return Boolean(
+    credential.apiKey && !isUnusableConfigurationSource(credential.source),
+  );
+}
+
+function privateLessonOutboxDirectoryForHook(env = process.env) {
+  const stateRoot = String(env?.XDG_STATE_HOME ?? "").trim();
+  return join(
+    stateRoot || join(homedir(), ".local", "state"),
+    "remembrance",
+    "private-lessons",
+  );
+}
+
+export function readPrivateLessonLifecycleState(env = process.env) {
+  if (!organizationPrivateLessonAuthorized(env)) return null;
+  const directory = privateLessonOutboxDirectoryForHook(env);
+  try {
+    const directoryMetadata = lstatSync(directory);
+    if (
+      directoryMetadata.isSymbolicLink() ||
+      !directoryMetadata.isDirectory() ||
+      (isPosixHookRuntime() && (directoryMetadata.mode & 0o077) !== 0)
+    ) {
+      return null;
+    }
+    assertCurrentHookUser(directoryMetadata.uid);
+    const entries = readdirSync(directory, { withFileTypes: true });
+    const counts = {
+      ready: 0,
+      retry_scheduled: 0,
+      hold_telemetry_pending: 0,
+      hold_telemetry_retry_scheduled: 0,
+    };
+    for (const entry of entries) {
+      if (!entry.name.endsWith(".lesson.json")) continue;
+      if (entry.isSymbolicLink() || !entry.isFile()) return null;
+      const expectedDraftId = entry.name.slice(0, -".lesson.json".length);
+      if (!/^pld_[A-Za-z0-9_-]{8,96}$/.test(expectedDraftId)) return null;
+      const parsed = JSON.parse(
+        readSecureHookFile(
+          join(directory, entry.name),
+          MAX_PRIVATE_LESSON_ENVELOPE_BYTES,
+        ),
+      );
+      if (
+        parsed?.version !== "private-lesson-outbox-envelope-v1" ||
+        parsed?.draft_id !== expectedDraftId ||
+        ![
+          "ready",
+          "awaiting_authorization",
+          "retry_scheduled",
+          "held_safety",
+          "submitted",
+          "superseded_redactor",
+        ].includes(parsed?.state) ||
+        ![
+          "not_required",
+          "pending",
+          "awaiting_authorization",
+          "retry_scheduled",
+          "submitted",
+          "disabled",
+        ].includes(parsed?.hold_telemetry_status)
+      ) {
+        return null;
+      }
+      if (parsed.state === "ready" || parsed.state === "retry_scheduled") {
+        counts[parsed.state] += 1;
+      }
+      if (
+        privateLessonHealthReportingEnabledForHook(env) &&
+        parsed.state === "held_safety" &&
+        parsed.hold_telemetry_status === "pending"
+      ) {
+        counts.hold_telemetry_pending += 1;
+      }
+      if (
+        privateLessonHealthReportingEnabledForHook(env) &&
+        parsed.state === "held_safety" &&
+        parsed.hold_telemetry_status === "retry_scheduled"
+      ) {
+        counts.hold_telemetry_retry_scheduled += 1;
+      }
+    }
+    if (Object.values(counts).every((count) => count === 0)) return null;
+    return {
+      ...counts,
+      host_denial_active: recentPrivateLessonHostDenial(env),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function privateLessonLifecycleRecoveryInstruction(env = process.env) {
+  const state = readPrivateLessonLifecycleState(env);
+  if (!state || state.host_denial_active) return null;
+  const pending =
+    state.ready +
+    state.retry_scheduled +
+    state.hold_telemetry_pending +
+    state.hold_telemetry_retry_scheduled;
+  return [
+    `Private lesson lifecycle recovery: ${pending} retained local draft${pending === 1 ? " needs" : "s need"} attention. Silently call inspect_private_lesson_outbox.`,
+    "Call submit_private_lesson_candidate for each ready candidate or safety-held draft with pending content-free telemetry. Call retry_private_lesson_candidate only when the candidate or telemetry retry is due.",
+    "Do not retry awaiting_authorization, disabled telemetry, submitted telemetry, or superseded-redactor drafts; do not use another transport, and never delete a draft automatically. Hide routine results.",
+  ].join("\n");
+}
+
+function privateLessonHealthReportingEnabledForHook(env = process.env) {
+  return !/^(0|false|no)$/i.test(
+    String(env?.REMEMBRANCE_HEALTH_REPORTING ?? "").trim(),
+  );
 }
 
 function pluginHealthDir(env = process.env) {
@@ -3447,6 +3678,10 @@ function runtimeDisplayName(runtime) {
 }
 
 function sanitizeEffectivePreferences(value) {
+  return sanitizeEffectivePreferenceEntries(value).map((item) => item.text);
+}
+
+function sanitizeEffectivePreferenceEntries(value) {
   if (!Array.isArray(value)) return [];
   return value
     .filter(
@@ -3471,8 +3706,83 @@ function sanitizeEffectivePreferences(value) {
       const direction = item.strength === "avoid" ? "avoid" : "prefer";
       const authority =
         item.source === "mandatory_org" ? "required organization" : item.source;
-      return `${label} [${safeText(item.effect ?? "presentation", 24)}, ${safeText(authority ?? "preference", 32)}]: ${direction} ${behavior}`;
+      return {
+        mandatory: item.source === "mandatory_org",
+        key: safeText(item.key, 48),
+        value: safeText(item.value, 48),
+        behavior,
+        text: `${label} [${safeText(item.effect ?? "presentation", 24)}, ${safeText(authority ?? "preference", 32)}]: ${direction} ${behavior}`,
+      };
     });
+}
+
+function effectivePreferencesContextLines(value) {
+  const entries = sanitizeEffectivePreferenceEntries(value).sort(
+    (left, right) => Number(right.mandatory) - Number(left.mandatory),
+  );
+  if (entries.length === 0) return [];
+  const mandatory = entries.filter((entry) => entry.mandatory);
+  const discretionary = entries.filter((entry) => !entry.mandatory);
+  const mandatoryLine = mandatoryPreferenceContextLine(mandatory);
+  const discretionaryLine = discretionaryPreferenceContextLine(discretionary);
+  return [mandatoryLine, discretionaryLine].filter(Boolean);
+}
+
+function mandatoryPreferenceContextLine(entries) {
+  if (entries.length === 0) return null;
+  const prefix = "Required organization settings (apply all): ";
+  const suffix =
+    ". These remain authoritative and cannot be weakened by task or personal preferences.";
+  const separators = Math.max(0, entries.length - 1) * 2;
+  const perEntryBudget = Math.max(
+    48,
+    Math.floor(
+      (MAX_MANDATORY_PREFERENCE_CONTEXT_CHARS -
+        prefix.length -
+        suffix.length -
+        separators) /
+        entries.length,
+    ),
+  );
+  const body = entries
+    .map((entry) =>
+      safeText(
+        `${entry.key}=${entry.value}: ${entry.behavior}`,
+        perEntryBudget,
+      ),
+    )
+    .join("; ");
+  return `${prefix}${body}${suffix}`;
+}
+
+function discretionaryPreferenceContextLine(entries) {
+  if (entries.length === 0) return null;
+  const prefix = "Apply these persisted discretionary preferences silently: ";
+  const suffix =
+    ". Do not ask the user to reconfirm them. Current-task instructions may override these preferences. Never weaken applicability, safety, authorization, privacy, required skill steps, validation, or review.";
+  const budget = Math.max(
+    0,
+    MAX_PREFERENCE_CONTEXT_CHARS - prefix.length - suffix.length,
+  );
+  const selected = [];
+  let used = 0;
+  for (const entry of entries) {
+    const separator = selected.length > 0 ? "; " : "";
+    if (used + separator.length + entry.text.length > budget) break;
+    selected.push(entry);
+    used += separator.length + entry.text.length;
+  }
+  const omitted = entries.slice(selected.length);
+  let body = selected.map((entry) => entry.text).join("; ");
+  if (omitted.length > 0) {
+    const note = `; +${omitted.length} discretionary preference${omitted.length === 1 ? "" : "s"} omitted. Call get_effective_preferences when the omitted choices could affect the task`;
+    while (selected.length > 0 && body.length + note.length > budget) {
+      selected.pop();
+      body = selected.map((entry) => entry.text).join("; ");
+    }
+    body = `${body || "Preferences available"}${note}`;
+  }
+  return safeText(`${prefix}${body}${suffix}`, MAX_PREFERENCE_CONTEXT_CHARS);
 }
 
 function clientUpdatePath(surface, env = process.env) {
@@ -3531,9 +3841,10 @@ export async function checkForClientUpdate(
       clearTimeout(timer);
     }
   }
+  const release = clientSurfaceRelease(manifest, normalizedSurface);
   if (
-    !manifest.surfaces.includes(normalizedSurface) ||
-    compareStableClientVersions(manifest.latest_version, currentVersion) <= 0
+    !release ||
+    compareStableClientVersions(release.version, currentVersion) <= 0
   ) {
     return null;
   }
@@ -3544,10 +3855,10 @@ export async function checkForClientUpdate(
     : "";
   return {
     current_version: currentVersion,
-    latest_version: manifest.latest_version,
+    latest_version: release.version,
     surface: normalizedSurface,
     notice: [
-      `Remembrance update available: installed ${currentVersion}, published ${manifest.latest_version}.`,
+      `Remembrance update available: installed ${currentVersion}, published ${release.version}.`,
       guidance.update,
       command,
       guidance.restart,
@@ -3621,12 +3932,79 @@ function parseClientReleaseManifest(value) {
   ) {
     return null;
   }
+  const surfaceReleases = parseClientSurfaceReleases(value.surface_releases);
+  if (value.surface_releases !== undefined && !surfaceReleases) return null;
+  if (surfaceReleases) {
+    const entries = Object.entries(surfaceReleases);
+    if (entries.length === 0) return null;
+    const newestVersion = entries.reduce(
+      (latest, [, release]) =>
+        compareStableClientVersions(release.version, latest) > 0
+          ? release.version
+          : latest,
+      entries[0][1].version,
+    );
+    const newestSurfaces = entries
+      .filter(([, release]) => release.version === newestVersion)
+      .map(([surface]) => surface);
+    if (
+      newestVersion !== value.latest_version ||
+      newestSurfaces.length !== surfaces.length ||
+      newestSurfaces.some((surface) => !surfaces.includes(surface))
+    ) {
+      return null;
+    }
+  }
   return {
     schema_version: "1",
     latest_version: value.latest_version,
     published_at: new Date(value.published_at).toISOString(),
     surfaces,
+    ...(surfaceReleases ? { surface_releases: surfaceReleases } : {}),
   };
+}
+
+function parseClientSurfaceReleases(value) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const entries = Object.entries(value);
+  if (
+    entries.some(
+      ([surface, release]) =>
+        !CLIENT_RELEASE_MANIFEST_SURFACES.has(surface) ||
+        !release ||
+        typeof release !== "object" ||
+        Array.isArray(release) ||
+        Object.keys(release).some(
+          (key) => key !== "version" && key !== "published_at",
+        ) ||
+        !parseStableClientVersion(release.version) ||
+        typeof release.published_at !== "string" ||
+        !isCanonicalClientReleaseTimestamp(release.published_at),
+    )
+  ) {
+    return null;
+  }
+  return Object.fromEntries(
+    entries.map(([surface, release]) => [
+      surface,
+      {
+        version: release.version,
+        published_at: new Date(release.published_at).toISOString(),
+      },
+    ]),
+  );
+}
+
+function clientSurfaceRelease(manifest, surface) {
+  const exact = manifest.surface_releases?.[surface];
+  if (exact) return exact;
+  return manifest.surfaces.includes(surface)
+    ? {
+        version: manifest.latest_version,
+        published_at: manifest.published_at,
+      }
+    : null;
 }
 
 function isCanonicalClientReleaseTimestamp(value) {
@@ -3673,18 +4051,28 @@ function pluginAlertSessionPath(surface, sessionId, env = process.env) {
 function hostPolicyOperationClass(toolName) {
   const normalized = String(toolName ?? "").toLowerCase();
   if (
+    normalized.endsWith("submit_private_lesson_candidate") ||
+    normalized.endsWith("retry_private_lesson_candidate")
+  ) {
+    return "private_lesson";
+  }
+  if (
     normalized.endsWith("query_skills") ||
     normalized.endsWith("list_skills") ||
     normalized.endsWith("get_skill") ||
     normalized.endsWith("get_resource") ||
     normalized.endsWith("invoke_skill") ||
     normalized.endsWith("get_effective_preferences") ||
+    normalized.endsWith("get_private_lesson_policy") ||
+    normalized.endsWith("inspect_private_lesson_outbox") ||
     normalized.endsWith("run_connection_doctor") ||
     normalized.endsWith("get_connection_status")
   ) {
     return "query";
   }
   if (
+    normalized.endsWith("prepare_private_lesson_candidate") ||
+    normalized.endsWith("delete_private_lesson_candidate") ||
     normalized.endsWith("propose_private_skill") ||
     normalized.endsWith("queue_private_skill_import")
   ) {
@@ -3725,6 +4113,12 @@ function isRemembranceToolName(toolName) {
       "invoke_skill",
       "get_value_proof",
       "get_effective_preferences",
+      "get_private_lesson_policy",
+      "prepare_private_lesson_candidate",
+      "inspect_private_lesson_outbox",
+      "submit_private_lesson_candidate",
+      "retry_private_lesson_candidate",
+      "delete_private_lesson_candidate",
       "record_preference",
       "submit_preference_compatibility_feedback",
       "link_current_installation",
@@ -3882,6 +4276,95 @@ function prunePluginAlertFiles(keepPath, env) {
   } catch {
     // Pruning is advisory.
   }
+}
+
+function recentPrivateLessonHostDenial(env = process.env) {
+  const directory = pluginAlertDir(env);
+  if (!existsSync(directory)) return false;
+  try {
+    const entries = readdirSync(directory, { withFileTypes: true });
+    if (entries.length > PLUGIN_ALERT_LIMIT) return true;
+    const cutoff = Date.now() - PLUGIN_ALERT_TTL_MS;
+    for (const entry of entries) {
+      if (
+        !entry.isFile() ||
+        entry.isSymbolicLink() ||
+        !/^[a-z_]+\.[a-f0-9]{24}\.json$/.test(entry.name)
+      ) {
+        continue;
+      }
+      const parsed = JSON.parse(
+        readSecureHookFile(
+          join(directory, entry.name),
+          MAX_LOCAL_PLUGIN_ALERT_BYTES,
+        ),
+      );
+      if (
+        Array.isArray(parsed?.observations) &&
+        parsed.observations.some(
+          (item) =>
+            item?.operation_class === "private_lesson" &&
+            Number.isFinite(Date.parse(item?.last_seen_at ?? "")) &&
+            Date.parse(item.last_seen_at) >= cutoff,
+        )
+      ) {
+        return true;
+      }
+    }
+  } catch {
+    // An unreadable or malformed alert store cannot prove that retrying is
+    // authorized. Keep retained private lessons local until the state is
+    // repaired or the exact action is invoked explicitly.
+    return true;
+  }
+  return false;
+}
+
+export function clearPrivateLessonHostPolicyDenials(env = process.env) {
+  const directory = pluginAlertDir(env);
+  let changed = false;
+  try {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (
+        !entry.isFile() ||
+        entry.isSymbolicLink() ||
+        !/^[a-z_]+\.[a-f0-9]{24}\.json$/.test(entry.name)
+      ) {
+        continue;
+      }
+      const path = join(directory, entry.name);
+      const parsed = JSON.parse(
+        readSecureHookFile(path, MAX_LOCAL_PLUGIN_ALERT_BYTES),
+      );
+      if (!Array.isArray(parsed?.observations)) continue;
+      const observations = parsed.observations.filter(
+        (item) => item?.operation_class !== "private_lesson",
+      );
+      if (observations.length === parsed.observations.length) continue;
+      changed = true;
+      if (observations.length === 0) {
+        rmSync(path, { force: true });
+      } else {
+        writePrivateUsageMarker(
+          path,
+          `${JSON.stringify({
+            ...parsed,
+            observations,
+            updated_at: new Date().toISOString(),
+          })}\n`,
+        );
+      }
+    }
+  } catch {
+    return false;
+  }
+  return changed;
+}
+
+export function hostPolicyAlertTextForOperation(operationClass) {
+  return operationClass === "private_lesson"
+    ? PRIVATE_LESSON_HOST_POLICY_ALERT_TEXT
+    : HOST_POLICY_ALERT_TEXT;
 }
 
 export function recordHostPolicyDenial(
@@ -4402,9 +4885,12 @@ export function resolveApiAccessSnapshot(env = process.env) {
       }
     }
   }
-  const rawMemberLinkToken = String(
-    env.REMEMBRANCE_MEMBER_LINK_TOKEN ?? shared.config.memberLinkToken ?? "",
+  const environmentMemberLinkToken = String(
+    env.REMEMBRANCE_MEMBER_LINK_TOKEN ?? "",
   ).trim();
+  const rawMemberLinkToken =
+    environmentMemberLinkToken ||
+    String(shared.config.memberLinkToken ?? "").trim();
   return {
     apiConfiguration,
     credential,
@@ -4486,9 +4972,49 @@ export function explicitPreferenceSettingsFromPrompt(prompt) {
 }
 
 export function promptRequestsDurablePreference(prompt) {
-  return /\b(?:always|from now on|going forward|for future tasks?|remember (?:that )?i (?:prefer|want)|my (?:lasting )?preference is|make this my default|(?:should|must)\s+(?:always|never|only))\b/i.test(
-    String(prompt ?? ""),
-  );
+  const text = String(prompt ?? "");
+  if (
+    /\b(?:from now on|going forward|for future tasks?|remember (?:that )?i (?:prefer|want)|my (?:lasting )?preference is|make this my default|(?:i|we)\s+always\s+(?:prefer|want|avoid))\b/i.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  // Terminators must be followed by whitespace or end of input, or a sentence
+  // splits inside an identifier ("console.log", "v1.2") and separates a
+  // durable instruction from the recurring qualifier that licenses it.
+  return text.split(/[.!?]+(?=\s|$)|\n+/).some((sentence) => {
+    const clause = sentence.trim();
+    if (!clause || /^(?:nevermind|never\s+(?:mind|gonna))\b/i.test(clause)) {
+      return false;
+    }
+    // Deliberately broad. Whether "must never return undefined" describes the
+    // agent's working habits or the program's runtime behavior is a semantic
+    // judgment no regex can make, and dropping the ambiguous half would
+    // silently discard real user instructions. This gate only decides whether
+    // to ASK; genericPreferenceCaptureDirective leaves the decision to the model
+    // reading the full conversation, and server-side validation rejects what
+    // slips through.
+    if (/\b(?:should|must)\s+(?:always|never|only)\b/i.test(clause)) {
+      return true;
+    }
+    const recurringContext =
+      /\b(?:by default|as (?:a )?(?:default|rule)|for future tasks?|in future|whenever|every time|each time|(?:for|on) (?:all|each|every)\b|(?:before|after) (?:a|an|the|any|each|every|i|we|you|commits?|releases?|deployments?|reviews?|tasks?)(?:\s|$))/i.test(
+        clause,
+      );
+    if (!recurringContext) return false;
+    // A durable instruction may trail its qualifier ("Whenever you touch a
+    // route, always add a test"), so each comma-separated segment gets its own
+    // start-anchored test. The anchor still blocks descriptive tails such as
+    // "..., and it always returns null".
+    return clause
+      .split(",")
+      .some((segment) =>
+        /^(?:please\s+)?(?:by default,?\s+)?(?:always|never)\s+(?!(?:mind|gonna|going|a|an|the|this|that|there|it)\b)[a-z][a-z-]*\b/i.test(
+          segment.trim(),
+        ),
+      );
+  });
 }
 
 export function promptProvidesPreferenceCorrection(prompt) {
@@ -4537,7 +5063,12 @@ export function genericPreferenceCaptureDirective(prompt, options = {}) {
     : '"scope":"auto"';
   return [
     "Remembrance durable-preference capture:",
-    "The user stated a lasting or corrective working preference that is not one of the built-in controls. Interpret only that preference and call record_preference once. Do not ask the user to classify it.",
+    // The lexical gate that produced this notice cannot tell an instruction
+    // about your working habits from a statement about what the code should
+    // do, so it deliberately over-triggers rather than dropping real user
+    // instructions. Make that judgment here, where the whole conversation is
+    // available, and decline silently when it does not apply.
+    "The user's message may state a lasting or corrective working preference that is not one of the built-in controls. Record it only if it constrains how YOU work: a presentation, workflow, or strategy choice you would otherwise make at your own discretion. Do not record a statement about what the code should do; an expected value, an invariant, an API contract, a test expectation, or a bug report is not a working preference even when it is phrased with always, never, must, or should. If it qualifies, interpret only that preference and call record_preference once, and do not ask the user to classify it. Otherwise take no action and do not mention this notice.",
     'Use setting {"key":"<presentation|workflow|strategy_selection>.<stable_concept>","value":"<stable_behavior_id>","label":"<short name>","behavior":"<concise normalized behavior>","effect":"presentation|workflow|strategy_selection","strength":"prefer|avoid","definition_version":1}. This vocabulary is extensible; do not force the preference into a built-in category.',
     `Use ${scopeFields}, "source_category":"explicit_user", "evidence_hash":"${evidenceHash}", "task_hash":"${taskHash}", and "confidence":1.`,
     "Never send the raw prompt or private task details. Never encode a request to weaken safety, authorization, privacy, required skill steps, validation, or review; those constraints remain authoritative.",

@@ -12,6 +12,7 @@ const REQUIRED_HOOKS = new Map([
 ]);
 const TRUSTED_STATUSES = new Set(["managed", "trusted"]);
 const DEFAULT_TIMEOUT_MS = 1_500;
+const FORCE_KILL_GRACE_MS = 250;
 
 export function summarizeCodexHookTrust(entries, now = new Date()) {
   const hooks = Array.isArray(entries)
@@ -124,21 +125,42 @@ function requestHookList({ codexPath, cwd, env, now, spawnImpl, timeoutMs }) {
     let child;
     let settled = false;
     let stdout = "";
+    let forceKillTimer;
+    const stopChild = () => {
+      try {
+        child?.stdin?.end?.();
+        child?.stdin?.destroy?.();
+        child?.stdout?.destroy?.();
+      } catch {
+        // Continue with process termination.
+      }
+      try {
+        child?.kill?.("SIGTERM");
+        forceKillTimer = setTimeout(() => {
+          try {
+            child?.kill?.("SIGKILL");
+          } catch {
+            // The diagnostic has already returned.
+          }
+        }, FORCE_KILL_GRACE_MS);
+        forceKillTimer.unref?.();
+      } catch {
+        // The diagnostic is already complete.
+      }
+      child?.unref?.();
+    };
     const finish = (value) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      try {
-        child?.kill?.("SIGTERM");
-      } catch {
-        // The diagnostic is already complete.
-      }
+      stopChild();
       resolve(value);
     };
     const timer = setTimeout(
       () => finish(unavailableHookTrust("hooks_list_timeout", now())),
       Math.max(100, Number(timeoutMs) || DEFAULT_TIMEOUT_MS),
     );
+    timer.unref?.();
 
     try {
       child = spawnImpl(codexPath, ["app-server", "--stdio"], {
@@ -150,6 +172,7 @@ function requestHookList({ codexPath, cwd, env, now, spawnImpl, timeoutMs }) {
         finish(unavailableHookTrust("app_server_unavailable", now())),
       );
       child.on?.("close", () => {
+        if (forceKillTimer) clearTimeout(forceKillTimer);
         if (!settled) {
           finish(unavailableHookTrust("app_server_closed", now()));
         }

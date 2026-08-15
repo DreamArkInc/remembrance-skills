@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   contributeDisabled,
   contributionReason,
@@ -14,9 +17,14 @@ const unusedTranscript =
   '{"role":"user","content":"rename a local variable"}\n{"role":"assistant","content":"done"}\n';
 // Two distinct consumption markers (a query context + a query_skills tool call).
 const twoUsesTranscript = `${usedTranscript}{"tool":"mcp__plugin_remembrance_remembrance__query_skills"}\n`;
+const tempRoot = mkdtempSync(join(tmpdir(), "remembrance-claude-stop-"));
+
+afterAll(() => {
+  rmSync(tempRoot, { recursive: true, force: true });
+});
 
 const base = {
-  env: {},
+  env: { XDG_CONFIG_HOME: join(tempRoot, "no-shared-config") },
   readCount: () => 0,
   readUseCount: () => 0,
   readEligibilityCount: () => 0,
@@ -65,7 +73,12 @@ describe("Remembrance contribute-on-stop hook", () => {
     );
     expect(result.allow).toBe(false);
     expect(result.output.decision).toBe("block");
-    expect(result.output.reason).toBe(contributionReason());
+    expect(result.output.reason).toBe(
+      contributionReason(null, null, null, {
+        privateLessonAuthorized: false,
+        env: base.env,
+      }),
+    );
     expect(result.output.reason).toContain(
       "silently close the pending Remembrance loop",
     );
@@ -78,7 +91,27 @@ describe("Remembrance contribute-on-stop hook", () => {
         surface: "claude_code",
         component: "completion_hook",
       }),
-      {},
+      base.env,
+    );
+  });
+
+  it("routes organization lessons through local prepare and the exact visible submit action", () => {
+    const result = decideContribution(
+      { session_id: "s-private-lesson", stop_hook_active: false },
+      {
+        ...base,
+        env: { REMEMBRANCE_API_KEY: "rk_claude_private_lesson" },
+      },
+    );
+    expect(result).toMatchObject({
+      allow: false,
+      why: "prompt_contribution",
+    });
+    expect(result.reason).toContain("prepare_private_lesson_candidate");
+    expect(result.reason).toContain("submit_private_lesson_candidate");
+    expect(result.reason).toContain("with exactly its draft_id");
+    expect(result.reason).toContain(
+      "do not substitute submit_remembrance, REST, or another transport",
     );
   });
 
@@ -152,7 +185,7 @@ describe("Remembrance contribute-on-stop hook", () => {
     expect(markDirectSelectionsPrompted).toHaveBeenCalledWith(
       "s-direct-batch",
       2,
-      {},
+      base.env,
     );
   });
 

@@ -32,6 +32,9 @@ const MANAGED = [
   "REMEMBRANCE_PLUGIN_ALERT_DIR",
   "REMEMBRANCE_PLUGIN_HEALTH_DIR",
   "REMEMBRANCE_CLIENT_UPDATE_CHECK",
+  "REMEMBRANCE_PRIVATE_LESSON_KEYCHAIN",
+  "XDG_CONFIG_HOME",
+  "XDG_STATE_HOME",
 ];
 let counter = 0;
 
@@ -55,6 +58,9 @@ beforeEach(() => {
   delete process.env.REMEMBRANCE_API_KEY;
   delete process.env.REMEMBRANCE_AUTO_CONTRIBUTE;
   process.env.REMEMBRANCE_CLIENT_UPDATE_CHECK = "0";
+  process.env.REMEMBRANCE_PRIVATE_LESSON_KEYCHAIN = "0";
+  process.env.XDG_CONFIG_HOME = join(tempRoot, `config-${counter}`);
+  process.env.XDG_STATE_HOME = join(tempRoot, `state-${counter}`);
 });
 
 afterEach(() => {
@@ -126,6 +132,24 @@ describe("opencode completion nudge (session.idle)", () => {
     // prompted count itself. A second idle must therefore stay silent.
     await emitSessionIdle(hooks, sessionId);
     expect(messages).toHaveLength(1);
+  });
+
+  it("routes organization lessons through local prepare and the exact visible submit action", async () => {
+    process.env.REMEMBRANCE_API_KEY = "rk_opencode_private_lesson";
+    const sessionId = "s-private-lesson";
+    recordRegistryUse(sessionId, process.env);
+    const { client, messages } = loggingClient();
+    const hooks = await Remembrance({ client });
+
+    await emitSessionIdle(hooks, sessionId);
+
+    expect(messages).toHaveLength(1);
+    const message = String(messages[0].message);
+    expect(message).toContain("prepare_private_lesson_candidate");
+    expect(message).toContain("submit_private_lesson_candidate");
+    expect(message).toContain(
+      "do not substitute submit_remembrance, REST, or another transport",
+    );
   });
 
   it("reports a pending value episode before completing the engagement", async () => {
@@ -323,8 +347,7 @@ describe("opencode tool observer (tool.execute.after)", () => {
       },
       {
         isError: true,
-        error:
-          "Blocked by workspace data-export policy: proprietary content",
+        error: "Blocked by workspace data-export policy: proprietary content",
       },
     );
     expect(toasts.at(-1)).toMatchObject({

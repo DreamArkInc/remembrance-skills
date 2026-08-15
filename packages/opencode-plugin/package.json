@@ -1,6 +1,6 @@
 {
   "name": "@remembrance-ai/opencode-plugin",
-  "version": "0.1.66",
+  "version": "0.1.71",
   "license": "Apache-2.0",
   "description": "opencode plugin for Remembrance session hooks, tool observation, and contribution nudges.",
   "type": "module",
@@ -33,6 +33,7 @@
     "build": "node --check src/index.mjs && node --check bin/setup.mjs && node --check scripts/hook-core.mjs",
     "prepack": "npm run build",
     "test": "vitest run",
+    "test:private-lesson": "vitest run test/completion.test.mjs test/registration.test.mjs",
     "test:coverage": "vitest run test/*.test.mjs --coverage.enabled=true --coverage.provider=v8 --coverage.include=src/index.mjs --coverage.include=bin/setup.mjs --coverage.reporter=text --coverage.thresholds.lines=96 --coverage.thresholds.functions=90 --coverage.thresholds.statements=96 --coverage.thresholds.branches=87",
     "typecheck": "node --check src/index.mjs && node --check bin/setup.mjs && node --check scripts/hook-core.mjs"
   },

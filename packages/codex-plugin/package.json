@@ -1,6 +1,6 @@
 {
   "name": "@remembrance/codex-plugin",
-  "version": "0.1.66",
+  "version": "0.1.71",
   "private": true,
   "license": "Apache-2.0",
   "description": "OpenAI Codex CLI plugin for Remembrance auto-query hooks, skill docs, and MCP server configuration.",
@@ -8,6 +8,7 @@
   "scripts": {
     "build": "node --check scripts/codex-hook-trust.mjs && node --check scripts/session-start.mjs && node --check scripts/query-on-prompt.mjs && node --check scripts/contribute-on-stop.mjs && node --check scripts/record-detail-open.mjs && node --check scripts/hook-core.mjs",
     "test": "vitest run",
+    "test:private-lesson": "vitest run test/contribute-on-stop.test.mjs test/hook-core.test.mjs",
     "test:hook-trust-coverage": "vitest run test/codex-hook-trust.test.mjs --coverage.enabled=true --coverage.provider=v8 --coverage.include=scripts/codex-hook-trust.mjs --coverage.reporter=text --coverage.thresholds.lines=100 --coverage.thresholds.functions=100 --coverage.thresholds.statements=100 --coverage.thresholds.branches=90",
     "typecheck": "node --check scripts/codex-hook-trust.mjs && node --check scripts/session-start.mjs && node --check scripts/query-on-prompt.mjs && node --check scripts/contribute-on-stop.mjs && node --check scripts/record-detail-open.mjs && node --check scripts/hook-core.mjs"
   },

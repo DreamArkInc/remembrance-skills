@@ -1,6 +1,6 @@
 {
   "name": "@remembrance/openclaw-plugin",
-  "version": "0.1.66",
+  "version": "0.1.71",
   "private": true,
   "license": "Apache-2.0",
   "description": "OpenClaw plugin for Remembrance auto-query conversation hooks, skill docs, and MCP server configuration.",
@@ -24,6 +24,7 @@
   "scripts": {
     "build": "node --check src/index.mjs && node --check src/hook-core.mjs",
     "test": "vitest run",
+    "test:private-lesson-coverage": "vitest run test/private-lesson-approval.test.mjs test/registration.test.mjs test/completion.test.mjs test/hook-core.test.mjs --coverage.enabled=true --coverage.provider=v8 --coverage.include=src/private-lesson-approval.mjs --coverage.reporter=text --coverage.thresholds.lines=100 --coverage.thresholds.functions=100 --coverage.thresholds.statements=100 --coverage.thresholds.branches=95",
     "typecheck": "node --check src/index.mjs && node --check src/hook-core.mjs"
   },
   "devDependencies": {

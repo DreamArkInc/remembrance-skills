@@ -39,7 +39,10 @@ function fakeAppServer({
   const child = new EventEmitter();
   child.stdout = new PassThrough();
   child.kill = vi.fn();
+  child.unref = vi.fn();
   child.stdin = {
+    destroy: vi.fn(),
+    end: vi.fn(),
     write: vi.fn((line) => {
       const request = JSON.parse(String(line));
       queueMicrotask(() => {
@@ -172,6 +175,39 @@ describe("Codex hook trust inspection", () => {
       /secret|private\/plugin|sha256/i,
     );
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(child.unref).toHaveBeenCalledOnce();
+    expect(child.stdin.end).toHaveBeenCalledOnce();
+    expect(child.stdin.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("force-kills an app-server that ignores graceful termination", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = fakeAppServer();
+      child.stdout.destroy = vi.fn(() => {
+        throw new Error("stream already closed");
+      });
+      child.kill = vi.fn((signal) => {
+        if (signal === "SIGKILL") throw new Error("process already exited");
+      });
+      const statusPromise = inspectCodexHookTrust({
+        codexPath: "/safe/codex",
+        cwd: "/workspace",
+        env: {},
+        now: () => NOW,
+        spawnImpl: () => child,
+        timeoutMs: 1_000,
+      });
+      await vi.runAllTicks();
+      await expect(statusPromise).resolves.toMatchObject({ status: "trusted" });
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(child.kill).not.toHaveBeenCalledWith("SIGKILL");
+      await vi.advanceTimersByTimeAsync(250);
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+      expect(child.stdout.destroy).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fails open for app-server errors and timeouts", async () => {

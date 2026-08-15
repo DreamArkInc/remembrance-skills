@@ -576,7 +576,7 @@ describe("Codex query-on-prompt adapter", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("still asks the agent to persist an arbitrary durable preference when auto-query is disabled", async () => {
+  it("disables preference capture and every network path when auto-query is disabled", async () => {
     const fetchImpl = vi.fn();
     const output = await handleQuery(
       {
@@ -585,12 +585,7 @@ describe("Codex query-on-prompt adapter", () => {
       },
       { env: testEnv({ REMEMBRANCE_AUTO_QUERY: "0" }), fetchImpl },
     );
-    expect(output.hookSpecificOutput.additionalContext).toContain(
-      "Remembrance durable-preference capture",
-    );
-    expect(output.hookSpecificOutput.additionalContext).toContain(
-      '"scope":"auto"',
-    );
+    expect(output).toBeNull();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

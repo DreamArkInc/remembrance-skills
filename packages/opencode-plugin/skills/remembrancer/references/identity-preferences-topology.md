@@ -141,7 +141,10 @@ source, and server-issued preference fingerprint from that result's feedback
 offer. The server derives the evidence identity and rejects expired,
 unfetched, cross-principal, stale-version, or unoffered claims.
 
-- An explicit durable user correction applies immediately.
+- An explicit instruction applies to the current task immediately. Known
+  built-ins activate durably without background work. A custom setting remains
+  pending until automatic normalization and validation approves it; unsafe,
+  malformed, or uncertain custom behavior stays inactive and is never replayed.
 - Inferred member or installation values require at least three consistent
   observations across two tasks and two days with confidence at least `0.85`.
 - A learned member + runtime residual requires four observations across three

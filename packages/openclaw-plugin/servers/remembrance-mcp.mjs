@@ -7,6 +7,10 @@ var __export = (target, all) => {
 
 // ../core/src/ids.ts
 import { createHash, randomUUID } from "node:crypto";
+function createPublicId(prefix) {
+  const token = randomUUID().replaceAll("-", "").slice(0, 18);
+  return `${prefix}_${token}`;
+}
 function canonicalJson(value) {
   return JSON.stringify(sortForHash(value));
 }
@@ -4539,11 +4543,26 @@ function parseClientReleaseManifest(value) {
   if (surfaces.length !== value.surfaces.length || new Set(surfaces).size !== surfaces.length) {
     return null;
   }
+  const surfaceReleases = parseSurfaceReleases(value.surface_releases);
+  if (value.surface_releases !== void 0 && !surfaceReleases) return null;
+  if (surfaceReleases) {
+    const entries = Object.entries(surfaceReleases);
+    if (entries.length === 0) return null;
+    const newestVersion = entries.reduce(
+      (latest, [, release]) => compareClientVersions(release.version, latest) > 0 ? release.version : latest,
+      entries[0][1].version
+    );
+    const newestSurfaces = entries.filter(([, release]) => release.version === newestVersion).map(([surface]) => surface);
+    if (newestVersion !== latestVersion || newestSurfaces.length !== surfaces.length || newestSurfaces.some((surface) => !surfaces.includes(surface))) {
+      return null;
+    }
+  }
   return {
     schema_version: CLIENT_RELEASE_SCHEMA_VERSION,
     latest_version: latestVersion,
     published_at: new Date(value.published_at).toISOString(),
-    surfaces
+    surfaces,
+    ...surfaceReleases ? { surface_releases: surfaceReleases } : {}
   };
 }
 function resolveClientUpdateStatus(input) {
@@ -4562,29 +4581,30 @@ function resolveClientUpdateStatus(input) {
       reason: "invalid_manifest"
     };
   }
-  if (!manifest.surfaces.includes(input.surface)) {
+  const release = clientSurfaceRelease(manifest, input.surface);
+  if (!release) {
     return {
       status: "unavailable",
       current_version: input.currentVersion,
       reason: "surface_not_published"
     };
   }
-  if (compareClientVersions(manifest.latest_version, input.currentVersion) <= 0) {
+  if (compareClientVersions(release.version, input.currentVersion) <= 0) {
     return {
       status: "current",
       current_version: input.currentVersion,
-      latest_version: manifest.latest_version
+      latest_version: release.version
     };
   }
   const guidance = CLIENT_UPDATE_GUIDANCE[input.surface];
   return {
     status: "update_available",
     current_version: input.currentVersion,
-    latest_version: manifest.latest_version,
+    latest_version: release.version,
     guidance,
     notice: clientUpdateNotice({
       currentVersion: input.currentVersion,
-      latestVersion: manifest.latest_version,
+      latestVersion: release.version,
       guidance
     })
   };
@@ -4603,6 +4623,38 @@ ${input.guidance.command}` : "";
 }
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function clientSurfaceRelease(manifest, surface) {
+  const exact = manifest.surface_releases?.[surface];
+  if (exact) return exact;
+  return manifest.surfaces.includes(surface) ? {
+    version: manifest.latest_version,
+    published_at: manifest.published_at
+  } : null;
+}
+function parseSurfaceReleases(value) {
+  if (value === void 0) return void 0;
+  if (!isRecord(value)) return null;
+  const validSurfaces = new Set(CLIENT_RELEASE_SURFACES);
+  const entries = Object.entries(value);
+  if (entries.some(
+    ([surface, release]) => !validSurfaces.has(surface) || !isRecord(release) || Object.keys(release).some(
+      (key) => key !== "version" && key !== "published_at"
+    ) || !parseStableClientVersion(release.version) || typeof release.published_at !== "string" || !isCanonicalIsoTimestamp(release.published_at)
+  )) {
+    return null;
+  }
+  return Object.fromEntries(
+    entries.map(([surface, release]) => [
+      surface,
+      {
+        version: release.version,
+        published_at: new Date(
+          release.published_at
+        ).toISOString()
+      }
+    ])
+  );
 }
 function isCanonicalIsoTimestamp(value) {
   const timestamp = Date.parse(value);
@@ -5286,6 +5338,31 @@ var preferenceSettingSchema = preferenceSettingBaseSchema.superRefine(
     }
   }
 );
+var preferenceValidationResultSchema = external_exports.object({
+  decision: external_exports.enum(["approve", "reject", "uncertain"]),
+  reason_code: external_exports.enum([
+    "normalized",
+    "unsafe_instruction",
+    "malformed",
+    "uncertain"
+  ]),
+  normalized_setting: preferenceSettingSchema.nullable()
+}).strict().superRefine((result, ctx) => {
+  if (result.decision === "approve" && !result.normalized_setting) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["normalized_setting"],
+      message: "An approved preference requires a normalized setting"
+    });
+  }
+  if (result.decision !== "approve" && result.normalized_setting) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["normalized_setting"],
+      message: "Inactive preference validation cannot return a setting"
+    });
+  }
+});
 var preferenceScopeSchema = external_exports.enum([
   "task",
   "organization",
@@ -5388,13 +5465,31 @@ var preferenceCompatibilityAssessmentSchema = external_exports.object({
   rationale: external_exports.string().trim().min(1).max(200).nullable().default(null),
   classification_version: external_exports.string().trim().min(1).max(96),
   source: preferenceCompatibilitySourceSchema,
-  locked: external_exports.boolean().default(false)
+  locked: external_exports.boolean().default(false),
+  // Whether this assessment carries enough authority to make a skill
+  // ineligible, as opposed to merely reordering it. A model classification
+  // is advisory on its own: an autonomous down-rank is bounded, reversible,
+  // and invisible, but "unusable organization-wide" is a policy action that
+  // needs a human in the loop. The persistence layer decides this and the
+  // ranking layer consumes one boolean, so the authority rule lives in one
+  // place. Defaults to advisory so absent or older data can never block.
+  enforcement: external_exports.enum(["advisory", "blocking"]).default("advisory")
 }).strict();
 var preferenceCompatibilityAssessmentsSchema = external_exports.array(preferenceCompatibilityAssessmentSchema).max(MAX_EFFECTIVE_PREFERENCES * 2);
 var preferenceCompatibilityClassifierResultSchema = external_exports.object({
   relationship: preferenceCompatibilityRelationshipSchema,
   confidence: external_exports.number().min(0).max(1),
-  rationale: external_exports.string().trim().min(1).max(200),
+  reason_code: external_exports.enum([
+    "behavior_supported",
+    "behavior_conflicted",
+    "required_step_conflict",
+    "insufficient_evidence",
+    "not_applicable",
+    "unsafe_or_malformed_input"
+  ]),
+  // Retained for private admin inspection only. Agent-facing explanations
+  // are rendered from trusted templates rather than replaying model text.
+  rationale: external_exports.string().trim().min(1).max(200).nullable().default(null),
   // `locked` means the skill declares this behavior as a required step. It
   // can block surgical application after an explicit invocation, but never
   // lets a preference bypass a skill or organization requirement.
@@ -5566,6 +5661,685 @@ function buildOrganizationSkillHandoffBundle(input, createdAt = /* @__PURE__ */ 
   });
 }
 
+// ../core/src/private-lessons.ts
+import { createPublicKey, verify } from "node:crypto";
+var PRIVATE_LESSON_CONTRACT_VERSION = "private-lesson-contract-v1";
+var PRIVATE_LESSON_REDACTION_VERSION = "private-lesson-redaction-v2";
+var PRIVATE_LESSON_POLICY_VERSION = "private-lesson-policy-v1";
+var PRIVATE_LESSON_RECEIPT_VERSION = "private-lesson-receipt-v1";
+var PRIVATE_LESSON_HOLD_EVENT_VERSION = "private-lesson-hold-event-v1";
+var PRIVATE_LESSON_HOLD_RECEIPT_VERSION = "private-lesson-hold-receipt-v1";
+var PRIVATE_LESSON_SUPPORTED_REDACTION_VERSIONS = [
+  PRIVATE_LESSON_REDACTION_VERSION
+];
+var PRIVATE_LESSON_MAX_PAYLOAD_BYTES = 4 * 1024;
+var PRIVATE_LESSON_MAX_REQUEST_BYTES = 8 * 1024;
+var sha256Schema = external_exports.string().regex(/^sha256:[a-f0-9]{64}$/);
+var opaqueCorrelationSchema = external_exports.string().regex(/^corr_[a-f0-9]{48}$/);
+var PRIVATE_LESSON_TAG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,47}$/;
+var privateLessonTagSyntaxSchema = external_exports.string().regex(PRIVATE_LESSON_TAG_PATTERN);
+var PRIVATE_LESSON_SAFE_TAG_ALIASES = Object.freeze({
+  catalog: "workflow",
+  durability: "reliability",
+  "host-approval": "authorization",
+  mongo: "database",
+  "private-lesson-test": "testing",
+  "private-lessons": "workflow",
+  "provider-failure": "reliability",
+  retry: "retries",
+  "tenant-isolation": "privacy",
+  "visual-review": "ui"
+});
+var PRIVATE_LESSON_TAG_IDENTITY_HINTS = /* @__PURE__ */ new Set([
+  "account",
+  "client",
+  "corp",
+  "customer",
+  "internal",
+  "org",
+  "organization",
+  "private",
+  "project",
+  "repo",
+  "repository",
+  "tenant",
+  "user"
+]);
+var privateLessonCanonicalTagSchema = privateLessonTagSyntaxSchema.superRefine((tag, ctx) => {
+  const inspected = inspectPrivateLessonTag(tag);
+  if (inspected.tag !== tag || inspected.held_reasons.length > 0) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "tag must be canonical and pass private-lesson safety checks"
+    });
+  }
+});
+var privateLessonEventTypeSchema = external_exports.enum([
+  "failure",
+  "correction",
+  "reusable_workflow"
+]);
+var privateLessonTierSchema = external_exports.enum([
+  "structured_metadata",
+  "bounded_redacted_prose"
+]);
+var privateLessonRedactionVersionSchema = external_exports.enum(
+  PRIVATE_LESSON_SUPPORTED_REDACTION_VERSIONS
+);
+var privateLessonRedactionCategorySchema = external_exports.enum([
+  "secret",
+  "credential",
+  "cookie",
+  "jwt",
+  "connection_string",
+  "email",
+  "ip_address",
+  "hostname",
+  "private_url",
+  "public_url",
+  "path",
+  "identifier",
+  "encoded_or_high_entropy",
+  "screenshot",
+  "stack_trace",
+  "code_block",
+  "unicode_control"
+]);
+var redactionCountsShape = Object.fromEntries(
+  privateLessonRedactionCategorySchema.options.map((category) => [
+    category,
+    external_exports.number().int().min(0).max(999)
+  ])
+);
+var privateLessonRedactionCountsSchema = external_exports.object(redactionCountsShape).partial().strict().transform(
+  (counts) => Object.fromEntries(
+    Object.entries(counts).filter(([, count]) => Number(count) > 0).sort(([left], [right]) => left.localeCompare(right))
+  )
+);
+var generalizedTextSchema = external_exports.string().trim().min(1).max(1200).superRefine(assertNetworkSafeLessonText);
+var conditionSchema = external_exports.string().trim().min(1).max(240).superRefine(assertNetworkSafeLessonText);
+var privateLessonCanonicalPayloadSchema = external_exports.object({
+  contract_version: external_exports.literal(PRIVATE_LESSON_CONTRACT_VERSION),
+  redaction_version: privateLessonRedactionVersionSchema,
+  event_type: privateLessonEventTypeSchema,
+  tier: privateLessonTierSchema,
+  generalized_lesson: generalizedTextSchema.nullable(),
+  stable_conditions: external_exports.array(conditionSchema).max(12),
+  tags: external_exports.array(privateLessonCanonicalTagSchema).max(12),
+  correlation_ids: external_exports.array(opaqueCorrelationSchema).max(8),
+  redaction_counts: privateLessonRedactionCountsSchema,
+  evidence_hashes: external_exports.array(sha256Schema).max(16)
+}).strict().superRefine((payload, ctx) => {
+  if (payload.tier === "bounded_redacted_prose" && !payload.generalized_lesson) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "bounded_redacted_prose requires generalized_lesson",
+      path: ["generalized_lesson"]
+    });
+  }
+  if (payload.tier === "structured_metadata" && payload.generalized_lesson !== null) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "structured_metadata cannot include generalized_lesson",
+      path: ["generalized_lesson"]
+    });
+  }
+});
+var privateLessonAttestationBaseSchema = external_exports.object({
+  version: external_exports.literal("private-lesson-attestation-v1"),
+  purpose: external_exports.literal("remembrance-private-lesson-submission"),
+  provider: external_exports.enum(["codex", "claude_code", "cursor", "other"]),
+  challenge_id: external_exports.string().regex(/^ach_[A-Za-z0-9_-]{8,96}$/),
+  key_id: external_exports.string().min(1).max(160),
+  algorithm: external_exports.literal("ed25519"),
+  nonce: external_exports.string().min(16).max(160),
+  audience: external_exports.literal("remembrance-private-lesson"),
+  organization_audience_hash: sha256Schema,
+  policy_digest: sha256Schema,
+  redactor_digest: sha256Schema,
+  issued_at: external_exports.string().datetime(),
+  expires_at: external_exports.string().datetime(),
+  signature: external_exports.string().min(32).max(512)
+}).strict();
+var privateLessonCandidateAttestationSchema = privateLessonAttestationBaseSchema.extend({
+  record_type: external_exports.literal("candidate").optional(),
+  payload_digest: sha256Schema
+});
+var privateLessonHoldAttestationSchema = privateLessonAttestationBaseSchema.extend({
+  record_type: external_exports.literal("held_safety_event"),
+  event_digest: sha256Schema
+});
+var privateLessonAttestationSchema = external_exports.union([
+  privateLessonCandidateAttestationSchema,
+  privateLessonHoldAttestationSchema
+]);
+var privateLessonSubmissionSchema = external_exports.object({
+  candidate: privateLessonCanonicalPayloadSchema,
+  payload_digest: sha256Schema,
+  policy_digest: sha256Schema,
+  redactor_digest: sha256Schema,
+  idempotency_key: external_exports.string().min(16).max(160),
+  attestation: privateLessonCandidateAttestationSchema
+}).strict();
+var privateLessonHoldEventPayloadSchema = external_exports.object({
+  version: external_exports.literal(PRIVATE_LESSON_HOLD_EVENT_VERSION),
+  record_type: external_exports.literal("held_safety_event"),
+  event_type: privateLessonEventTypeSchema,
+  held_categories: external_exports.array(privateLessonRedactionCategorySchema).min(1).max(privateLessonRedactionCategorySchema.options.length).superRefine((categories, ctx) => {
+    if (new Set(categories).size !== categories.length) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        message: "held categories must be unique"
+      });
+    }
+  }).transform((categories) => [...new Set(categories)].sort()),
+  redaction_counts: privateLessonRedactionCountsSchema,
+  contract_version: external_exports.literal(PRIVATE_LESSON_CONTRACT_VERSION),
+  redaction_version: privateLessonRedactionVersionSchema,
+  redactor_digest: sha256Schema,
+  policy_digest: sha256Schema
+}).strict().superRefine((event, ctx) => {
+  const held = new Set(event.held_categories);
+  for (const category of event.held_categories) {
+    if (!event.redaction_counts[category]) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        message: "held category requires a positive redaction count",
+        path: ["redaction_counts", category]
+      });
+    }
+  }
+  for (const category of Object.keys(event.redaction_counts)) {
+    if (!held.has(category)) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        message: "redaction counts may include held categories only",
+        path: ["redaction_counts", category]
+      });
+    }
+  }
+});
+var privateLessonHoldSubmissionSchema = external_exports.object({
+  record_type: external_exports.literal("held_safety_event"),
+  event: privateLessonHoldEventPayloadSchema,
+  event_digest: sha256Schema,
+  idempotency_key: external_exports.string().min(16).max(160),
+  attestation: privateLessonHoldAttestationSchema
+}).strict();
+var privateLessonEndpointSubmissionSchema = external_exports.union([
+  privateLessonSubmissionSchema,
+  privateLessonHoldSubmissionSchema
+]);
+var privateLessonPolicyPayloadSchema = external_exports.object({
+  version: external_exports.literal(PRIVATE_LESSON_POLICY_VERSION),
+  purpose: external_exports.literal("remembrance-private-lesson-policy"),
+  organization_audience_hash: sha256Schema,
+  policy_sequence: external_exports.number().int().positive(),
+  enabled: external_exports.boolean(),
+  enabled_tiers: external_exports.array(privateLessonTierSchema).max(2),
+  action: external_exports.literal("submit_private_lesson_candidate"),
+  endpoint: external_exports.literal("/api/v1/agent/private-lessons"),
+  max_payload_bytes: external_exports.literal(PRIVATE_LESSON_MAX_PAYLOAD_BYTES),
+  encryption_ready: external_exports.boolean(),
+  kill_switch: external_exports.boolean(),
+  public_fallback: external_exports.literal(false),
+  contract_version: external_exports.literal(PRIVATE_LESSON_CONTRACT_VERSION),
+  redaction_version: external_exports.literal(PRIVATE_LESSON_REDACTION_VERSION),
+  redactor_digest: sha256Schema,
+  issued_at: external_exports.string().datetime(),
+  expires_at: external_exports.string().datetime()
+}).strict();
+var privateLessonReceiptPayloadSchema = external_exports.object({
+  version: external_exports.literal(PRIVATE_LESSON_RECEIPT_VERSION),
+  purpose: external_exports.literal("remembrance-private-lesson-receipt"),
+  receipt_id: external_exports.string().regex(/^plr_[A-Za-z0-9_-]{8,96}$/),
+  public_id: external_exports.string().regex(/^rpub_[A-Za-z0-9_-]{8,96}$/),
+  organization_audience_hash: sha256Schema,
+  status: external_exports.literal("accepted_private_candidate"),
+  processing_state: external_exports.literal("queued_for_verification"),
+  payload_digest: sha256Schema,
+  policy_digest: sha256Schema,
+  contract_version: external_exports.literal(PRIVATE_LESSON_CONTRACT_VERSION),
+  redaction_version: privateLessonRedactionVersionSchema,
+  redactor_digest: sha256Schema,
+  issued_at: external_exports.string().datetime()
+}).strict();
+var privateLessonHoldReceiptPayloadSchema = external_exports.object({
+  version: external_exports.literal(PRIVATE_LESSON_HOLD_RECEIPT_VERSION),
+  purpose: external_exports.literal("remembrance-private-lesson-hold-receipt"),
+  receipt_id: external_exports.string().regex(/^plhr_[A-Za-z0-9_-]{8,96}$/),
+  organization_audience_hash: sha256Schema,
+  status: external_exports.literal("accepted_hold_telemetry"),
+  processing_state: external_exports.literal("recorded"),
+  event_digest: sha256Schema,
+  policy_digest: sha256Schema,
+  contract_version: external_exports.literal(PRIVATE_LESSON_CONTRACT_VERSION),
+  redaction_version: privateLessonRedactionVersionSchema,
+  redactor_digest: sha256Schema,
+  issued_at: external_exports.string().datetime()
+}).strict();
+var privateLessonSignedEnvelopeSchema = (payloadSchema) => external_exports.object({
+  payload: payloadSchema,
+  canonical_payload: external_exports.string().min(2).max(8192),
+  signature: external_exports.string().min(32).max(512),
+  key_id: external_exports.string().min(1).max(160),
+  algorithm: external_exports.literal("Ed25519")
+}).strict();
+var signedPrivateLessonPolicySchema = privateLessonSignedEnvelopeSchema(privateLessonPolicyPayloadSchema);
+var signedPrivateLessonReceiptSchema = privateLessonSignedEnvelopeSchema(privateLessonReceiptPayloadSchema);
+var signedPrivateLessonHoldReceiptSchema = privateLessonSignedEnvelopeSchema(privateLessonHoldReceiptPayloadSchema);
+var privateLessonVerificationKeySchema = external_exports.object({
+  kty: external_exports.literal("OKP"),
+  crv: external_exports.literal("Ed25519"),
+  x: external_exports.string().min(20),
+  kid: external_exports.string().min(1).max(160),
+  use: external_exports.literal("sig"),
+  alg: external_exports.literal("EdDSA")
+}).strict();
+var privateLessonVerificationKeySetSchema = external_exports.object({ keys: external_exports.array(privateLessonVerificationKeySchema).min(1).max(16) }).strict();
+var privateLessonPolicyTrustFloorSchema = external_exports.object({
+  organization_audience_hash: sha256Schema,
+  policy_sequence: external_exports.number().int().positive(),
+  policy_digest: sha256Schema
+}).strict();
+var privateLessonPreparationInputSchema = external_exports.object({
+  event_type: privateLessonEventTypeSchema,
+  generalized_lesson: external_exports.string().max(8192).nullable().optional(),
+  stable_conditions: external_exports.array(external_exports.string().max(2048)).max(12).optional(),
+  tags: external_exports.array(external_exports.string().max(96)).max(12).optional(),
+  correlation_ids: external_exports.array(external_exports.string().max(160)).max(8).optional(),
+  evidence_hashes: external_exports.array(external_exports.string().max(96)).max(16).optional()
+}).strict();
+var ZERO_WIDTH_OR_BIDI = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/gu;
+var CODE_BLOCK = /```[\s\S]*?```/gu;
+var STACK_TRACE = /(?:^|\n)\s*(?:at\s+\S+\s*\([^\n]+:\d+:\d+\)|File\s+"[^"]+",\s+line\s+\d+)/gmu;
+var SCREENSHOT = /!\[[^\]]*\]\([^)]*\)|\bdata:image\/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+|\b[A-Za-z0-9_-]+\.(?:png|jpe?g|gif|webp)\b/giu;
+var CONNECTION_STRING = /\b(?:mongodb(?:\+srv)?|postgres(?:ql)?|mysql|redis|rediss):\/\/[^\s]+/giu;
+var PRIVATE_URL = /\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|[^\s/]+\.(?:local|internal|corp))(?:\/[^\s]*)?/giu;
+var PUBLIC_URL = /\bhttps?:\/\/[^\s]+/giu;
+var EMAIL = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu;
+var IP_ADDRESS = /\b(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:[A-F0-9]{1,4}:){1,7}:[A-F0-9]{0,4}\b|\b(?:[A-F0-9]{1,4}:){2,7}[A-F0-9]{1,4}\b/giu;
+var FILE_PATH = /(?<![A-Za-z0-9.*~:\/\\-])(?:(?:~\/|\.{1,2}\/|\/[A-Za-z0-9.*-]+\/|[A-Za-z]:\\)[^\s),;]*[A-Za-z0-9_*~=-]|[A-Za-z0-9.*_-]+\/[^\s),;]*\/[^\s),;]*[A-Za-z0-9_*~=-]|[A-Za-z0-9.*_-]+\/[A-Za-z0-9._-]*\.[A-Za-z0-9]{1,10}\b)/gmu;
+var JWT = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/gu;
+var COOKIE = /\b(?:cookie|set-cookie|session(?:_id)?|csrf(?:_token)?)\s*[:=]\s*[^\s;,]+/giu;
+var CREDENTIAL = /\b(?:api[_-]?key|access[_-]?token|auth(?:orization)?|password|passwd|private[_-]?key|client[_-]?secret)\s*[:=]\s*[^\s;,]+/giu;
+var SECRET = /\b(?:sk|pk|rk|ghp|github_pat|xox[baprs]|AKIA)[-_A-Za-z0-9]{12,}\b/gu;
+var INTERNAL_HOSTNAME = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:local|internal|corp|lan)\b/giu;
+var HOSTNAME = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?!(?:c|cc|cpp|cs|css|go|h|hpp|html|java|js|json|jsx|kt|lock|md|mjs|proto|py|rb|rs|scss|sh|sql|swift|toml|ts|tsx|xml|yaml|yml|zsh)\b)(?:[a-z]{2,63}|local|internal|corp|lan)\b/gu;
+var IDENTIFIER = /\b(?:org|user|member|account|tenant|repo|job|request|trace)[_-][A-Za-z0-9_-]{8,}\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b|\b[0-9a-f]{24}\b|\barn:aws:[^\s;,]+/giu;
+var SHORT_PADDED_BASE64 = /(?<![A-Za-z0-9+/=])(?:[A-Za-z0-9+/]{4}){4,8}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)(?![A-Za-z0-9+/=])/gu;
+var SHORT_MIXED_OPAQUE = /(?<![A-Za-z0-9+/_=-])(?=[A-Za-z0-9+/_=-]{20,39}(?![A-Za-z0-9+/_=-]))(?=[A-Za-z0-9+/_=-]*[a-z])(?=[A-Za-z0-9+/_=-]*[A-Z])(?=[A-Za-z0-9+/_=-]*\d)(?=[A-Za-z0-9+/_=-]*[+/_=-])[A-Za-z0-9+/_=-]{20,39}(?![A-Za-z0-9+/_=-])/gu;
+var SHORT_CONTEXTUAL_CREDENTIAL = /\b(?:api[_ -]?key|access[_ -]?token|auth(?:orization)?|password|passwd|private[_ -]?key|client[_ -]?secret|token|credential|secret)\b\s+(?:is\s+)?(?=[^\s;,]{12,39}(?:[\s;,]|$))(?=[^\s;,]*[0-9+/_=-])[A-Za-z0-9+/_=-]{12,39}\b/giu;
+var HIGH_ENTROPY = /\b[A-Za-z0-9+/_=-]{40,}\b/gu;
+var EXISTING_REDACTION_MARKER = new RegExp(
+  `\\[redacted:(?:${privateLessonRedactionCategorySchema.options.join("|")})\\]`,
+  "gu"
+);
+var REPLACEMENTS = [
+  { category: "unicode_control", pattern: ZERO_WIDTH_OR_BIDI, hold: true },
+  { category: "stack_trace", pattern: STACK_TRACE, hold: true },
+  { category: "screenshot", pattern: SCREENSHOT, hold: true },
+  { category: "connection_string", pattern: CONNECTION_STRING, hold: false },
+  { category: "private_url", pattern: PRIVATE_URL, hold: false },
+  { category: "public_url", pattern: PUBLIC_URL, hold: true },
+  { category: "jwt", pattern: JWT, hold: false },
+  { category: "cookie", pattern: COOKIE, hold: false },
+  { category: "credential", pattern: CREDENTIAL, hold: false },
+  { category: "secret", pattern: SECRET, hold: false },
+  { category: "email", pattern: EMAIL, hold: false },
+  { category: "ip_address", pattern: IP_ADDRESS, hold: false },
+  {
+    category: "encoded_or_high_entropy",
+    pattern: SHORT_PADDED_BASE64,
+    hold: true
+  },
+  {
+    category: "encoded_or_high_entropy",
+    pattern: SHORT_MIXED_OPAQUE,
+    hold: true
+  },
+  {
+    category: "credential",
+    pattern: SHORT_CONTEXTUAL_CREDENTIAL,
+    hold: false
+  },
+  { category: "encoded_or_high_entropy", pattern: HIGH_ENTROPY, hold: true },
+  { category: "path", pattern: FILE_PATH, hold: false },
+  { category: "hostname", pattern: INTERNAL_HOSTNAME, hold: false },
+  { category: "hostname", pattern: HOSTNAME, hold: false },
+  { category: "identifier", pattern: IDENTIFIER, hold: false },
+  { category: "code_block", pattern: CODE_BLOCK, hold: true }
+];
+function normalizePrivateLessonText(value) {
+  return value.normalize("NFC").replace(/\r\n?/gu, "\n").replace(/[\t ]+/gu, " ").replace(/ *\n */gu, "\n").replace(/\n{3,}/gu, "\n\n").trim();
+}
+function redactPrivateLessonText(value) {
+  let text = normalizePrivateLessonText(value);
+  const existingMarkers = [];
+  text = text.replace(EXISTING_REDACTION_MARKER, (marker) => {
+    const index = existingMarkers.push(marker) - 1;
+    return `\uFFF0${index}\uFFF1`;
+  });
+  const counts = {};
+  const held = /* @__PURE__ */ new Set();
+  for (const replacement of REPLACEMENTS) {
+    replacement.pattern.lastIndex = 0;
+    let matches = 0;
+    text = text.replace(replacement.pattern, () => {
+      matches += 1;
+      return `[redacted:${replacement.category}]`;
+    });
+    if (matches > 0) {
+      counts[replacement.category] = (counts[replacement.category] ?? 0) + matches;
+      if (replacement.hold) held.add(replacement.category);
+    }
+  }
+  text = text.replace(/\uFFF0(\d+)\uFFF1/gu, (_, index) => {
+    return existingMarkers[Number(index)] ?? "[redacted:identifier]";
+  });
+  return {
+    text: normalizePrivateLessonText(text),
+    counts: privateLessonRedactionCountsSchema.parse(counts),
+    held_reasons: [...held].sort()
+  };
+}
+function preparePrivateLessonCandidate(input) {
+  input = privateLessonPreparationInputSchema.parse(input);
+  const redactedParts = [
+    redactPrivateLessonText(input.generalized_lesson ?? ""),
+    ...(input.stable_conditions ?? []).map(redactPrivateLessonText)
+  ];
+  const tagParts = (input.tags ?? []).map(inspectPrivateLessonTag);
+  const counts = {};
+  const held = /* @__PURE__ */ new Set();
+  for (const part of [...redactedParts, ...tagParts]) {
+    for (const [category, count] of Object.entries(part.counts)) {
+      const key = category;
+      counts[key] = Math.min(999, (counts[key] ?? 0) + Number(count));
+    }
+    for (const reason of part.held_reasons) held.add(reason);
+  }
+  const lesson = redactedParts[0]?.text || null;
+  const candidate = privateLessonCanonicalPayloadSchema.parse({
+    contract_version: PRIVATE_LESSON_CONTRACT_VERSION,
+    redaction_version: PRIVATE_LESSON_REDACTION_VERSION,
+    event_type: input.event_type,
+    tier: lesson ? "bounded_redacted_prose" : "structured_metadata",
+    generalized_lesson: lesson,
+    stable_conditions: redactedParts.slice(1).map((part) => part.text).filter(Boolean),
+    tags: [...new Set(tagParts.flatMap((part) => part.tag ?? []))].sort().slice(0, 12),
+    correlation_ids: [
+      ...new Set((input.correlation_ids ?? []).map(pseudonymizeCorrelationId))
+    ].sort().slice(0, 8),
+    redaction_counts: counts,
+    evidence_hashes: [...new Set(input.evidence_hashes ?? [])].sort().slice(0, 16)
+  });
+  const canonicalPayload = canonicalPrivateLessonPayload(candidate);
+  return {
+    status: held.size > 0 ? "held_safety" : "ready",
+    candidate,
+    canonical_payload: canonicalPayload,
+    payload_digest: hashValue(canonicalPayload),
+    redactor_digest: privateLessonRedactorDigest(),
+    held_reasons: [...held].sort()
+  };
+}
+function canonicalPrivateLessonPayload(input) {
+  const parsed = privateLessonCanonicalPayloadSchema.parse(input);
+  const canonical = canonicalJson(parsed);
+  assertPrivateLessonPayloadSize(canonical);
+  return canonical;
+}
+function computePrivateLessonRedactorDigest() {
+  return hashValue(
+    canonicalJson({
+      version: PRIVATE_LESSON_REDACTION_VERSION,
+      categories: privateLessonRedactionCategorySchema.options,
+      normalization: "unicode-nfc-lf-space-v1",
+      metadata: {
+        correlation_ids: "domain-separated-sha256-v1",
+        tag_syntax: PRIVATE_LESSON_TAG_PATTERN.source,
+        tag_safety: "redaction-plus-identity-hints-v1",
+        tag_identity_hints: [...PRIVATE_LESSON_TAG_IDENTITY_HINTS].sort(),
+        tag_aliases: PRIVATE_LESSON_SAFE_TAG_ALIASES
+      },
+      rules: REPLACEMENTS.map(({ category, pattern, hold }) => ({
+        category,
+        pattern: pattern.source,
+        flags: pattern.flags,
+        hold
+      }))
+    })
+  );
+}
+function inspectPrivateLessonTag(value) {
+  const normalized = normalizePrivateLessonText(value).toLowerCase();
+  const aliased = PRIVATE_LESSON_SAFE_TAG_ALIASES[normalized] ?? normalized;
+  const redacted = redactPrivateLessonText(aliased);
+  const counts = { ...redacted.counts };
+  const held = /* @__PURE__ */ new Set([
+    ...redacted.held_reasons,
+    ...Object.keys(redacted.counts)
+  ]);
+  const identityHints = new Set(
+    aliased.split(/[-_]/u).filter((segment) => PRIVATE_LESSON_TAG_IDENTITY_HINTS.has(segment))
+  );
+  if (!privateLessonTagSyntaxSchema.safeParse(aliased).success || redacted.text !== aliased || identityHints.size >= 2) {
+    if (held.size === 0) {
+      counts.identifier = Math.min(999, (counts.identifier ?? 0) + 1);
+      held.add("identifier");
+    }
+    return {
+      tag: null,
+      counts,
+      held_reasons: [...held].sort()
+    };
+  }
+  return {
+    tag: aliased,
+    counts: {},
+    held_reasons: []
+  };
+}
+function pseudonymizeCorrelationId(value) {
+  const digest = hashValue(
+    canonicalJson({
+      domain: "remembrance-private-lesson-correlation-v1",
+      value: normalizePrivateLessonText(value)
+    })
+  ).slice("sha256:".length);
+  return `corr_${digest.slice(0, 48)}`;
+}
+var CURRENT_PRIVATE_LESSON_REDACTOR_DIGEST = computePrivateLessonRedactorDigest();
+var PRIVATE_LESSON_SUPPORTED_REDACTOR_PROFILES = Object.freeze({
+  [PRIVATE_LESSON_REDACTION_VERSION]: Object.freeze({
+    [CURRENT_PRIVATE_LESSON_REDACTOR_DIGEST]: Object.freeze({
+      version: PRIVATE_LESSON_REDACTION_VERSION,
+      digest: CURRENT_PRIVATE_LESSON_REDACTOR_DIGEST,
+      normalization: "unicode-nfc-lf-space-v1"
+    })
+  })
+});
+var privateLessonRedactionProfileErrorCodeSchema = external_exports.enum([
+  "unsupported_redaction_version",
+  "unsupported_redactor_digest"
+]);
+var PrivateLessonRedactionProfileError = class extends Error {
+  constructor(code) {
+    super(
+      code === "unsupported_redaction_version" ? "Private lesson redaction version is unsupported." : "Private lesson redactor digest is unsupported."
+    );
+    this.code = code;
+    this.name = "PrivateLessonRedactionProfileError";
+  }
+  code;
+};
+function privateLessonRedactorDigest() {
+  return CURRENT_PRIVATE_LESSON_REDACTOR_DIGEST;
+}
+function privateLessonRedactorProfile(version, digest) {
+  if (typeof version !== "string" || !PRIVATE_LESSON_SUPPORTED_REDACTION_VERSIONS.includes(
+    version
+  )) {
+    throw new PrivateLessonRedactionProfileError(
+      "unsupported_redaction_version"
+    );
+  }
+  if (typeof digest !== "string") {
+    throw new PrivateLessonRedactionProfileError("unsupported_redactor_digest");
+  }
+  const profile = PRIVATE_LESSON_SUPPORTED_REDACTOR_PROFILES[version]?.[digest];
+  if (!profile) {
+    throw new PrivateLessonRedactionProfileError("unsupported_redactor_digest");
+  }
+  return profile;
+}
+function canonicalPrivateLessonHoldEvent(input) {
+  return canonicalJson(privateLessonHoldEventPayloadSchema.parse(input));
+}
+function privateLessonHoldEventDigest(input) {
+  return hashValue(canonicalPrivateLessonHoldEvent(input));
+}
+function privateLessonPolicyDigest(input) {
+  return hashValue(
+    canonicalJson(privateLessonPolicyPayloadSchema.parse(input))
+  );
+}
+function privateLessonSignaturePayload(purpose, canonicalPayload) {
+  return canonicalJson({
+    domain: "remembrance-signature-v1",
+    purpose,
+    payload: canonicalPayload
+  });
+}
+function verifyPrivateLessonSignedEnvelope(args) {
+  if (args.kind !== "policy" && args.policyFloor !== void 0) {
+    throw new Error(
+      "A private lesson policy trust floor applies only to policies."
+    );
+  }
+  const profile = privateLessonSignedEnvelopeProfileFields(args.envelope);
+  if (profile.version !== void 0 || profile.digest !== void 0) {
+    privateLessonRedactorProfile(profile.version, profile.digest);
+  }
+  const schema = args.kind === "policy" ? signedPrivateLessonPolicySchema : args.kind === "receipt" ? signedPrivateLessonReceiptSchema : signedPrivateLessonHoldReceiptSchema;
+  const envelope = schema.parse(args.envelope);
+  const canonical = canonicalJson(envelope.payload);
+  if (canonical !== envelope.canonical_payload) {
+    throw new Error("Private lesson signed payload is not canonical.");
+  }
+  const keys = privateLessonVerificationKeySetSchema.parse(args.keySet);
+  const jwk = keys.keys.find((key) => key.kid === envelope.key_id);
+  if (!jwk) {
+    throw new Error(
+      `Private lesson verification key is unavailable: ${envelope.key_id}`
+    );
+  }
+  const purpose = args.kind === "policy" ? "remembrance-private-lesson-policy" : args.kind === "receipt" ? "remembrance-private-lesson-receipt" : "remembrance-private-lesson-hold-receipt";
+  const signatureValid = verify(
+    null,
+    Buffer.from(privateLessonSignaturePayload(purpose, canonical)),
+    createPublicKey({
+      key: { kty: "OKP", crv: "Ed25519", x: jwk.x },
+      format: "jwk"
+    }),
+    Buffer.from(envelope.signature, "base64url")
+  );
+  if (!signatureValid) {
+    throw new Error("Private lesson signature is invalid.");
+  }
+  if (args.kind === "policy") {
+    const policy = envelope;
+    privateLessonRedactorProfile(
+      policy.payload.redaction_version,
+      policy.payload.redactor_digest
+    );
+    const now = args.now ?? /* @__PURE__ */ new Date();
+    if (new Date(policy.payload.expires_at) <= now) {
+      throw new Error("Private lesson policy is expired.");
+    }
+    if (new Date(policy.payload.issued_at) > now) {
+      throw new Error("Private lesson policy is not active yet.");
+    }
+    if (args.policyFloor !== void 0) {
+      const floor = privateLessonPolicyTrustFloorSchema.parse(args.policyFloor);
+      if (policy.payload.organization_audience_hash !== floor.organization_audience_hash) {
+        throw new Error(
+          "Private lesson policy audience does not match the trusted organization."
+        );
+      }
+      if (policy.payload.policy_sequence < floor.policy_sequence) {
+        throw new Error("Private lesson policy is stale.");
+      }
+      if (policy.payload.policy_sequence === floor.policy_sequence && privateLessonPolicyDigest(policy.payload) !== floor.policy_digest) {
+        throw new Error(
+          "Private lesson policy conflicts with the trusted digest at the same sequence."
+        );
+      }
+    }
+  } else {
+    privateLessonRedactorProfile(
+      envelope.payload.redaction_version,
+      envelope.payload.redactor_digest
+    );
+  }
+  return envelope;
+}
+function privateLessonSignedEnvelopeProfileFields(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return { version: void 0, digest: void 0 };
+  }
+  const envelope = input;
+  if (!envelope.payload || typeof envelope.payload !== "object" || Array.isArray(envelope.payload)) {
+    return { version: void 0, digest: void 0 };
+  }
+  const payload = envelope.payload;
+  return {
+    version: payload.redaction_version,
+    digest: payload.redactor_digest
+  };
+}
+function assertPrivateLessonPayloadSize(canonicalPayload) {
+  if (Buffer.byteLength(canonicalPayload, "utf8") > PRIVATE_LESSON_MAX_PAYLOAD_BYTES) {
+    throw new Error(
+      `Private lesson payload exceeds ${PRIVATE_LESSON_MAX_PAYLOAD_BYTES} bytes.`
+    );
+  }
+}
+function assertNetworkSafeLessonText(value, ctx) {
+  const forbidden = [
+    [
+      ZERO_WIDTH_OR_BIDI,
+      "Unicode direction or zero-width controls are forbidden"
+    ],
+    [CODE_BLOCK, "Code blocks are forbidden"],
+    [STACK_TRACE, "Raw stack traces are forbidden"],
+    [SCREENSHOT, "Screenshot references are forbidden"],
+    [PUBLIC_URL, "URLs are forbidden"],
+    [CONNECTION_STRING, "Connection strings are forbidden"],
+    [COOKIE, "Cookies are forbidden"],
+    [EMAIL, "Emails are forbidden"],
+    [IP_ADDRESS, "IP addresses are forbidden"],
+    [INTERNAL_HOSTNAME, "Hostnames are forbidden"],
+    [HOSTNAME, "Hostnames are forbidden"],
+    [FILE_PATH, "File paths are forbidden"],
+    [IDENTIFIER, "Private identifiers are forbidden"],
+    [JWT, "JWTs are forbidden"],
+    [CREDENTIAL, "Credentials are forbidden"],
+    [SECRET, "Secrets are forbidden"],
+    [SHORT_PADDED_BASE64, "Encoded or high-entropy values are forbidden"],
+    [SHORT_MIXED_OPAQUE, "Encoded or high-entropy values are forbidden"],
+    [SHORT_CONTEXTUAL_CREDENTIAL, "Credentials are forbidden"],
+    [HIGH_ENTROPY, "Encoded or high-entropy values are forbidden"]
+  ];
+  for (const [pattern, message] of forbidden) {
+    pattern.lastIndex = 0;
+    if (pattern.test(value)) {
+      ctx.addIssue({ code: external_exports.ZodIssueCode.custom, message });
+    }
+  }
+}
+
 // ../core/src/remembrance-mcp-policy.ts
 var REMEMBRANCE_MCP_READ_TOOLS = [
   "get_connection_status",
@@ -5574,6 +6348,7 @@ var REMEMBRANCE_MCP_READ_TOOLS = [
   "list_skills",
   "invoke_skill",
   "get_effective_preferences",
+  "get_private_lesson_policy",
   "get_skill",
   "get_resource",
   "get_value_proof"
@@ -5589,7 +6364,8 @@ var REMEMBRANCE_MCP_PRIVATE_CONTRIBUTION_TOOLS = [
   "propose_private_skill",
   "submit_suggestion",
   "record_preference",
-  "link_current_installation"
+  "link_current_installation",
+  "submit_private_lesson_candidate"
 ];
 var REMEMBRANCE_MCP_OPTIONAL_SHARED_CONTRIBUTION_TOOLS = [
   "propose_skill_idea",
@@ -5600,7 +6376,11 @@ var REMEMBRANCE_MCP_OPTIONAL_SHARED_CONTRIBUTION_TOOLS = [
 ];
 var REMEMBRANCE_MCP_LOCAL_ONLY_TOOLS = [
   "bootstrap_agent_identity",
-  "queue_private_skill_import"
+  "queue_private_skill_import",
+  "prepare_private_lesson_candidate",
+  "inspect_private_lesson_outbox",
+  "retry_private_lesson_candidate",
+  "delete_private_lesson_candidate"
 ];
 var REMEMBRANCE_MCP_RECOMMENDED_ORG_TOOLS = [
   ...REMEMBRANCE_MCP_READ_TOOLS,
@@ -6529,12 +7309,36 @@ var verifyRequestSchema = external_exports.object({
 });
 var attestationChallengeRequestSchema = external_exports.object({
   provider: attestationProviderSchema.exclude(["org_api_key"]),
-  source_type: external_exports.enum(["remembrance", "resource_review"]),
+  source_type: external_exports.enum(["remembrance", "resource_review", "private_lesson"]),
   agent_id: boundedString(MAX_SHORT_TEXT_LENGTH).optional(),
   subject: boundedString(MAX_SHORT_TEXT_LENGTH).optional(),
   skill_slug: boundedString(MAX_SHORT_TEXT_LENGTH).optional(),
   resource_slug: boundedString(MAX_SHORT_TEXT_LENGTH).optional(),
   evidence_hash: boundedString(MAX_SHORT_TEXT_LENGTH),
+  private_lesson: external_exports.object({
+    key_id: boundedString(MAX_SHORT_TEXT_LENGTH),
+    record_type: external_exports.enum(["candidate", "held_safety_event"]).optional(),
+    organization_audience_hash: external_exports.string().regex(/^sha256:[a-f0-9]{64}$/),
+    payload_digest: external_exports.string().regex(/^sha256:[a-f0-9]{64}$/).optional(),
+    event_digest: external_exports.string().regex(/^sha256:[a-f0-9]{64}$/).optional(),
+    policy_digest: external_exports.string().regex(/^sha256:[a-f0-9]{64}$/),
+    redactor_digest: external_exports.string().regex(/^sha256:[a-f0-9]{64}$/)
+  }).strict().superRefine((binding, ctx) => {
+    if ((binding.record_type ?? "candidate") === "candidate" && (!binding.payload_digest || binding.event_digest)) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        message: "candidate binding requires only payload_digest",
+        path: ["payload_digest"]
+      });
+    }
+    if (binding.record_type === "held_safety_event" && (!binding.event_digest || binding.payload_digest)) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        message: "held_safety_event binding requires only event_digest",
+        path: ["event_digest"]
+      });
+    }
+  }).optional(),
   expires_in_seconds: external_exports.number().int().min(30).max(600).default(300)
 }).superRefine((value, ctx) => {
   if (!value.agent_id) {
@@ -6556,6 +7360,20 @@ var attestationChallengeRequestSchema = external_exports.object({
       code: external_exports.ZodIssueCode.custom,
       message: "resource_slug is required for resource review attestations",
       path: ["resource_slug"]
+    });
+  }
+  if (value.source_type === "private_lesson" && !value.private_lesson) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "private_lesson binding is required for private lesson attestations",
+      path: ["private_lesson"]
+    });
+  }
+  if (value.source_type !== "private_lesson" && value.private_lesson !== void 0) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "private_lesson binding is only valid for private lesson attestations",
+      path: ["private_lesson"]
     });
   }
 });
@@ -6766,7 +7584,7 @@ var seedSkills = [
     summary: "Operational setup and troubleshooting workflow for Remembrance across Claude Code, Codex, OpenClaw, Cursor, Gemini, MCP, REST, skill-only installs, enterprise keys, and local agent identity.",
     status: "active",
     visibility: "public",
-    version: "0.1.19",
+    version: "0.1.23",
     domains: ["agent-skills", "mcp", "resource-discovery"],
     tags: [
       "remembrance",
@@ -6817,7 +7635,7 @@ var seedSkills = [
         "gemini",
         "rest"
       ],
-      version: "0.1.19",
+      version: "0.1.23",
       status: "active",
       visibility: "public",
       providers: ["codex", "claude", "cursor", "openclaw", "generic"],
@@ -7154,6 +7972,68 @@ read the shared file and must receive its own request credential. Only that
 manual override needs a process environment or HTTP header credential. A Codex
 tenant/privacy-policy denial is enforced by Codex before the request reaches
 Remembrance; do not classify it as a Remembrance rejection.
+
+### Organization-private lesson autopilot
+
+Routine organization lessons use one narrow, reviewable write instead of a
+broad remembrance payload. The local plugin first calls
+\`prepare_private_lesson_candidate\`. That tool generalizes, canonicalizes, and
+redacts a failure, correction, or reusable workflow lesson in memory; encrypts
+only the canonical safe record in a local outbox; and returns a draft ID. It
+never writes the original input to disk, logs, telemetry, or error output. Tags
+use an open, bounded lowercase slug vocabulary; new technical terms survive,
+while malformed or privacy-sensitive tags hold the draft instead of being
+silently removed.
+
+The plugin then calls \`submit_private_lesson_candidate\` with that draft ID.
+This is the only host-visible network action in the flow. Approve or persist
+approval for this exact action, not every Remembrance write. The server derives
+the organization and private visibility from the authenticated key, verifies a
+signed organization policy plus purpose-bound attestation, and returns a signed
+content-free receipt. The endpoint can never create or automatically propagate
+public content.
+
+If the host denies the action, no candidate content was sent. The encrypted
+draft remains on the device in \`awaiting_authorization\`; do not retry it
+through REST, hosted MCP, or another transport. Timeouts, 429s, and 5xx
+responses retry with bounded backoff during later plugin lifecycles. A 401,
+403, policy change, or validation failure remains held for explicit repair.
+Drafts never expire or auto-delete. Inspect, retry, or explicitly delete one
+with the local private-lesson tools; deletion requires confirmation.
+
+The signed organization policy pins \`private-lesson-redaction-v2\` and its exact
+supported redactor digest. If either is unsupported, the finalized
+\`private-lesson-outbox-v1\` record moves to terminal \`superseded_redactor\`.
+Terminal drafts are never retried, re-redacted, expired, or automatically
+deleted, and they continue to count toward the 64 MiB outbox ceiling. Outbox
+inspection and the connection doctor report terminal count, retained bytes,
+reason, and explicit deletion guidance without returning lesson content or a
+local path.
+
+When health reporting is enabled, a held draft may submit a content-free
+\`held_safety_event\` through the same exact action. It contains only the event
+type, held category counts, contract/redactor profile, event and policy
+digests, idempotency key, and a purpose-bound attestation. It never contains
+lesson prose, conditions, tags, correlations, evidence hashes, a candidate
+digest, paths, or draft content. Hold telemetry cannot enter verification,
+review, topology, propagation, or skill materialization. Set
+\`REMEMBRANCE_HEALTH_REPORTING=0\` to disable this optional report without
+affecting queries or retained drafts; the organization kill switch disables
+the entire private-lesson lane.
+
+Structured metadata and bounded redacted prose are enabled by default for an
+authenticated organization. Raw traces, code blocks, URLs, attachments,
+secrets, paths, identifiers, screenshots, encoded/high-entropy content, and
+ambiguous material remain local. Rich content cannot be sent merely because a
+user confirms it; first generalize it into the safe schema. Organization admins
+can pause the lane or select metadata-only capture under **Dashboard > Settings
+> Private lesson automation**.
+
+Hosted-only MCP and REST clients report \`auto_capture_supported: false\`
+because they cannot guarantee durable local retention. They must implement the
+same two-stage boundary locally: canonicalize and durably retain the safe draft,
+then invoke only \`POST /api/v1/agent/private-lessons\`. Querying and the main
+agent task remain available when capture or submission is blocked.
 
 ### Approve private repository contributions in managed Codex
 
@@ -8198,8 +9078,8 @@ POST https://remembrance.dev/api/v1/resources/reviews
 
 // ../core/src/skill-value.ts
 import {
-  createPublicKey,
-  verify
+  createPublicKey as createPublicKey2,
+  verify as verify2
 } from "node:crypto";
 var tokenSavingsRangeSchema = external_exports.object({
   low: external_exports.number().int(),
@@ -8340,10 +9220,10 @@ function verifySignedValueProof(proofInput, keySetInput, now = /* @__PURE__ */ n
       "malformed"
     );
   }
-  const verified = verify(
+  const verified = verify2(
     null,
     Buffer.from(canonicalJson(proof.payload)),
-    createPublicKey({
+    createPublicKey2({
       key: { kty: "OKP", crv: "Ed25519", x: jwk.x },
       format: "jwk"
     }),
@@ -8494,9 +9374,9 @@ var verifierOutputSchema = external_exports.object({
 });
 
 // src/server.ts
-import { existsSync as existsSync3 } from "node:fs";
-import { mkdir as mkdir2, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname2 } from "node:path";
+import { existsSync as existsSync5 } from "node:fs";
+import { mkdir as mkdir3, writeFile as writeFile2 } from "node:fs/promises";
+import { dirname as dirname3 } from "node:path";
 import {
   createHash as createHash3,
   createHmac,
@@ -9798,6 +10678,24 @@ var getBySlugSchema = external_exports.object({
 var getValueProofSchema = external_exports.object({
   id: external_exports.string().min(1).describe("Value proof id returned with potential_savings.")
 });
+var privateLessonDraftReferenceSchema = external_exports.object({
+  draft_id: external_exports.string().regex(/^pld_[A-Za-z0-9_-]{8,96}$/).describe(
+    "Local private-lesson draft returned by prepare_private_lesson_candidate."
+  )
+}).strict();
+var privateLessonInspectSchema = external_exports.object({
+  draft_id: external_exports.string().regex(/^pld_[A-Za-z0-9_-]{8,96}$/).optional(),
+  limit: external_exports.number().int().min(1).max(200).default(50)
+}).strict();
+var privateLessonDeleteSchema = privateLessonDraftReferenceSchema.extend({
+  confirm: external_exports.literal(true).describe(
+    "Must be true. Deletion is explicit and leaves a content-free tombstone."
+  )
+});
+var privateLessonSubmissionToolSchema = external_exports.union([
+  privateLessonDraftReferenceSchema,
+  privateLessonEndpointSubmissionSchema
+]);
 var bootstrapAgentIdentitySchema = external_exports.object({
   subject: external_exports.string().min(1).optional().describe(
     "Optional stable agent identity. Omit it to generate a private opaque subject from the new public-key fingerprint."
@@ -9868,8 +10766,15 @@ var toolDefinitions = [
     effectivePreferencesRequestSchema
   ),
   tool(
+    "get_private_lesson_policy",
+    "Fetch and cryptographically verify the authenticated organization's signed private-lesson automation policy. The server response never exposes an organization id and public_fallback is always false. The local MCP augments this with secure outbox readiness; hosted-only clients report auto_capture_supported=false.",
+    "/api/v1/agent/private-lesson-policy",
+    external_exports.object({}).strict(),
+    "GET"
+  ),
+  tool(
     "record_preference",
-    "Record a bounded, privacy-safe preference observation for the current verified installation. Built-in settings need only key and value; a custom setting also supplies its plain-language label, behavior, presentation/workflow/strategy_selection effect, prefer/avoid direction, and definition version. Send normalized settings and hashes only, never prompt text. A valid principal session is required. Explicit user preferences apply immediately; inferred observations activate only after Remembrance's consistency and confidence thresholds are met.",
+    "Record a bounded, privacy-safe preference observation for the current verified installation. Built-in settings need only key and value; a custom setting also supplies its plain-language label, behavior, presentation/workflow/strategy_selection effect, prefer/avoid direction, and definition version. Send normalized settings and hashes only, never prompt text. A valid principal session is required. An explicit instruction governs the current task immediately. Known built-ins activate durably at once; custom settings remain pending until automatic normalization and validation approves them. Inferred observations activate only after Remembrance's consistency and confidence thresholds are met.",
     "/api/v1/agent/preferences",
     recordPreferenceRequestSchema
   ),
@@ -9911,6 +10816,36 @@ var toolDefinitions = [
     "queue_private_skill_import",
     organizationSkillHandoffRequestSchema
   ),
+  localTool(
+    "prepare_private_lesson_candidate",
+    "Locally canonicalize, redact, validate, encrypt, and durably queue one compact organization-private failure, correction, or evidence lesson. This is an evidence lane, not a complete-skill transport: use propose_private_skill or propose_skill_idea for a complete reusable procedure, playbook, or actionable instructions. Tags use an open, bounded lowercase slug vocabulary; malformed or privacy-sensitive tags hold the draft instead of being dropped. Pre-redaction input remains memory-only and this tool performs no network request. The result returns a draft handle and never echoes lesson prose. Follow the returned next_action with submit_private_lesson_candidate; held_safety content remains local. An unsupported redactor version or digest becomes terminal superseded_redactor and is never retried or re-redacted.",
+    "prepare_private_lesson_candidate",
+    privateLessonPreparationInputSchema
+  ),
+  localTool(
+    "inspect_private_lesson_outbox",
+    "Inspect content-free state, retained bytes, terminal reasons, deletion guidance, and retry metadata for encrypted local private-lesson drafts. This never returns lesson prose or canonical payload bytes. Terminal drafts remain retained and count toward the safety ceiling until explicitly deleted.",
+    "inspect_private_lesson_outbox",
+    privateLessonInspectSchema
+  ),
+  tool(
+    "submit_private_lesson_candidate",
+    "Submit exactly one canonical, challenge-attested organization-private lesson candidate or one content-free held-safety telemetry event. Local plugin clients normally pass only the draft_id returned by prepare_private_lesson_candidate; raw or hosted clients pass the strict candidate-or-hold union. The action can never create or automatically promote public content. Held telemetry contains no lesson prose and can never enter verification, review, topology, or skill materialization. Exact replay is idempotent; host denial leaves the local draft untouched.",
+    "/api/v1/agent/private-lessons",
+    privateLessonSubmissionToolSchema
+  ),
+  localTool(
+    "retry_private_lesson_candidate",
+    "Explicitly retry one retained private-lesson draft after authorization, policy, or transient service issues are resolved. It uses the same exact private submission action and never falls back to a public or alternate transport.",
+    "retry_private_lesson_candidate",
+    privateLessonDraftReferenceSchema
+  ),
+  localTool(
+    "delete_private_lesson_candidate",
+    "Explicitly delete one selected local private-lesson draft. confirm=true is required. No automatic cleanup exists, and deletion leaves only a content-free tombstone.",
+    "delete_private_lesson_candidate",
+    privateLessonDeleteSchema
+  ),
   tool(
     "submit_feedback",
     "Submit minimal post-use skill feedback. When the skill came from query_skills, pass its query_id and result_id to close the surfaced-to-use funnel. If the response includes next_step.submit_remembrance_payload, call submit_remembrance to promote substantive feedback to rich evidence. For self-corrections or CI/deploy/release misses, use submit_remembrance with type failure_report.",
@@ -9944,13 +10879,13 @@ var toolDefinitions = [
   ),
   tool(
     "propose_skill_idea",
-    "Propose a missing reusable skill when query_skills has no useful result. THIS TOOL'S VISIBILITY IS NOT FIXED: an active organization API key keeps the candidate inside that organization's review queue, while intentionally calling without a key creates a PUBLIC candidate. A supplied invalid/inactive key fails with 401 and a valid key without submission:create fails with 403; neither failure creates a candidate. Prefer propose_private_skill for anything repository-derived, organization-specific, or otherwise not intended for the public registry because that endpoint structurally requires organization auth. Use propose_skill_idea only when a public candidate is an acceptable outcome. Check `visibility` (organization_private or public_candidate) and `owner_scope` in the successful response, and report where the candidate landed. Never remove or bypass an organization key to force public submission: submit privately, then use the reviewed public-propagation flow. Send repository-derived private instructions only when Remembrance is an organization-approved destination. If host policy blocks the export, report that nothing was sent, do not retry, and do not create a handoff unless an organization admin explicitly requests one.",
+    "Propose a complete missing reusable skill when query_skills has no useful result. This full skill lane retains bounded markdown, public citations, snippets, metadata, and actionable instructions through normal safety and review; do not compress a finished skill into the narrow private-lesson contract. THIS TOOL'S VISIBILITY IS NOT FIXED: an active organization API key keeps the candidate inside that organization's review queue, while intentionally calling without a key creates a PUBLIC candidate. A supplied invalid/inactive key fails with 401 and a valid key without submission:create fails with 403; neither failure creates a candidate. Prefer propose_private_skill for anything repository-derived, organization-specific, or otherwise not intended for the public registry because that endpoint structurally requires organization auth. Use propose_skill_idea only when a public candidate is an acceptable outcome. Check `visibility` (organization_private or public_candidate) and `owner_scope` in the successful response, and report where the candidate landed. Never remove or bypass an organization key to force public submission: submit privately, then use the reviewed public-propagation flow. Send repository-derived private instructions only when Remembrance is an organization-approved destination. If host policy blocks the export, report that nothing was sent, do not retry, and do not create a handoff unless an organization admin explicitly requests one.",
     "/api/v1/agent/skill-ideas",
     skillIdeaRequestSchema
   ),
   tool(
     "propose_private_skill",
-    "Submit a proposed skill only to the authenticated organization's private review queue. Privacy here is STRUCTURAL, not credential-dependent: this endpoint rejects anonymous use and never creates a public candidate, so unlike propose_skill_idea it cannot silently fall through to public when a key fails to resolve \u2014 it fails closed with 401/403 instead. Prefer it whenever the content is repository-derived, organization-specific, or must not reach the public registry; that preference is about removing the credential from the privacy decision, not about propose_skill_idea being unsafe when a key is present. Use it for repository-derived instructions only when Remembrance is an organization-approved destination. The response reports `visibility` (always organization_private here) \u2014 a rejection means nothing was submitted. If host policy blocks the export, report that nothing was sent, never retry through another transport, and do not create a handoff unless an organization admin explicitly requests one.",
+    "Submit a complete proposed skill only to the authenticated organization's private review queue. This full skill lane retains bounded markdown, public citations, snippets, metadata, and actionable instructions through normal safety and review; do not compress a finished skill into the narrow private-lesson contract. Privacy here is STRUCTURAL, not credential-dependent: this endpoint rejects anonymous use and never creates a public candidate, so unlike propose_skill_idea it cannot silently fall through to public when a key fails to resolve \u2014 it fails closed with 401/403 instead. Prefer it whenever the content is repository-derived, organization-specific, or must not reach the public registry; that preference is about removing the credential from the privacy decision, not about propose_skill_idea being unsafe when a key is present. Use it for repository-derived instructions only when Remembrance is an organization-approved destination. The response reports `visibility` (always organization_private here) \u2014 a rejection means nothing was submitted. If host policy blocks the export, report that nothing was sent, never retry through another transport, and do not create a handoff unless an organization admin explicitly requests one.",
     "/api/v1/agent/private-skill-ideas",
     skillIdeaRequestSchema
   ),
@@ -10007,13 +10942,13 @@ function localTool(name, description, local, schema) {
   };
 }
 function annotationsForTool(name) {
-  const readOnly = name === "list_skills" || name === "get_effective_preferences" || name === "get_value_proof" || name === "run_connection_doctor";
+  const readOnly = name === "list_skills" || name === "get_effective_preferences" || name === "get_value_proof" || name === "run_connection_doctor" || name === "get_private_lesson_policy" || name === "inspect_private_lesson_outbox";
   const openWorld = name === "submit_feedback" || name === "submit_remembrance" || name === "propose_skill_idea" || name === "submit_suggestion" || name === "submit_resource" || name === "submit_resource_review";
   return {
     readOnlyHint: readOnly,
     openWorldHint: openWorld,
-    destructiveHint: false,
-    ...readOnly || name === "queue_private_skill_import" ? { idempotentHint: true } : {}
+    destructiveHint: name === "delete_private_lesson_candidate",
+    ...readOnly || name === "queue_private_skill_import" || name === "submit_private_lesson_candidate" || name === "retry_private_lesson_candidate" ? { idempotentHint: true } : {}
   };
 }
 function inputSchemaFor(schema, name) {
@@ -10022,7 +10957,29 @@ function inputSchemaFor(schema, name) {
     $refStrategy: "none"
   });
   const definitions = converted.definitions;
-  return definitions?.[name] ?? converted;
+  const resolved = definitions?.[name] ?? converted;
+  if (name === "submit_private_lesson_candidate") {
+    const alternatives = Array.isArray(resolved.anyOf) ? resolved.anyOf : [];
+    const properties = collectUnionProperties(resolved);
+    return {
+      type: "object",
+      properties,
+      additionalProperties: false,
+      anyOf: alternatives
+    };
+  }
+  return resolved.type === "object" ? resolved : { type: "object", ...resolved };
+}
+function collectUnionProperties(schema) {
+  const own = schema.properties && typeof schema.properties === "object" ? schema.properties : {};
+  const alternatives = Array.isArray(schema.anyOf) ? schema.anyOf : [];
+  return Object.assign(
+    {},
+    own,
+    ...alternatives.map(
+      (alternative) => alternative && typeof alternative === "object" ? collectUnionProperties(alternative) : {}
+    )
+  );
 }
 
 // src/private-skill-handoff.ts
@@ -10092,7 +11049,7 @@ import { homedir as homedir3 } from "node:os";
 import { join as join3 } from "node:path";
 
 // src/local-agent-identity.ts
-import { createPrivateKey, createPublicKey as createPublicKey2 } from "node:crypto";
+import { createPrivateKey, createPublicKey as createPublicKey3 } from "node:crypto";
 import { existsSync } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join2 } from "node:path";
@@ -10249,11 +11206,11 @@ function parseStoredIdentity(value) {
   }
   if (!Number.isFinite(Date.parse(value.created_at))) return null;
   try {
-    const publicDer = createPublicKey2(value.public_key).export({
+    const publicDer = createPublicKey3(value.public_key).export({
       type: "spki",
       format: "der"
     });
-    const derivedPublicDer = createPublicKey2(
+    const derivedPublicDer = createPublicKey3(
       createPrivateKey(value.private_key)
     ).export({ type: "spki", format: "der" });
     if (!publicDer.equals(derivedPublicDer)) return null;
@@ -10454,7 +11411,7 @@ function resolveApiAccess(env = process.env, fileSystem = nodeFileSystem2) {
   return {
     configuration,
     credential,
-    memberLinkToken: env.REMEMBRANCE_MEMBER_LINK_TOKEN?.trim() ?? shared.config.memberLinkToken ?? ""
+    memberLinkToken: env.REMEMBRANCE_MEMBER_LINK_TOKEN?.trim() || shared.config.memberLinkToken || ""
   };
 }
 function isUnusableCredentialSource(source) {
@@ -10737,7 +11694,9 @@ function localPluginLifecycleHealth(options) {
       ]
     };
   }
-  const genericEntry = markerEntries.find((entry) => entry.path === genericPath);
+  const genericEntry = markerEntries.find(
+    (entry) => entry.path === genericPath
+  );
   const currentSessionStartMs = genericEntry?.sessionStartMs;
   const currentSessionEntries = typeof currentSessionStartMs === "number" ? markerEntries.filter(
     (entry) => entry.sessionStartMs >= currentSessionStartMs
@@ -11119,10 +12078,1026 @@ async function checkClientUpdate(input) {
   return status.status === "unavailable" ? null : status;
 }
 
+// src/private-lesson-outbox.ts
+import { createCipheriv, createDecipheriv, randomBytes as randomBytes2 } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  chmod as chmod2,
+  lstat,
+  mkdir as mkdir2,
+  open,
+  readdir,
+  rename,
+  unlink
+} from "node:fs/promises";
+import { existsSync as existsSync4 } from "node:fs";
+import { homedir as homedir4 } from "node:os";
+import { dirname as dirname2, join as join4 } from "node:path";
+
+// src/private-lesson-keychain.ts
+import { randomBytes } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { existsSync as existsSync3 } from "node:fs";
+var KEYCHAIN_SERVICE = "dev.remembrance.private-lessons";
+var defaultDependencies = {
+  platform: process.platform,
+  securityExists: existsSync3("/usr/bin/security"),
+  execFile: execFileSync,
+  randomKey: null,
+  uid: typeof process.getuid === "function" ? process.getuid() : null
+};
+function readPrivateLessonKeychainKey(env, dependencies = defaultDependencies) {
+  if (!keychainEnabled(env, dependencies)) return null;
+  try {
+    return decodeKey(
+      String(
+        dependencies.execFile(
+          "/usr/bin/security",
+          [
+            "find-generic-password",
+            "-s",
+            KEYCHAIN_SERVICE,
+            "-a",
+            keychainAccount(dependencies),
+            "-w"
+          ],
+          {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "ignore"],
+            timeout: 2e3
+          }
+        )
+      ).trim()
+    );
+  } catch {
+    return null;
+  }
+}
+function resolvePrivateLessonKeychainKey(env, dependencies = defaultDependencies) {
+  if (!keychainEnabled(env, dependencies)) return null;
+  const existing = readPrivateLessonKeychainKey(env, dependencies);
+  if (existing) return existing;
+  const encoded = dependencies.randomKey ?? randomBytes(32).toString("base64url");
+  const generated = decodeKey(encoded);
+  if (!generated) return null;
+  try {
+    dependencies.execFile(
+      "/usr/bin/security",
+      [
+        "add-generic-password",
+        "-s",
+        KEYCHAIN_SERVICE,
+        "-a",
+        keychainAccount(dependencies),
+        "-w",
+        encoded
+      ],
+      { stdio: "ignore", timeout: 2e3 }
+    );
+    return generated;
+  } catch {
+    return readPrivateLessonKeychainKey(env, dependencies);
+  }
+}
+function keychainEnabled(env, dependencies) {
+  return !(env.NODE_ENV === "test" || /^(0|false|no)$/i.test(env.REMEMBRANCE_PRIVATE_LESSON_KEYCHAIN ?? "") || dependencies.platform !== "darwin" || !dependencies.securityExists);
+}
+function keychainAccount(dependencies) {
+  return `uid-${dependencies.uid ?? "user"}`;
+}
+function decodeKey(encoded) {
+  const key = Buffer.from(encoded, "base64url");
+  return key.length === 32 ? key : null;
+}
+
+// src/private-lesson-outbox.ts
+var PRIVATE_LESSON_OUTBOX_VERSION = "private-lesson-outbox-v1";
+var PRIVATE_LESSON_OUTBOX_MAX_BYTES = 64 * 1024 * 1024;
+var PRIVATE_LESSON_OUTBOX_MIN_BYTES = 1024 * 1024;
+var PRIVATE_LESSON_OUTBOX_MAX_CONFIGURED_BYTES = 1024 * 1024 * 1024;
+var PRIVATE_LESSON_DRAFT_MAX_BYTES = 64 * 1024;
+var PRIVATE_LESSON_OUTBOX_LOCK_STALE_MS = 3e4;
+var PRIVATE_LESSON_OUTBOX_LOCK_WAIT_MS = 5e3;
+var privateLessonOutboxLockContext = new AsyncLocalStorage();
+var PrivateLessonPolicyFloorError = class extends Error {
+  constructor(message, code) {
+    super(message);
+    this.code = code;
+    this.name = "PrivateLessonPolicyFloorError";
+  }
+  code;
+};
+async function queuePreparedPrivateLesson(prepared, policy, options = {}) {
+  const now = options.now ?? /* @__PURE__ */ new Date();
+  const outbox = await readyOutbox(options);
+  const summary = await privateLessonOutboxSummary({
+    ...options,
+    outboxDirectory: outbox.directory,
+    encryption: outbox.encryption
+  });
+  if (summary.paused_at_ceiling) {
+    throw new Error(
+      "Private lesson capture is paused because the local 64 MiB outbox safety ceiling was reached."
+    );
+  }
+  const draftId = createPublicId("pld");
+  const createdAt = now.toISOString();
+  const state = prepared.status === "held_safety" ? "held_safety" : policy ? "ready" : "awaiting_authorization";
+  const draft = {
+    version: PRIVATE_LESSON_OUTBOX_VERSION,
+    draft_id: draftId,
+    state,
+    candidate: prepared.candidate,
+    canonical_payload: prepared.canonical_payload,
+    payload_digest: prepared.payload_digest,
+    redaction_version: prepared.candidate.redaction_version,
+    redactor_digest: prepared.redactor_digest,
+    held_reasons: prepared.held_reasons,
+    policy,
+    idempotency_key: `private-lesson-${hashValue(
+      canonicalJson({
+        draft_id: draftId,
+        payload_digest: prepared.payload_digest
+      })
+    ).replace(/^sha256:/, "")}`,
+    attempts: 0,
+    next_retry_at: null,
+    last_error_code: null,
+    created_at: createdAt,
+    updated_at: createdAt,
+    submitted_at: null,
+    receipt_digest: null,
+    terminal_reason: null,
+    hold_telemetry_status: prepared.status === "held_safety" ? "pending" : "not_required",
+    hold_event_digest: null,
+    hold_receipt_digest: null,
+    hold_reported_at: null
+  };
+  await writeDraft(draft, outbox, false, summary.total_bytes);
+  return draft;
+}
+async function readPrivateLessonDraft(draftId, options = {}) {
+  assertDraftId(draftId);
+  const outbox = await readyOutbox(options);
+  return withPrivateLessonOutboxLock(outbox.directory, async () => {
+    if (existsSync4(tombstonePath(outbox.directory, draftId))) {
+      throw new Error("Private lesson draft was explicitly deleted.");
+    }
+    const path = draftPath(outbox.directory, draftId);
+    await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
+    const serialized = await readBoundedFile(
+      path,
+      PRIVATE_LESSON_DRAFT_MAX_BYTES
+    );
+    const envelope = parseEnvelope(serialized, draftId);
+    const draft = decryptDraft(envelope, outbox.encryption, true);
+    const reconciled = terminalizeUnsupportedProfile(
+      draft,
+      options.now ?? /* @__PURE__ */ new Date()
+    );
+    if (reconciled !== draft) {
+      await writeDraft(reconciled, outbox, true, void 0, true);
+    }
+    return reconciled;
+  });
+}
+async function reconcilePrivateLessonOutboxProfiles(options = {}) {
+  const outbox = await readyOutbox(options);
+  return withPrivateLessonOutboxLock(outbox.directory, async () => {
+    await reconcileExplicitDeletionTombstones(outbox.directory);
+    const entries = await secureOutboxEntries(outbox.directory);
+    let inspected = 0;
+    let terminalized = 0;
+    for (const name of entries.filter(
+      (entry) => entry.endsWith(".lesson.json")
+    )) {
+      const draftId = name.slice(0, -".lesson.json".length);
+      const before = parseEnvelope(
+        await readBoundedFile(
+          draftPath(outbox.directory, draftId),
+          PRIVATE_LESSON_DRAFT_MAX_BYTES
+        ),
+        draftId
+      ).state;
+      const draft = await readPrivateLessonDraft(draftId, {
+        ...options,
+        outboxDirectory: outbox.directory,
+        encryption: outbox.encryption
+      });
+      inspected += 1;
+      if (before !== "superseded_redactor" && draft.state === "superseded_redactor") {
+        terminalized += 1;
+      }
+    }
+    return { inspected, terminalized };
+  });
+}
+async function listPrivateLessonDrafts(options = {}) {
+  const outbox = await readyOutbox(options);
+  await reconcilePrivateLessonOutboxProfiles({
+    ...options,
+    outboxDirectory: outbox.directory,
+    encryption: outbox.encryption
+  });
+  const entries = await secureOutboxEntries(outbox.directory);
+  const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
+  const drafts = [];
+  for (const name of entries.filter((item) => item.endsWith(".lesson.json"))) {
+    if (drafts.length >= limit) break;
+    const draft = await readPrivateLessonDraft(
+      name.slice(0, -".lesson.json".length),
+      {
+        ...options,
+        outboxDirectory: outbox.directory,
+        encryption: outbox.encryption
+      }
+    );
+    drafts.push({
+      draft_id: draft.draft_id,
+      state: draft.state,
+      payload_digest: draft.payload_digest,
+      attempts: draft.attempts,
+      next_retry_at: draft.next_retry_at,
+      last_error_code: draft.last_error_code,
+      created_at: draft.created_at,
+      updated_at: draft.updated_at,
+      submitted_at: draft.submitted_at,
+      terminal_reason: draft.terminal_reason,
+      hold_telemetry_status: draft.hold_telemetry_status,
+      hold_event_digest: draft.hold_event_digest,
+      hold_reported_at: draft.hold_reported_at
+    });
+  }
+  return drafts.sort(
+    (left, right) => right.updated_at.localeCompare(left.updated_at)
+  );
+}
+async function updatePrivateLessonDraft(draftId, update, options = {}) {
+  const outbox = await readyOutbox(options);
+  return withPrivateLessonOutboxLock(outbox.directory, async () => {
+    const current = await readPrivateLessonDraft(draftId, {
+      ...options,
+      outboxDirectory: outbox.directory,
+      encryption: outbox.encryption
+    });
+    const next = validateDraft(update(structuredClone(current)));
+    if (next.draft_id !== current.draft_id || next.payload_digest !== current.payload_digest || next.canonical_payload !== current.canonical_payload || next.redaction_version !== current.redaction_version || next.redactor_digest !== current.redactor_digest || next.idempotency_key !== current.idempotency_key) {
+      throw new Error("Private lesson draft content is immutable.");
+    }
+    next.updated_at = (options.now ?? /* @__PURE__ */ new Date()).toISOString();
+    await writeDraft(next, outbox, true);
+    return next;
+  });
+}
+async function deletePrivateLessonDraft(draftId, confirmed, options = {}) {
+  if (!confirmed) {
+    throw new Error(
+      "Explicit confirmation is required to delete a private lesson draft."
+    );
+  }
+  assertDraftId(draftId);
+  const outbox = await readyOutbox(options);
+  return withPrivateLessonOutboxLock(outbox.directory, async () => {
+    const path = draftPath(outbox.directory, draftId);
+    await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
+    const tombstone = {
+      version: "private-lesson-outbox-deletion-v1",
+      draft_id: draftId,
+      deleted_at: (options.now ?? /* @__PURE__ */ new Date()).toISOString(),
+      reason: "explicit_confirmed_deletion"
+    };
+    await atomicWritePrivate(
+      tombstonePath(outbox.directory, draftId),
+      `${JSON.stringify(tombstone)}
+`
+    );
+    await unlink(path);
+    await syncDirectory(outbox.directory);
+    return tombstone;
+  });
+}
+async function privateLessonOutboxSummary(options = {}) {
+  const outbox = await readyOutbox(options);
+  await reconcilePrivateLessonOutboxProfiles({
+    ...options,
+    outboxDirectory: outbox.directory,
+    encryption: outbox.encryption
+  });
+  const entries = await secureOutboxEntries(outbox.directory);
+  const counts = {
+    ready: 0,
+    awaiting_authorization: 0,
+    retry_scheduled: 0,
+    held_safety: 0,
+    submitted: 0,
+    superseded_redactor: 0
+  };
+  let totalBytes = 0;
+  let deletionTombstones = 0;
+  let terminalBytes = 0;
+  const terminalReasons = {};
+  for (const name of entries) {
+    const path = join4(outbox.directory, name);
+    const metadata = await lstat(path);
+    totalBytes += metadata.size;
+    if (name.endsWith(".deleted.json")) {
+      deletionTombstones += 1;
+      continue;
+    }
+    if (!name.endsWith(".lesson.json")) continue;
+    const envelope = parseEnvelope(
+      await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES),
+      name.slice(0, -".lesson.json".length)
+    );
+    counts[envelope.state] += 1;
+    if (envelope.state === "superseded_redactor") {
+      terminalBytes += metadata.size;
+      const draft = await readPrivateLessonDraft(
+        name.slice(0, -".lesson.json".length),
+        {
+          ...options,
+          outboxDirectory: outbox.directory,
+          encryption: outbox.encryption
+        }
+      );
+      const reason = draft.terminal_reason;
+      terminalReasons[reason] = (terminalReasons[reason] ?? 0) + 1;
+    }
+  }
+  return {
+    directory: outbox.directory,
+    encryption_source: outbox.encryption.source,
+    total_bytes: totalBytes,
+    ceiling_bytes: outbox.ceilingBytes,
+    paused_at_ceiling: totalBytes >= outbox.ceilingBytes,
+    counts,
+    terminal_count: counts.superseded_redactor,
+    terminal_bytes: terminalBytes,
+    terminal_reasons: terminalReasons,
+    deletion_guidance: counts.superseded_redactor > 0 ? "Inspect the retained draft, then use delete_private_lesson_candidate with confirm=true only when you explicitly choose to remove it." : null,
+    deletion_tombstones: deletionTombstones
+  };
+}
+async function inspectPrivateLessonOutboxHealth(options = {}) {
+  const env = options.env ?? process.env;
+  const directory = options.outboxDirectory ?? privateLessonOutboxDirectory(env, options.homeDirectory);
+  const encryption = options.encryption ?? readExistingOutboxEncryption(env, options);
+  if (!existsSync4(directory)) {
+    return {
+      storage_initialized: false,
+      encryption_ready: encryption !== null,
+      encryption_source: encryption?.source ?? "uninitialized",
+      total_bytes: 0,
+      ceiling_bytes: privateLessonOutboxMaxBytes(env),
+      paused_at_ceiling: false,
+      counts: emptyOutboxCounts(),
+      terminal_count: 0,
+      terminal_bytes: 0,
+      terminal_reasons: {},
+      deletion_guidance: null,
+      deletion_tombstones: 0
+    };
+  }
+  const metadata = await lstat(directory);
+  assertPrivateLessonPathMetadata(metadata, "directory");
+  if (encryption) {
+    await reconcilePrivateLessonOutboxProfiles({
+      ...options,
+      outboxDirectory: directory,
+      encryption
+    });
+  }
+  const entries = await secureOutboxEntries(directory);
+  const counts = emptyOutboxCounts();
+  let totalBytes = 0;
+  let deletionTombstones = 0;
+  let terminalBytes = 0;
+  const terminalReasons = {};
+  for (const name of entries) {
+    const path = join4(directory, name);
+    const entry = await lstat(path);
+    totalBytes += entry.size;
+    if (name.endsWith(".deleted.json")) {
+      deletionTombstones += 1;
+      continue;
+    }
+    if (!name.endsWith(".lesson.json")) continue;
+    const envelope = parseEnvelope(
+      await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES),
+      name.slice(0, -".lesson.json".length)
+    );
+    counts[envelope.state] += 1;
+    if (envelope.state === "superseded_redactor") {
+      terminalBytes += entry.size;
+      if (encryption) {
+        const draft = await readPrivateLessonDraft(
+          name.slice(0, -".lesson.json".length),
+          {
+            ...options,
+            outboxDirectory: directory,
+            encryption
+          }
+        );
+        const reason = draft.terminal_reason;
+        terminalReasons[reason] = (terminalReasons[reason] ?? 0) + 1;
+      }
+    }
+  }
+  return {
+    storage_initialized: true,
+    encryption_ready: encryption !== null,
+    encryption_source: encryption?.source ?? "uninitialized",
+    total_bytes: totalBytes,
+    ceiling_bytes: privateLessonOutboxMaxBytes(env),
+    paused_at_ceiling: totalBytes >= privateLessonOutboxMaxBytes(env),
+    counts,
+    terminal_count: counts.superseded_redactor,
+    terminal_bytes: terminalBytes,
+    terminal_reasons: terminalReasons,
+    deletion_guidance: counts.superseded_redactor > 0 ? "Inspect the retained draft, then use delete_private_lesson_candidate with confirm=true only when you explicitly choose to remove it." : null,
+    deletion_tombstones: deletionTombstones
+  };
+}
+function privateLessonOutboxDirectory(env = process.env, homeDirectory = homedir4()) {
+  const stateRoot = env.XDG_STATE_HOME?.trim() || join4(homeDirectory, ".local", "state");
+  return join4(stateRoot, "remembrance", "private-lessons");
+}
+function privateLessonOutboxKeyPath(env = process.env, homeDirectory = homedir4()) {
+  const configRoot = join4(homeDirectory, ".config");
+  return join4(configRoot, "remembrance", "private-lesson-outbox.key");
+}
+function privateLessonOutboxMaxBytes(env = process.env) {
+  const configured = env.REMEMBRANCE_PRIVATE_LESSON_OUTBOX_MAX_BYTES?.trim();
+  if (!configured) return PRIVATE_LESSON_OUTBOX_MAX_BYTES;
+  const value = Number(configured);
+  if (!Number.isSafeInteger(value) || value < PRIVATE_LESSON_OUTBOX_MIN_BYTES || value > PRIVATE_LESSON_OUTBOX_MAX_CONFIGURED_BYTES) {
+    throw new Error(
+      `REMEMBRANCE_PRIVATE_LESSON_OUTBOX_MAX_BYTES must be an integer from ${PRIVATE_LESSON_OUTBOX_MIN_BYTES} to ${PRIVATE_LESSON_OUTBOX_MAX_CONFIGURED_BYTES}.`
+    );
+  }
+  return value;
+}
+async function resolvePrivateLessonOutboxEncryption(options = {}) {
+  if (options.encryption) return options.encryption;
+  const keychain = resolvePrivateLessonKeychainKey(options.env ?? process.env);
+  if (keychain) return { key: keychain, source: "os_keychain" };
+  const path = privateLessonOutboxKeyPath(options.env, options.homeDirectory);
+  await ensurePrivateLessonDirectory(dirname2(path));
+  let encoded;
+  try {
+    encoded = await readConcurrentPrivateLessonFallbackKey(path);
+  } catch (error) {
+    if (!isMissingError(error)) throw error;
+    encoded = randomBytes2(32).toString("base64url");
+    try {
+      await atomicWritePrivate(path, `${encoded}
+`);
+    } catch (writeError) {
+      if (!isAlreadyExistsError2(writeError)) throw writeError;
+      encoded = await readConcurrentPrivateLessonFallbackKey(path);
+    }
+  }
+  return { key: Buffer.from(encoded, "base64url"), source: "mode_0600_file" };
+}
+async function rememberPrivateLessonPolicyFloor(binding, options = {}) {
+  const audience = digestHex(
+    binding.organization_audience_hash,
+    "organization audience"
+  );
+  const digest = digestHex(binding.policy_digest, "policy");
+  if (!Number.isSafeInteger(binding.policy_sequence) || binding.policy_sequence < 1) {
+    throw new PrivateLessonPolicyFloorError(
+      "Private lesson policy sequence is invalid.",
+      "policy_floor_invalid"
+    );
+  }
+  const directory = options.outboxDirectory ?? privateLessonOutboxDirectory(options.env, options.homeDirectory);
+  await ensurePrivateLessonDirectory(directory);
+  const entries = await readdir(directory, { withFileTypes: true });
+  assertSecurePrivateLessonOutboxEntries(entries);
+  const observed = entries.flatMap((entry) => {
+    const match = entry.name.match(
+      /^\.policy\.([a-f0-9]{64})\.(\d{1,16})\.([a-f0-9]{64})\.json$/
+    );
+    if (!match || match[1] !== audience) return [];
+    return [{ sequence: Number(match[2]), digest: match[3] }];
+  });
+  const highest = observed.reduce(
+    (maximum, item) => Math.max(maximum, item.sequence),
+    0
+  );
+  if (highest > binding.policy_sequence) {
+    throw new PrivateLessonPolicyFloorError(
+      "Private lesson policy sequence moved backward.",
+      "policy_downgrade"
+    );
+  }
+  if (observed.some(
+    (item) => item.sequence === binding.policy_sequence && item.digest !== digest
+  )) {
+    throw new PrivateLessonPolicyFloorError(
+      "Private lesson policy conflicts at the same sequence.",
+      "policy_sequence_conflict"
+    );
+  }
+  const path = join4(
+    directory,
+    `.policy.${audience}.${binding.policy_sequence}.${digest}.json`
+  );
+  try {
+    await atomicWritePrivate(
+      path,
+      `${JSON.stringify({
+        version: "private-lesson-policy-floor-v1",
+        organization_audience_hash: binding.organization_audience_hash,
+        policy_sequence: binding.policy_sequence,
+        policy_digest: binding.policy_digest
+      })}
+`
+    );
+  } catch (error) {
+    if (!isAlreadyExistsError2(error)) throw error;
+  }
+}
+async function readyOutbox(options) {
+  const directory = options.outboxDirectory ?? privateLessonOutboxDirectory(options.env, options.homeDirectory);
+  await ensurePrivateLessonDirectory(directory);
+  return {
+    directory,
+    encryption: await resolvePrivateLessonOutboxEncryption(options),
+    ceilingBytes: privateLessonOutboxMaxBytes(options.env)
+  };
+}
+async function ensurePrivateLessonDirectory(path) {
+  await mkdir2(path, { recursive: true, mode: 448 });
+  assertPrivateLessonPathMetadata(await lstat(path), "directory");
+  await chmod2(path, 448);
+  assertPrivateLessonPathMetadata(await lstat(path), "directory");
+}
+async function withPrivateLessonOutboxLock(directory, operation) {
+  const active = privateLessonOutboxLockContext.getStore();
+  if (active?.has(directory)) return operation();
+  const lockPath = join4(directory, ".outbox.lock");
+  const deadline = Date.now() + PRIVATE_LESSON_OUTBOX_LOCK_WAIT_MS;
+  let handle = null;
+  while (!handle) {
+    let candidateHandle = null;
+    try {
+      candidateHandle = await open(lockPath, "wx", 384);
+      await candidateHandle.writeFile(
+        `${JSON.stringify({
+          version: "private-lesson-outbox-lock-v1",
+          pid: process.pid,
+          created_at: (/* @__PURE__ */ new Date()).toISOString()
+        })}
+`,
+        "utf8"
+      );
+      await candidateHandle.sync();
+      await candidateHandle.chmod(384);
+      await syncDirectory(directory);
+      handle = candidateHandle;
+    } catch (error) {
+      if (!isAlreadyExistsError2(error)) {
+        await candidateHandle?.close().catch(() => {
+        });
+        if (candidateHandle) {
+          await unlink(lockPath).catch(() => {
+          });
+          await syncDirectory(directory);
+        }
+        throw error;
+      }
+      let metadata;
+      try {
+        metadata = await lstat(lockPath);
+      } catch (statError) {
+        if (isMissingError(statError)) metadata = null;
+        else throw statError;
+      }
+      if (!metadata) continue;
+      assertPrivateLessonPathMetadata(metadata, "file");
+      if (Date.now() - metadata.mtimeMs > PRIVATE_LESSON_OUTBOX_LOCK_STALE_MS) {
+        const stalePath = join4(
+          directory,
+          `.outbox.lock.stale-${randomBytes2(12).toString("hex")}`
+        );
+        try {
+          await rename(lockPath, stalePath);
+          await unlink(stalePath);
+          await syncDirectory(directory);
+          continue;
+        } catch (reclaimError) {
+          if (!isMissingError(reclaimError)) throw reclaimError;
+        }
+      }
+      if (Date.now() >= deadline) {
+        throw new Error("Private lesson outbox is busy; retry shortly.");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  const nextActive = new Set(active ?? []);
+  nextActive.add(directory);
+  try {
+    return await privateLessonOutboxLockContext.run(nextActive, operation);
+  } finally {
+    const heldMetadata = await handle.stat().catch(() => null);
+    await handle.close().catch(() => {
+    });
+    const currentMetadata = await lstat(lockPath).catch(() => null);
+    if (heldMetadata && currentMetadata && heldMetadata.dev === currentMetadata.dev && heldMetadata.ino === currentMetadata.ino) {
+      await unlink(lockPath).catch(() => {
+      });
+      await syncDirectory(directory);
+    }
+  }
+}
+async function retainedPrivateLessonOutboxBytes(directory) {
+  const entries = await secureOutboxEntries(directory);
+  let total = 0;
+  for (const name of entries)
+    total += (await lstat(join4(directory, name))).size;
+  return total;
+}
+async function reconcileExplicitDeletionTombstones(directory) {
+  const entries = await secureOutboxEntries(directory);
+  let changed = false;
+  for (const name of entries.filter(
+    (entry) => entry.endsWith(".deleted.json")
+  )) {
+    const tombstone = parseDeletionTombstone(
+      await readBoundedFile(join4(directory, name), 4 * 1024),
+      name.slice(0, -".deleted.json".length)
+    );
+    const retainedDraft = draftPath(directory, tombstone.draft_id);
+    if (!existsSync4(retainedDraft)) continue;
+    await assertRegularPrivateFile(
+      retainedDraft,
+      PRIVATE_LESSON_DRAFT_MAX_BYTES
+    );
+    await unlink(retainedDraft);
+    changed = true;
+  }
+  if (changed) await syncDirectory(directory);
+}
+async function syncDirectory(directory) {
+  if (process.platform === "win32") return;
+  const handle = await open(directory, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+async function writeDraft(draft, outbox, replace = false, currentOutboxBytes, allowUnsupportedProfile = false) {
+  return withPrivateLessonOutboxLock(outbox.directory, async () => {
+    const validated = validateDraft(draft, allowUnsupportedProfile);
+    await writeDraftUnlocked(
+      validated,
+      outbox,
+      replace,
+      currentOutboxBytes,
+      allowUnsupportedProfile
+    );
+  });
+}
+async function writeDraftUnlocked(draft, outbox, replace, _currentOutboxBytes, allowUnsupportedProfile = false) {
+  const validated = validateDraft(draft, allowUnsupportedProfile);
+  const plaintext = Buffer.from(canonicalJson(validated), "utf8");
+  if (plaintext.length > PRIVATE_LESSON_DRAFT_MAX_BYTES) {
+    throw new Error("Private lesson draft exceeds its local size limit.");
+  }
+  const nonce = randomBytes2(12);
+  const aad = Buffer.from(
+    canonicalJson({
+      version: "private-lesson-outbox-envelope-v1",
+      draft_id: validated.draft_id,
+      state: validated.state,
+      payload_digest: validated.payload_digest,
+      hold_telemetry_status: validated.hold_telemetry_status,
+      next_retry_at: validated.next_retry_at,
+      terminal_reason: validated.terminal_reason
+    }),
+    "utf8"
+  );
+  const cipher = createCipheriv("aes-256-gcm", outbox.encryption.key, nonce);
+  cipher.setAAD(aad);
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const envelope = {
+    version: "private-lesson-outbox-envelope-v1",
+    draft_id: validated.draft_id,
+    state: validated.state,
+    payload_digest: validated.payload_digest,
+    hold_telemetry_status: validated.hold_telemetry_status,
+    next_retry_at: validated.next_retry_at,
+    terminal_reason: validated.terminal_reason,
+    created_at: validated.created_at,
+    updated_at: validated.updated_at,
+    encryption: {
+      algorithm: "aes-256-gcm",
+      key_source: outbox.encryption.source,
+      nonce: nonce.toString("base64url"),
+      ciphertext: ciphertext.toString("base64url"),
+      auth_tag: cipher.getAuthTag().toString("base64url")
+    }
+  };
+  const serialized = `${JSON.stringify(envelope)}
+`;
+  if (!replace && await retainedPrivateLessonOutboxBytes(outbox.directory) + Buffer.byteLength(serialized, "utf8") > outbox.ceilingBytes) {
+    throw new Error(
+      "Private lesson capture is paused because the local 64 MiB outbox safety ceiling was reached."
+    );
+  }
+  const path = draftPath(outbox.directory, validated.draft_id);
+  if (replace) {
+    await atomicReplacePrivate(path, serialized);
+  } else {
+    await atomicWritePrivate(path, serialized);
+  }
+}
+function decryptDraft(envelope, encryption, allowUnsupportedProfile = false) {
+  const aad = Buffer.from(
+    canonicalJson({
+      version: envelope.version,
+      draft_id: envelope.draft_id,
+      state: envelope.state,
+      payload_digest: envelope.payload_digest,
+      hold_telemetry_status: envelope.hold_telemetry_status,
+      next_retry_at: envelope.next_retry_at,
+      terminal_reason: envelope.terminal_reason
+    }),
+    "utf8"
+  );
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    encryption.key,
+    Buffer.from(envelope.encryption.nonce, "base64url")
+  );
+  decipher.setAAD(aad);
+  decipher.setAuthTag(Buffer.from(envelope.encryption.auth_tag, "base64url"));
+  const plaintext = Buffer.concat([
+    decipher.update(Buffer.from(envelope.encryption.ciphertext, "base64url")),
+    decipher.final()
+  ]).toString("utf8");
+  const draft = validateDraft(JSON.parse(plaintext), allowUnsupportedProfile);
+  if (draft.draft_id !== envelope.draft_id || draft.state !== envelope.state || draft.payload_digest !== envelope.payload_digest || draft.hold_telemetry_status !== envelope.hold_telemetry_status || draft.next_retry_at !== envelope.next_retry_at || draft.terminal_reason !== envelope.terminal_reason) {
+    throw new Error(
+      "Private lesson outbox envelope does not match its payload."
+    );
+  }
+  return draft;
+}
+function validateDraft(value, allowUnsupportedProfile = false) {
+  if (!isRecord4(value)) throw new Error("Private lesson draft is invalid.");
+  assertDraftId(String(value.draft_id ?? ""));
+  if (value.version !== PRIVATE_LESSON_OUTBOX_VERSION) {
+    throw new Error("Private lesson draft version is unsupported.");
+  }
+  if (!isOutboxState(value.state)) {
+    throw new Error("Private lesson draft state is invalid.");
+  }
+  if (typeof value.canonical_payload !== "string") {
+    throw new Error("Private lesson canonical payload is missing.");
+  }
+  if (hashValue(value.canonical_payload) !== value.payload_digest) {
+    throw new Error("Private lesson draft payload digest is invalid.");
+  }
+  if (!isRecord4(value.candidate)) {
+    throw new Error("Private lesson draft candidate is missing.");
+  }
+  if (canonicalJson(value.candidate) !== value.canonical_payload) {
+    throw new Error("Private lesson draft candidate is not canonical.");
+  }
+  if (typeof value.redaction_version !== "string" || typeof value.redactor_digest !== "string" || value.candidate.redaction_version !== value.redaction_version) {
+    throw new Error("Private lesson draft redactor profile is invalid.");
+  }
+  try {
+    privateLessonRedactorProfile(
+      value.redaction_version,
+      value.redactor_digest
+    );
+    if (canonicalPrivateLessonPayload(value.candidate) !== value.canonical_payload) {
+      throw new Error("Private lesson draft candidate is not canonical.");
+    }
+  } catch (error) {
+    if (!(error instanceof PrivateLessonRedactionProfileError) || !allowUnsupportedProfile) {
+      throw error;
+    }
+  }
+  if (!Number.isInteger(value.attempts) || Number(value.attempts) < 0 || Number(value.attempts) > 1e3) {
+    throw new Error("Private lesson draft attempts are invalid.");
+  }
+  if (!isHoldTelemetryStatus(value.hold_telemetry_status)) {
+    throw new Error("Private lesson hold telemetry status is invalid.");
+  }
+  if (value.terminal_reason !== null && typeof value.terminal_reason !== "string") {
+    throw new Error("Private lesson terminal reason is invalid.");
+  }
+  if (value.state === "superseded_redactor" && value.terminal_reason !== "unsupported_redaction_version" && value.terminal_reason !== "unsupported_redactor_digest") {
+    throw new Error("Private lesson terminal reason is unsupported.");
+  }
+  if (value.state !== "superseded_redactor" && value.terminal_reason !== null) {
+    throw new Error("Only terminal drafts may include a terminal reason.");
+  }
+  if (value.state === "superseded_redactor" && (value.next_retry_at !== null || value.hold_telemetry_status !== "disabled" && value.hold_telemetry_status !== "submitted")) {
+    throw new Error("Terminal private lesson drafts cannot be retried.");
+  }
+  if (value.policy !== null) {
+    if (!isRecord4(value.policy) || typeof value.policy.policy_digest !== "string" || !Number.isSafeInteger(value.policy.policy_sequence) || typeof value.policy.organization_audience_hash !== "string" || typeof value.policy.expires_at !== "string" || !Array.isArray(value.policy.enabled_tiers) || typeof value.policy.redaction_version !== "string" || typeof value.policy.redactor_digest !== "string") {
+      throw new Error("Private lesson draft policy binding is invalid.");
+    }
+    privateLessonRedactorProfile(
+      value.policy.redaction_version,
+      value.policy.redactor_digest
+    );
+  }
+  return value;
+}
+function terminalizeUnsupportedProfile(draft, now) {
+  try {
+    privateLessonRedactorProfile(
+      draft.redaction_version,
+      draft.redactor_digest
+    );
+    return draft;
+  } catch (error) {
+    if (!(error instanceof PrivateLessonRedactionProfileError)) throw error;
+    if (draft.state === "superseded_redactor" && draft.terminal_reason === error.code) {
+      return draft;
+    }
+    return {
+      ...draft,
+      state: "superseded_redactor",
+      terminal_reason: error.code,
+      next_retry_at: null,
+      hold_telemetry_status: draft.hold_telemetry_status === "submitted" ? "submitted" : "disabled",
+      updated_at: now.toISOString()
+    };
+  }
+}
+function isHoldTelemetryStatus(value) {
+  return value === "not_required" || value === "pending" || value === "awaiting_authorization" || value === "retry_scheduled" || value === "submitted" || value === "disabled";
+}
+function parseEnvelope(serialized, expectedDraftId) {
+  const value = JSON.parse(serialized);
+  if (!isRecord4(value) || value.version !== "private-lesson-outbox-envelope-v1" || value.draft_id !== expectedDraftId || !isOutboxState(value.state) || typeof value.payload_digest !== "string" || !isHoldTelemetryStatus(value.hold_telemetry_status) || value.next_retry_at !== null && typeof value.next_retry_at !== "string" || value.terminal_reason !== null && typeof value.terminal_reason !== "string" || !isRecord4(value.encryption) || value.encryption.algorithm !== "aes-256-gcm" || value.encryption.key_source !== "os_keychain" && value.encryption.key_source !== "mode_0600_file" || typeof value.encryption.nonce !== "string" || typeof value.encryption.ciphertext !== "string" || typeof value.encryption.auth_tag !== "string") {
+    throw new Error("Private lesson outbox envelope is invalid.");
+  }
+  return value;
+}
+function parseDeletionTombstone(serialized, expectedDraftId) {
+  const value = JSON.parse(serialized);
+  if (!isRecord4(value) || value.version !== "private-lesson-outbox-deletion-v1" || value.draft_id !== expectedDraftId || typeof value.deleted_at !== "string" || value.reason !== "explicit_confirmed_deletion") {
+    throw new Error("Private lesson deletion tombstone is invalid.");
+  }
+  return value;
+}
+async function secureOutboxEntries(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  assertSecurePrivateLessonOutboxEntries(entries);
+  return entries.filter((entry) => entry.isFile() && !entry.name.startsWith(".")).map((entry) => entry.name).sort();
+}
+async function assertRegularPrivateFile(path, maxBytes) {
+  const metadata = await lstat(path);
+  assertPrivateLessonPathMetadata(metadata, "file");
+  if (metadata.size > maxBytes) {
+    throw new Error("Private lesson outbox entry exceeds its size limit.");
+  }
+}
+async function readBoundedFile(path, maxBytes) {
+  return readSecureLocalText(path, { maxBytes });
+}
+async function atomicWritePrivate(path, data) {
+  const handle = await open(path, "wx", 384);
+  try {
+    await handle.writeFile(data, "utf8");
+    await handle.sync();
+    await handle.chmod(384);
+  } finally {
+    await handle.close();
+  }
+  await syncDirectory(dirname2(path));
+}
+async function atomicReplacePrivate(path, data) {
+  await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
+  const temporary = join4(
+    dirname2(path),
+    `.${randomBytes2(12).toString("hex")}.tmp`
+  );
+  try {
+    await atomicWritePrivate(temporary, data);
+    await rename(temporary, path);
+    await chmod2(path, 384);
+    await syncDirectory(dirname2(path));
+  } finally {
+    await unlink(temporary).catch(() => {
+    });
+  }
+}
+function readExistingOutboxEncryption(env, options) {
+  const keychain = readPrivateLessonKeychainKey(env);
+  if (keychain) return { key: keychain, source: "os_keychain" };
+  const path = privateLessonOutboxKeyPath(env, options.homeDirectory);
+  if (!existsSync4(path)) return null;
+  try {
+    const encoded = readSecureLocalText(path, { maxBytes: 256 }).trim();
+    const key = Buffer.from(encoded, "base64url");
+    return key.length === 32 ? { key, source: "mode_0600_file" } : null;
+  } catch {
+    return null;
+  }
+}
+function assertPrivateLessonPathMetadata(metadata, kind, currentUid = typeof process.getuid === "function" ? process.getuid() : null, platform = process.platform) {
+  const validType = !metadata.isSymbolicLink() && (kind === "directory" ? metadata.isDirectory() : metadata.isFile());
+  if (!validType) {
+    throw new Error(
+      kind === "directory" ? "Private lesson outbox path is unsafe." : "Private lesson outbox entry is unsafe."
+    );
+  }
+  if (currentUid !== null && metadata.uid !== currentUid) {
+    throw new Error(
+      kind === "directory" ? "Private lesson outbox is not owned by the current user." : "Private lesson outbox entry is not owned by the current user."
+    );
+  }
+  if (platform !== "win32" && (metadata.mode & 63) !== 0) {
+    throw new Error(
+      kind === "directory" ? "Private lesson outbox permissions are not private." : "Private lesson outbox entry permissions are not private."
+    );
+  }
+}
+function assertSecurePrivateLessonOutboxEntries(entries) {
+  if (entries.some((entry) => entry.isSymbolicLink() || !entry.isFile())) {
+    throw new Error("Private lesson outbox contains an unsafe entry.");
+  }
+}
+function emptyOutboxCounts() {
+  return {
+    ready: 0,
+    awaiting_authorization: 0,
+    retry_scheduled: 0,
+    held_safety: 0,
+    submitted: 0,
+    superseded_redactor: 0
+  };
+}
+function draftPath(directory, draftId) {
+  assertDraftId(draftId);
+  return join4(directory, `${draftId}.lesson.json`);
+}
+function tombstonePath(directory, draftId) {
+  assertDraftId(draftId);
+  return join4(directory, `${draftId}.deleted.json`);
+}
+function assertDraftId(value) {
+  if (!/^pld_[A-Za-z0-9_-]{8,96}$/.test(value)) {
+    throw new Error("Private lesson draft id is invalid.");
+  }
+}
+function isOutboxState(value) {
+  return value === "ready" || value === "awaiting_authorization" || value === "retry_scheduled" || value === "held_safety" || value === "submitted" || value === "superseded_redactor";
+}
+function isRecord4(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+function digestHex(value, label) {
+  const match = value.match(/^sha256:([a-f0-9]{64})$/);
+  if (!match) {
+    throw new PrivateLessonPolicyFloorError(
+      `Private lesson ${label} digest is invalid.`,
+      "policy_floor_invalid"
+    );
+  }
+  return match[1];
+}
+function isMissingError(error) {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+function isAlreadyExistsError2(error) {
+  return error instanceof Error && "code" in error && error.code === "EEXIST";
+}
+async function readConcurrentPrivateLessonFallbackKey(path) {
+  let lastError = new Error(
+    "Private lesson outbox encryption key is unavailable."
+  );
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      await assertRegularPrivateFile(path, 256);
+      const encoded = (await readBoundedFile(path, 256)).trim();
+      if (Buffer.from(encoded, "base64url").length === 32) return encoded;
+      lastError = new Error("Private lesson outbox encryption key is invalid.");
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw lastError;
+}
+
 // src/server.ts
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.1.66" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.71" : "0.0.0-dev";
 var tools = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var inputBuffer = Buffer.alloc(0);
@@ -11130,6 +13105,7 @@ var clientFraming = "ndjson";
 var cachedPrincipalSession = null;
 var connectedClientInfo = null;
 var cachedValueProofKeys = null;
+var principalSessionBackgroundTasks = /* @__PURE__ */ new Set();
 var PRINCIPAL_SESSION_REQUIRED_TOOLS = /* @__PURE__ */ new Set([
   "record_preference",
   "submit_preference_compatibility_feedback",
@@ -11152,6 +13128,11 @@ function apiAccessKey(access) {
 }
 function resetPrincipalSessionCacheForTests() {
   cachedPrincipalSession = null;
+}
+async function waitForPrincipalSessionBackgroundTasksForTests() {
+  while (principalSessionBackgroundTasks.size > 0) {
+    await Promise.allSettled([...principalSessionBackgroundTasks]);
+  }
 }
 if (!doctorCliRequested) {
   process.stdin.on("data", (chunk) => {
@@ -11244,7 +13225,11 @@ async function dispatchJsonRpcRequest(request) {
   if (request.method === "initialize") {
     connectedClientInfo = normalizedMcpClientInfo(request.params?.clientInfo);
     const access = resolveApiAccess();
-    void ensurePrincipalSessionToken(access).catch(() => null);
+    warmPrincipalSession(access);
+    if (process.env.NODE_ENV !== "test") {
+      void inspectPrivateLessonOutboxHealth().catch(() => {
+      });
+    }
     const clientUpdate = await currentClientUpdate(access);
     return {
       id: request.id,
@@ -11371,6 +13356,23 @@ async function callTool(definition, rawArguments) {
       uploadBaseUrl: access.configuration.baseUrl
     });
   }
+  if (definition.local === "prepare_private_lesson_candidate") {
+    return preparePrivateLessonDraft(payload);
+  }
+  if (definition.local === "inspect_private_lesson_outbox") {
+    return inspectPrivateLessonOutbox(payload);
+  }
+  if (definition.local === "retry_private_lesson_candidate") {
+    return submitPrivateLessonDraft(
+      String(payload.draft_id),
+      access,
+      true
+    );
+  }
+  if (definition.local === "delete_private_lesson_candidate") {
+    const request = payload;
+    return deletePrivateLessonDraft(request.draft_id, request.confirm);
+  }
   if (definition.name === "run_connection_doctor") {
     return runLocalConnectionDoctor(
       payload,
@@ -11383,6 +13385,12 @@ async function callTool(definition, rawArguments) {
   }
   if (definition.name === "submit_remembrance") {
     return submitRemembrance(payload, access);
+  }
+  if (definition.name === "get_private_lesson_policy") {
+    return getLocalPrivateLessonPolicy(access);
+  }
+  if (definition.name === "submit_private_lesson_candidate" && isRecord5(payload) && typeof payload.draft_id === "string") {
+    return submitPrivateLessonDraft(payload.draft_id, access, false);
   }
   const localConfigurationError = remoteConfigurationError(
     access.configuration.source,
@@ -11425,7 +13433,7 @@ function apiConfigurationErrorMessage(issue, setting) {
   return `${setting} is invalid. Set it to an absolute HTTP(S) registry URL without credentials, query parameters, or fragments, or intentionally remove it before using remote Remembrance tools.`;
 }
 function clientHealthReportFromConnectionStatus(status) {
-  const health = isRecord4(status.plugin_health) ? status.plugin_health : null;
+  const health = isRecord5(status.plugin_health) ? status.plugin_health : null;
   if (!health || health.expected !== true || health.status !== "degraded") {
     return null;
   }
@@ -11435,9 +13443,9 @@ function clientHealthReportFromConnectionStatus(status) {
   }
   const host = agentHostBySurface(surface);
   if (!host || !host.plugin) return null;
-  const components = isRecord4(health.components) ? health.components : {};
-  const observed = (name) => isRecord4(components[name]) && components[name]?.observed === true ? "active" : "not_observed";
-  const issueCodes2 = Array.isArray(health.issues) ? health.issues.map((issue) => isRecord4(issue) ? issue.code : null).filter((code) => typeof code === "string") : [];
+  const components = isRecord5(health.components) ? health.components : {};
+  const observed = (name) => isRecord5(components[name]) && components[name]?.observed === true ? "active" : "not_observed";
+  const issueCodes2 = Array.isArray(health.issues) ? health.issues.map((issue) => isRecord5(issue) ? issue.code : null).filter((code) => typeof code === "string") : [];
   const allowedIssueCodes = /* @__PURE__ */ new Set([
     "native_hooks_not_observed",
     "session_start_not_observed",
@@ -11490,7 +13498,7 @@ function isSafeHostVersion(value) {
   return value === null || typeof value === "string" && value.length <= 64 && /^[0-9A-Za-z._+ -]*$/.test(value.trim());
 }
 async function reportDegradedClientHealth(status, access = resolveApiAccess()) {
-  if (/^(0|false|no)$/i.test(process.env.REMEMBRANCE_HEALTH_REPORTING ?? "")) {
+  if (!privateLessonHealthReportingEnabled()) {
     return;
   }
   const report = clientHealthReportFromConnectionStatus(status);
@@ -11515,6 +13523,734 @@ async function reportDegradedClientHealth(status, access = resolveApiAccess()) {
   } finally {
     clearTimeout(timeout);
   }
+}
+var PrivateLessonPolicySafetyError = class extends Error {
+};
+var PrivateLessonPolicyRefreshRequiredError = class extends Error {
+};
+var PrivateLessonRemoteError = class extends McpPublicError {
+  constructor(message, status, code, retryable) {
+    super(message);
+    this.status = status;
+    this.code = code;
+    this.retryable = retryable;
+  }
+  status;
+  code;
+  retryable;
+};
+async function getLocalPrivateLessonPolicy(access) {
+  const verified = await fetchVerifiedPrivateLessonPolicy(access);
+  const outbox = await privateLessonOutboxSummary();
+  return {
+    ok: true,
+    status: 200,
+    body: {
+      ...verified.body,
+      auto_capture_supported: true,
+      local_outbox: publicOutboxSummary(outbox)
+    }
+  };
+}
+async function preparePrivateLessonDraft(input) {
+  const prepared = preparePrivateLessonCandidate(input);
+  const draft = await queuePreparedPrivateLesson(prepared, null);
+  return privateLessonDraftActionResult(draft, {
+    next_action: prepared.status === "ready" || prepared.status === "held_safety" && privateLessonHealthReportingEnabled() ? {
+      tool: "submit_private_lesson_candidate",
+      arguments: { draft_id: draft.draft_id }
+    } : null
+  });
+}
+async function inspectPrivateLessonOutbox(input) {
+  const summary = await privateLessonOutboxSummary();
+  if (input.draft_id) {
+    const draft = await readPrivateLessonDraft(input.draft_id);
+    return {
+      draft: privateLessonDraftActionResult(draft),
+      outbox: publicOutboxSummary(summary)
+    };
+  }
+  return {
+    drafts: await listPrivateLessonDrafts({ limit: input.limit }),
+    outbox: publicOutboxSummary(summary)
+  };
+}
+async function submitPrivateLessonDraft(draftId, access, allowPolicyRefresh) {
+  let draft = await readPrivateLessonDraft(draftId);
+  if (draft.state === "superseded_redactor") {
+    return privateLessonDraftActionResult(draft, {
+      status: "superseded_redactor",
+      action_required: "This terminal draft uses an unsupported redactor profile. Inspect it, then explicitly delete it only if you no longer need to retain it."
+    });
+  }
+  if (draft.state === "submitted") {
+    return privateLessonDraftActionResult(draft, {
+      status: "already_submitted"
+    });
+  }
+  if (draft.state === "held_safety") {
+    return submitPrivateLessonHoldTelemetry(draft, access, allowPolicyRefresh);
+  }
+  let verifiedPolicy;
+  let currentBinding;
+  try {
+    verifiedPolicy = await fetchVerifiedPrivateLessonPolicy(access);
+    currentBinding = bindingForPrivateLessonPolicy(verifiedPolicy.policy);
+    await rememberPrivateLessonPolicyFloor(currentBinding);
+  } catch (error) {
+    draft = await persistPrivateLessonFailure(
+      draft,
+      error,
+      error instanceof PrivateLessonPolicyFloorError ? error.code : void 0
+    );
+    return privateLessonDraftActionResult(draft, {
+      status: "not_submitted",
+      action_required: draft.state === "awaiting_authorization" ? "Authorize the exact submit_private_lesson_candidate action, then retry." : null
+    });
+  }
+  if (!privateLessonPolicyAllows(verifiedPolicy.policy, draft.candidate.tier)) {
+    draft = await persistPrivateLessonFailure(
+      draft,
+      new PrivateLessonPolicySafetyError(
+        "Organization private lesson policy does not allow this candidate."
+      )
+    );
+    return privateLessonDraftActionResult(draft, { status: "not_submitted" });
+  }
+  if (draft.policy && draft.policy.organization_audience_hash !== currentBinding.organization_audience_hash) {
+    draft = await persistPrivateLessonFailure(
+      draft,
+      new PrivateLessonPolicySafetyError(
+        "Private lesson policy audience changed after preparation."
+      ),
+      "policy_audience_changed"
+    );
+    return privateLessonDraftActionResult(draft, {
+      status: "not_submitted",
+      action_required: "Keep this draft retained and prepare a new draft for the active organization."
+    });
+  }
+  if (draft.policy && currentBinding.policy_sequence < draft.policy.policy_sequence) {
+    draft = await persistPrivateLessonFailure(
+      draft,
+      new PrivateLessonPolicySafetyError(
+        "Private lesson policy sequence moved backward."
+      ),
+      "policy_downgrade"
+    );
+    return privateLessonDraftActionResult(draft, { status: "not_submitted" });
+  }
+  if (draft.policy && currentBinding.policy_sequence === draft.policy.policy_sequence && currentBinding.policy_digest !== draft.policy.policy_digest) {
+    draft = await persistPrivateLessonFailure(
+      draft,
+      new PrivateLessonPolicySafetyError(
+        "Private lesson policy content conflicts at the same sequence."
+      ),
+      "policy_sequence_conflict"
+    );
+    return privateLessonDraftActionResult(draft, { status: "not_submitted" });
+  }
+  if (draft.policy && draft.policy.policy_digest !== currentBinding.policy_digest && !allowPolicyRefresh) {
+    draft = await persistPrivateLessonFailure(
+      draft,
+      new PrivateLessonPolicySafetyError(
+        "Organization private lesson policy changed after preparation."
+      ),
+      "policy_changed"
+    );
+    return privateLessonDraftActionResult(draft, {
+      status: "not_submitted",
+      action_required: "Explicitly retry the retained draft under the current policy."
+    });
+  }
+  if (!draft.policy) {
+    draft = await updatePrivateLessonDraft(draft.draft_id, (current) => ({
+      ...current,
+      policy: current.policy ?? currentBinding
+    }));
+  }
+  try {
+    const identity = await ensureSigningIdentity();
+    const challengeResult = await callRemembrance(
+      mustFindTool("request_attestation_challenge"),
+      {
+        provider: identity.provider,
+        source_type: "private_lesson",
+        agent_id: identity.subject,
+        evidence_hash: draft.payload_digest,
+        private_lesson: {
+          key_id: identity.key_id,
+          organization_audience_hash: currentBinding.organization_audience_hash,
+          payload_digest: draft.payload_digest,
+          policy_digest: currentBinding.policy_digest,
+          redactor_digest: draft.redactor_digest
+        }
+      },
+      { access, skipEconomicsSession: true }
+    );
+    const challenge = requirePrivateLessonRemoteBody(
+      challengeResult,
+      "challenge"
+    );
+    const signingPayload = stringField(challenge, "signing_payload_canonical");
+    const submission = {
+      candidate: draft.candidate,
+      payload_digest: draft.payload_digest,
+      policy_digest: currentBinding.policy_digest,
+      redactor_digest: draft.redactor_digest,
+      idempotency_key: draft.idempotency_key,
+      attestation: {
+        version: "private-lesson-attestation-v1",
+        purpose: "remembrance-private-lesson-submission",
+        provider: identity.provider,
+        challenge_id: stringField(challenge, "challenge_id"),
+        key_id: identity.key_id,
+        algorithm: "ed25519",
+        nonce: stringField(challenge, "nonce"),
+        audience: "remembrance-private-lesson",
+        organization_audience_hash: currentBinding.organization_audience_hash,
+        payload_digest: draft.payload_digest,
+        policy_digest: currentBinding.policy_digest,
+        redactor_digest: draft.redactor_digest,
+        issued_at: stringField(challenge, "issued_at"),
+        expires_at: stringField(challenge, "expires_at"),
+        signature: signPayload(
+          null,
+          Buffer.from(signingPayload),
+          createPrivateKey2(identity.private_key)
+        ).toString("base64url")
+      }
+    };
+    const result = await callRemembrance(
+      mustFindTool("submit_private_lesson_candidate"),
+      submission,
+      { access }
+    );
+    const body = requirePrivateLessonRemoteBody(result, "submission");
+    const status = String(body.status ?? "");
+    if (status !== "accepted_private_candidate" && status !== "duplicate") {
+      throw new PrivateLessonPolicySafetyError(
+        "Private lesson submission returned an unsupported state."
+      );
+    }
+    const receipt = await verifyPrivateLessonEnvelopeWithKeyRefresh(
+      body.receipt,
+      "receipt",
+      access
+    );
+    const processingState = String(body.processing_state ?? "");
+    const receiptPolicy = receipt.payload.policy_digest === currentBinding.policy_digest ? currentBinding : draft.policy?.policy_digest === receipt.payload.policy_digest ? draft.policy : null;
+    if (receipt.payload.status !== "accepted_private_candidate" || receipt.payload.processing_state !== "queued_for_verification" || status === "accepted_private_candidate" && processingState !== "queued_for_verification" || status === "duplicate" && processingState !== "already_queued" || body.payload_digest !== receipt.payload.payload_digest || body.policy_digest !== receipt.payload.policy_digest || receipt.payload.payload_digest !== draft.payload_digest || receipt.payload.contract_version !== draft.candidate.contract_version || receipt.payload.redaction_version !== draft.redaction_version || receipt.payload.redactor_digest !== draft.redactor_digest || !receiptPolicy || receipt.payload.organization_audience_hash !== currentBinding.organization_audience_hash) {
+      throw new PrivateLessonPolicySafetyError(
+        "Private lesson receipt does not match the submitted draft."
+      );
+    }
+    const receiptDigest = hashValue(canonicalJson(receipt));
+    draft = await updatePrivateLessonDraft(draft.draft_id, (current) => ({
+      ...current,
+      state: "submitted",
+      attempts: Math.min(1e3, current.attempts + 1),
+      next_retry_at: null,
+      last_error_code: null,
+      submitted_at: (/* @__PURE__ */ new Date()).toISOString(),
+      receipt_digest: receiptDigest,
+      policy: receiptPolicy
+    }));
+    return {
+      ...privateLessonDraftActionResult(draft, { status }),
+      receipt,
+      processing_state: processingState
+    };
+  } catch (error) {
+    draft = await persistPrivateLessonFailure(draft, error);
+    return privateLessonDraftActionResult(draft, {
+      status: "not_submitted",
+      action_required: draft.state === "awaiting_authorization" ? "Authorize the exact submit_private_lesson_candidate action, then retry." : null
+    });
+  }
+}
+async function submitPrivateLessonHoldTelemetry(initialDraft, access, allowPolicyRefresh) {
+  let draft = initialDraft;
+  if (draft.hold_telemetry_status === "submitted") {
+    return privateLessonDraftActionResult(draft, {
+      status: "already_recorded",
+      processing_state: "recorded"
+    });
+  }
+  if (!privateLessonHealthReportingEnabled()) {
+    draft = await updatePrivateLessonDraft(draft.draft_id, (current) => ({
+      ...current,
+      hold_telemetry_status: "disabled",
+      next_retry_at: null,
+      last_error_code: "health_reporting_disabled"
+    }));
+    return privateLessonDraftActionResult(draft, {
+      status: "not_submitted",
+      action_required: null
+    });
+  }
+  let verifiedPolicy;
+  let currentBinding;
+  try {
+    verifiedPolicy = await fetchVerifiedPrivateLessonPolicy(access);
+    currentBinding = bindingForPrivateLessonPolicy(verifiedPolicy.policy);
+    await rememberPrivateLessonPolicyFloor(currentBinding);
+  } catch (error) {
+    draft = await persistPrivateLessonHoldFailure(draft, error);
+    return privateLessonDraftActionResult(draft, {
+      status: "not_submitted",
+      action_required: draft.hold_telemetry_status === "awaiting_authorization" ? "Authorize the exact submit_private_lesson_candidate action, then retry." : null
+    });
+  }
+  if (!verifiedPolicy.policy.payload.enabled || verifiedPolicy.policy.payload.kill_switch) {
+    draft = await updatePrivateLessonDraft(draft.draft_id, (current) => ({
+      ...current,
+      policy: currentBinding,
+      hold_telemetry_status: "disabled",
+      next_retry_at: null,
+      last_error_code: "private_lesson_automation_disabled"
+    }));
+    return privateLessonDraftActionResult(draft, {
+      status: "not_submitted",
+      action_required: null
+    });
+  }
+  const policyConflict = privateLessonPolicyBindingConflict(
+    draft.policy,
+    currentBinding,
+    allowPolicyRefresh
+  );
+  if (policyConflict) {
+    draft = await persistPrivateLessonHoldFailure(
+      draft,
+      new PrivateLessonPolicySafetyError(policyConflict.message),
+      policyConflict.code
+    );
+    return privateLessonDraftActionResult(draft, {
+      status: "not_submitted",
+      action_required: policyConflict.action_required
+    });
+  }
+  if (!draft.policy) {
+    draft = await updatePrivateLessonDraft(draft.draft_id, (current) => ({
+      ...current,
+      policy: current.policy ?? currentBinding
+    }));
+  }
+  const submissionBindings = draft.policy && draft.policy.policy_digest !== currentBinding.policy_digest && allowPolicyRefresh ? [draft.policy, currentBinding] : [currentBinding];
+  for (const submissionBinding of submissionBindings) {
+    try {
+      const submitted = await submitPrivateLessonHoldTelemetryWithBinding(
+        draft,
+        access,
+        submissionBinding
+      );
+      const receiptPolicy = [
+        submissionBinding,
+        currentBinding,
+        draft.policy
+      ].find(
+        (binding) => binding?.policy_digest === submitted.receipt.payload.policy_digest
+      );
+      if (submitted.body.event_digest !== submitted.receipt.payload.event_digest || submitted.body.policy_digest !== submitted.receipt.payload.policy_digest || submitted.receipt.payload.event_digest !== submitted.eventDigest || submitted.receipt.payload.contract_version !== draft.candidate.contract_version || submitted.receipt.payload.redaction_version !== draft.redaction_version || submitted.receipt.payload.redactor_digest !== draft.redactor_digest || !receiptPolicy || submitted.receipt.payload.organization_audience_hash !== receiptPolicy.organization_audience_hash) {
+        throw new PrivateLessonPolicySafetyError(
+          "Private lesson hold receipt does not match the submitted event."
+        );
+      }
+      draft = await updatePrivateLessonDraft(draft.draft_id, (current) => ({
+        ...current,
+        attempts: Math.min(1e3, current.attempts + 1),
+        next_retry_at: null,
+        last_error_code: null,
+        hold_telemetry_status: "submitted",
+        hold_event_digest: submitted.eventDigest,
+        hold_receipt_digest: hashValue(canonicalJson(submitted.receipt)),
+        hold_reported_at: (/* @__PURE__ */ new Date()).toISOString(),
+        policy: receiptPolicy
+      }));
+      return {
+        ...privateLessonDraftActionResult(draft, {
+          status: submitted.status
+        }),
+        receipt: submitted.receipt,
+        processing_state: submitted.processingState
+      };
+    } catch (error) {
+      const isRetainedPolicyAttempt = submissionBinding.policy_digest !== currentBinding.policy_digest;
+      if (isRetainedPolicyAttempt && privateLessonSubmissionRequiresPolicyRefresh(error)) {
+        continue;
+      }
+      draft = await persistPrivateLessonHoldFailure(draft, error);
+      return privateLessonDraftActionResult(draft, {
+        status: "not_submitted",
+        action_required: draft.hold_telemetry_status === "awaiting_authorization" ? "Authorize the exact submit_private_lesson_candidate action, then retry." : null
+      });
+    }
+  }
+  throw new PrivateLessonPolicySafetyError(
+    "Private lesson hold telemetry could not resolve an active policy binding."
+  );
+}
+async function submitPrivateLessonHoldTelemetryWithBinding(draft, access, policyBinding) {
+  const event = privateLessonHoldEventPayloadSchema.parse({
+    version: PRIVATE_LESSON_HOLD_EVENT_VERSION,
+    record_type: "held_safety_event",
+    event_type: draft.candidate.event_type,
+    held_categories: draft.held_reasons,
+    redaction_counts: Object.fromEntries(
+      draft.held_reasons.flatMap((category) => {
+        const count = draft.candidate.redaction_counts[category];
+        return count ? [[category, count]] : [];
+      })
+    ),
+    contract_version: PRIVATE_LESSON_CONTRACT_VERSION,
+    redaction_version: draft.redaction_version,
+    redactor_digest: draft.redactor_digest,
+    policy_digest: policyBinding.policy_digest
+  });
+  const eventDigest = privateLessonHoldEventDigest(event);
+  if (canonicalPrivateLessonHoldEvent(event).length > 4 * 1024) {
+    throw new PrivateLessonPolicySafetyError(
+      "Private lesson hold telemetry exceeds its content-free size bound."
+    );
+  }
+  const identity = await ensureSigningIdentity();
+  const challengeResult = await callRemembrance(
+    mustFindTool("request_attestation_challenge"),
+    {
+      provider: identity.provider,
+      source_type: "private_lesson",
+      agent_id: identity.subject,
+      evidence_hash: eventDigest,
+      private_lesson: {
+        key_id: identity.key_id,
+        record_type: "held_safety_event",
+        organization_audience_hash: policyBinding.organization_audience_hash,
+        event_digest: eventDigest,
+        policy_digest: policyBinding.policy_digest,
+        redactor_digest: draft.redactor_digest
+      }
+    },
+    { access, skipEconomicsSession: true }
+  );
+  const challenge = requirePrivateLessonRemoteBody(
+    challengeResult,
+    "challenge"
+  );
+  const submission = {
+    record_type: "held_safety_event",
+    event,
+    event_digest: eventDigest,
+    idempotency_key: privateLessonHoldIdempotencyKey(draft, eventDigest),
+    attestation: {
+      version: "private-lesson-attestation-v1",
+      purpose: "remembrance-private-lesson-submission",
+      provider: identity.provider,
+      challenge_id: stringField(challenge, "challenge_id"),
+      key_id: identity.key_id,
+      algorithm: "ed25519",
+      nonce: stringField(challenge, "nonce"),
+      audience: "remembrance-private-lesson",
+      record_type: "held_safety_event",
+      organization_audience_hash: policyBinding.organization_audience_hash,
+      event_digest: eventDigest,
+      policy_digest: policyBinding.policy_digest,
+      redactor_digest: draft.redactor_digest,
+      issued_at: stringField(challenge, "issued_at"),
+      expires_at: stringField(challenge, "expires_at"),
+      signature: signPayload(
+        null,
+        Buffer.from(stringField(challenge, "signing_payload_canonical")),
+        createPrivateKey2(identity.private_key)
+      ).toString("base64url")
+    }
+  };
+  const result = await callRemembrance(
+    mustFindTool("submit_private_lesson_candidate"),
+    submission,
+    { access }
+  );
+  if (privateLessonPolicyRefreshRequiredResponse(result)) {
+    throw new PrivateLessonPolicyRefreshRequiredError();
+  }
+  const body = requirePrivateLessonRemoteBody(result, "submission");
+  const status = String(body.status ?? "");
+  const processingState = String(body.processing_state ?? "");
+  if (status !== "accepted_hold_telemetry" && status !== "duplicate" || processingState !== "recorded" && processingState !== "already_recorded") {
+    throw new PrivateLessonPolicySafetyError(
+      "Private lesson hold submission returned an unsupported state."
+    );
+  }
+  const receipt = await verifyPrivateLessonEnvelopeWithKeyRefresh(
+    body.receipt,
+    "hold_receipt",
+    access
+  );
+  return { body, eventDigest, processingState, receipt, status };
+}
+async function fetchVerifiedPrivateLessonPolicy(access) {
+  const result = await callRemembrance(
+    mustFindTool("get_private_lesson_policy"),
+    {},
+    { access, skipEconomicsSession: true }
+  );
+  const body = requirePrivateLessonRemoteBody(result, "policy");
+  const verified = await verifyPrivateLessonEnvelopeWithKeyRefresh(
+    body.policy,
+    "policy",
+    access
+  );
+  const digest = privateLessonPolicyDigest(verified.payload);
+  if (body.policy_digest !== digest) {
+    throw new PrivateLessonPolicySafetyError(
+      "Private lesson policy digest does not match its signed payload."
+    );
+  }
+  return { policy: verified, body };
+}
+async function verifyPrivateLessonEnvelopeWithKeyRefresh(envelope, kind, access) {
+  let keySet;
+  try {
+    keySet = await fetchValueProofKeySet(false, access);
+  } catch {
+    throw new PrivateLessonRemoteError(
+      "Private lesson verification keys are temporarily unavailable.",
+      0,
+      "verification_keys_unavailable",
+      true
+    );
+  }
+  try {
+    return verifyPrivateLessonEnvelope(envelope, kind, keySet);
+  } catch (error) {
+    rethrowPrivateLessonProfileVerificationError(error, kind);
+    let refreshedKeySet;
+    try {
+      refreshedKeySet = await fetchValueProofKeySet(true, access);
+    } catch {
+      throw new PrivateLessonRemoteError(
+        "Private lesson verification keys are temporarily unavailable.",
+        0,
+        "verification_keys_unavailable",
+        true
+      );
+    }
+    try {
+      return verifyPrivateLessonEnvelope(envelope, kind, refreshedKeySet);
+    } catch (error2) {
+      rethrowPrivateLessonProfileVerificationError(error2, kind);
+      throw new PrivateLessonPolicySafetyError(
+        `Private lesson ${kind} signature verification failed.`
+      );
+    }
+  }
+}
+function rethrowPrivateLessonProfileVerificationError(error, kind) {
+  if (error instanceof PrivateLessonRedactionProfileError) {
+    throw new PrivateLessonPolicySafetyError(
+      `Private lesson ${kind} uses an unsupported redactor profile (${error.code}).`
+    );
+  }
+}
+function verifyPrivateLessonEnvelope(envelope, kind, keySet) {
+  if (kind === "policy") {
+    return verifyPrivateLessonSignedEnvelope({ envelope, kind, keySet });
+  }
+  if (kind === "receipt") {
+    return verifyPrivateLessonSignedEnvelope({ envelope, kind, keySet });
+  }
+  return verifyPrivateLessonSignedEnvelope({ envelope, kind, keySet });
+}
+function requirePrivateLessonRemoteBody(result, operation) {
+  const response = isRecord5(result) ? result : {};
+  const status = typeof response.status === "number" ? response.status : 0;
+  if (response.ok !== true || !isRecord5(response.body)) {
+    const retryable = status === 0 || status === 408 || status === 429 || status >= 500;
+    const code = status === 401 || status === 403 ? "authorization_required" : retryable ? "service_unavailable" : `${operation}_rejected`;
+    throw new PrivateLessonRemoteError(
+      `Private lesson ${operation} is unavailable${status ? ` (${status})` : ""}.`,
+      status,
+      code,
+      retryable
+    );
+  }
+  return response.body;
+}
+function bindingForPrivateLessonPolicy(policy) {
+  return {
+    policy_digest: privateLessonPolicyDigest(policy.payload),
+    policy_sequence: policy.payload.policy_sequence,
+    organization_audience_hash: policy.payload.organization_audience_hash,
+    expires_at: policy.payload.expires_at,
+    enabled_tiers: policy.payload.enabled_tiers,
+    redaction_version: policy.payload.redaction_version,
+    redactor_digest: policy.payload.redactor_digest
+  };
+}
+function privateLessonPolicyAllows(policy, tier) {
+  return policy.payload.enabled && !policy.payload.kill_switch && policy.payload.encryption_ready && policy.payload.public_fallback === false && policy.payload.redaction_version === PRIVATE_LESSON_REDACTION_VERSION && policy.payload.redactor_digest === privateLessonRedactorDigest() && policy.payload.enabled_tiers.includes(tier);
+}
+function privateLessonHealthReportingEnabled(env = process.env) {
+  return !/^(0|false|no)$/i.test(env.REMEMBRANCE_HEALTH_REPORTING ?? "");
+}
+function privateLessonHoldIdempotencyKey(draft, eventDigest) {
+  return `private-lesson-hold-${hashValue(
+    canonicalJson({ draft_id: draft.draft_id, event_digest: eventDigest })
+  ).replace(/^sha256:/, "")}`;
+}
+function privateLessonPolicyRefreshRequiredResponse(result) {
+  if (!isRecord5(result) || result.status !== 409 || !isRecord5(result.body)) {
+    return false;
+  }
+  return result.body.code === "policy_changed" || result.body.error === "Private lesson policy changed; refresh policy before retrying.";
+}
+function privateLessonSubmissionRequiresPolicyRefresh(error) {
+  return error instanceof PrivateLessonPolicyRefreshRequiredError;
+}
+function privateLessonPolicyBindingConflict(stored, current, allowPolicyRefresh) {
+  if (!stored) return null;
+  if (stored.organization_audience_hash !== current.organization_audience_hash) {
+    return {
+      code: "policy_audience_changed",
+      message: "Private lesson policy audience changed after preparation.",
+      action_required: "Keep this draft retained and prepare a new draft for the active organization."
+    };
+  }
+  if (current.policy_sequence < stored.policy_sequence) {
+    return {
+      code: "policy_downgrade",
+      message: "Private lesson policy sequence moved backward.",
+      action_required: null
+    };
+  }
+  if (current.policy_sequence === stored.policy_sequence && current.policy_digest !== stored.policy_digest) {
+    return {
+      code: "policy_sequence_conflict",
+      message: "Private lesson policy content conflicts at the same sequence.",
+      action_required: null
+    };
+  }
+  if (current.policy_digest !== stored.policy_digest && !allowPolicyRefresh) {
+    return {
+      code: "policy_changed",
+      message: "Organization private lesson policy changed after preparation.",
+      action_required: "Explicitly retry the retained draft under the current policy."
+    };
+  }
+  return null;
+}
+async function persistPrivateLessonFailure(draft, error, explicitCode) {
+  return updatePrivateLessonDraft(
+    draft.draft_id,
+    (current) => current.state === "submitted" || current.state === "superseded_redactor" ? current : {
+      ...current,
+      ...privateLessonFailureTransition(current, error, explicitCode)
+    }
+  );
+}
+async function persistPrivateLessonHoldFailure(draft, error, explicitCode) {
+  return updatePrivateLessonDraft(draft.draft_id, (current) => {
+    if (current.state === "superseded_redactor" || current.hold_telemetry_status === "submitted") {
+      return current;
+    }
+    const attempts = Math.min(1e3, current.attempts + 1);
+    if (error instanceof PrivateLessonRemoteError) {
+      if (error.status === 401 || error.status === 403) {
+        return {
+          ...current,
+          attempts,
+          next_retry_at: null,
+          last_error_code: explicitCode ?? error.code,
+          hold_telemetry_status: "awaiting_authorization"
+        };
+      }
+      if (error.retryable) {
+        return {
+          ...current,
+          attempts,
+          next_retry_at: new Date(
+            Date.now() + privateLessonRetryDelayMs(attempts)
+          ).toISOString(),
+          last_error_code: explicitCode ?? error.code,
+          hold_telemetry_status: "retry_scheduled"
+        };
+      }
+    }
+    return {
+      ...current,
+      attempts,
+      next_retry_at: null,
+      last_error_code: explicitCode ?? "validation_or_policy_hold",
+      hold_telemetry_status: "disabled"
+    };
+  });
+}
+function privateLessonFailureTransition(draft, error, explicitCode) {
+  const attempts = Math.min(1e3, draft.attempts + 1);
+  if (error instanceof PrivateLessonRemoteError) {
+    if (error.status === 401 || error.status === 403) {
+      return {
+        state: "awaiting_authorization",
+        attempts,
+        next_retry_at: null,
+        last_error_code: explicitCode ?? error.code
+      };
+    }
+    if (error.retryable) {
+      return {
+        state: "retry_scheduled",
+        attempts,
+        next_retry_at: new Date(
+          Date.now() + privateLessonRetryDelayMs(attempts)
+        ).toISOString(),
+        last_error_code: explicitCode ?? error.code
+      };
+    }
+  }
+  return {
+    state: "held_safety",
+    attempts,
+    next_retry_at: null,
+    last_error_code: explicitCode ?? "validation_or_policy_hold"
+  };
+}
+function privateLessonRetryDelayMs(attempts) {
+  return Math.min(6 * 60 * 60 * 1e3, 5e3 * 2 ** Math.min(attempts - 1, 12));
+}
+function privateLessonDraftActionResult(draft, extra = {}) {
+  return {
+    draft_id: draft.draft_id,
+    state: draft.state,
+    payload_digest: draft.payload_digest,
+    redaction_version: draft.redaction_version,
+    redactor_digest: draft.redactor_digest,
+    redaction_counts: draft.candidate.redaction_counts,
+    held_reasons: draft.held_reasons,
+    attempts: draft.attempts,
+    next_retry_at: draft.next_retry_at,
+    last_error_code: draft.last_error_code,
+    terminal_reason: draft.terminal_reason,
+    hold_telemetry_status: draft.hold_telemetry_status,
+    hold_event_digest: draft.hold_event_digest,
+    hold_receipt_digest: draft.hold_receipt_digest,
+    hold_reported_at: draft.hold_reported_at,
+    retained_locally: draft.state !== "submitted",
+    ...extra
+  };
+}
+function publicOutboxSummary(summary) {
+  const { directory: _directory, ...safe } = summary;
+  return safe;
+}
+function stringField(record2, key) {
+  const value = record2[key];
+  if (typeof value !== "string" || !value) {
+    throw new PrivateLessonPolicySafetyError(
+      `Private lesson response omitted ${key}.`
+    );
+  }
+  return value;
 }
 async function submitRemembrance(payload, access) {
   const { verified_attestation: verifiedAttestation, ...request } = payload;
@@ -11650,7 +14386,7 @@ async function signedRemembranceAttestation(remembrancePayload, skillSlug, acces
 }
 async function bootstrapAgentIdentity(args, access = resolveApiAccess()) {
   const keyPath = identityPath(args.key_path);
-  let reusedExistingIdentity = !args.force_rotate && existsSync3(keyPath);
+  let reusedExistingIdentity = !args.force_rotate && existsSync5(keyPath);
   let identity = reusedExistingIdentity ? await readIdentity(keyPath) : null;
   if (!identity) {
     const created = await createAndPersistIdentity(args, keyPath);
@@ -11764,7 +14500,7 @@ async function createAndPersistIdentity(args, keyPath) {
     private_key: String(privateKey.export({ type: "pkcs8", format: "pem" })),
     created_at: (/* @__PURE__ */ new Date()).toISOString()
   };
-  await mkdir2(dirname2(keyPath), { recursive: true, mode: 448 });
+  await mkdir3(dirname3(keyPath), { recursive: true, mode: 448 });
   try {
     await writeFile2(keyPath, `${JSON.stringify(identity, null, 2)}
 `, {
@@ -11783,7 +14519,7 @@ async function createAndPersistIdentity(args, keyPath) {
   }
 }
 async function readIdentity(path = identityPath()) {
-  if (!existsSync3(path)) {
+  if (!existsSync5(path)) {
     return null;
   }
   try {
@@ -11880,7 +14616,7 @@ async function callRemembrance(definition, rawArguments, options = {}) {
     if (principalSession) {
       headers["x-remembrance-principal-session"] = principalSession;
     } else if (definition.name === "query_skills" || definition.name === "invoke_skill") {
-      void ensurePrincipalSessionToken(access).catch(() => null);
+      warmPrincipalSession(access);
     }
   }
   const endpoint = endpointFor(definition, payload);
@@ -11924,7 +14660,7 @@ async function callRemembrance(definition, rawArguments, options = {}) {
     );
     if (sentPrincipalSession && refreshSignaled && !authenticationFailed) {
       cachedPrincipalSession = null;
-      void ensurePrincipalSessionToken(access).catch(() => null);
+      warmPrincipalSession(access);
     } else if (sentPrincipalSession && authenticationFailed) {
       cachedPrincipalSession = null;
       const refreshed = await ensurePrincipalSessionToken(access).catch(
@@ -11980,7 +14716,7 @@ async function localProjectKey() {
 }
 function principalSessionAuthenticationFailed(response, body) {
   if (response.status !== 401 && response.status !== 403) return false;
-  if (!isRecord4(body) || typeof body.error !== "string") return false;
+  if (!isRecord5(body) || typeof body.error !== "string") return false;
   return /principal session|economics session|installation session|agent principal|installation principal/i.test(
     body.error
   );
@@ -11998,10 +14734,20 @@ async function runLocalConnectionDoctor(options, execution = "mcp_tool", access 
     error: localConfigurationError
   }) : callDoctorReadProbe(connectionDefinition, {}, access);
   const catalogPromise = options.active_read_probe && !localConfigurationError ? callDoctorReadProbe(mustFindTool("list_skills"), { limit: 1 }, access) : Promise.resolve(null);
-  const [connectionResult, catalogResult, clientUpdate] = await Promise.all([
+  const policyPromise = access.credential.apiKey ? fetchVerifiedPrivateLessonPolicy(access).then((value) => ({ ok: true, value })).catch((error) => ({ ok: false, error })) : Promise.resolve(null);
+  const outboxPromise = inspectPrivateLessonOutboxHealth().then((value) => ({ ok: true, value })).catch((error) => ({ ok: false, error }));
+  const [
+    connectionResult,
+    catalogResult,
+    clientUpdate,
+    policyResult,
+    outboxResult
+  ] = await Promise.all([
     connectionPromise,
     catalogPromise,
-    currentClientUpdate(access)
+    currentClientUpdate(access),
+    policyPromise,
+    outboxPromise
   ]);
   const connectionStatus = localConnectionStatus(connectionResult, {
     apiBase: access.configuration.baseUrl,
@@ -12014,15 +14760,15 @@ async function runLocalConnectionDoctor(options, execution = "mcp_tool", access 
     item_count: null
   };
   if (options.active_read_probe && !localConfigurationError) {
-    const resultRecord = isRecord4(catalogResult) ? catalogResult : {};
-    const body = isRecord4(resultRecord.body) ? resultRecord.body : {};
+    const resultRecord = isRecord5(catalogResult) ? catalogResult : {};
+    const body = isRecord5(resultRecord.body) ? resultRecord.body : {};
     const skills = Array.isArray(body.skills) ? body.skills : null;
     activeReadProbe.succeeded = resultRecord.ok === true && skills !== null;
     activeReadProbe.item_count = skills ? skills.length : null;
   } else if (options.active_read_probe) {
     activeReadProbe.succeeded = false;
   }
-  return buildConnectionDoctorReport({
+  const report = buildConnectionDoctorReport({
     connection_status: connectionStatus,
     transport: execution === "standalone_cli" ? "standalone_cli" : "local_stdio_mcp",
     host_registration_observed: execution === "mcp_tool",
@@ -12030,6 +14776,90 @@ async function runLocalConnectionDoctor(options, execution = "mcp_tool", access 
     check_organization_write_authorization: options.check_organization_write_authorization,
     client_update: clientUpdate
   });
+  const privateLessonAutomation = privateLessonDoctorSummary({
+    report,
+    policyResult,
+    outboxResult
+  });
+  return {
+    ...report,
+    status: report.status === "healthy" && privateLessonAutomation.status !== "ready" && privateLessonAutomation.status !== "not_applicable" ? "attention" : report.status,
+    private_lesson_automation: privateLessonAutomation
+  };
+}
+function privateLessonDoctorSummary(args) {
+  const organization = args.report.scope === "organization";
+  const policy = !organization ? {
+    status: "not_applicable",
+    contract_version: null,
+    redaction_version: null,
+    redactor_digest: null,
+    policy_sequence: null,
+    enabled_tiers: [],
+    encryption_ready: null,
+    public_fallback: null
+  } : args.policyResult?.ok ? {
+    status: privateLessonPolicyAllows(
+      args.policyResult.value.policy,
+      "structured_metadata"
+    ) || privateLessonPolicyAllows(
+      args.policyResult.value.policy,
+      "bounded_redacted_prose"
+    ) ? "ready" : "disabled",
+    contract_version: args.policyResult.value.policy.payload.contract_version,
+    redaction_version: args.policyResult.value.policy.payload.redaction_version,
+    redactor_digest: privateLessonRedactorDigest(),
+    policy_sequence: args.policyResult.value.policy.payload.policy_sequence,
+    enabled_tiers: args.policyResult.value.policy.payload.enabled_tiers,
+    encryption_ready: args.policyResult.value.policy.payload.encryption_ready,
+    public_fallback: args.policyResult.value.policy.payload.public_fallback
+  } : {
+    status: args.policyResult?.error instanceof PrivateLessonRemoteError && (args.policyResult.error.status === 401 || args.policyResult.error.status === 403) ? "authorization_required" : args.policyResult?.error instanceof PrivateLessonPolicySafetyError ? "invalid" : "unavailable",
+    contract_version: PRIVATE_LESSON_CONTRACT_VERSION,
+    redaction_version: PRIVATE_LESSON_REDACTION_VERSION,
+    redactor_digest: privateLessonRedactorDigest(),
+    policy_sequence: null,
+    enabled_tiers: [],
+    encryption_ready: null,
+    public_fallback: null
+  };
+  const outbox = args.outboxResult.ok ? {
+    status: args.outboxResult.value.storage_initialized ? "ready" : "uninitialized",
+    encryption_source: args.outboxResult.value.encryption_source,
+    encryption_ready: args.outboxResult.value.encryption_ready,
+    paused_at_ceiling: args.outboxResult.value.paused_at_ceiling,
+    counts: args.outboxResult.value.counts,
+    terminal_count: args.outboxResult.value.terminal_count,
+    terminal_bytes: args.outboxResult.value.terminal_bytes,
+    terminal_reasons: args.outboxResult.value.terminal_reasons,
+    deletion_guidance: args.outboxResult.value.deletion_guidance
+  } : {
+    status: "unavailable",
+    encryption_source: null,
+    encryption_ready: false,
+    paused_at_ceiling: null,
+    counts: {},
+    terminal_count: 0,
+    terminal_bytes: 0,
+    terminal_reasons: {},
+    deletion_guidance: null
+  };
+  const ready = organization && args.report.registry_submission_authorized && policy.status === "ready" && outbox.encryption_ready === true && args.report.signed_contributions_ready === true && !outbox.paused_at_ceiling;
+  const blocked = organization && (policy.status === "invalid" || policy.status === "authorization_required" || !args.report.registry_submission_authorized);
+  return {
+    status: !organization ? "not_applicable" : ready ? "ready" : blocked ? "blocked" : "attention",
+    auto_capture_supported: true,
+    organization_write_authorized: args.report.registry_submission_authorized,
+    action: {
+      name: "submit_private_lesson_candidate",
+      visibility: "declared",
+      host_approval: args.report.host_policy.status === "recent_denial" ? "recently_denied" : args.report.host_policy.status === "no_recent_denial" ? "no_recent_denial" : "not_observable"
+    },
+    policy,
+    outbox,
+    hold_telemetry_enabled: privateLessonHealthReportingEnabled(),
+    signing_ready: args.report.signed_contributions_ready
+  };
 }
 async function currentClientUpdate(access = resolveApiAccess()) {
   const configuredSurface = process.env.REMEMBRANCE_PLUGIN_HOST?.trim().toLowerCase();
@@ -12053,7 +14883,7 @@ async function callDoctorReadProbe(definition, payload, access) {
   }) : first;
 }
 function isTransientDoctorProbeFailure(result) {
-  if (!isRecord4(result) || result.ok === true) return false;
+  if (!isRecord5(result) || result.ok === true) return false;
   const status = typeof result.status === "number" ? result.status : 0;
   return status === 0 || status === 408 || status === 425 || status >= 500;
 }
@@ -12071,9 +14901,24 @@ function formatConnectionDoctorReport(report) {
     `Registry submissions: ${report.registry_submission_authorized ? "authorized" : "not authorized"}`,
     `Host policy observation: ${report.host_policy?.status ?? "not_observable"}`,
     `Client update: ${clientUpdate.status}${clientUpdate.latest_version ? ` (published ${clientUpdate.latest_version})` : ""}`,
-    `Signed contributions: ${report.signed_contributions_ready === null ? "not observable" : report.signed_contributions_ready ? "ready" : "not ready"}`,
-    ""
+    `Signed contributions: ${report.signed_contributions_ready === null ? "not observable" : report.signed_contributions_ready ? "ready" : "not ready"}`
   ];
+  if (report.private_lesson_automation) {
+    lines.push(
+      `Private lesson automation: ${report.private_lesson_automation.status}`,
+      `Private lesson policy: ${report.private_lesson_automation.policy.status}`,
+      `Private lesson outbox: ${report.private_lesson_automation.outbox.status}`,
+      `Private lesson hold telemetry: ${report.private_lesson_automation.hold_telemetry_enabled ? "enabled" : "disabled"}`,
+      `Private lesson terminal drafts: ${report.private_lesson_automation.outbox.terminal_count} (${report.private_lesson_automation.outbox.terminal_bytes} retained bytes)`,
+      `Private lesson action: ${report.private_lesson_automation.action.visibility}`
+    );
+    if (report.private_lesson_automation.outbox.deletion_guidance) {
+      lines.push(
+        `Private lesson retained-draft action: ${report.private_lesson_automation.outbox.deletion_guidance}`
+      );
+    }
+  }
+  lines.push("");
   for (const check of report.checks) {
     lines.push(`[${check.status.toUpperCase()}] ${check.id}: ${check.summary}`);
     if (check.remediation) {
@@ -12314,6 +15159,11 @@ async function ensurePrincipalSessionToken(access = resolveApiAccess()) {
   };
   return cachedPrincipalSession.token;
 }
+function warmPrincipalSession(access) {
+  const task = ensurePrincipalSessionToken(access).then(() => void 0).catch(() => void 0);
+  principalSessionBackgroundTasks.add(task);
+  void task.finally(() => principalSessionBackgroundTasks.delete(task));
+}
 function currentPrincipalSessionToken(access) {
   if (!cachedPrincipalSession) return null;
   if (cachedPrincipalSession.accessKey !== apiAccessKey(access) || cachedPrincipalSession.expiresAt <= Date.now() + 6e4) {
@@ -12342,7 +15192,7 @@ async function directPrincipalSessionRequest(payload, access) {
   }
 }
 function normalizedMcpClientInfo(value) {
-  if (!isRecord4(value)) return null;
+  if (!isRecord5(value)) return null;
   const name = boundedLocalProfileField(value.name);
   if (!name) return null;
   return {
@@ -12395,7 +15245,7 @@ function mustFindTool(name) {
   }
   return tool2;
 }
-function isRecord4(value) {
+function isRecord5(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 function identityPath(explicit) {
@@ -12452,5 +15302,6 @@ export {
   resetPrincipalSessionCacheForTests,
   resetValueProofKeyCacheForTests,
   runConnectionDoctorCli,
-  runLocalConnectionDoctor
+  runLocalConnectionDoctor,
+  waitForPrincipalSessionBackgroundTasksForTests
 };

@@ -51,6 +51,30 @@ describe("VS Code completion hook", () => {
     expect(String(result.output.reason ?? "")).toContain("submit_remembrance");
   });
 
+  it("routes organization lessons through local prepare and the exact visible submit action", async () => {
+    const result = await handleStopHook(
+      { session_id: "s-private-lesson" },
+      {
+        env: testEnv({
+          REMEMBRANCE_API_KEY: "rk_vscode_private_lesson",
+        }),
+        readUseCount: () => 1,
+        readCount: () => 0,
+        recordHealth: vi.fn(),
+        writeCount: vi.fn(),
+        markDirectSelectionsPrompted: vi.fn(),
+        reportTaskOutcomes: vi.fn(),
+      },
+    );
+    const reason = String(result.output.reason ?? "");
+    expect(result).toMatchObject({ allow: false, why: "prompt_contribution" });
+    expect(reason).toContain("prepare_private_lesson_candidate");
+    expect(reason).toContain("submit_private_lesson_candidate");
+    expect(reason).toContain(
+      "do not substitute submit_remembrance, REST, or another transport",
+    );
+  });
+
   it("records completion health under the VS Code surface", async () => {
     const recordHealth = vi.fn();
     await handleStopHook(

@@ -237,11 +237,7 @@ const api = (
 ).replace(/\/$/, "");
 const keyPath =
   process.env.REMEMBRANCE_AGENT_KEY_PATH ??
-  join(
-    join(homedir(), ".config"),
-    "remembrance",
-    "agent-key.json",
-  );
+  join(join(homedir(), ".config"), "remembrance", "agent-key.json");
 const subject =
   process.env.REMEMBRANCE_AGENT_SUBJECT ??
   `claude:${process.env.USER ?? "local"}:${hostname() || "skill-only"}`;

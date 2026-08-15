@@ -75,22 +75,31 @@ describe("OpenClaw completion hook (before_agent_finalize)", () => {
     );
   });
 
-  it("revises with the contribution reason on new registry use", () => {
+  it("routes organization use through the private lesson contribution lane", () => {
     const written = [];
     const result = handleCompletion(
       event(),
-      base({ writePromptedCount: (id, count) => written.push([id, count]) }),
+      base({
+        env: { REMEMBRANCE_API_KEY: "rk_openclaw_private_lesson" },
+        writePromptedCount: (id, count) => written.push([id, count]),
+      }),
     );
     expect(result.action).toBe("revise");
-    expect(result.reason).toBe(contributionReason());
-    expect(result.retry.instruction).toBe(contributionReason());
+    expect(result.retry.instruction).toBe(result.reason);
     expect(result.retry.instruction).toContain(
       "silently close the pending Remembrance loop",
     );
     expect(result.retry.instruction).toContain(
       "Do not mention routine Remembrance calls",
     );
-    expect(result.retry.instruction).toContain("submit_remembrance");
+    expect(result.retry.instruction).toContain(
+      "prepare_private_lesson_candidate",
+    );
+    expect(result.retry.instruction).toContain(
+      "submit_private_lesson_candidate",
+    );
+    expect(result.retry.instruction).toContain("Never auto-delete a draft");
+    expect(result.reason).not.toBe(contributionReason());
     // It records the new prompted count so it won't re-revise the same use.
     expect(written).toEqual([["r1", 1]]);
   });

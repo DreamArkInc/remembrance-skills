@@ -138,11 +138,80 @@ Do not use this skill when:
    failed.
 6. Use the selected skill or resource. When delegating, pass its slug, `query_id`, and `result_id` to the subagent; the subagent must open that result or run its own full-context query before custom work.
 7. After meaningful use, report task completion or abandonment with `report_task_outcome`. Remembrance accepts one terminal outcome per query or direct invocation; retry the same report with the same idempotency key instead of submitting a different later outcome. Use only result IDs from `task_outcome.eligible_result_ids`. Each result and bundle also carries `task_outcome_eligible`; `task_outcome.available` is true only when at least one result is eligible. One result ID attributes the outcome to that result. When two or three selected query results exactly match a returned bundle, include its `bundle_id` to attribute the outcome only to that bundle. Other multi-result combinations are accepted as funnel telemetry without proof or cohort attribution. Include success, latency, and detailed token totals only when the runtime exposes them. For Vercel AI Gateway work, include every `gen_` generation ID in `metering_reference`; Remembrance retrieves the authoritative records asynchronously, so caller totals never establish proof trust. Never include prompts, transcripts, outputs, source paths, or private URLs. Then submit quick feedback with the same `query_id` and `result_id`; if the feedback response includes `next_step.submit_remembrance_payload`, submit that full remembrance when the lesson should become reusable evidence. If it includes `feedback_pattern_suggestion`, Remembrance has already created a reviewable evidence candidate; do not submit a duplicate suggestion. Direct selections use post-use feedback only and are excluded from query-fit and reranker training.
-8. Before finishing, self-check both halves of the loop: confirm that a relevant query actually happened, then check for high-value failure lessons. If the query was missed, run it from the full conversation before concluding. If a high match was surfaced but not opened, open it now or submit `fit: "poor"` query feedback with an explicit reason. If you caught your own mistake, the user caught one, CI/deploy failed, a security issue surfaced, or you fixed a release/versioning miss, submit a `failure_report` remembrance even if no skill was used. Native plugins prompt once for an unopened high match and reusable evidence at completion; raw MCP, REST, and skill-only installs must do these checks proactively.
+8. Before finishing, self-check both halves of the loop: confirm that a relevant query actually happened, then check for high-value failure lessons. If the query was missed, run it from the full conversation before concluding. If a high match was surfaced but not opened, open it now or submit `fit: "poor"` query feedback with an explicit reason. If you caught your own mistake, the user caught one, CI/deploy failed, a security issue surfaced, or you fixed a release/versioning miss, capture the reusable lesson. With an authenticated organization and the private lesson tools available, use the two-stage private lesson lane described below for a compact evidence lesson instead of a broad `failure_report` remembrance. This lane is not a replacement for a complete skill proposal. Native plugins do this silently at completion after exact-action approval. Use `submit_remembrance` only when the narrow contract cannot represent the lesson and the host has approved the richer payload. Raw MCP, REST, and skill-only installs must perform the same check proactively.
 9. If no suitable skill exists and the query response includes `no_results.propose_skill_idea_payload`, verify it, then choose the proposal route by asking one question: **could this content be harmful or unwanted as a public candidate?** If yes — anything repository-derived or organization-specific — use `propose_private_skill`, which cannot create a public candidate under any credential state. Use `propose_skill_idea` only when a public candidate is an acceptable outcome: an active organization key keeps it private, while intentionally omitting a key creates a PUBLIC candidate. A supplied invalid/inactive key fails with 401 and an insufficient key fails with 403; neither failure creates a candidate. Either route, read `visibility` in the successful response (`organization_private` or `public_candidate`) and state where the candidate landed. Never remove, hide, or bypass an organization key to force a public candidate; submit privately, then use the reviewed public-propagation flow when the organization wants to share it.
 10. If no suitable skill exists and you create a reusable method, submit it through the same explicit private-versus-public boundary.
 11. If you discover a reusable API, MPP endpoint, MCP server, docs site, package, dataset, service, or tool, submit it as a resource.
 12. If a skill or resource seems duplicated, stale, unsafe, or incomplete, submit evidence or a suggestion. You may include an advisory `routing_hint`, but do not decide or promise whether Remembrance will amend, specialize, fork, or create a skill.
+
+## Organization-private lesson autopilot
+
+For an authenticated organization, routine failures, corrections, and reusable
+workflow lessons use a narrow two-stage path:
+
+This is a compact evidence lane, not a finished-skill transport. When the agent
+has built a complete reusable procedure, playbook, or actionable set of
+instructions, use `propose_private_skill` or `propose_skill_idea` instead. Those
+full skill routes preserve bounded markdown, public citations, snippets,
+metadata, and instructional detail through the normal safety and review
+pipeline. Never shorten a finished skill merely to fit the private-lesson
+contract.
+
+1. Call `prepare_private_lesson_candidate` locally. Give it only a generalized
+   lesson, stable conditions, bounded tags, pseudonymous correlation IDs, and
+   SHA-256 evidence hashes. The tool canonicalizes and redacts the candidate in
+   memory, encrypts the safe canonical record in the local outbox, and returns a
+   draft ID. Tags use an open, bounded lowercase slug vocabulary, so retain
+   useful technical terms rather than forcing them into a fixed list. A
+   malformed or privacy-sensitive tag holds the draft explicitly; it is never
+   dropped silently. Pre-redaction content is never written to disk.
+2. When preparation returns a `next_action`, call
+   `submit_private_lesson_candidate` with that draft ID. Preparation is strictly
+   local; this is the one host-visible network action. The local MCP obtains the
+   signed organization policy and purpose-bound attestation, then sends the
+   exact canonical bytes. If the host asks, authorize only this named action.
+
+Successful receipts and routine hook narration stay silent. A host denial means
+nothing was sent and the encrypted draft remains local in
+`awaiting_authorization`; do not retry it through REST or another transport.
+Transient timeouts, 429s, and 5xx responses remain queued for bounded retry on a
+later lifecycle. Authentication, policy, or validation failures remain held.
+Queued lessons never expire or auto-delete; deleting one requires an explicit
+confirmed local action.
+
+The signed policy pins `private-lesson-redaction-v2` and the exact digest of its
+current rules. An unsupported version or digest moves the encrypted draft to
+terminal `superseded_redactor`. Terminal drafts are never retried, re-redacted,
+expired, or automatically deleted; they still count toward the 64 MiB safety
+ceiling. `inspect_private_lesson_outbox` and `run_connection_doctor` report the
+terminal count, retained bytes, reason, and explicit deletion guidance without
+returning draft content or a local path.
+
+The private lesson endpoint derives its organization and private visibility
+from the authenticated key. It cannot create public content and never falls
+back to public submission. Accepted candidates enter the existing verifier,
+topology, review-policy, encrypted-storage, and audit pipelines. Rich content,
+raw traces, URLs, code blocks, attachments, secrets, paths, identifiers, or
+ambiguous material stays local and must not be forced through by confirmation.
+Use `inspect_private_lesson_outbox` to inspect content-free state, retry a
+selected draft with `retry_private_lesson_candidate`, and delete only with
+`delete_private_lesson_candidate` plus explicit confirmation.
+
+When health reporting is enabled, a held draft may use the same exact submit
+action to send only a `held_safety_event`: event type, held category counts,
+contract/redactor profile, event and policy digests, idempotency, and a
+challenge-bound attestation. It never sends lesson prose, conditions, tags,
+correlation IDs, evidence hashes, candidate digest, paths, or draft content.
+The signed hold receipt is verified locally. Hold telemetry cannot enter
+verification, review, topology, public propagation, or private-skill
+materialization. `REMEMBRANCE_HEALTH_REPORTING=0` disables this optional report
+without affecting querying or retained drafts; the organization kill switch
+disables the whole private-lesson lane.
+
+Hosted-only MCP and raw REST clients cannot guarantee durable local retention.
+They receive `auto_capture_supported: false` and must locally canonicalize and
+retain the draft before making the explicit private-lesson request. See
+`references/remembrance-setup.md` for exact host approval and policy setup.
 
 ## Token savings and value proof
 
@@ -475,7 +544,7 @@ Idempotency-Key: <stable sha256 hash of the canonical request body>
 
 Use the same key for the same logical submission. Mutation routes include
 `/api/v1/agent/query-feedback`, `/api/v1/agent/feedback`,
-`/api/v1/agent/remembrances`,
+`/api/v1/agent/remembrances`, `/api/v1/agent/private-lessons`,
 `/api/v1/agent/skill-ideas`, `/api/v1/agent/suggestions`, `/api/v1/resources`,
 `/api/v1/resources/reviews`, `/api/v1/resources/verify`, and
 `/api/v1/verify`.

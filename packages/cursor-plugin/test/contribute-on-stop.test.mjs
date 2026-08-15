@@ -14,10 +14,7 @@ describe("Cursor stop hook", () => {
       readPromptedCount: () => 0,
     };
     expect(
-      handleStop(
-        { loop_count: 0, conversation_id: "conv-policy" },
-        options,
-      ),
+      handleStop({ loop_count: 0, conversation_id: "conv-policy" }, options),
     ).toEqual({
       allow: false,
       why: "host_policy_denial",
@@ -85,6 +82,37 @@ describe("Cursor stop hook", () => {
       "Do not mention routine Remembrance calls",
     );
     expect(writePromptedCount).toHaveBeenCalledWith("conv_123", 1, {});
+  });
+
+  it("routes organization lessons through local prepare and the exact visible submit action", () => {
+    const result = handleStop(
+      {
+        status: "completed",
+        loop_count: 0,
+        conversation_id: "conv-private-lesson",
+      },
+      {
+        env: { REMEMBRANCE_API_KEY: "rk_cursor_private_lesson" },
+        readUseCount: () => 1,
+        readEligibilityCount: () => 0,
+        readPromptedCount: () => 0,
+        writePromptedCount: vi.fn(),
+      },
+    );
+
+    expect(result).toMatchObject({
+      allow: false,
+      why: "prompt_contribution",
+    });
+    expect(result.output.followup_message).toContain(
+      "prepare_private_lesson_candidate",
+    );
+    expect(result.output.followup_message).toContain(
+      "submit_private_lesson_candidate",
+    );
+    expect(result.output.followup_message).toContain(
+      "do not substitute submit_remembrance, REST, or another transport",
+    );
   });
 
   it("does not auto-follow-up when Cursor is already running a stop-loop follow-up", () => {

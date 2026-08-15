@@ -1,6 +1,6 @@
 {
   "name": "@remembrance/cursor-plugin",
-  "version": "0.1.66",
+  "version": "0.1.71",
   "private": true,
   "license": "Apache-2.0",
   "description": "Cursor plugin for Remembrance MCP tools, always-on agent guidance, and contribution hooks.",
@@ -8,6 +8,7 @@
   "scripts": {
     "build": "node --check scripts/session-start.mjs && node --check scripts/record-task-eligibility.mjs && node --check scripts/record-mcp-use.mjs && node --check scripts/contribute-on-stop.mjs && node --check scripts/hook-core.mjs",
     "test": "vitest run",
+    "test:private-lesson": "vitest run test/contribute-on-stop.test.mjs",
     "test:preference-hook-coverage": "vitest run test/record-task-eligibility.test.mjs --coverage.enabled=true --coverage.provider=v8 --coverage.include=scripts/record-task-eligibility.mjs --coverage.reporter=text --coverage.thresholds.lines=100 --coverage.thresholds.functions=100 --coverage.thresholds.statements=100 --coverage.thresholds.branches=90",
     "typecheck": "node --check scripts/session-start.mjs && node --check scripts/record-task-eligibility.mjs && node --check scripts/record-mcp-use.mjs && node --check scripts/contribute-on-stop.mjs && node --check scripts/hook-core.mjs"
   },

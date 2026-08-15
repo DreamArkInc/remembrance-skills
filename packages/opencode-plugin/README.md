@@ -25,7 +25,9 @@ At session creation, the plugin performs a bounded, credential-free release
 check. If a newer verified version exists, opencode shows a notice and gives the
 agent the locally bundled setup command. The agent must ask before running it,
 and the user must restart opencode afterward. Remembrance never updates itself
-silently. Set `REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable the advisory check.
+silently. OpenCode follows its exact npm release and does not wait for native
+plugin marketplaces. Set `REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable the
+advisory check.
 
 Older opencode installations that predate this startup check still learn about
 a verified update on their next successful Remembrance query. The API places a
@@ -61,7 +63,11 @@ installs remain fully functional with installation-local preferences. Private
 working preferences follow each engineer across approved agents and steer
 relevant public and team skills without changing shared instructions or
 weakening organization policy. Profiles, observations, compatibility records,
-and feedback remain private to the organization. Classification runs
+and feedback remain private to the organization. An explicit instruction
+governs the current task immediately. Known built-ins activate durably at once.
+Custom preferences remain pending until automatic normalization and validation
+approves them; unsafe, malformed, or uncertain custom behavior stays inactive
+and is never replayed to an agent. Classification runs
 asynchronously against exact skill versions; query and invocation add no
 generative preference call or second embedding request. Material compatibility
 may reorder only already-relevant skills inside one match tier or apply a
@@ -140,6 +146,30 @@ and must not be reported as a Remembrance setup failure. The plugin reports one
 local, content-free alert: **Remembrance was blocked by host policy before
 reaching Remembrance. Nothing was sent. Querying remains available.** It does
 not retry or automatically create a handoff.
+
+### Private lesson autopilot
+
+The local `prepare_private_lesson_candidate` tool canonicalizes and redacts a
+routine organization lesson in memory and stores only an encrypted
+post-redaction draft. `submit_private_lesson_candidate` is the separate network
+action; it sends those exact bytes only to the authenticated organization's
+private verifier queue and can never create or automatically propagate public
+content. Drafts never expire or auto-delete.
+
+The signed policy pins the corrected `private-lesson-redaction-v2` profile and
+its exact digest. Unsupported-profile drafts become terminal
+`superseded_redactor`, stay encrypted, and are never retried, re-redacted, or
+automatically deleted. When health reporting is enabled, a held draft may send
+only content-free category/version counts and signed protocol digests through
+the same approved action; that telemetry cannot enter verification, review,
+topology, or skill materialization. Disable it with
+`REMEMBRANCE_HEALTH_REPORTING=0`.
+
+OpenCode permission keys match MCP tool names. Set only
+`remembrance_submit_private_lesson_candidate` to `allow`; broader Remembrance
+write tools can remain `ask` or `deny`. Local preparation, inspection, retry,
+and confirmed deletion remain local-only. A host denial is held and is never
+retried through another transport.
 
 ## Generated files
 

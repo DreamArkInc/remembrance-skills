@@ -25,7 +25,9 @@ At session start, Remembrance checks a credential-free public release manifest.
 When a newer verified plugin exists, Claude Code receives the locally bundled
 update command and must ask before running it. After a successful update, run
 `/reload-plugins` or fully restart Claude Code. The plugin never updates itself
-silently. Set `REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable the advisory check.
+silently. Claude Code follows its exact public-mirror release and does not wait
+for unrelated npm or ClawHub surfaces. Set
+`REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable the advisory check.
 
 Claude Code installations from before this startup check existed still learn
 about a verified update on their next successful Remembrance query. The API
@@ -78,7 +80,11 @@ installs remain fully functional with installation-local preferences. Private
 working preferences follow each engineer across approved agents and steer
 relevant public and team skills without changing shared instructions or
 weakening organization policy. Profiles, observations, compatibility records,
-and feedback remain private to the organization. Classification runs
+and feedback remain private to the organization. An explicit instruction
+governs the current task immediately. Known built-ins activate durably at once.
+Custom preferences remain pending until automatic normalization and validation
+approves them; unsafe, malformed, or uncertain custom behavior stays inactive
+and is never replayed to an agent. Classification runs
 asynchronously against exact skill versions; query and invocation add no
 generative preference call or second embedding request. Material compatibility
 may reorder only already-relevant skills inside one match tier or apply a
@@ -187,6 +193,31 @@ organization admin uploads the resulting file at **Dashboard > Skills >
 Import**; the skills then enter the normal private review pipeline. Until that
 page returns an import receipt, the agent must describe the skills as queued
 locally, not submitted.
+
+### Private lesson autopilot
+
+Routine organization lessons use a narrower two-stage flow. Local
+`prepare_private_lesson_candidate` canonicalizes and redacts in memory and
+stores only an encrypted post-redaction draft. The separate
+`submit_private_lesson_candidate` action sends those exact bytes to the
+organization's private verifier queue; it cannot create or automatically
+propagate public content. Drafts never expire or auto-delete.
+
+The signed policy pins the corrected `private-lesson-redaction-v2` profile and
+its exact digest. Unsupported-profile drafts become terminal
+`superseded_redactor`, stay encrypted, and are never retried, re-redacted, or
+automatically deleted. When health reporting is enabled, a held draft may send
+only content-free category/version counts and signed protocol digests through
+the same approved action; that telemetry cannot enter verification, review,
+topology, or skill materialization. Disable it with
+`REMEMBRANCE_HEALTH_REPORTING=0`.
+
+Persist approval for exactly
+`mcp__remembrance__submit_private_lesson_candidate` in Claude Code's managed
+permission rules. Do not use `bypassPermissions` or a server-wide wildcard.
+The local preparation, inspection, retry, and confirmed-delete tools stay
+local-only. Retryable failures resume during later lifecycle events; a host
+denial remains held and is never retried through another transport.
 
 Use `/remembrance:use <slug>` when a person explicitly selects a skill. Claude
 resolves ambiguous names with the indexed, normalized slug-prefix filter in

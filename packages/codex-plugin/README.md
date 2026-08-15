@@ -44,7 +44,8 @@ On a fresh Codex session, Remembrance checks a credential-free public release
 manifest. When a newer verified plugin exists, Codex receives the trusted local
 update command, asks for permission before running it, and tells the user to
 fully quit and reopen Codex afterward. It never updates silently or treats the
-new version as active before restart. Set
+new version as active before restart. Codex follows its exact public-mirror
+release and does not wait for unrelated npm or ClawHub surfaces. Set
 `REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable this advisory check.
 
 Codex installations from before this startup check existed still learn about a
@@ -92,7 +93,11 @@ installs remain fully functional with installation-local preferences. Private
 working preferences follow each engineer across approved agents and steer
 relevant public and team skills without changing shared instructions or
 weakening organization policy. Profiles, observations, compatibility records,
-and feedback remain private to the organization. Classification runs
+and feedback remain private to the organization. An explicit instruction
+governs the current task immediately. Known built-ins activate durably at once.
+Custom preferences remain pending until automatic normalization and validation
+approves them; unsafe, malformed, or uncertain custom behavior stays inactive
+and is never replayed to an agent. Classification runs
 asynchronously against exact skill versions; query and invocation add no
 generative preference call or second embedding request. Material compatibility
 may reorder only already-relevant skills inside one match tier or apply a
@@ -202,6 +207,34 @@ local request JSON. It writes a mode-0600 file under
 request. An organization admin then uploads that file at Dashboard > Skills >
 Import. The handoff is not a submission until the dashboard returns a batch
 receipt.
+
+### Private lesson autopilot
+
+Routine organization lessons use a narrower two-stage flow. The local
+`prepare_private_lesson_candidate` tool canonicalizes and redacts in memory,
+then encrypts only the post-redaction record in a durable outbox. The separate
+`submit_private_lesson_candidate` MCP action sends those exact bytes to the
+authenticated organization's private verifier queue. It cannot create or
+automatically propagate public content. Drafts never expire or auto-delete;
+retryable failures resume later, while authentication, validation, policy, and
+host-denial states remain held.
+
+The signed policy pins the corrected `private-lesson-redaction-v2` profile and
+its exact digest. Unsupported-profile drafts become terminal
+`superseded_redactor`, remain encrypted and counted toward the outbox ceiling,
+and are never retried, re-redacted, or automatically deleted. A held draft may
+send only category/version counts and signed protocol digests through the same
+approved action when health reporting is enabled; this content-free telemetry
+cannot enter verification, review, topology, or skill materialization. Disable
+it with `REMEMBRANCE_HEALTH_REPORTING=0`.
+
+Codex should persist approval only for the exact submit action when the host
+offers that choice; the preparation, inspection, retry, and confirmed-delete
+tools remain local. No `/hooks` command is required. `run_connection_doctor`
+reports policy, signing, encryption, outbox, and action visibility without
+showing lesson content or local paths. A hosted Remembrance app dependency will
+be added only after the production connector has a real stable ID, so this
+release ships no placeholder `.app.json`.
 
 Note the underscore: Codex configures MCP servers under `[mcp_servers.<id>]`,
 not `mcpServers`.
