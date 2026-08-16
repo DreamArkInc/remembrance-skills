@@ -8,6 +8,7 @@ import {
   handlePrivateLessonSubmitApproval,
 } from "../src/index.mjs";
 import { readPluginLifecycleHealth } from "../src/hook-core.mjs";
+import { EXPECTED_OPENCLAW_RUNTIME_HOOKS } from "../../../scripts/openclaw-plugin-install-smoke.mjs";
 
 describe("OpenClaw plugin registration health", () => {
   const dirs = [];
@@ -67,12 +68,9 @@ describe("OpenClaw plugin registration health", () => {
 
     plugin.register({ on, logger: { info }, registerCli, version: "1.2.3" });
 
-    expect(on.mock.calls.map(([name]) => name)).toEqual([
-      "before_tool_call",
-      "before_prompt_build",
-      "after_tool_call",
-      "before_agent_finalize",
-    ]);
+    expect(on.mock.calls.map(([name]) => name)).toEqual(
+      EXPECTED_OPENCLAW_RUNTIME_HOOKS,
+    );
     expect(info).toHaveBeenCalledWith(
       expect.stringContaining("lifecycle hooks registered"),
     );
