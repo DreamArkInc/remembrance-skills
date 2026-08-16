@@ -52,13 +52,15 @@ stores only an encrypted post-redaction draft. The separately host-visible
 authenticated organization's private verifier queue. It cannot create or
 automatically propagate public content.
 
-Drafts never expire or auto-delete. Retryable failures resume during later
-lifecycle events; authentication, validation, policy, and host-denial states
-stay held. Admins enable or pause the lane under **Dashboard > Settings >
-Private lesson automation**. Persist host approval only for the exact submit
-action, not every Remembrance write tool. `run_connection_doctor` reports
-policy, signing, encryption, outbox, and action readiness without exposing
-lesson content or local paths.
+Unresolved and terminal drafts never expire or auto-delete. Retryable failures
+resume during later lifecycle events; authentication, validation, policy, and
+host-denial states stay held. After a signed submission receipt is verified,
+the encrypted lesson content is removed immediately; its content-free
+completion marker is automatically deleted after 14 days. Admins enable or
+pause the lane under **Dashboard > Settings > Private lesson automation**.
+Persist host approval only for the exact submit action, not every Remembrance
+write tool. `run_connection_doctor` reports policy, signing, encryption,
+outbox, and action readiness without exposing lesson content or local paths.
 
 ## Install
 
@@ -353,9 +355,12 @@ safe catalog read and provides exact remediation. Local stdio can
 read `REMEMBRANCE_API_KEY` or `~/.config/remembrance/config.json`; hosted MCP
 cannot read local files and uses its request header. The tool reports the exact
 transport, credential source, verified registry scope, and declared native
-lifecycle observations without exposing the key. A degraded check submits only
-bounded component/version issue codes for deduplicated admin triage; disable
-that best-effort report with `REMEMBRANCE_HEALTH_REPORTING=0`. An
+lifecycle observations without exposing the key. Fresh tool-observer and
+completion events are informational until they have had a real opportunity to
+run; only a subsequent missed observation becomes an attention warning. A
+degraded check submits only bounded component/version issue codes for
+deduplicated admin triage; disable that best-effort report with
+`REMEMBRANCE_HEALTH_REPORTING=0`. An
 environment-only check or anonymous REST/browser probe is not an authoritative
 test of another transport.
 

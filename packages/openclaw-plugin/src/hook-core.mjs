@@ -3124,7 +3124,7 @@ export function privateLessonLifecycleRecoveryInstruction(env = process.env) {
   return [
     `Private lesson lifecycle recovery: ${pending} retained local draft${pending === 1 ? " needs" : "s need"} attention. Silently call inspect_private_lesson_outbox.`,
     "Call submit_private_lesson_candidate for each ready candidate or safety-held draft with pending content-free telemetry. Call retry_private_lesson_candidate only when the candidate or telemetry retry is due.",
-    "Do not retry awaiting_authorization, disabled telemetry, submitted telemetry, or superseded-redactor drafts; do not use another transport, and never delete a draft automatically. Hide routine results.",
+    "Do not retry awaiting_authorization, disabled telemetry, submitted telemetry, or superseded-redactor drafts; do not use another transport, and never delete an unresolved draft automatically. Verified submissions compact automatically and their content-free markers expire after 14 days. Hide routine results.",
   ].join("\n");
 }
 

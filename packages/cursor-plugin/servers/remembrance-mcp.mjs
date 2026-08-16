@@ -5073,6 +5073,18 @@ function pluginLifecycleCheck(pluginHealth, issues) {
       "The native plugin startup and prompt lifecycle is active."
     );
   }
+  if (pluginHealth.status === "pending") {
+    const pending = Array.isArray(pluginHealth.pending_components) ? pluginHealth.pending_components.filter(
+      (component) => component === "tool_observer" || component === "completion_hook"
+    ) : [];
+    const pendingSummary = pending.map(
+      (component) => component === "tool_observer" ? "tool observation" : "completion"
+    ).join(" and ");
+    return info(
+      "plugin_lifecycle",
+      `The native plugin startup and prompt lifecycle is active; ${pendingSummary || "remaining lifecycle"} verification is pending until ${pending.length === 1 ? "that event has" : "those events have"} an opportunity to run.`
+    );
+  }
   if (stringValue(pluginHealth.surface) === "codex" && issues.includes("hook_trust_required")) {
     const hookTrust = record(pluginHealth.hook_trust);
     const allowedEvents = /* @__PURE__ */ new Set([
@@ -5099,7 +5111,7 @@ function pluginLifecycleCheck(pluginHealth, issues) {
     const codex = stringValue(pluginHealth.surface) === "codex";
     return warning(
       "plugin_lifecycle",
-      "The core native lifecycle is active; tool or completion events have not occurred yet.",
+      "The core native lifecycle is active, but a tool-observer or completion event did not run after an observed opportunity.",
       "exercise_plugin_lifecycle",
       codex ? `Use one Remembrance tool, complete one turn, and rerun the doctor. If this warning remains, ${codexHookReviewAction("run_connection_doctor")}` : "Use one Remembrance tool, complete one turn, and rerun the doctor.",
       issues,
@@ -5179,6 +5191,9 @@ function issueCodes(value) {
 }
 function pass(id, summary) {
   return { id, status: "pass", summary, remediation: null };
+}
+function info(id, summary) {
+  return { id, status: "info", summary, remediation: null };
 }
 function notApplicable(id, summary) {
   return { id, status: "not_applicable", summary, remediation: null };
@@ -7595,7 +7610,7 @@ var seedSkills = [
     summary: "Operational setup and troubleshooting workflow for Remembrance across Claude Code, Codex, OpenClaw, Cursor, Gemini, MCP, REST, skill-only installs, enterprise keys, and local agent identity.",
     status: "active",
     visibility: "public",
-    version: "0.1.23",
+    version: "0.1.24",
     domains: ["agent-skills", "mcp", "resource-discovery"],
     tags: [
       "remembrance",
@@ -7646,7 +7661,7 @@ var seedSkills = [
         "gemini",
         "rest"
       ],
-      version: "0.1.23",
+      version: "0.1.24",
       status: "active",
       visibility: "public",
       providers: ["codex", "claude", "cursor", "openclaw", "generic"],
@@ -8009,8 +8024,11 @@ draft remains on the device in \`awaiting_authorization\`; do not retry it
 through REST, hosted MCP, or another transport. Timeouts, 429s, and 5xx
 responses retry with bounded backoff during later plugin lifecycles. A 401,
 403, policy change, or validation failure remains held for explicit repair.
-Drafts never expire or auto-delete. Inspect, retry, or explicitly delete one
-with the local private-lesson tools; deletion requires confirmation.
+Unresolved and terminal drafts never expire or auto-delete. Inspect, retry, or
+explicitly delete one with the local private-lesson tools; deletion requires
+confirmation. After a signed submission receipt is verified, the encrypted
+lesson content is removed immediately and its content-free completion marker
+is automatically deleted after 14 days.
 
 The signed organization policy pins \`private-lesson-redaction-v2\` and its exact
 supported redactor digest. If either is unsupported, the finalized
@@ -11053,8 +11071,16 @@ function isAlreadyExistsError(error) {
 }
 
 // src/connection-status.ts
-import { existsSync as existsSync2 } from "node:fs";
-import { createHash as createHash2 } from "node:crypto";
+import {
+  chmodSync,
+  existsSync as existsSync2,
+  lstatSync as lstatSync2,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
+import { createHash as createHash2, randomBytes } from "node:crypto";
 import { isIP } from "node:net";
 import { homedir as homedir3 } from "node:os";
 import { join as join3 } from "node:path";
@@ -11349,6 +11375,7 @@ var PLUGIN_HEALTH_COMPONENTS = [
   "tool_observer",
   "completion_hook"
 ];
+var CONNECTION_DOCTOR_PROBE_COMPONENT = "connection_doctor_probe";
 var PLUGIN_HEALTH_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 var PLUGIN_HEALTH_MAX_FUTURE_SKEW_MS = 5 * 60 * 1e3;
 var HOST_POLICY_OBSERVATION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
@@ -11371,6 +11398,57 @@ var nodeFileSystem2 = {
   mode: secureLocalFileMode,
   list: listSecureLocalDirectory
 };
+function recordConnectionDoctorLifecycleProbe(options = {}) {
+  const env = options.env ?? process.env;
+  const rawSurface = String(env.REMEMBRANCE_PLUGIN_HOST ?? "").trim().toLowerCase();
+  if (!isPluginHostSurface(rawSurface)) return false;
+  const healthDir = env.REMEMBRANCE_PLUGIN_HEALTH_DIR ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR) : join3(
+    options.homeDirectory ?? homedir3(),
+    ".cache",
+    "remembrance",
+    "plugin-health"
+  );
+  const path = join3(healthDir, `${rawSurface}.json`);
+  if (!existsSync2(path)) return false;
+  const temporaryPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    const parsed = JSON.parse(
+      readSecureLocalText(path, {
+        maxBytes: MAX_LOCAL_LIFECYCLE_MARKER_BYTES
+      })
+    );
+    if (!isRecord3(parsed) || parsed.surface !== rawSurface) return false;
+    const components = isRecord3(parsed.components) ? parsed.components : {};
+    if (typeof components.session_start !== "string") return false;
+    mkdirSync(healthDir, { recursive: true, mode: 448 });
+    const directoryMetadata = lstatSync2(healthDir);
+    if (directoryMetadata.isSymbolicLink() || !directoryMetadata.isDirectory()) {
+      return false;
+    }
+    chmodSync(healthDir, 448);
+    writeFileSync(
+      temporaryPath,
+      `${JSON.stringify({
+        ...parsed,
+        components: {
+          ...components,
+          [CONNECTION_DOCTOR_PROBE_COMPONENT]: (options.now ?? /* @__PURE__ */ new Date()).toISOString()
+        }
+      })}
+`,
+      { mode: 384, flag: "wx" }
+    );
+    renameSync(temporaryPath, path);
+    chmodSync(path, 384);
+    return true;
+  } catch {
+    try {
+      rmSync(temporaryPath, { force: true });
+    } catch {
+    }
+    return false;
+  }
+}
 function remembranceConfigPath(env = process.env, homeDirectory = homedir3()) {
   const configRoot = env.REMEMBRANCE_PLUGIN_HOST?.trim().toLowerCase() === "openclaw" ? join3(homeDirectory, ".config") : env.XDG_CONFIG_HOME ?? join3(homeDirectory, ".config");
   return join3(configRoot, "remembrance", "config.json");
@@ -11735,6 +11813,20 @@ function localPluginLifecycleHealth(options) {
     }
     if (Number.isFinite(latestMs)) mergedComponents[component] = latestValue;
   }
+  let latestDoctorProbe;
+  let latestDoctorProbeMs = Number.NEGATIVE_INFINITY;
+  for (const entry of cohort) {
+    const components2 = isRecord3(entry.marker.components) ? entry.marker.components : {};
+    const value = components2[CONNECTION_DOCTOR_PROBE_COMPONENT];
+    const valueMs = validLifecycleTimestamp(value, nowMs);
+    if (valueMs > latestDoctorProbeMs) {
+      latestDoctorProbeMs = valueMs;
+      latestDoctorProbe = value;
+    }
+  }
+  if (Number.isFinite(latestDoctorProbeMs)) {
+    mergedComponents[CONNECTION_DOCTOR_PROBE_COMPONENT] = latestDoctorProbe;
+  }
   const marker = {
     ...newestEntry.marker,
     components: mergedComponents,
@@ -11772,6 +11864,7 @@ function localPluginLifecycleHealth(options) {
   const coreLifecycleObserved = components.session_start.observed && components.prompt_hook.observed;
   const hookTrust = normalizedPluginHookTrust(marker.hook_trust);
   const hookTrustReviewEvents = hookTrust?.status === "review_required" ? new Set(hookTrust.review_events) : /* @__PURE__ */ new Set();
+  const pendingComponents = [];
   if (hookTrustReviewEvents.size > 0) {
     issues.push({
       code: "hook_trust_required",
@@ -11780,17 +11873,40 @@ function localPluginLifecycleHealth(options) {
       ])
     });
   }
-  if (coreLifecycleObserved && !components.tool_observer.observed && !hookTrustReviewEvents.has("PostToolUse")) {
-    issues.push({
-      code: "tool_observer_not_observed",
-      action: surface === "codex" ? `Use a Remembrance MCP tool, then call get_connection_status again. If this remains missing, ${codexHookReviewAction("get_connection_status")}` : "No native tool observer has run in this session yet. Use a Remembrance MCP tool, then call get_connection_status again."
-    });
+  if (coreLifecycleObserved && !hookTrustReviewEvents.has("PostToolUse")) {
+    const toolObserverMs = validLifecycleTimestamp(
+      componentRecord.tool_observer,
+      nowMs
+    );
+    const missedProbe = Number.isFinite(latestDoctorProbeMs) && (!Number.isFinite(toolObserverMs) || toolObserverMs < latestDoctorProbeMs);
+    if (missedProbe) {
+      issues.push({
+        code: "tool_observer_not_observed",
+        action: surface === "codex" ? `A prior doctor call completed without a later tool-observer event. ${codexHookReviewAction("get_connection_status")}` : "A prior doctor call completed without a later native tool-observer event. Update or reinstall the plugin, fully restart the host, and retry."
+      });
+    } else if (!components.tool_observer.observed) {
+      pendingComponents.push("tool_observer");
+    }
   }
-  if (coreLifecycleObserved && !components.completion_hook.observed && !hookTrustReviewEvents.has("Stop")) {
-    issues.push({
-      code: "completion_hook_not_observed",
-      action: surface === "codex" ? `Complete one turn, then call get_connection_status again. If this remains missing, ${codexHookReviewAction("get_connection_status")}` : "No native completion hook has run in this session yet. Complete one turn, then call get_connection_status again."
-    });
+  if (coreLifecycleObserved && !hookTrustReviewEvents.has("Stop")) {
+    const promptHookMs = validLifecycleTimestamp(
+      componentRecord.prompt_hook,
+      nowMs
+    );
+    const completionHookMs = validLifecycleTimestamp(
+      componentRecord.completion_hook,
+      nowMs
+    );
+    const completedTurnOpportunity = Number.isFinite(latestDoctorProbeMs) && Number.isFinite(promptHookMs) && promptHookMs > latestDoctorProbeMs;
+    const missedCompletedTurn = completedTurnOpportunity && (!Number.isFinite(completionHookMs) || completionHookMs < latestDoctorProbeMs);
+    if (missedCompletedTurn) {
+      issues.push({
+        code: "completion_hook_not_observed",
+        action: surface === "codex" ? `A new prompt arrived after a prior doctor call without an intervening completion event. ${codexHookReviewAction("get_connection_status")}` : "A new prompt arrived after a prior doctor call without an intervening native completion event. Update or reinstall the plugin, fully restart the host, and retry."
+      });
+    } else if (!components.completion_hook.observed) {
+      pendingComponents.push("completion_hook");
+    }
   }
   const lastSeenMs = validLifecycleTimestamp(marker.last_seen_at, nowMs);
   const lastSeenAt = Number.isFinite(lastSeenMs) ? String(marker.last_seen_at) : null;
@@ -11834,7 +11950,7 @@ function localPluginLifecycleHealth(options) {
   );
   return {
     expected: true,
-    status: issues.length === 0 ? "active" : onlyAwaitingEligibleEvents ? "partial" : "degraded",
+    status: issues.length === 0 ? pendingComponents.length > 0 ? "pending" : "active" : onlyAwaitingEligibleEvents ? "partial" : "degraded",
     surface,
     plugin_version: markerVersion || null,
     host_version: typeof marker.host_version === "string" && marker.host_version ? marker.host_version : null,
@@ -11847,6 +11963,7 @@ function localPluginLifecycleHealth(options) {
     },
     hook_trust: hookTrust,
     components,
+    pending_components: pendingComponents,
     issues,
     explanation: "Each host process session is tracked independently. Turn-specific prompt, tool, and completion observations are combined only when they share the current SessionStart marker."
   };
@@ -12090,7 +12207,7 @@ async function checkClientUpdate(input) {
 }
 
 // src/private-lesson-outbox.ts
-import { createCipheriv, createDecipheriv, randomBytes as randomBytes2 } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes as randomBytes3 } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   chmod as chmod2,
@@ -12106,7 +12223,7 @@ import { homedir as homedir4 } from "node:os";
 import { dirname as dirname2, join as join4 } from "node:path";
 
 // src/private-lesson-keychain.ts
-import { randomBytes } from "node:crypto";
+import { randomBytes as randomBytes2 } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync as existsSync3 } from "node:fs";
 var KEYCHAIN_SERVICE = "dev.remembrance.private-lessons";
@@ -12148,7 +12265,7 @@ function resolvePrivateLessonKeychainKey(env, dependencies = defaultDependencies
   if (!keychainEnabled(env, dependencies)) return null;
   const existing = readPrivateLessonKeychainKey(env, dependencies);
   if (existing) return existing;
-  const encoded = dependencies.randomKey ?? randomBytes(32).toString("base64url");
+  const encoded = dependencies.randomKey ?? randomBytes2(32).toString("base64url");
   const generated = decodeKey(encoded);
   if (!generated) return null;
   try {
@@ -12184,9 +12301,11 @@ function decodeKey(encoded) {
 // src/private-lesson-outbox.ts
 var PRIVATE_LESSON_OUTBOX_VERSION = "private-lesson-outbox-v1";
 var PRIVATE_LESSON_OUTBOX_MAX_BYTES = 64 * 1024 * 1024;
+var PRIVATE_LESSON_SUBMITTED_RECORD_RETENTION_MS = 14 * 24 * 60 * 60 * 1e3;
 var PRIVATE_LESSON_OUTBOX_MIN_BYTES = 1024 * 1024;
 var PRIVATE_LESSON_OUTBOX_MAX_CONFIGURED_BYTES = 1024 * 1024 * 1024;
 var PRIVATE_LESSON_DRAFT_MAX_BYTES = 64 * 1024;
+var PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES = 8 * 1024;
 var PRIVATE_LESSON_OUTBOX_LOCK_STALE_MS = 3e4;
 var PRIVATE_LESSON_OUTBOX_LOCK_WAIT_MS = 5e3;
 var privateLessonOutboxLockContext = new AsyncLocalStorage();
@@ -12254,6 +12373,9 @@ async function readPrivateLessonDraft(draftId, options = {}) {
     if (existsSync4(tombstonePath(outbox.directory, draftId))) {
       throw new Error("Private lesson draft was explicitly deleted.");
     }
+    if (existsSync4(submittedRecordPath(outbox.directory, draftId))) {
+      throw new Error("Private lesson draft was already submitted.");
+    }
     const path = draftPath(outbox.directory, draftId);
     await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
     const serialized = await readBoundedFile(
@@ -12272,10 +12394,39 @@ async function readPrivateLessonDraft(draftId, options = {}) {
     return reconciled;
   });
 }
+async function readPrivateLessonSubmittedRecord(draftId, options = {}) {
+  assertDraftId(draftId);
+  const directory = options.outboxDirectory ?? privateLessonOutboxDirectory(options.env, options.homeDirectory);
+  if (!existsSync4(directory)) return null;
+  assertPrivateLessonPathMetadata(await lstat(directory), "directory");
+  return withPrivateLessonOutboxLock(directory, async () => {
+    await reconcileSubmittedRecordsUnlocked(
+      directory,
+      options.now ?? /* @__PURE__ */ new Date()
+    );
+    if (existsSync4(tombstonePath(directory, draftId))) {
+      throw new Error("Private lesson draft was explicitly deleted.");
+    }
+    const path = submittedRecordPath(directory, draftId);
+    if (!existsSync4(path)) return null;
+    await assertRegularPrivateFile(
+      path,
+      PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
+    );
+    return parseSubmittedRecord(
+      await readBoundedFile(path, PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES),
+      draftId
+    );
+  });
+}
 async function reconcilePrivateLessonOutboxProfiles(options = {}) {
   const outbox = await readyOutbox(options);
   return withPrivateLessonOutboxLock(outbox.directory, async () => {
     await reconcileExplicitDeletionTombstones(outbox.directory);
+    await reconcileSubmittedRecordsUnlocked(
+      outbox.directory,
+      options.now ?? /* @__PURE__ */ new Date()
+    );
     const entries = await secureOutboxEntries(outbox.directory);
     let inspected = 0;
     let terminalized = 0;
@@ -12296,10 +12447,18 @@ async function reconcilePrivateLessonOutboxProfiles(options = {}) {
         encryption: outbox.encryption
       });
       inspected += 1;
+      if (draft.state === "submitted") {
+        await compactLegacySubmittedDraftUnlocked(draft, outbox);
+        continue;
+      }
       if (before !== "superseded_redactor" && draft.state === "superseded_redactor") {
         terminalized += 1;
       }
     }
+    await reconcileSubmittedRecordsUnlocked(
+      outbox.directory,
+      options.now ?? /* @__PURE__ */ new Date()
+    );
     return { inspected, terminalized };
   });
 }
@@ -12313,8 +12472,22 @@ async function listPrivateLessonDrafts(options = {}) {
   const entries = await secureOutboxEntries(outbox.directory);
   const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
   const drafts = [];
-  for (const name of entries.filter((item) => item.endsWith(".lesson.json"))) {
+  for (const name of entries.filter(
+    (item) => item.endsWith(".lesson.json") || item.endsWith(".submitted.json")
+  )) {
     if (drafts.length >= limit) break;
+    if (name.endsWith(".submitted.json")) {
+      const draftId = name.slice(0, -".submitted.json".length);
+      const completion = parseSubmittedRecord(
+        await readBoundedFile(
+          submittedRecordPath(outbox.directory, draftId),
+          PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
+        ),
+        draftId
+      );
+      drafts.push(submittedRecordListItem(completion));
+      continue;
+    }
     const draft = await readPrivateLessonDraft(
       name.slice(0, -".lesson.json".length),
       {
@@ -12333,6 +12506,7 @@ async function listPrivateLessonDrafts(options = {}) {
       created_at: draft.created_at,
       updated_at: draft.updated_at,
       submitted_at: draft.submitted_at,
+      completion_expires_at: null,
       terminal_reason: draft.terminal_reason,
       hold_telemetry_status: draft.hold_telemetry_status,
       hold_event_digest: draft.hold_event_digest,
@@ -12360,6 +12534,72 @@ async function updatePrivateLessonDraft(draftId, update, options = {}) {
     return next;
   });
 }
+async function completePrivateLessonSubmission(draftId, input, options = {}) {
+  assertDraftId(draftId);
+  const outbox = await readyOutbox(options);
+  return withPrivateLessonOutboxLock(outbox.directory, async () => {
+    await reconcileSubmittedRecordsUnlocked(
+      outbox.directory,
+      options.now ?? /* @__PURE__ */ new Date()
+    );
+    if (existsSync4(tombstonePath(outbox.directory, draftId))) {
+      throw new Error("Private lesson draft was explicitly deleted.");
+    }
+    const existingPath = submittedRecordPath(outbox.directory, draftId);
+    if (existsSync4(existingPath)) {
+      const completion2 = parseSubmittedRecord(
+        await readBoundedFile(
+          existingPath,
+          PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
+        ),
+        draftId
+      );
+      if (completion2.receipt_digest !== input.receipt_digest) {
+        throw new Error("Private lesson submitted receipt digest conflicts.");
+      }
+      return completion2;
+    }
+    const path = draftPath(outbox.directory, draftId);
+    await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
+    const envelope = parseEnvelope(
+      await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES),
+      draftId
+    );
+    const current = decryptDraft(envelope, outbox.encryption, true);
+    if (current.state === "superseded_redactor") {
+      throw new Error("Terminal private lesson drafts cannot be submitted.");
+    }
+    if (current.state === "submitted" && current.receipt_digest !== input.receipt_digest) {
+      throw new Error("Private lesson submitted receipt digest conflicts.");
+    }
+    const submittedAt = input.submitted_at ?? options.now ?? /* @__PURE__ */ new Date();
+    const submittedIso = submittedAt.toISOString();
+    const draft = current.state === "submitted" ? current : validateDraft({
+      ...current,
+      state: "submitted",
+      attempts: Math.min(1e3, current.attempts + 1),
+      next_retry_at: null,
+      last_error_code: null,
+      submitted_at: submittedIso,
+      receipt_digest: input.receipt_digest,
+      updated_at: submittedIso
+    });
+    const completion = submittedRecordFromDraft(draft, {
+      remote_status: input.remote_status,
+      processing_state: input.processing_state
+    });
+    await atomicWritePrivate(
+      submittedRecordPath(outbox.directory, draftId),
+      `${JSON.stringify(completion)}
+`
+    );
+    await unlink(path).catch(() => {
+    });
+    await syncDirectory(outbox.directory).catch(() => {
+    });
+    return completion;
+  });
+}
 async function deletePrivateLessonDraft(draftId, confirmed, options = {}) {
   if (!confirmed) {
     throw new Error(
@@ -12370,7 +12610,19 @@ async function deletePrivateLessonDraft(draftId, confirmed, options = {}) {
   const outbox = await readyOutbox(options);
   return withPrivateLessonOutboxLock(outbox.directory, async () => {
     const path = draftPath(outbox.directory, draftId);
-    await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
+    const completionPath = submittedRecordPath(outbox.directory, draftId);
+    if (!existsSync4(path) && !existsSync4(completionPath)) {
+      throw new Error("Private lesson draft does not exist.");
+    }
+    if (existsSync4(path)) {
+      await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
+    }
+    if (existsSync4(completionPath)) {
+      await assertRegularPrivateFile(
+        completionPath,
+        PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
+      );
+    }
     const tombstone = {
       version: "private-lesson-outbox-deletion-v1",
       draft_id: draftId,
@@ -12382,7 +12634,12 @@ async function deletePrivateLessonDraft(draftId, confirmed, options = {}) {
       `${JSON.stringify(tombstone)}
 `
     );
-    await unlink(path);
+    await unlink(path).catch((error) => {
+      if (!isMissingError(error)) throw error;
+    });
+    await unlink(completionPath).catch((error) => {
+      if (!isMissingError(error)) throw error;
+    });
     await syncDirectory(outbox.directory);
     return tombstone;
   });
@@ -12413,6 +12670,15 @@ async function privateLessonOutboxSummary(options = {}) {
     totalBytes += metadata.size;
     if (name.endsWith(".deleted.json")) {
       deletionTombstones += 1;
+      continue;
+    }
+    if (name.endsWith(".submitted.json")) {
+      const draftId = name.slice(0, -".submitted.json".length);
+      parseSubmittedRecord(
+        await readBoundedFile(path, PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES),
+        draftId
+      );
+      counts.submitted += 1;
       continue;
     }
     if (!name.endsWith(".lesson.json")) continue;
@@ -12477,6 +12743,11 @@ async function inspectPrivateLessonOutboxHealth(options = {}) {
       outboxDirectory: directory,
       encryption
     });
+  } else {
+    await withPrivateLessonOutboxLock(
+      directory,
+      () => reconcileSubmittedRecordsUnlocked(directory, options.now ?? /* @__PURE__ */ new Date())
+    );
   }
   const entries = await secureOutboxEntries(directory);
   const counts = emptyOutboxCounts();
@@ -12490,6 +12761,15 @@ async function inspectPrivateLessonOutboxHealth(options = {}) {
     totalBytes += entry.size;
     if (name.endsWith(".deleted.json")) {
       deletionTombstones += 1;
+      continue;
+    }
+    if (name.endsWith(".submitted.json")) {
+      const draftId = name.slice(0, -".submitted.json".length);
+      parseSubmittedRecord(
+        await readBoundedFile(path, PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES),
+        draftId
+      );
+      counts.submitted += 1;
       continue;
     }
     if (!name.endsWith(".lesson.json")) continue;
@@ -12559,7 +12839,7 @@ async function resolvePrivateLessonOutboxEncryption(options = {}) {
     encoded = await readConcurrentPrivateLessonFallbackKey(path);
   } catch (error) {
     if (!isMissingError(error)) throw error;
-    encoded = randomBytes2(32).toString("base64url");
+    encoded = randomBytes3(32).toString("base64url");
     try {
       await atomicWritePrivate(path, `${encoded}
 `);
@@ -12691,7 +12971,7 @@ async function withPrivateLessonOutboxLock(directory, operation) {
       if (Date.now() - metadata.mtimeMs > PRIVATE_LESSON_OUTBOX_LOCK_STALE_MS) {
         const stalePath = join4(
           directory,
-          `.outbox.lock.stale-${randomBytes2(12).toString("hex")}`
+          `.outbox.lock.stale-${randomBytes3(12).toString("hex")}`
         );
         try {
           await rename(lockPath, stalePath);
@@ -12741,14 +13021,22 @@ async function reconcileExplicitDeletionTombstones(directory) {
       await readBoundedFile(join4(directory, name), 4 * 1024),
       name.slice(0, -".deleted.json".length)
     );
-    const retainedDraft = draftPath(directory, tombstone.draft_id);
-    if (!existsSync4(retainedDraft)) continue;
-    await assertRegularPrivateFile(
-      retainedDraft,
-      PRIVATE_LESSON_DRAFT_MAX_BYTES
-    );
-    await unlink(retainedDraft);
-    changed = true;
+    const retainedPaths = [
+      {
+        path: draftPath(directory, tombstone.draft_id),
+        maxBytes: PRIVATE_LESSON_DRAFT_MAX_BYTES
+      },
+      {
+        path: submittedRecordPath(directory, tombstone.draft_id),
+        maxBytes: PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
+      }
+    ];
+    for (const retained of retainedPaths) {
+      if (!existsSync4(retained.path)) continue;
+      await assertRegularPrivateFile(retained.path, retained.maxBytes);
+      await unlink(retained.path);
+      changed = true;
+    }
   }
   if (changed) await syncDirectory(directory);
 }
@@ -12779,7 +13067,7 @@ async function writeDraftUnlocked(draft, outbox, replace, _currentOutboxBytes, a
   if (plaintext.length > PRIVATE_LESSON_DRAFT_MAX_BYTES) {
     throw new Error("Private lesson draft exceeds its local size limit.");
   }
-  const nonce = randomBytes2(12);
+  const nonce = randomBytes3(12);
   const aad = Buffer.from(
     canonicalJson({
       version: "private-lesson-outbox-envelope-v1",
@@ -12947,6 +13235,135 @@ function terminalizeUnsupportedProfile(draft, now) {
     };
   }
 }
+function submittedRecordFromDraft(draft, remote) {
+  if (draft.state !== "submitted" || !draft.submitted_at || !draft.receipt_digest) {
+    throw new Error("Private lesson submission completion is incomplete.");
+  }
+  return parseSubmittedRecord(
+    JSON.stringify({
+      version: "private-lesson-outbox-submitted-v1",
+      draft_id: draft.draft_id,
+      state: "submitted",
+      payload_digest: draft.payload_digest,
+      redaction_version: draft.redaction_version,
+      redactor_digest: draft.redactor_digest,
+      attempts: draft.attempts,
+      created_at: draft.created_at,
+      updated_at: draft.updated_at,
+      submitted_at: draft.submitted_at,
+      expires_at: new Date(
+        Date.parse(draft.submitted_at) + PRIVATE_LESSON_SUBMITTED_RECORD_RETENTION_MS
+      ).toISOString(),
+      receipt_digest: draft.receipt_digest,
+      remote_status: remote.remote_status,
+      processing_state: remote.processing_state
+    }),
+    draft.draft_id
+  );
+}
+async function compactLegacySubmittedDraftUnlocked(draft, outbox) {
+  const completion = submittedRecordFromDraft(draft, {
+    remote_status: null,
+    processing_state: null
+  });
+  const path = submittedRecordPath(outbox.directory, draft.draft_id);
+  try {
+    await atomicWritePrivate(path, `${JSON.stringify(completion)}
+`);
+  } catch (error) {
+    if (!isAlreadyExistsError2(error)) throw error;
+    const existing = parseSubmittedRecord(
+      await readBoundedFile(path, PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES),
+      draft.draft_id
+    );
+    if (existing.payload_digest !== completion.payload_digest || existing.receipt_digest !== completion.receipt_digest) {
+      throw new Error("Private lesson submitted record conflicts.");
+    }
+  }
+  await unlink(draftPath(outbox.directory, draft.draft_id));
+  await syncDirectory(outbox.directory);
+}
+async function reconcileSubmittedRecordsUnlocked(directory, now) {
+  const entries = await secureOutboxEntries(directory);
+  let changed = false;
+  for (const name of entries.filter(
+    (entry) => entry.endsWith(".submitted.json")
+  )) {
+    const draftId = name.slice(0, -".submitted.json".length);
+    const path = submittedRecordPath(directory, draftId);
+    const completion = parseSubmittedRecord(
+      await readBoundedFile(path, PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES),
+      draftId
+    );
+    const retainedDraft = draftPath(directory, draftId);
+    if (existsSync4(retainedDraft)) {
+      await assertRegularPrivateFile(
+        retainedDraft,
+        PRIVATE_LESSON_DRAFT_MAX_BYTES
+      );
+      await unlink(retainedDraft);
+      changed = true;
+    }
+    if (Date.parse(completion.expires_at) <= now.getTime()) {
+      await unlink(path);
+      changed = true;
+    }
+  }
+  if (changed) await syncDirectory(directory);
+}
+function submittedRecordListItem(completion) {
+  return {
+    draft_id: completion.draft_id,
+    state: "submitted",
+    payload_digest: completion.payload_digest,
+    attempts: completion.attempts,
+    next_retry_at: null,
+    last_error_code: null,
+    created_at: completion.created_at,
+    updated_at: completion.updated_at,
+    submitted_at: completion.submitted_at,
+    completion_expires_at: completion.expires_at,
+    terminal_reason: null,
+    hold_telemetry_status: "not_required",
+    hold_event_digest: null,
+    hold_reported_at: null
+  };
+}
+function parseSubmittedRecord(serialized, expectedDraftId) {
+  const value = JSON.parse(serialized);
+  const allowedKeys = /* @__PURE__ */ new Set([
+    "version",
+    "draft_id",
+    "state",
+    "payload_digest",
+    "redaction_version",
+    "redactor_digest",
+    "attempts",
+    "created_at",
+    "updated_at",
+    "submitted_at",
+    "expires_at",
+    "receipt_digest",
+    "remote_status",
+    "processing_state"
+  ]);
+  if (!isRecord4(value) || Object.keys(value).some((key) => !allowedKeys.has(key)) || value.version !== "private-lesson-outbox-submitted-v1" || value.draft_id !== expectedDraftId || value.state !== "submitted" || !isSha256Digest(value.payload_digest) || typeof value.redaction_version !== "string" || !isSha256Digest(value.redactor_digest) || !Number.isInteger(value.attempts) || Number(value.attempts) < 1 || Number(value.attempts) > 1e3 || !isIsoTimestamp(value.created_at) || !isIsoTimestamp(value.updated_at) || !isIsoTimestamp(value.submitted_at) || !isIsoTimestamp(value.expires_at) || !isSha256Digest(value.receipt_digest) || value.remote_status !== null && value.remote_status !== "accepted_private_candidate" && value.remote_status !== "duplicate" || value.processing_state !== null && value.processing_state !== "queued_for_verification" && value.processing_state !== "already_queued") {
+    throw new Error("Private lesson submitted record is invalid.");
+  }
+  const submittedAt = Date.parse(value.submitted_at);
+  if (Date.parse(value.created_at) > submittedAt || Date.parse(value.updated_at) < submittedAt || Date.parse(value.expires_at) !== submittedAt + PRIVATE_LESSON_SUBMITTED_RECORD_RETENTION_MS || value.remote_status === null !== (value.processing_state === null) || value.remote_status === "accepted_private_candidate" && value.processing_state !== "queued_for_verification" || value.remote_status === "duplicate" && value.processing_state !== "already_queued") {
+    throw new Error("Private lesson submitted record is inconsistent.");
+  }
+  return value;
+}
+function isSha256Digest(value) {
+  return typeof value === "string" && /^sha256:[a-f0-9]{64}$/.test(value);
+}
+function isIsoTimestamp(value) {
+  if (typeof value !== "string") return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
 function isHoldTelemetryStatus(value) {
   return value === "not_required" || value === "pending" || value === "awaiting_authorization" || value === "retry_scheduled" || value === "submitted" || value === "disabled";
 }
@@ -12994,7 +13411,7 @@ async function atomicReplacePrivate(path, data) {
   await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
   const temporary = join4(
     dirname2(path),
-    `.${randomBytes2(12).toString("hex")}.tmp`
+    `.${randomBytes3(12).toString("hex")}.tmp`
   );
   try {
     await atomicWritePrivate(temporary, data);
@@ -13056,6 +13473,10 @@ function draftPath(directory, draftId) {
   assertDraftId(draftId);
   return join4(directory, `${draftId}.lesson.json`);
 }
+function submittedRecordPath(directory, draftId) {
+  assertDraftId(draftId);
+  return join4(directory, `${draftId}.submitted.json`);
+}
 function tombstonePath(directory, draftId) {
   assertDraftId(draftId);
   return join4(directory, `${draftId}.deleted.json`);
@@ -13108,7 +13529,7 @@ async function readConcurrentPrivateLessonFallbackKey(path) {
 // src/server.ts
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.1.73" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.74" : "0.0.0-dev";
 var tools = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var inputBuffer = Buffer.alloc(0);
@@ -13576,6 +13997,13 @@ async function preparePrivateLessonDraft(input) {
 async function inspectPrivateLessonOutbox(input) {
   const summary = await privateLessonOutboxSummary();
   if (input.draft_id) {
+    const completion = await readPrivateLessonSubmittedRecord(input.draft_id);
+    if (completion) {
+      return {
+        draft: privateLessonSubmittedActionResult(completion),
+        outbox: publicOutboxSummary(summary)
+      };
+    }
     const draft = await readPrivateLessonDraft(input.draft_id);
     return {
       draft: privateLessonDraftActionResult(draft),
@@ -13588,6 +14016,12 @@ async function inspectPrivateLessonOutbox(input) {
   };
 }
 async function submitPrivateLessonDraft(draftId, access, allowPolicyRefresh) {
+  const completion = await readPrivateLessonSubmittedRecord(draftId);
+  if (completion) {
+    return privateLessonSubmittedActionResult(completion, {
+      status: "already_submitted"
+    });
+  }
   let draft = await readPrivateLessonDraft(draftId);
   if (draft.state === "superseded_redactor") {
     return privateLessonDraftActionResult(draft, {
@@ -13596,7 +14030,18 @@ async function submitPrivateLessonDraft(draftId, access, allowPolicyRefresh) {
     });
   }
   if (draft.state === "submitted") {
-    return privateLessonDraftActionResult(draft, {
+    if (!draft.receipt_digest) {
+      throw new PrivateLessonPolicySafetyError(
+        "Submitted private lesson draft is missing its receipt digest."
+      );
+    }
+    const migrated = await completePrivateLessonSubmission(draft.draft_id, {
+      receipt_digest: draft.receipt_digest,
+      remote_status: null,
+      processing_state: null,
+      submitted_at: draft.submitted_at ? new Date(draft.submitted_at) : void 0
+    });
+    return privateLessonSubmittedActionResult(migrated, {
       status: "already_submitted"
     });
   }
@@ -13758,23 +14203,43 @@ async function submitPrivateLessonDraft(draftId, access, allowPolicyRefresh) {
       );
     }
     const receiptDigest = hashValue(canonicalJson(receipt));
-    draft = await updatePrivateLessonDraft(draft.draft_id, (current) => ({
-      ...current,
+    const completionProcessingState = processingState === "queued_for_verification" || processingState === "already_queued" ? processingState : null;
+    if (!completionProcessingState) {
+      throw new PrivateLessonPolicySafetyError(
+        "Private lesson submission omitted its processing state."
+      );
+    }
+    const completion2 = await completePrivateLessonSubmission(draft.draft_id, {
+      receipt_digest: receiptDigest,
+      remote_status: status,
+      processing_state: completionProcessingState
+    });
+    draft = {
+      ...draft,
       state: "submitted",
-      attempts: Math.min(1e3, current.attempts + 1),
+      attempts: completion2.attempts,
       next_retry_at: null,
       last_error_code: null,
-      submitted_at: (/* @__PURE__ */ new Date()).toISOString(),
-      receipt_digest: receiptDigest,
-      policy: receiptPolicy
-    }));
+      submitted_at: completion2.submitted_at,
+      receipt_digest: completion2.receipt_digest,
+      policy: receiptPolicy,
+      updated_at: completion2.updated_at
+    };
     return {
-      ...privateLessonDraftActionResult(draft, { status }),
+      ...privateLessonDraftActionResult(draft, {
+        status,
+        completion_expires_at: completion2.expires_at
+      }),
       receipt,
       processing_state: processingState
     };
   } catch (error) {
     draft = await persistPrivateLessonFailure(draft, error);
+    if (draft.state === "submitted") {
+      return privateLessonDraftActionResult(draft, {
+        status: "already_submitted"
+      });
+    }
     return privateLessonDraftActionResult(draft, {
       status: "not_submitted",
       action_required: draft.state === "awaiting_authorization" ? "Authorize the exact submit_private_lesson_candidate action, then retry." : null
@@ -14152,13 +14617,37 @@ function privateLessonPolicyBindingConflict(stored, current, allowPolicyRefresh)
   return null;
 }
 async function persistPrivateLessonFailure(draft, error, explicitCode) {
-  return updatePrivateLessonDraft(
-    draft.draft_id,
-    (current) => current.state === "submitted" || current.state === "superseded_redactor" ? current : {
-      ...current,
-      ...privateLessonFailureTransition(current, error, explicitCode)
+  const completed = await readPrivateLessonSubmittedRecord(draft.draft_id);
+  if (completed) return submittedDraftFromCompletion(draft, completed);
+  try {
+    return await updatePrivateLessonDraft(
+      draft.draft_id,
+      (current) => current.state === "submitted" || current.state === "superseded_redactor" ? current : {
+        ...current,
+        ...privateLessonFailureTransition(current, error, explicitCode)
+      }
+    );
+  } catch (updateError) {
+    const racedCompletion = await readPrivateLessonSubmittedRecord(
+      draft.draft_id
+    );
+    if (racedCompletion) {
+      return submittedDraftFromCompletion(draft, racedCompletion);
     }
-  );
+    throw updateError;
+  }
+}
+function submittedDraftFromCompletion(draft, completion) {
+  return {
+    ...draft,
+    state: "submitted",
+    attempts: completion.attempts,
+    next_retry_at: null,
+    last_error_code: null,
+    submitted_at: completion.submitted_at,
+    receipt_digest: completion.receipt_digest,
+    updated_at: completion.updated_at
+  };
 }
 async function persistPrivateLessonHoldFailure(draft, error, explicitCode) {
   return updatePrivateLessonDraft(draft.draft_id, (current) => {
@@ -14247,6 +14736,29 @@ function privateLessonDraftActionResult(draft, extra = {}) {
     hold_receipt_digest: draft.hold_receipt_digest,
     hold_reported_at: draft.hold_reported_at,
     retained_locally: draft.state !== "submitted",
+    ...extra
+  };
+}
+function privateLessonSubmittedActionResult(completion, extra = {}) {
+  return {
+    draft_id: completion.draft_id,
+    state: "submitted",
+    payload_digest: completion.payload_digest,
+    redaction_version: completion.redaction_version,
+    redactor_digest: completion.redactor_digest,
+    redaction_counts: {},
+    held_reasons: [],
+    attempts: completion.attempts,
+    next_retry_at: null,
+    last_error_code: null,
+    terminal_reason: null,
+    hold_telemetry_status: "not_required",
+    hold_event_digest: null,
+    hold_receipt_digest: null,
+    hold_reported_at: null,
+    submitted_at: completion.submitted_at,
+    completion_expires_at: completion.expires_at,
+    retained_locally: false,
     ...extra
   };
 }
@@ -14792,6 +15304,9 @@ async function runLocalConnectionDoctor(options, execution = "mcp_tool", access 
     policyResult,
     outboxResult
   });
+  if (execution === "mcp_tool") {
+    recordConnectionDoctorLifecycleProbe();
+  }
   return {
     ...report,
     status: report.status === "healthy" && privateLessonAutomation.status !== "ready" && privateLessonAutomation.status !== "not_applicable" ? "attention" : report.status,

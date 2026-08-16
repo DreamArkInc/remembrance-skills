@@ -75,7 +75,9 @@ any Remembrance hook as **Needs review**, treat the installation as degraded
 until hook trust, restart, and MCP registration are fixed.
 `run_connection_doctor` reads Codex's own hook trust status and names the exact
 Remembrance hook that needs review. The health marker stores only bounded event
-names and trust states, never hook commands, local paths, or hashes.
+names and trust states, never hook commands, local paths, or hashes. On a fresh
+process, unexercised tool-observer and completion events are informational; a
+warning appears only after a later lifecycle opportunity is actually missed.
 
 ## Installation identity and preferences
 
@@ -215,9 +217,11 @@ Routine organization lessons use a narrower two-stage flow. The local
 then encrypts only the post-redaction record in a durable outbox. The separate
 `submit_private_lesson_candidate` MCP action sends those exact bytes to the
 authenticated organization's private verifier queue. It cannot create or
-automatically propagate public content. Drafts never expire or auto-delete;
-retryable failures resume later, while authentication, validation, policy, and
-host-denial states remain held.
+automatically propagate public content. Unresolved and terminal drafts never
+expire or auto-delete; retryable failures resume later, while authentication,
+validation, policy, and host-denial states remain held. Verified submissions
+discard encrypted lesson content immediately; their content-free completion
+markers are automatically deleted after 14 days.
 
 The signed policy pins the corrected `private-lesson-redaction-v2` profile and
 its exact digest. Unsupported-profile drafts become terminal

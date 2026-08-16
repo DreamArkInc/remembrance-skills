@@ -77,7 +77,8 @@ openclaw mcp doctor remembrance --probe
 Then run Remembrance MCP `run_connection_doctor` and require
 `safe_to_query: true`. It verifies the active connection and gives one exact
 next step without exposing the key. Use `get_connection_status` only for lower-
-level fields. Do not conclude that OpenClaw is
+level fields. Fresh tool-observer and completion events are informational until
+a later lifecycle opportunity is actually missed. Do not conclude that OpenClaw is
 anonymous from an unset `REMEMBRANCE_API_KEY` or an anonymous curl/browser
 probe; those do not test the bundled plugin process.
 
@@ -244,8 +245,11 @@ Routine organization lessons use local `prepare_private_lesson_candidate` to
 canonicalize and redact in memory and retain only an encrypted post-redaction
 draft. The separately approved `submit_private_lesson_candidate` action sends
 those exact bytes to the organization's private verifier queue and can never
-create or automatically propagate public content. Drafts never expire or
-auto-delete; retryable failures resume later and held drafts remain local.
+create or automatically propagate public content. Unresolved and terminal
+drafts never expire or auto-delete; retryable failures resume later and held
+drafts remain local. Verified submissions discard encrypted lesson content
+immediately; their content-free completion markers are automatically deleted
+after 14 days.
 
 The signed policy pins the corrected `private-lesson-redaction-v2` profile and
 its exact digest. Unsupported-profile drafts become terminal

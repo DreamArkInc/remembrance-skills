@@ -292,8 +292,11 @@ draft remains on the device in `awaiting_authorization`; do not retry it
 through REST, hosted MCP, or another transport. Timeouts, 429s, and 5xx
 responses retry with bounded backoff during later plugin lifecycles. A 401,
 403, policy change, or validation failure remains held for explicit repair.
-Drafts never expire or auto-delete. Inspect, retry, or explicitly delete one
-with the local private-lesson tools; deletion requires confirmation.
+Unresolved and terminal drafts never expire or auto-delete. Inspect, retry, or
+explicitly delete one with the local private-lesson tools; deletion requires
+confirmation. After a signed submission receipt is verified, the encrypted
+lesson content is removed immediately and its content-free completion marker
+is automatically deleted after 14 days.
 
 The signed organization policy pins `private-lesson-redaction-v2` and its exact
 supported redactor digest. If either is unsupported, the finalized

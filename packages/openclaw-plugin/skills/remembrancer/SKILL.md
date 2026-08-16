@@ -22,8 +22,8 @@ background and register a privacy-bounded runtime profile. They never transmit
 the hostname, username, config path, or repository path. Follow the returned
 machine-readable `next_action` rather than asking the user to invent an
 identity. Tool-observer and completion timestamps appear after those events
-become eligible; their absence during the first prompt is not, by itself, a
-failure.
+become eligible. A fresh doctor reports them as informational; only a later
+missed lifecycle opportunity raises an attention warning.
 
 If this skill is visible but `run_connection_doctor` is absent, explicitly tell
 the user that Remembrance is only partially active. Do not silently fall back
@@ -176,8 +176,10 @@ nothing was sent and the encrypted draft remains local in
 `awaiting_authorization`; do not retry it through REST or another transport.
 Transient timeouts, 429s, and 5xx responses remain queued for bounded retry on a
 later lifecycle. Authentication, policy, or validation failures remain held.
-Queued lessons never expire or auto-delete; deleting one requires an explicit
-confirmed local action.
+Unresolved and terminal lessons never expire or auto-delete; deleting one
+requires an explicit confirmed local action. After a signed submission receipt
+is verified, the encrypted lesson content is removed immediately and its
+content-free completion marker is automatically deleted after 14 days.
 
 The signed policy pins `private-lesson-redaction-v2` and the exact digest of its
 current rules. An unsupported version or digest moves the encrypted draft to

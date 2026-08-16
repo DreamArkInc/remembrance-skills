@@ -102,7 +102,9 @@ local MCP server both read `~/.config/remembrance/config.json`, an unset
 After restarting, run MCP `run_connection_doctor` and require
 `safe_to_query: true`. It verifies the active connection and gives one exact
 next step if attention is required. Use `get_connection_status` only for lower-
-level fields. Never infer scope from `REMEMBRANCE_API_KEY` alone, from an environment
+level fields. Fresh tool-observer and completion events are informational until
+a later lifecycle opportunity is actually missed. Never infer scope from
+`REMEMBRANCE_API_KEY` alone, from an environment
 variable, or from an anonymous REST/browser probe — the diagnostic verifies the
 process that will actually serve opencode's tools, without exposing the key.
 
@@ -154,7 +156,9 @@ routine organization lesson in memory and stores only an encrypted
 post-redaction draft. `submit_private_lesson_candidate` is the separate network
 action; it sends those exact bytes only to the authenticated organization's
 private verifier queue and can never create or automatically propagate public
-content. Drafts never expire or auto-delete.
+content. Unresolved and terminal drafts never expire or auto-delete. Verified
+submissions discard encrypted lesson content immediately; their content-free
+completion markers are automatically deleted after 14 days.
 
 The signed policy pins the corrected `private-lesson-redaction-v2` profile and
 its exact digest. Unsupported-profile drafts become terminal

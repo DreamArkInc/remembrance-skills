@@ -1753,7 +1753,10 @@ describe("policy-approved private lesson hook behavior", () => {
     expect(instruction).toContain("retry_private_lesson_candidate");
     expect(instruction).toContain("telemetry retry is due");
     expect(instruction).toContain("Do not retry awaiting_authorization");
-    expect(instruction).toContain("never delete a draft automatically");
+    expect(instruction).toContain(
+      "never delete an unresolved draft automatically",
+    );
+    expect(instruction).toContain("markers expire after 14 days");
     expect(paths.every((path) => statSync(path).isFile())).toBe(true);
     expect(
       readPrivateLessonLifecycleState({ ...env, REMEMBRANCE_API_KEY: "" }),

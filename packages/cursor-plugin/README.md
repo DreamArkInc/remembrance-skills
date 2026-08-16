@@ -87,7 +87,8 @@ chmod 600 ~/.config/remembrance/config.json
 After restart, run MCP `run_connection_doctor` and require
 `safe_to_query: true`. It verifies the active connection and gives one exact
 next step if attention is required. Use `get_connection_status` only for lower-
-level fields. Never
+level fields. Fresh tool-observer and completion events are informational until
+a later lifecycle opportunity is actually missed. Never
 infer Cursor's plugin scope from `REMEMBRANCE_API_KEY` alone or from an
 anonymous REST/browser probe; the diagnostic verifies the process that will
 actually serve Cursor's tools without exposing the key.
@@ -154,7 +155,9 @@ Routine organization lessons are prepared locally with
 and stores only an encrypted post-redaction draft. The separate
 `submit_private_lesson_candidate` action sends those exact bytes to the private
 organization verifier queue and can never create or automatically propagate
-public content. Drafts never expire or auto-delete.
+public content. Unresolved and terminal drafts never expire or auto-delete.
+Verified submissions discard encrypted lesson content immediately; their
+content-free completion markers are automatically deleted after 14 days.
 
 The signed policy pins the corrected `private-lesson-redaction-v2` profile and
 its exact digest. Unsupported-profile drafts become terminal

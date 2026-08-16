@@ -144,7 +144,9 @@ submission-capable organization key.
 Run `run_connection_doctor` if setup seems incomplete. It performs one safe
 catalog read, verifies the active transport, registry scope, and native
 lifecycle, and returns one exact remediation without exposing the key. Use
-`get_connection_status` only for the underlying fields. Claude Code's
+`get_connection_status` only for the underlying fields. Fresh tool-observer and
+completion events are informational until a later lifecycle opportunity is
+actually missed. Claude Code's
 hooks and bundled MCP read `~/.config/remembrance/config.json`. A
 manual hosted MCP override cannot read that file and needs a request
 credential. An unset environment variable or anonymous curl/browser probe is
@@ -201,7 +203,9 @@ Routine organization lessons use a narrower two-stage flow. Local
 stores only an encrypted post-redaction draft. The separate
 `submit_private_lesson_candidate` action sends those exact bytes to the
 organization's private verifier queue; it cannot create or automatically
-propagate public content. Drafts never expire or auto-delete.
+propagate public content. Unresolved and terminal drafts never expire or
+auto-delete. Verified submissions discard encrypted lesson content immediately;
+their content-free completion markers are automatically deleted after 14 days.
 
 The signed policy pins the corrected `private-lesson-redaction-v2` profile and
 its exact digest. Unsupported-profile drafts become terminal
