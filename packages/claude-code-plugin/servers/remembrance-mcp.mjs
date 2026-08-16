@@ -4986,6 +4986,16 @@ function clientUpdateCheck(update) {
       update.guidance.command ?? void 0
     );
   }
+  if (update.status === "current" && compareClientVersions(update.current_version, update.latest_version) > 0) {
+    return warning(
+      "client_update",
+      `This process runs Remembrance ${update.current_version}, ahead of the published ${update.latest_version} manifest for this surface.`,
+      "client_release_manifest_behind",
+      "Do not downgrade this client. Release automation should activate the verified per-surface manifest; querying and contributions may continue.",
+      void 0,
+      true
+    );
+  }
   if (update.status === "current") {
     return pass(
       "client_update",
@@ -5006,8 +5016,9 @@ function clientUpdateSummary(update) {
     };
   }
   if (update.status === "current" || update.status === "update_available") {
+    const aheadOfManifest = update.status === "current" && compareClientVersions(update.current_version, update.latest_version) > 0;
     return {
-      status: update.status,
+      status: aheadOfManifest ? "ahead_of_manifest" : update.status,
       current_version: update.current_version,
       latest_version: update.latest_version
     };
@@ -13097,7 +13108,7 @@ async function readConcurrentPrivateLessonFallbackKey(path) {
 // src/server.ts
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.1.72" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.73" : "0.0.0-dev";
 var tools = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var inputBuffer = Buffer.alloc(0);
