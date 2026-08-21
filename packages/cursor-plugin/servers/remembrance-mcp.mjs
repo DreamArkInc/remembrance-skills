@@ -12452,6 +12452,44 @@ async function readPrivateLessonSubmittedRecord(draftId, options = {}) {
     );
   });
 }
+async function readPrivateLessonSubmissionSource(draftId, options = {}) {
+  assertDraftId(draftId);
+  const outbox = await readyOutbox(options);
+  return withPrivateLessonOutboxLock(outbox.directory, async () => {
+    await reconcileSubmittedRecordsUnlocked(
+      outbox.directory,
+      options.now ?? /* @__PURE__ */ new Date()
+    );
+    if (existsSync4(tombstonePath(outbox.directory, draftId))) {
+      throw new Error("Private lesson draft was explicitly deleted.");
+    }
+    const completionPath = submittedRecordPath(outbox.directory, draftId);
+    if (existsSync4(completionPath)) {
+      await assertRegularPrivateFile(
+        completionPath,
+        PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
+      );
+      return {
+        kind: "submitted",
+        completion: parseSubmittedRecord(
+          await readBoundedFile(
+            completionPath,
+            PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
+          ),
+          draftId
+        )
+      };
+    }
+    return {
+      kind: "draft",
+      draft: await readPrivateLessonDraft(draftId, {
+        ...options,
+        outboxDirectory: outbox.directory,
+        encryption: outbox.encryption
+      })
+    };
+  });
+}
 async function reconcilePrivateLessonOutboxProfiles(options = {}) {
   const outbox = await readyOutbox(options);
   return withPrivateLessonOutboxLock(outbox.directory, async () => {
@@ -14049,13 +14087,13 @@ async function inspectPrivateLessonOutbox(input) {
   };
 }
 async function submitPrivateLessonDraft(draftId, access, allowPolicyRefresh) {
-  const completion = await readPrivateLessonSubmittedRecord(draftId);
-  if (completion) {
-    return privateLessonSubmittedActionResult(completion, {
+  const source = await readPrivateLessonSubmissionSource(draftId);
+  if (source.kind === "submitted") {
+    return privateLessonSubmittedActionResult(source.completion, {
       status: "already_submitted"
     });
   }
-  let draft = await readPrivateLessonDraft(draftId);
+  let draft = source.draft;
   if (draft.state === "superseded_redactor") {
     return privateLessonDraftActionResult(draft, {
       status: "superseded_redactor",
@@ -14242,7 +14280,7 @@ async function submitPrivateLessonDraft(draftId, access, allowPolicyRefresh) {
         "Private lesson submission omitted its processing state."
       );
     }
-    const completion2 = await completePrivateLessonSubmission(draft.draft_id, {
+    const completion = await completePrivateLessonSubmission(draft.draft_id, {
       receipt_digest: receiptDigest,
       remote_status: status,
       processing_state: completionProcessingState
@@ -14250,18 +14288,18 @@ async function submitPrivateLessonDraft(draftId, access, allowPolicyRefresh) {
     draft = {
       ...draft,
       state: "submitted",
-      attempts: completion2.attempts,
+      attempts: completion.attempts,
       next_retry_at: null,
       last_error_code: null,
-      submitted_at: completion2.submitted_at,
-      receipt_digest: completion2.receipt_digest,
+      submitted_at: completion.submitted_at,
+      receipt_digest: completion.receipt_digest,
       policy: receiptPolicy,
-      updated_at: completion2.updated_at
+      updated_at: completion.updated_at
     };
     return {
       ...privateLessonDraftActionResult(draft, {
         status,
-        completion_expires_at: completion2.expires_at
+        completion_expires_at: completion.expires_at
       }),
       receipt,
       processing_state: processingState
