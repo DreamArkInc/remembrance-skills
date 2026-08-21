@@ -13,6 +13,7 @@ import {
 import { Remembrance } from "../src/index.mjs";
 import {
   HOST_POLICY_ALERT_TEXT,
+  readCompletionObligations,
   readPluginLifecycleHealth,
   readValueEpisodeSurfaces,
   readRegistryUseCount,
@@ -421,8 +422,8 @@ describe("opencode tool observer (tool.execute.after)", () => {
     expect(readRegistryUseCount("s-empty-tool", process.env)).toBe(0);
   });
 
-  it("records explicit invocation and closes contribution handling", async () => {
-    const { client } = loggingClient();
+  it("records explicit invocation and closes only its exact post-use feedback", async () => {
+    const { client, messages } = loggingClient();
     const hooks = await Remembrance({ client });
     await hooks["tool.execute.after"](
       {
@@ -447,11 +448,81 @@ describe("opencode tool observer (tool.execute.after)", () => {
     expect(readRegistryUseCount("s-direct", process.env)).toBe(1);
 
     await hooks["tool.execute.after"](
-      { tool: "submit_remembrance", sessionID: "s-direct" },
-      { body: { id: "rem_direct" } },
+      {
+        tool: "submit_feedback",
+        sessionID: "s-direct",
+        args: {
+          query_id: "rinv_opencode",
+          result_id: "qres_direct",
+          useful: true,
+          lesson: "The selected skill fit.",
+        },
+      },
+      { body: { accepted: true } },
     );
     await emitSessionIdle(hooks, "s-direct");
     expect(readRegistryUseCount("s-direct", process.env)).toBe(1);
+    expect(readCompletionObligations("s-direct", process.env)).toEqual([]);
+    expect(messages).toHaveLength(0);
+  });
+
+  it("keeps query feedback pending after the exact private lesson succeeds", async () => {
+    const sessionId = "s-mixed-private-query";
+    const { client, messages } = loggingClient();
+    const hooks = await Remembrance({ client });
+    await hooks["tool.execute.after"](
+      { tool: "query_skills", sessionID: sessionId },
+      {
+        body: {
+          query_id: "rq_opencode_mixed",
+          skills: [{ slug: "release-review", result_id: "qres_mixed" }],
+          resources: [],
+          query_feedback: {
+            available: true,
+            query_id: "rq_opencode_mixed",
+            result_ids: ["qres_mixed"],
+          },
+        },
+      },
+    );
+    await hooks["tool.execute.after"](
+      { tool: "prepare_private_lesson_candidate", sessionID: sessionId },
+      { body: { draft_id: "pld_opencodemixed", state: "ready" } },
+    );
+    await hooks["tool.execute.after"](
+      {
+        tool: "submit_private_lesson_candidate",
+        sessionID: sessionId,
+        args: { draft_id: "pld_opencodemixed" },
+      },
+      { body: { accepted_private_candidate: true } },
+    );
+
+    expect(readCompletionObligations(sessionId, process.env)).toEqual([
+      expect.objectContaining({
+        kind: "query_feedback",
+        query_id: "rq_opencode_mixed",
+      }),
+    ]);
+    await emitSessionIdle(hooks, sessionId);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].message).toContain("rq_opencode_mixed");
+    expect(messages[0].message).not.toContain("pld_opencodemixed");
+  });
+
+  it.each([
+    "submit_private_lesson_candidate",
+    "retry_private_lesson_candidate",
+  ])("treats %s as completed contribution work", async (toolName) => {
+    const { client, messages } = loggingClient();
+    const hooks = await Remembrance({ client });
+    recordRegistryUse(`s-${toolName}`, process.env);
+    await hooks["tool.execute.after"](
+      { tool: toolName, sessionID: `s-${toolName}` },
+      { body: { accepted_private_candidate: true } },
+    );
+    await emitSessionIdle(hooks, `s-${toolName}`);
+    expect(messages).toHaveLength(0);
   });
 
   it("keeps the contribution reminder open when feedback requests a remembrance", async () => {

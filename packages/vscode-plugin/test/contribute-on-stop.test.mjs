@@ -49,6 +49,49 @@ describe("VS Code completion hook", () => {
       "Do not mention routine Remembrance calls",
     );
     expect(String(result.output.reason ?? "")).toContain("submit_remembrance");
+    expect(String(result.output.reason ?? "")).toContain(
+      "provide the task's normal user-facing final answer",
+    );
+  });
+
+  it("marks only the exact completion obligations included in the stop prompt", async () => {
+    const env = testEnv();
+    const obligation = {
+      id: "query_feedback:rq_vscode_pending",
+      kind: "query_feedback",
+      engagement_count: 1,
+      query_id: "rq_vscode_pending",
+      prompted_at: null,
+    };
+    const writeCount = vi.fn();
+    const markCompletionObligationsPrompted = vi.fn();
+    const result = await handleStopHook(
+      { session_id: "s-exact-obligation" },
+      {
+        env,
+        readUseCount: () => 1,
+        readCount: () => 0,
+        readCompletionObligations: () => [obligation],
+        recordHealth: vi.fn(),
+        writeCount,
+        markCompletionObligationsPrompted,
+        markDirectSelectionsPrompted: vi.fn(),
+        reportTaskOutcomes: vi.fn(),
+      },
+    );
+
+    expect(result).toMatchObject({
+      allow: false,
+      why: "prompt_pending_obligations",
+    });
+    expect(result.output.reason).toContain("rq_vscode_pending");
+    expect(writeCount).toHaveBeenCalledWith("s-exact-obligation", 1);
+    expect(markCompletionObligationsPrompted).toHaveBeenCalledWith(
+      "s-exact-obligation",
+      [obligation.id],
+      env,
+      1,
+    );
   });
 
   it("routes organization lessons through local prepare and the exact visible submit action", async () => {

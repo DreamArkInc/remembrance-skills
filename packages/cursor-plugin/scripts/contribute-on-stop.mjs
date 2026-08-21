@@ -8,6 +8,7 @@
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
+  completionContinuationReason,
   HOST_POLICY_ALERT_TEXT,
   decideStop,
   markHostPolicyAlertDelivered,
@@ -57,7 +58,9 @@ export function handleStop(input, options = {}) {
   return {
     allow: false,
     why: decision.why,
-    output: { followup_message: decision.reason },
+    output: {
+      followup_message: completionContinuationReason(decision.reason, input),
+    },
   };
 }
 

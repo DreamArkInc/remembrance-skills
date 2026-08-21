@@ -7,7 +7,7 @@ import {
   clearHighMatchSurfaceForExplicitSelection,
   directSelectionFromResponse,
   highMatchFromResponse,
-  markCurrentEngagementHandled,
+  observeSuccessfulCompletionTool,
   recordDirectiveFollowThroughForTool,
   recordDirectSelectionSurface,
   recordHighMatchSurface,
@@ -28,6 +28,8 @@ const CONTRIBUTION_TOOLS = [
   "submit_remembrance",
   "propose_skill_idea",
   "propose_private_skill",
+  "submit_private_lesson_candidate",
+  "retry_private_lesson_candidate",
   "submit_suggestion",
   "submit_resource",
   "submit_resource_review",
@@ -58,6 +60,9 @@ export async function handlePostToolUse(input, options = {}) {
       const recordUse = options.recordRegistryUse ?? recordRegistryUse;
       recordUse(sessionId, env);
     }
+    const observe =
+      options.observeCompletionTool ?? observeSuccessfulCompletionTool;
+    observe(sessionId, name, toolArguments(input), response, env);
     const recordHighMatch = options.recordHighMatch ?? recordHighMatchSurface;
     recordHighMatch(sessionId, highMatchFromResponse(response), env);
     const recordFollowThrough =
@@ -94,6 +99,9 @@ export async function handlePostToolUse(input, options = {}) {
       valueEpisodeFromResponse(toolResponse(input)),
       env,
     );
+    const observe =
+      options.observeCompletionTool ?? observeSuccessfulCompletionTool;
+    observe(sessionId, name, toolArguments(input), toolResponse(input), env);
     const clearExplicit =
       options.clearHighMatchSurfaceForExplicitSelection ??
       clearHighMatchSurfaceForExplicitSelection;
@@ -114,30 +122,66 @@ export async function handlePostToolUse(input, options = {}) {
       why: "preference_compatibility_feedback_recorded",
     };
   }
+  if (normalizedName.endsWith("prepare_private_lesson_candidate")) {
+    const observe =
+      options.observeCompletionTool ?? observeSuccessfulCompletionTool;
+    const observation = observe(
+      sessionId,
+      name,
+      toolArguments(input),
+      toolResponse(input),
+      env,
+    );
+    return {
+      recorded: observation.opened.length > 0,
+      cleared: false,
+      why: "private_lesson_prepared",
+    };
+  }
   if (CONTRIBUTION_TOOLS.some((tool) => normalizedName.endsWith(tool))) {
-    if (
-      normalizedName.endsWith("submit_feedback") &&
-      responseRequestsRemembranceFollowup(toolResponse(input))
-    ) {
+    const observe =
+      options.observeCompletionTool ?? observeSuccessfulCompletionTool;
+    const observation = observe(
+      sessionId,
+      name,
+      toolArguments(input),
+      toolResponse(input),
+      env,
+    );
+    if (responseRequestsRemembranceFollowup(toolResponse(input))) {
       return {
-        recorded: false,
+        recorded: true,
         cleared: false,
         why: "remembrance_followup_pending",
       };
     }
-    const markHandled =
-      options.markCurrentEngagementHandled ?? markCurrentEngagementHandled;
-    const count = markHandled(sessionId, env);
     return {
-      recorded: count > 0,
+      recorded: true,
       cleared: false,
-      why: "contribution_handled",
-      count,
+      why:
+        observation.pending.length > 0
+          ? "contribution_recorded_pending"
+          : "contribution_handled",
+      count: observation.handled_count,
     };
   }
   const clear =
     options.clearHighMatchSurfaceIfOpened ?? clearHighMatchSurfaceIfOpened;
   const cleared = clear(sessionId, name, toolArguments(input), env);
+  if (
+    normalizedName.endsWith("get_skill") ||
+    normalizedName.endsWith("get_resource")
+  ) {
+    const observe =
+      options.observeCompletionTool ?? observeSuccessfulCompletionTool;
+    observe(
+      sessionId,
+      name,
+      toolArguments(input),
+      toolResponse(input),
+      env,
+    );
+  }
   return {
     cleared,
     why: cleared ? "matched_detail_open" : "not_current_match",

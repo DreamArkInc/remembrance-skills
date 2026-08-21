@@ -187,6 +187,30 @@ describe("VS Code prompt hook", () => {
     expect(output).toBeNull();
   });
 
+  it("captures a user correction in the same turn without querying", async () => {
+    const fetchImpl = vi.fn();
+    const recordEligibility = vi.fn();
+    const output = await handleHookInput(
+      {
+        hook_event_name: "UserPromptSubmit",
+        prompt: "That completed approach is overkill; keep the fix focused.",
+        session_id: "vscode-correction",
+      },
+      {
+        env: testEnv(),
+        fetchImpl,
+        recordEligibility,
+        recordHealth: vi.fn(),
+      },
+    );
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(recordEligibility).toHaveBeenCalled();
+    expect(output?.hookSpecificOutput.additionalContext).toContain(
+      "Remembrance user-correction capture",
+    );
+  });
+
   it("honours the disable switch without touching the network", async () => {
     const fetchImpl = vi.fn();
     const output = await handleHookInput(
@@ -249,6 +273,61 @@ describe("VS Code prompt hook", () => {
     } finally {
       timeoutSpy.mockRestore();
     }
+  });
+
+  it("records the exact query-feedback obligation on network and cache delivery", async () => {
+    const fetchImpl = vi.fn(async () =>
+      Response.json({
+        query_id: "rq_vscode_feedback",
+        skills: [
+          {
+            slug: "vscode-feedback-debug",
+            description: "Debug VS Code feedback failures.",
+            result_id: "qres_vscode_feedback",
+          },
+        ],
+        resources: [],
+        query_feedback: {
+          available: true,
+          query_id: "rq_vscode_feedback",
+          result_ids: ["qres_vscode_feedback"],
+        },
+      }),
+    );
+    const env = testEnv({ REMEMBRANCE_API_URL: "https://remembrance.dev" });
+    const input = {
+      prompt: "Review this VS Code deployment workflow.",
+      session_id: "vscode-query-feedback",
+    };
+    const recordQueryFeedbackObligation = vi.fn();
+
+    await handleHookInput(input, {
+      env,
+      fetchImpl,
+      recordHealth: vi.fn(),
+      recordQueryFeedbackObligation,
+    });
+    await handleHookInput(input, {
+      env,
+      fetchImpl,
+      recordHealth: vi.fn(),
+      recordQueryFeedbackObligation,
+    });
+
+    expect(queryCallCount(fetchImpl)).toBe(1);
+    expect(recordQueryFeedbackObligation).toHaveBeenCalledTimes(2);
+    expect(recordQueryFeedbackObligation).toHaveBeenNthCalledWith(
+      1,
+      "vscode-query-feedback",
+      { available: true, query_id: "rq_vscode_feedback" },
+      env,
+    );
+    expect(recordQueryFeedbackObligation).toHaveBeenNthCalledWith(
+      2,
+      "vscode-query-feedback",
+      { available: true, query_id: "rq_vscode_feedback" },
+      env,
+    );
   });
 
   it("caches empty responses without counting them as registry consumption", async () => {

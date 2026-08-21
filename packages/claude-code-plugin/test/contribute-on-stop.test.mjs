@@ -73,7 +73,7 @@ describe("Remembrance contribute-on-stop hook", () => {
     );
     expect(result.allow).toBe(false);
     expect(result.output.decision).toBe("block");
-    expect(result.output.reason).toBe(
+    expect(result.output.reason).toContain(
       contributionReason(null, null, null, {
         privateLessonAuthorized: false,
         env: base.env,
@@ -86,12 +86,53 @@ describe("Remembrance contribute-on-stop hook", () => {
       "Do not mention routine Remembrance calls",
     );
     expect(result.output.reason).toContain("submit_remembrance");
+    expect(result.output.reason).toContain(
+      "provide the task's normal user-facing final answer",
+    );
     expect(recordHealth).toHaveBeenCalledWith(
       expect.objectContaining({
         surface: "claude_code",
         component: "completion_hook",
       }),
       base.env,
+    );
+  });
+
+  it("marks only the exact completion obligations included in the stop prompt", async () => {
+    const obligation = {
+      id: "query_feedback:rq_claude_pending",
+      kind: "query_feedback",
+      engagement_count: 1,
+      query_id: "rq_claude_pending",
+      prompted_at: null,
+    };
+    const writeCount = vi.fn();
+    const markCompletionObligationsPrompted = vi.fn();
+    const result = await handleStopHook(
+      {
+        session_id: "s-exact-obligation",
+        transcript_path: "/x",
+        stop_hook_active: false,
+      },
+      {
+        ...base,
+        readCompletionObligations: () => [obligation],
+        writeCount,
+        markCompletionObligationsPrompted,
+      },
+    );
+
+    expect(result).toMatchObject({
+      allow: false,
+      why: "prompt_pending_obligations",
+    });
+    expect(result.output.reason).toContain("rq_claude_pending");
+    expect(writeCount).toHaveBeenCalledWith("s-exact-obligation", 1);
+    expect(markCompletionObligationsPrompted).toHaveBeenCalledWith(
+      "s-exact-obligation",
+      [obligation.id],
+      base.env,
+      1,
     );
   });
 
@@ -138,6 +179,35 @@ describe("Remembrance contribute-on-stop hook", () => {
       why: "prompt_contribution",
       consumption: 2,
     });
+  });
+
+  it("does not let an earlier low-value capture suppress a later user correction", () => {
+    const result = decideContribution(
+      {
+        session_id: "s-marginal-lesson",
+        stop_hook_active: false,
+        last_assistant_message:
+          "The user corrected the completed approach as overkill, so the implementation was revised.",
+      },
+      {
+        ...base,
+        readTranscript: () =>
+          `${usedTranscript}{"role":"assistant","content":"The user caught that the completed approach was overkill, so it was revised."}\n`,
+        readCount: () => 1,
+        readUseCount: () => 1,
+        readEligibilityCount: () => 2,
+      },
+    );
+
+    expect(result).toMatchObject({
+      allow: false,
+      why: "prompt_high_value_lesson_contribution",
+      consumption: 2,
+    });
+    expect(result.reason).toContain("most valuable reusable lesson");
+    expect(result.reason).toContain(
+      "A lower-value earlier capture does not satisfy this obligation",
+    );
   });
 
   it("prompts once for every newly invoked skill and marks the batch prompted", async () => {

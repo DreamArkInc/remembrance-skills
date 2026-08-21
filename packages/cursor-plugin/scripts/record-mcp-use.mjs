@@ -12,8 +12,8 @@ import {
   clearHighMatchSurfaceForExplicitSelection,
   directSelectionFromResponse,
   highMatchFromResponse,
+  observeSuccessfulCompletionTool,
   readRegistryUseCount,
-  readTaskEligibilityCount,
   recordDirectiveFollowThroughForTool,
   recordDirectSelectionSurface,
   recordHighMatchSurface,
@@ -26,7 +26,6 @@ import {
   resolveApiCredential,
   toolResponseIndicatesFailure,
   valueEpisodeFromResponse,
-  writePromptedCount,
 } from "./hook-core.mjs";
 
 const CONSUMPTION_TOOLS = new Set([
@@ -40,6 +39,8 @@ const CONTRIBUTION_TOOLS = new Set([
   "submit_remembrance",
   "propose_skill_idea",
   "propose_private_skill",
+  "submit_private_lesson_candidate",
+  "retry_private_lesson_candidate",
   "submit_suggestion",
   "submit_resource",
   "submit_resource_review",
@@ -132,6 +133,15 @@ export async function handleMcpUse(input, options = {}) {
       options.clearHighMatchSurfaceForExplicitSelection ??
       clearHighMatchSurfaceForExplicitSelection;
     clearHighMatch(sessionId, selection.slug, env);
+    const observe =
+      options.observeCompletionTool ?? observeSuccessfulCompletionTool;
+    observe(
+      sessionId,
+      tool,
+      toolArguments(input),
+      response,
+      env,
+    );
     return { recorded: true, kind: "direct_selection", tool, count };
   }
   if (CONSUMPTION_TOOLS.has(tool)) {
@@ -141,6 +151,9 @@ export async function handleMcpUse(input, options = {}) {
       const count = matched
         ? (options.recordRegistryUse ?? recordRegistryUse)(sessionId, env)
         : readRegistryUseCount(sessionId, env);
+      const observe =
+        options.observeCompletionTool ?? observeSuccessfulCompletionTool;
+      observe(sessionId, tool, toolArguments(input), response, env);
       const recordFollowThrough =
         options.recordDirectiveFollowThrough ??
         recordDirectiveFollowThroughForTool;
@@ -171,6 +184,15 @@ export async function handleMcpUse(input, options = {}) {
         toolArguments(input),
         env,
       );
+      const observe =
+        options.observeCompletionTool ?? observeSuccessfulCompletionTool;
+      observe(
+        sessionId,
+        tool,
+        toolArguments(input),
+        mcpResponseFromHook(input),
+        env,
+      );
       return { recorded: true, kind: "consumption", tool, count };
     }
   }
@@ -181,29 +203,49 @@ export async function handleMcpUse(input, options = {}) {
       tool,
     };
   }
+  if (tool === "prepare_private_lesson_candidate") {
+    const observe =
+      options.observeCompletionTool ?? observeSuccessfulCompletionTool;
+    const observation = observe(
+      sessionId,
+      tool,
+      toolArguments(input),
+      mcpResponseFromHook(input),
+      env,
+    );
+    return {
+      recorded: observation.opened.length > 0,
+      kind: "private_lesson_prepared",
+      tool,
+    };
+  }
   if (CONTRIBUTION_TOOLS.has(tool)) {
-    if (
-      tool === "submit_feedback" &&
-      responseRequestsRemembranceFollowup(mcpResponseFromHook(input))
-    ) {
+    const response = mcpResponseFromHook(input);
+    const observe =
+      options.observeCompletionTool ?? observeSuccessfulCompletionTool;
+    const observation = observe(
+      sessionId,
+      tool,
+      toolArguments(input),
+      response,
+      env,
+    );
+    if (responseRequestsRemembranceFollowup(response)) {
       return {
-        recorded: false,
+        recorded: true,
         kind: "remembrance_followup_pending",
         tool,
       };
     }
-    const readUse = options.readRegistryUseCount ?? readRegistryUseCount;
-    const readEligibility =
-      options.readTaskEligibilityCount ?? readTaskEligibilityCount;
-    const writePrompted = options.writePromptedCount ?? writePromptedCount;
-    const count = Math.max(
-      readUse(sessionId, env),
-      readEligibility(sessionId, env),
-    );
-    if (count > 0) {
-      writePrompted(sessionId, count, env);
-    }
-    return { recorded: count > 0, kind: "contribution", tool, count };
+    return {
+      recorded: true,
+      kind:
+        observation.pending.length > 0
+          ? "contribution_recorded_pending"
+          : "contribution",
+      tool,
+      count: observation.handled_count,
+    };
   }
   return { recorded: false, kind: "ignored", tool };
 }

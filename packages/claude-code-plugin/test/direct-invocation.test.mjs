@@ -19,7 +19,7 @@ describe("Claude Code direct skill invocation hook", () => {
     );
   });
 
-  it("records a successful invocation and suppresses completion after feedback", async () => {
+  it("records a successful invocation and keeps its feedback pending after an unrelated contribution", async () => {
     const recordRegistryUse = vi.fn(() => 1);
     const recordDirectSelection = vi.fn();
     const recordValueEpisode = vi.fn();
@@ -81,7 +81,6 @@ describe("Claude Code direct skill invocation hook", () => {
       {},
     );
 
-    const markCurrentEngagementHandled = vi.fn(() => 1);
     expect(
       await handlePostToolUse(
         {
@@ -89,11 +88,11 @@ describe("Claude Code direct skill invocation hook", () => {
           tool_name: "mcp__remembrance__propose_private_skill",
           tool_response: { id: "rpub_test" },
         },
-        { env: {}, markCurrentEngagementHandled },
+        { env: {} },
       ),
     ).toMatchObject({
       recorded: true,
-      why: "contribution_handled",
+      why: "contribution_recorded_pending",
     });
   });
 
@@ -147,7 +146,7 @@ describe("Claude Code direct skill invocation hook", () => {
   });
 
   it("does not close the loop for an HTTP-rejected contribution", async () => {
-    const markCurrentEngagementHandled = vi.fn();
+    const observeCompletionTool = vi.fn();
     expect(
       await handlePostToolUse(
         {
@@ -159,14 +158,19 @@ describe("Claude Code direct skill invocation hook", () => {
             body: { error: "Missing submission:create scope" },
           },
         },
-        { env: {}, markCurrentEngagementHandled },
+        { env: {}, observeCompletionTool },
       ),
     ).toEqual({ cleared: false, why: "tool_failed" });
-    expect(markCurrentEngagementHandled).not.toHaveBeenCalled();
+    expect(observeCompletionTool).not.toHaveBeenCalled();
   });
 
   it("keeps completion pending for a feedback-generated remembrance", async () => {
-    const markCurrentEngagementHandled = vi.fn();
+    const observeCompletionTool = vi.fn(() => ({
+      opened: [{ kind: "remembrance_followup" }],
+      closed: [],
+      pending: [{ kind: "remembrance_followup" }],
+      handled_count: 0,
+    }));
     expect(
       await handlePostToolUse(
         {
@@ -181,13 +185,13 @@ describe("Claude Code direct skill invocation hook", () => {
             },
           },
         },
-        { env: {}, markCurrentEngagementHandled },
+        { env: {}, observeCompletionTool },
       ),
     ).toEqual({
-      recorded: false,
+      recorded: true,
       cleared: false,
       why: "remembrance_followup_pending",
     });
-    expect(markCurrentEngagementHandled).not.toHaveBeenCalled();
+    expect(observeCompletionTool).toHaveBeenCalledOnce();
   });
 });

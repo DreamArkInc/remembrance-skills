@@ -1,16 +1,17 @@
 {
   "name": "@remembrance/claude-code-plugin",
-  "version": "0.1.74",
+  "version": "0.1.76",
   "private": true,
   "license": "Apache-2.0",
   "description": "Claude Code plugin for Remembrance auto-query hooks, skill docs, and MCP server configuration.",
   "type": "module",
   "scripts": {
-    "build": "node scripts/refresh-mcp-bundle.mjs && node --check scripts/session-start.mjs && node --check scripts/query-on-prompt.mjs && node --check scripts/contribute-on-stop.mjs && node --check scripts/record-detail-open.mjs && node --check scripts/hook-core.mjs",
+    "build": "node scripts/refresh-mcp-bundle.mjs && node --check scripts/session-start.mjs && node --check scripts/query-on-prompt.mjs && node --check scripts/contribute-on-stop.mjs && node --check scripts/record-detail-open.mjs && node --check scripts/route-local-memory.mjs && node --check scripts/hook-core.mjs",
     "refresh:mcp": "node scripts/refresh-mcp-bundle.mjs",
     "test": "vitest run",
+    "test:memory-routing-coverage": "vitest run test/route-local-memory.test.mjs --coverage.enabled=true --coverage.provider=v8 --coverage.include=scripts/route-local-memory.mjs --coverage.reporter=text --coverage.thresholds.lines=100 --coverage.thresholds.functions=100 --coverage.thresholds.statements=100 --coverage.thresholds.branches=100",
     "test:private-lesson": "vitest run test/contribute-on-stop.test.mjs test/host-policy-denial.test.mjs test/query-on-prompt.test.mjs",
-    "typecheck": "node --check scripts/session-start.mjs && node --check scripts/query-on-prompt.mjs && node --check scripts/contribute-on-stop.mjs && node --check scripts/record-detail-open.mjs && node --check scripts/hook-core.mjs && node --check scripts/refresh-mcp-bundle.mjs"
+    "typecheck": "node --check scripts/session-start.mjs && node --check scripts/query-on-prompt.mjs && node --check scripts/contribute-on-stop.mjs && node --check scripts/record-detail-open.mjs && node --check scripts/route-local-memory.mjs && node --check scripts/hook-core.mjs && node --check scripts/refresh-mcp-bundle.mjs"
   },
   "devDependencies": {
     "vitest": "^3.1.2"

@@ -81,6 +81,9 @@ describe("Cursor stop hook", () => {
     expect(result.output.followup_message).toContain(
       "Do not mention routine Remembrance calls",
     );
+    expect(result.output.followup_message).toContain(
+      "provide the task's normal user-facing final answer",
+    );
     expect(writePromptedCount).toHaveBeenCalledWith("conv_123", 1, {});
   });
 
@@ -207,6 +210,9 @@ describe("Cursor stop hook", () => {
     expect(result.why).toBe("prompt_high_value_lesson_contribution");
     expect(result.output.followup_message).toContain(
       "High-value lesson detected",
+    );
+    expect(result.output.followup_message).toContain(
+      "repeat your immediately preceding user-facing answer unchanged",
     );
     expect(writePromptedCount).toHaveBeenCalledWith("conv_version", 1, {});
   });

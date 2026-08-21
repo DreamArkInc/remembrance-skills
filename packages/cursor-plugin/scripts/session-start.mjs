@@ -24,6 +24,7 @@ export const CURSOR_REMEMBRANCE_CONTEXT = [
   "When a person explicitly names a Remembrance skill, resolve ambiguity with list_skills and call invoke_skill; never guess a slug or run query_skills merely to rediscover that selection.",
   "Otherwise, before reusable service/API/tool/workflow/UI/review tasks, call query_skills, then use get_skill/get_resource when a result fits.",
   "For short follow-ups such as 'fix these issues', 'continue', or 'try again', infer the concrete task from the full conversation and still query before acting; do not wait for the current prompt to repeat trigger keywords.",
+  "When the user corrects or rejects a completed approach, resolve it and capture any generalized organization-reusable lesson in that turn; local memory does not satisfy shared capture, and an earlier lower-value lesson does not discharge the new correction.",
   "After using queried or directly selected guidance, report an available outcome and submit redacted feedback once; direct selections never use query-fit feedback.",
   "Submit a remembrance, suggestion, resource review, or missing-skill idea when something reusable was learned.",
   "Before finishing a reusable task, self-check for a missed query and for user-caught, CI/deploy, security, or release lessons even when no skill was used.",

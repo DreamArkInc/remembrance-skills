@@ -57,6 +57,7 @@ describe("Codex query-on-prompt adapter", () => {
     const recorded = [];
     const eligible = [];
     const highMatches = [];
+    const queryFeedback = [];
     const output = await handleQuery(
       {
         prompt: "Fix this Vercel Next.js build error in GitHub Actions.",
@@ -69,6 +70,8 @@ describe("Codex query-on-prompt adapter", () => {
         },
         recordEligibility: (id) => eligible.push(id),
         recordHighMatch: (id, match) => highMatches.push({ id, match }),
+        recordQueryFeedbackObligation: (id, tracking) =>
+          queryFeedback.push({ id, tracking }),
         fetchImpl: vi.fn(async (url, init) => {
           if (String(url).endsWith("/api/v1/agent/query")) {
             calls.push({ url, body: JSON.parse(String(init.body)) });
@@ -94,6 +97,11 @@ describe("Codex query-on-prompt adapter", () => {
               query_id: "rq_test",
               message:
                 "After use, call submit_feedback and then submit_remembrance when the lesson is reusable.",
+            },
+            query_feedback: {
+              available: true,
+              query_id: "rq_test",
+              result_ids: ["qres_test"],
             },
           });
         }),
@@ -141,6 +149,12 @@ describe("Codex query-on-prompt adapter", () => {
           result_id: "qres_test",
           slug: "vercel-build-debug",
         }),
+      },
+    ]);
+    expect(queryFeedback).toEqual([
+      {
+        id: "t1",
+        tracking: { available: true, query_id: "rq_test" },
       },
     ]);
   });
@@ -191,6 +205,28 @@ describe("Codex query-on-prompt adapter", () => {
         }),
       },
     ]);
+  });
+
+  it("captures a user correction in the same turn without querying", async () => {
+    const fetchImpl = vi.fn();
+    const eligible = [];
+    const output = await handleQuery(
+      {
+        prompt: "That completed approach is overkill; keep the fix focused.",
+        turn_id: "t-correction",
+      },
+      {
+        env: testEnv(),
+        fetchImpl,
+        recordEligibility: (id) => eligible.push(id),
+      },
+    );
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(eligible).toEqual(["t-correction"]);
+    expect(output?.hookSpecificOutput.additionalContext).toContain(
+      "Remembrance user-correction capture",
+    );
   });
 
   it("really increments the on-disk use marker on a hit", async () => {
@@ -589,6 +625,19 @@ describe("Codex query-on-prompt adapter", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("disables correction capture and every network path when auto-query is disabled", async () => {
+    const fetchImpl = vi.fn();
+    const output = await handleQuery(
+      {
+        prompt: "That completed approach is overkill; keep the fix focused.",
+        turn_id: "correction-disabled",
+      },
+      { env: testEnv({ REMEMBRANCE_AUTO_QUERY: "0" }), fetchImpl },
+    );
+    expect(output).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("fails open on bad input, timeouts, server errors, and malformed responses", async () => {
     // Missing prompt → no match → null, no throw.
     expect(await handleQuery({}, { env: testEnv() })).toBeNull();
@@ -705,6 +754,8 @@ describe("Codex query-on-prompt adapter", () => {
       "mcp__plugin_remembrance_remembranceget_connection_status",
       "remembrance.list_skills",
       "report_task_outcome",
+      "mcp__remembrance__submit_private_lesson_candidate",
+      "mcp__plugin_remembrance_remembrance__retry_private_lesson_candidate",
     ]) {
       expect(postToolMatcher.test(toolName), toolName).toBe(true);
     }

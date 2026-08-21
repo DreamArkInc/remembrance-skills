@@ -110,10 +110,21 @@ It is enabled by default after install; set `REMEMBRANCE_AUTO_QUERY=0` to disabl
 network auto-query. The v0.1 heuristic is English-first, so multilingual
 workflows should call `query_skills` explicitly when useful.
 
+Claude Code's successful local-memory writes are observed without reading the
+memory body. A write under Claude's default auto-memory directory injects one
+routing decision: keep human/repository/machine facts local, and mirror only a
+generalized organization-reusable lesson through Remembrance's private lesson
+lane. The observer never sends memory content, and a local-memory write does
+not by itself satisfy shared capture. Custom memory locations still follow the
+same rule from the bundled Remembrancer instructions.
+
 The `Stop` (completion) hook is the contribution mirror of the query hook. When a
 session's transcript or runtime markers show Remembrance was used, or show that
 a reusable task missed its query, it blocks the stop exactly once and asks the
 agent to query/close the loop with redacted feedback or evidence.
+The prompt hook also recognizes explicit rejection of an approach, repeated
+instructions, and user-caught omissions as lesson-forming events in that turn;
+an earlier low-value submission does not discharge the later correction.
 It is loop-safe (it never re-blocks a stop that a hook already continued), fires
 on the agent's final response each turn, and compares completed queries with
 eligible reusable prompts. A long session can therefore recover each later
@@ -147,6 +158,12 @@ lifecycle, and returns one exact remediation without exposing the key. Use
 `get_connection_status` only for the underlying fields. Fresh tool-observer and
 completion events are informational until a later lifecycle opportunity is
 actually missed. Claude Code's
+authenticated connection status also includes content-free recent contribution
+outcomes for the current installation, or for the current API key when no
+installation principal is available. It covers remembrances, private skill
+ideas, skill suggestions, resource submissions, and resource reviews, including
+duplicate outcomes. It does not return lesson text, titles, review prose, actor
+identity, or private payload data. Claude Code's
 hooks and bundled MCP read `~/.config/remembrance/config.json`. A
 manual hosted MCP override cannot read that file and needs a request
 credential. An unset environment variable or anonymous curl/browser probe is
@@ -202,10 +219,16 @@ Routine organization lessons use a narrower two-stage flow. Local
 `prepare_private_lesson_candidate` canonicalizes and redacts in memory and
 stores only an encrypted post-redaction draft. The separate
 `submit_private_lesson_candidate` action sends those exact bytes to the
-organization's private verifier queue; it cannot create or automatically
-propagate public content. Unresolved and terminal drafts never expire or
-auto-delete. Verified submissions discard encrypted lesson content immediately;
-their content-free completion markers are automatically deleted after 14 days.
+organization's private verifier queue. This action always submits privately and
+never falls back to anonymous or public submission. After the private outcome
+is accepted, a separate server-owned process may create a freshly redacted
+public candidate only when the organization admin enabled the
+**Contribution propagation** setting; the submitting agent neither chooses nor
+sees that process, and
+the derivative must pass the complete public pipeline. Unresolved and terminal
+drafts never expire or auto-delete. Verified submissions discard encrypted
+lesson content immediately; their content-free completion markers are
+automatically deleted after 14 days.
 
 The signed policy pins the corrected `private-lesson-redaction-v2` profile and
 its exact digest. Unsupported-profile drafts become terminal

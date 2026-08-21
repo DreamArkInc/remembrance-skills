@@ -132,7 +132,12 @@ describe("VS Code post-tool detail tracking", () => {
   });
 
   it("marks successful feedback as handled so completion does not repeat it", async () => {
-    const markCurrentEngagementHandled = vi.fn(() => 2);
+    const observeCompletionTool = vi.fn(() => ({
+      opened: [],
+      closed: [{ kind: "post_use_feedback" }],
+      pending: [],
+      handled_count: 2,
+    }));
     expect(
       await handlePostToolUse(
         {
@@ -140,14 +145,14 @@ describe("VS Code post-tool detail tracking", () => {
           tool_name: "mcp__remembrance__submit_feedback",
           tool_response: { accepted: true },
         },
-        { env: {}, markCurrentEngagementHandled, recordHealth: vi.fn() },
+        { env: {}, observeCompletionTool, recordHealth: vi.fn() },
       ),
     ).toMatchObject({ recorded: true, why: "contribution_handled" });
-    expect(markCurrentEngagementHandled).toHaveBeenCalled();
+    expect(observeCompletionTool).toHaveBeenCalled();
   });
 
   it("does not mark an HTTP-rejected contribution as handled", async () => {
-    const markCurrentEngagementHandled = vi.fn();
+    const observeCompletionTool = vi.fn();
     expect(
       await handlePostToolUse(
         {
@@ -166,14 +171,19 @@ describe("VS Code post-tool detail tracking", () => {
             ],
           },
         },
-        { env: {}, markCurrentEngagementHandled, recordHealth: vi.fn() },
+        { env: {}, observeCompletionTool, recordHealth: vi.fn() },
       ),
     ).toMatchObject({ why: "tool_failed" });
-    expect(markCurrentEngagementHandled).not.toHaveBeenCalled();
+    expect(observeCompletionTool).not.toHaveBeenCalled();
   });
 
   it("keeps completion pending when feedback requests a remembrance follow-up", async () => {
-    const markCurrentEngagementHandled = vi.fn();
+    const observeCompletionTool = vi.fn(() => ({
+      opened: [{ kind: "remembrance_followup" }],
+      closed: [],
+      pending: [{ kind: "remembrance_followup" }],
+      handled_count: 0,
+    }));
     expect(
       await handlePostToolUse(
         {
@@ -190,10 +200,10 @@ describe("VS Code post-tool detail tracking", () => {
             },
           },
         },
-        { env: {}, markCurrentEngagementHandled, recordHealth: vi.fn() },
+        { env: {}, observeCompletionTool, recordHealth: vi.fn() },
       ),
     ).toMatchObject({ why: "remembrance_followup_pending" });
-    expect(markCurrentEngagementHandled).not.toHaveBeenCalled();
+    expect(observeCompletionTool).toHaveBeenCalled();
   });
 
   // Fail-open is provided by the script's main() wrapper, not by the handler, so

@@ -12,6 +12,7 @@ import {
 } from "vitest";
 import { Remembrance } from "../src/index.mjs";
 import {
+  readCompletionObligations,
   readDirectiveSurface,
   readHighMatchSurface,
   readRegistryUseCount,
@@ -128,6 +129,11 @@ function stubCorrelatedQuery(calls, suffix) {
         available: true,
         eligible_result_ids: [`qres_${suffix}`],
       },
+      query_feedback: {
+        available: true,
+        query_id: `rq_${suffix}`,
+        result_ids: [`qres_${suffix}`],
+      },
     },
   );
 }
@@ -187,6 +193,21 @@ describe("opencode prompt context injection", () => {
         /^@remembrance-ai\/opencode-plugin\/\d+\.\d+\.\d+$/,
       ),
     });
+  });
+
+  it("captures a user correction in the same turn without querying", async () => {
+    const fetchImpl = vi.spyOn(globalThis, "fetch");
+    const { client } = loggingClient();
+    const hooks = await Remembrance({ client });
+
+    const system = await emitUserMessage(
+      hooks,
+      "That completed approach is overkill; keep the fix focused.",
+      "s-correction",
+    );
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(system.join("\n")).toContain("Remembrance user-correction capture");
   });
 
   it("queries once per user message even when the host re-fires the event", async () => {
@@ -459,6 +480,7 @@ describe("opencode prompt context injection", () => {
     expect(readRegistryUseCount(sessionID, process.env)).toBe(0);
     expect(readHighMatchSurface(sessionID, process.env)).toBeNull();
     expect(readValueEpisodeSurfaces(sessionID, process.env)).toEqual([]);
+    expect(readCompletionObligations(sessionID, process.env)).toEqual([]);
 
     const output = { system: [] };
     await hooks["experimental.chat.system.transform"]({ sessionID }, output);
@@ -478,6 +500,12 @@ describe("opencode prompt context injection", () => {
             result_id: "qres_delivery",
           }),
         ],
+      }),
+    ]);
+    expect(readCompletionObligations(sessionID, process.env)).toEqual([
+      expect.objectContaining({
+        kind: "query_feedback",
+        query_id: "rq_delivery",
       }),
     ]);
   });
@@ -505,6 +533,7 @@ describe("opencode prompt context injection", () => {
     expect(readRegistryUseCount(sessionID, process.env)).toBe(0);
     expect(readHighMatchSurface(sessionID, process.env)).toBeNull();
     expect(readValueEpisodeSurfaces(sessionID, process.env)).toEqual([]);
+    expect(readCompletionObligations(sessionID, process.env)).toEqual([]);
   });
 
   it("does not double-count when the host calls the transform twice", async () => {
@@ -527,6 +556,7 @@ describe("opencode prompt context injection", () => {
       result_id: "qres_double_transform",
     });
     expect(readValueEpisodeSurfaces(sessionID, process.env)).toHaveLength(1);
+    expect(readCompletionObligations(sessionID, process.env)).toHaveLength(1);
   });
 
   it("records a continuation directive only after its guidance is delivered", async () => {

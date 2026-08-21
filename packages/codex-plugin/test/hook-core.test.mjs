@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -25,6 +26,7 @@ import {
   clientUserAgent,
   clearHighMatchSurfaceIfOpened,
   clearHighMatchSurfaceForExplicitSelection,
+  completionContinuationReason,
   contributionReason,
   countRegistryConsumption,
   countTaskEligibility,
@@ -52,9 +54,13 @@ import {
   privateLessonLifecycleRecoveryInstruction,
   preferenceCompatibilityEvidenceFromResponse,
   promptProvidesPreferenceCorrection,
+  promptContainsUserCorrection,
   promptRequestsDurablePreference,
   markValueEpisodeSelection,
   markHostPolicyAlertDelivered,
+  markCompletionObligationsPrompted,
+  observeSuccessfulCompletionTool,
+  readCompletionObligations,
   readDirectSelectionSurface,
   readDirectSelectionSurfaces,
   readPromptedCount,
@@ -76,6 +82,9 @@ import {
   recordHighMatchSurface,
   recordHostPolicyDenial,
   recordExplicitPreferenceObservations,
+  recordPostUseFeedbackObligation,
+  recordPrivateLessonObligation,
+  recordQueryFeedbackObligation,
   recordPluginLifecycleHealth,
   recordTaskEligibility,
   recordValueEpisodeSurface,
@@ -95,6 +104,7 @@ import {
   valueEpisodeFromResponse,
   warmPrincipalSession,
   projectKeyForHook,
+  userCorrectionCaptureDirective,
   writePromptedCount,
 } from "../scripts/hook-core.mjs";
 
@@ -2446,7 +2456,7 @@ describe("hook-core trigger + payload helpers", () => {
     ).toBe(true);
   });
 
-  it("surfaces bounded corner-case exclusions so the agent can discard a poor match", () => {
+  it("keeps an explicitly inapplicable corner case out of auto-query context", () => {
     const response = {
       body: {
         query_id: "rq_corner_case",
@@ -2492,17 +2502,8 @@ describe("hook-core trigger + payload helpers", () => {
     };
 
     const context = formatContext(response);
-    expect(context).toContain(
-      "applicability unlikely/corner_case: No stated use condition matches this task",
-    );
-    expect(context).toContain(
-      "use only when Atlas Data Federation spill-to-disk failure; Federated query memory limit",
-    );
-    expect(context).toContain("avoid when Routine aggregation index tuning");
-    expect(context).toContain("constraints missing routine index tuning");
-    expect(context).not.toContain("ignored-fifth-term");
-    expect(context).not.toContain("ignored third condition");
-    expect(context).not.toContain("required next step");
+    expect(context).toBeNull();
+    expect(queryResponseHasMatches(response)).toBe(false);
     expect(highMatchFromResponse(response)).toBeNull();
   });
 
@@ -2741,6 +2742,14 @@ describe("hook-core trigger + payload helpers", () => {
     expect(shouldQueryPrompt("fix these issues")).toMatchObject({
       likely_match: false,
     });
+    expect(
+      shouldQueryPrompt("Review the latest comments from Claude and Codex"),
+    ).toEqual({ likely_match: false, reason: "no_trigger_match" });
+    expect(
+      shouldQueryPrompt(
+        "Integrate the Anthropic API through its TypeScript SDK",
+      ),
+    ).toEqual({ likely_match: true, reason: "external_service" });
     expect(isContextualContinuationPrompt("fix these issues")).toBe(true);
     expect(isContextualContinuationPrompt("continue")).toBe(true);
     expect(
@@ -2773,6 +2782,76 @@ describe("hook-core trigger + payload helpers", () => {
     expect(
       isContextualContinuationPrompt("What is the capital of France?"),
     ).toBe(false);
+  });
+
+  it("detects user corrections when the lesson forms, without treating ordinary bug prose as feedback", async () => {
+    for (const prompt of [
+      "That approach is overkill; keep the change focused.",
+      "That completed approach is overkill; keep the change focused.",
+      "You missed the actual failure mode again.",
+      "I already told you not to rewrite the whole module.",
+      "I don't like this implementation direction.",
+      "Revert that approach and use the existing abstraction.",
+    ]) {
+      expect(promptContainsUserCorrection(prompt), prompt).toBe(true);
+      expect(userCorrectionCaptureDirective(prompt), prompt).toContain(
+        "Remembrance user-correction capture",
+      );
+    }
+    for (const prompt of [
+      "The tests are wrong when the cache expires.",
+      "Fix this implementation bug.",
+      "The parser rejects the wrong input.",
+    ]) {
+      expect(promptContainsUserCorrection(prompt), prompt).toBe(false);
+      expect(userCorrectionCaptureDirective(prompt), prompt).toBeNull();
+    }
+
+    const fetchImpl = vi.fn();
+    const result = await runPromptHook(
+      "That approach is the wrong direction; preserve the existing behavior.",
+      { env: {}, fetchImpl },
+    );
+    expect(result).toMatchObject({
+      consumed: false,
+      eligible: true,
+      reason: "user_correction",
+    });
+    expect(result?.context).toContain("local memory");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("defensively suppresses weak possible and exploratory auto-query responses", () => {
+    const weak = {
+      slug: "remembrancer",
+      description: "Meta guidance",
+      match_tier: "possible",
+      why_matched: {
+        lexical_signal: "weak",
+        semantic_signal: "moderate",
+        domain_match: true,
+      },
+      applicability: { fit: "unknown" },
+    };
+    const strong = {
+      slug: "provider-integration",
+      description: "Provider workflow",
+      match_tier: "possible",
+      why_matched: {
+        lexical_signal: "strong",
+        semantic_signal: "moderate",
+        domain_match: false,
+      },
+      applicability: { fit: "likely" },
+    };
+    const weakOnly = { body: { skills: [weak], resources: [] } };
+    expect(queryResponseHasMatches(weakOnly)).toBe(false);
+    expect(formatContext(weakOnly)).toBeNull();
+
+    const mixed = { body: { skills: [weak, strong], resources: [] } };
+    expect(queryResponseHasMatches(mixed)).toBe(true);
+    expect(formatContext(mixed)).toContain("provider-integration");
+    expect(formatContext(mixed)).not.toContain("remembrancer");
   });
 
   it("infers seeded domains and clamps the limit", () => {
@@ -3725,6 +3804,704 @@ describe("hook-core marker round-trip", () => {
     ).toBe(false);
   });
 
+  it("keeps query feedback pending after the exact private lesson is submitted", () => {
+    const env = markerEnv();
+    const sessionId = "mixed-query-private-lesson";
+    recordTaskEligibility(sessionId, env);
+
+    expect(
+      recordQueryFeedbackObligation(
+        sessionId,
+        { available: true, query_id: "rq_mixed" },
+        env,
+      ),
+    ).toMatchObject({ kind: "query_feedback", query_id: "rq_mixed" });
+    expect(
+      recordPrivateLessonObligation(
+        sessionId,
+        { body: { draft_id: "pld_mixedlesson", state: "ready" } },
+        env,
+      ),
+    ).toMatchObject({
+      kind: "private_lesson",
+      draft_id: "pld_mixedlesson",
+    });
+
+    const submitted = observeSuccessfulCompletionTool(
+      sessionId,
+      "submit_private_lesson_candidate",
+      { draft_id: "pld_mixedlesson" },
+      { body: { accepted_private_candidate: true } },
+      env,
+    );
+    expect(submitted.closed).toEqual([
+      expect.objectContaining({ kind: "private_lesson" }),
+    ]);
+    expect(submitted.pending).toEqual([
+      expect.objectContaining({ kind: "query_feedback", query_id: "rq_mixed" }),
+    ]);
+    expect(submitted.handled_count).toBe(0);
+    expect(readPromptedCount(sessionId, env)).toBe(0);
+
+    const decision = decideStop({ session_id: sessionId }, { env });
+    expect(decision).toMatchObject({
+      allow: false,
+      why: "prompt_pending_obligations",
+    });
+    expect(decision.reason).toContain("query_id rq_mixed");
+    expect(decision.reason).not.toContain("pld_mixedlesson");
+
+    writePromptedCount(sessionId, decision.useCount, env);
+    expect(readCompletionObligations(sessionId, env)).toEqual([
+      expect.objectContaining({
+        kind: "query_feedback",
+        prompted_at: expect.any(String),
+      }),
+    ]);
+    expect(decideStop({ session_id: sessionId }, { env })).toEqual({
+      allow: true,
+      why: "no_new_usage",
+    });
+  });
+
+  it("closes query and post-use obligations independently in either order", () => {
+    const env = markerEnv();
+    const sessionId = "mixed-query-post-use";
+    recordTaskEligibility(sessionId, env);
+    recordQueryFeedbackObligation(
+      sessionId,
+      { available: true, query_id: "rq_independent" },
+      env,
+    );
+    recordPostUseFeedbackObligation(
+      sessionId,
+      {
+        query_id: "rq_independent",
+        result_id: "qres_independent",
+        skill_slug: "completion-hooks",
+      },
+      env,
+    );
+
+    const queryFeedback = observeSuccessfulCompletionTool(
+      sessionId,
+      "submit_query_feedback",
+      { query_id: "rq_independent", overall_fit: "good", results: [] },
+      { accepted: true },
+      env,
+    );
+    expect(queryFeedback.closed).toEqual([
+      expect.objectContaining({ kind: "query_feedback" }),
+    ]);
+    expect(queryFeedback.pending).toEqual([
+      expect.objectContaining({
+        kind: "post_use_feedback",
+        result_id: "qres_independent",
+      }),
+    ]);
+    expect(readPromptedCount(sessionId, env)).toBe(0);
+
+    const feedback = observeSuccessfulCompletionTool(
+      sessionId,
+      "submit_feedback",
+      { query_id: "rq_independent", result_id: "qres_independent" },
+      { accepted: true },
+      env,
+    );
+    expect(feedback.closed).toEqual([
+      expect.objectContaining({ kind: "post_use_feedback" }),
+    ]);
+    expect(feedback.pending).toEqual([]);
+    expect(feedback.handled_count).toBe(1);
+    expect(readPromptedCount(sessionId, env)).toBe(1);
+  });
+
+  it("stores only a digest for a feedback-generated remembrance follow-up", () => {
+    const env = markerEnv();
+    const sessionId = "feedback-followup-digest";
+    const payload = {
+      type: "skill_feedback",
+      lesson: "A proprietary correction that must not enter marker state.",
+      interaction: {
+        query_id: "rq_followup",
+        result_id: "qres_followup",
+      },
+    };
+    recordTaskEligibility(sessionId, env);
+    recordPostUseFeedbackObligation(
+      sessionId,
+      { query_id: "rq_followup", result_id: "qres_followup" },
+      env,
+    );
+
+    const feedback = observeSuccessfulCompletionTool(
+      sessionId,
+      "submit_feedback",
+      { query_id: "rq_followup", result_id: "qres_followup" },
+      { body: { next_step: { submit_remembrance_payload: payload } } },
+      env,
+    );
+    expect(feedback.pending).toEqual([
+      expect.objectContaining({
+        kind: "remembrance_followup",
+        payload_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      }),
+    ]);
+    const obligationDirectory = readdirSync(env.REMEMBRANCE_USAGE_DIR).find(
+      (name) => name.endsWith(".obligations"),
+    );
+    const markerText = readdirSync(
+      join(env.REMEMBRANCE_USAGE_DIR, obligationDirectory),
+    )
+      .map((name) =>
+        readFileSync(
+          join(env.REMEMBRANCE_USAGE_DIR, obligationDirectory, name),
+          "utf8",
+        ),
+      )
+      .join("\n");
+    expect(markerText).not.toContain(payload.lesson);
+
+    const submitted = observeSuccessfulCompletionTool(
+      sessionId,
+      "submit_remembrance",
+      payload,
+      { accepted: true },
+      env,
+    );
+    expect(submitted.pending).toEqual([]);
+    expect(submitted.closed).toEqual([
+      expect.objectContaining({ kind: "remembrance_followup" }),
+    ]);
+  });
+
+  it("does not let a standalone contribution suppress the next real task", () => {
+    const env = markerEnv();
+    const sessionId = "standalone-contribution";
+    expect(
+      observeSuccessfulCompletionTool(
+        sessionId,
+        "propose_private_skill",
+        {},
+        { accepted: true },
+        env,
+      ),
+    ).toMatchObject({ handled_count: 0, pending: [] });
+    expect(readPromptedCount(sessionId, env)).toBe(0);
+
+    recordTaskEligibility(sessionId, env);
+    expect(decideStop({ session_id: sessionId }, { env })).toMatchObject({
+      allow: false,
+      why: "prompt_task_closure",
+    });
+  });
+
+  it("opens exact obligations from every query and skill-consumption path", () => {
+    const cases = [
+      {
+        sessionId: "observe-query",
+        tool: "mcp__remembrance__query_skills",
+        args: {},
+        response: {
+          body: {
+            query_id: "rq_observed_query",
+            query_feedback: {
+              available: true,
+              query_id: "rq_observed_query",
+            },
+          },
+        },
+        expected: {
+          kind: "query_feedback",
+          query_id: "rq_observed_query",
+        },
+      },
+      {
+        sessionId: "observe-invocation",
+        tool: "invoke_skill",
+        args: { slug: "release-review" },
+        response: {
+          body: {
+            selection_mode: "explicit",
+            query_id: "rinv_observed",
+            result_id: "qres_observed",
+            skill: {
+              slug: "release-review",
+              version_id: "skv_observed",
+              skill_md: "# Reviewed instructions",
+            },
+            feedback: { available: true },
+          },
+        },
+        expected: {
+          kind: "post_use_feedback",
+          query_id: "rinv_observed",
+          result_id: "qres_observed",
+        },
+      },
+      {
+        sessionId: "observe-detail",
+        tool: "get_resource",
+        args: {
+          slug: "release-docs",
+          query_id: "rq_detail",
+          result_id: "qres_detail",
+        },
+        response: { body: { resource: { slug: "release-docs" } } },
+        expected: {
+          kind: "post_use_feedback",
+          query_id: "rq_detail",
+          result_id: "qres_detail",
+        },
+      },
+      {
+        sessionId: "observe-private-lesson",
+        tool: "prepare_private_lesson_candidate",
+        args: {},
+        response: {
+          body: { draft_id: "pld_observedlesson", state: "ready" },
+        },
+        expected: {
+          kind: "private_lesson",
+          draft_id: "pld_observedlesson",
+        },
+      },
+    ];
+
+    for (const item of cases) {
+      const env = markerEnv();
+      const observation = observeSuccessfulCompletionTool(
+        item.sessionId,
+        item.tool,
+        item.args,
+        item.response,
+        env,
+      );
+      expect(observation.opened).toEqual([
+        expect.objectContaining(item.expected),
+      ]);
+      expect(observation.pending).toEqual([
+        expect.objectContaining(item.expected),
+      ]);
+    }
+
+    const env = markerEnv();
+    expect(
+      observeSuccessfulCompletionTool(
+        "observe-invalid",
+        "unrelated_tool",
+        [],
+        null,
+        env,
+      ),
+    ).toMatchObject({
+      tool: "unrelated_tool",
+      opened: [],
+      closed: [],
+      pending: [],
+      handled_count: 0,
+    });
+  });
+
+  it("rejects incomplete or terminal obligation descriptors without changing state", () => {
+    const env = markerEnv();
+    const sessionId = "invalid-obligation-descriptors";
+
+    expect(recordQueryFeedbackObligation(sessionId, {}, env)).toBeNull();
+    expect(
+      recordQueryFeedbackObligation(
+        sessionId,
+        {
+          body: {
+            query_id: "rq_unavailable",
+            query_feedback: { available: false },
+          },
+        },
+        env,
+      ),
+    ).toBeNull();
+    expect(
+      recordPostUseFeedbackObligation(
+        sessionId,
+        { query_id: "rq_missing_result" },
+        env,
+      ),
+    ).toBeNull();
+    expect(
+      recordPostUseFeedbackObligation(
+        sessionId,
+        {
+          query_id: "rq_unavailable_feedback",
+          result_id: "qres_unavailable_feedback",
+          feedback_available: false,
+        },
+        env,
+      ),
+    ).toBeNull();
+    expect(
+      recordPrivateLessonObligation(
+        sessionId,
+        { body: { draft_id: "invalid", state: "ready" } },
+        env,
+      ),
+    ).toBeNull();
+    expect(
+      recordPrivateLessonObligation(
+        sessionId,
+        { body: { draft_id: "pld_terminalstate", state: "submitted" } },
+        env,
+      ),
+    ).toBeNull();
+    expect(readCompletionObligations(sessionId, env)).toEqual([]);
+  });
+
+  it("fails open when a host returns a non-JSON remembrance payload", () => {
+    const env = markerEnv();
+    const sessionId = "cyclic-remembrance-payload";
+    const cyclicPayload = { type: "skill_feedback" };
+    cyclicPayload.self = cyclicPayload;
+
+    expect(() =>
+      observeSuccessfulCompletionTool(
+        sessionId,
+        "submit_feedback",
+        { query_id: "rq_cyclic", result_id: "qres_cyclic" },
+        {
+          body: {
+            next_step: { submit_remembrance_payload: cyclicPayload },
+          },
+        },
+        env,
+      ),
+    ).not.toThrow();
+    expect(readCompletionObligations(sessionId, env)).toEqual([]);
+  });
+
+  it("bounds obligation storage and ignores malformed, expired, oversized, and symlink markers", () => {
+    const boundedEnv = markerEnv();
+    for (let index = 0; index < 64; index += 1) {
+      expect(
+        recordQueryFeedbackObligation(
+          "bounded-obligations",
+          { available: true, query_id: `rq_bounded_${index}` },
+          boundedEnv,
+        ),
+      ).not.toBeNull();
+    }
+    expect(
+      recordQueryFeedbackObligation(
+        "bounded-obligations",
+        { available: true, query_id: "rq_bounded_overflow" },
+        boundedEnv,
+      ),
+    ).toBeNull();
+    expect(
+      readCompletionObligations("bounded-obligations", boundedEnv),
+    ).toHaveLength(64);
+
+    const env = markerEnv();
+    recordQueryFeedbackObligation(
+      "unsafe-obligations",
+      { available: true, query_id: "rq_expired" },
+      env,
+    );
+    const directoryName = readdirSync(env.REMEMBRANCE_USAGE_DIR).find((name) =>
+      name.endsWith(".obligations"),
+    );
+    const directory = join(env.REMEMBRANCE_USAGE_DIR, directoryName);
+    const validName = readdirSync(directory)[0];
+    const validPath = join(directory, validName);
+    const expired = JSON.parse(readFileSync(validPath, "utf8"));
+    writeFileSync(
+      validPath,
+      JSON.stringify({ ...expired, created_at: "2000-01-01T00:00:00.000Z" }),
+      { mode: 0o600 },
+    );
+    writeFileSync(join(directory, `${"a".repeat(32)}.json`), "not-json", {
+      mode: 0o600,
+    });
+    writeFileSync(
+      join(directory, `${"d".repeat(32)}.json`),
+      JSON.stringify({
+        version: "completion-obligation-v1",
+        kind: "query_feedback",
+        id: "query_feedback:invalid-date",
+        engagement_count: 1,
+        created_at: "not-a-date",
+      }),
+      { mode: 0o600 },
+    );
+    writeFileSync(
+      join(directory, `${"e".repeat(32)}.json`),
+      JSON.stringify({ version: "wrong-version" }),
+      { mode: 0o600 },
+    );
+    writeFileSync(join(directory, `${"b".repeat(32)}.json`), "x".repeat(9_000), {
+      mode: 0o600,
+    });
+    writeFileSync(join(directory, "ignore-me.txt"), "not an obligation", {
+      mode: 0o600,
+    });
+    symlinkSync(validPath, join(directory, `${"c".repeat(32)}.json`));
+
+    expect(readCompletionObligations("unsafe-obligations", env)).toEqual([]);
+    expect(existsSync(validPath)).toBe(false);
+  });
+
+  it("renders and marks only the selected pending obligation kinds", () => {
+    const env = markerEnv();
+    const sessionId = "selected-obligation-prompt";
+    recordTaskEligibility(sessionId, env);
+    const query = recordQueryFeedbackObligation(
+      sessionId,
+      { available: true, query_id: "rq_selected" },
+      env,
+    );
+    recordPostUseFeedbackObligation(
+      sessionId,
+      {
+        query_id: "rq_selected",
+        result_id: "qres_selected",
+        skill_slug: "selected-skill",
+      },
+      env,
+    );
+    recordPrivateLessonObligation(
+      sessionId,
+      { body: { draft_id: "pld_selectedlesson", state: "ready" } },
+      env,
+    );
+    observeSuccessfulCompletionTool(
+      sessionId,
+      "submit_feedback",
+      { query_id: "rq_other", result_id: "qres_other" },
+      {
+        body: {
+          next_step: {
+            submit_remembrance_payload: {
+              type: "skill_feedback",
+              interaction: {
+                query_id: "rq_other",
+                result_id: "qres_other",
+              },
+            },
+          },
+        },
+      },
+      env,
+    );
+
+    const first = decideStop({ session_id: sessionId }, { env });
+    expect(first.reason).toContain("Query fit");
+    expect(first.reason).toContain("Post-use feedback for selected-skill");
+    expect(first.reason).toContain("Reusable evidence");
+    expect(first.reason).toContain("pld_selectedlesson");
+    expect(
+      markCompletionObligationsPrompted(
+        sessionId,
+        [query.id],
+        env,
+        1,
+      ),
+    ).toBe(1);
+
+    const second = decideStop({ session_id: sessionId }, { env });
+    expect(second.reason).not.toContain("Query fit");
+    expect(second.reason).toContain("Post-use feedback");
+    expect(second.obligationIds).not.toContain(query.id);
+  });
+
+  it("does not re-mark prompted, future, or unselected obligations", () => {
+    const env = markerEnv();
+    const sessionId = "selective-obligation-marking";
+    const first = recordQueryFeedbackObligation(
+      sessionId,
+      { available: true, query_id: "rq_mark_first" },
+      env,
+      1,
+    );
+    const future = recordQueryFeedbackObligation(
+      sessionId,
+      { available: true, query_id: "rq_mark_future" },
+      env,
+      2,
+    );
+
+    expect(
+      markCompletionObligationsPrompted(sessionId, [first.id], env, 1),
+    ).toBe(1);
+    expect(
+      markCompletionObligationsPrompted(
+        sessionId,
+        [first.id, future.id],
+        env,
+        1,
+      ),
+    ).toBe(0);
+    expect(readCompletionObligations(sessionId, env)).toEqual([
+      expect.objectContaining({
+        query_id: "rq_mark_first",
+        prompted_at: expect.any(String),
+      }),
+      expect.objectContaining({
+        query_id: "rq_mark_future",
+        prompted_at: null,
+      }),
+    ]);
+  });
+
+  it("bounds completion guidance while disclosing omitted actions", () => {
+    const env = markerEnv();
+    const sessionId = "bounded-obligation-guidance";
+    recordTaskEligibility(sessionId, env);
+    for (let index = 0; index < 13; index += 1) {
+      recordQueryFeedbackObligation(
+        sessionId,
+        { available: true, query_id: `rq_guidance_${index}` },
+        env,
+      );
+    }
+
+    const decision = decideStop({ session_id: sessionId }, { env });
+    expect(decision.reason.match(/Query fit:/g)).toHaveLength(12);
+    expect(decision.reason).toContain("1 additional pending action(s)");
+    expect(decision.obligationIds).toHaveLength(13);
+  });
+
+  it("preserves prompt state when the same obligation is observed again", () => {
+    const env = markerEnv();
+    const sessionId = "duplicate-obligation";
+    const original = recordQueryFeedbackObligation(
+      sessionId,
+      { available: true, query_id: "rq_duplicate" },
+      env,
+    );
+    expect(
+      markCompletionObligationsPrompted(sessionId, [original.id], env, 1),
+    ).toBe(1);
+    const prompted = readCompletionObligations(sessionId, env)[0];
+
+    const duplicate = recordQueryFeedbackObligation(
+      sessionId,
+      { available: true, query_id: "rq_duplicate" },
+      env,
+    );
+    expect(duplicate).toMatchObject({
+      id: original.id,
+      created_at: prompted.created_at,
+      prompted_at: prompted.prompted_at,
+    });
+  });
+
+  it("uses safe correlation fallbacks and ignores incomplete invocation data", () => {
+    const env = markerEnv();
+    const sessionId = "completion-correlation-fallbacks";
+    recordTaskEligibility(sessionId, env);
+
+    expect(
+      observeSuccessfulCompletionTool(
+        sessionId,
+        "invoke_skill",
+        {},
+        { body: { selection_mode: "explicit" } },
+        env,
+      ).opened,
+    ).toEqual([]);
+    expect(
+      observeSuccessfulCompletionTool(sessionId, null, [], null, env),
+    ).toMatchObject({ tool: "", opened: [], closed: [] });
+
+    const feedback = observeSuccessfulCompletionTool(
+      sessionId,
+      "submit_feedback",
+      { query_id: "rq_fallback", result_id: "qres_fallback" },
+      {
+        body: {
+          next_step: {
+            submit_remembrance_payload: { type: "skill_feedback" },
+          },
+        },
+      },
+      env,
+    );
+    expect(feedback.pending).toEqual([
+      expect.objectContaining({
+        kind: "remembrance_followup",
+        query_id: "rq_fallback",
+        result_id: "qres_fallback",
+      }),
+    ]);
+    expect(
+      observeSuccessfulCompletionTool(
+        sessionId,
+        "submit_remembrance",
+        { type: "different-normalized-payload" },
+        { accepted: true },
+        env,
+      ).pending,
+    ).toEqual([]);
+
+    recordPrivateLessonObligation(
+      sessionId,
+      { body: { draft_id: "pld_responsefallback", state: "ready" } },
+      env,
+    );
+    expect(
+      observeSuccessfulCompletionTool(
+        sessionId,
+        "retry_private_lesson_candidate",
+        {},
+        { body: { draft_id: "pld_responsefallback" } },
+        env,
+      ).closed,
+    ).toEqual([expect.objectContaining({ kind: "private_lesson" })]);
+  });
+
+  it("matches a remembrance follow-up by correlation without retaining its prose", () => {
+    const env = markerEnv();
+    const sessionId = "correlated-remembrance-followup";
+    recordTaskEligibility(sessionId, env);
+    observeSuccessfulCompletionTool(
+      sessionId,
+      "submit_feedback",
+      { query_id: "rq_correlated", result_id: "qres_correlated" },
+      {
+        body: {
+          next_step: {
+            submit_remembrance_payload: {
+              type: "skill_feedback",
+              lesson: "Original generalized lesson.",
+              interaction: {
+                query_id: "rq_correlated",
+                result_id: "qres_correlated",
+              },
+            },
+          },
+        },
+      },
+      env,
+    );
+    const result = observeSuccessfulCompletionTool(
+      sessionId,
+      "submit_remembrance",
+      {
+        type: "skill_feedback",
+        lesson: "Server-normalized generalized lesson.",
+        interaction: {
+          query_id: "rq_correlated",
+          result_id: "qres_correlated",
+        },
+      },
+      { accepted: true },
+      env,
+    );
+    expect(result.closed).toEqual([
+      expect.objectContaining({ kind: "remembrance_followup" }),
+    ]);
+    expect(result.pending).toEqual([]);
+    expect(readPromptedCount(sessionId, env)).toBe(1);
+  });
+
   it("exposes a stable contribution reason", () => {
     const reason = contributionReason();
     expect(reason).toContain("silently close the pending Remembrance loop");
@@ -3765,6 +4542,28 @@ describe("hook-core marker round-trip", () => {
         risk_level: "low",
       }),
     ).toContain("If you have not opened it, call get_skill");
+  });
+
+  it("preserves the task answer across a visible completion-hook continuation", () => {
+    const prior = "Implemented the requested fix and verified all tests.";
+    const withPrior = completionContinuationReason("Close the pending loop.", {
+      last_assistant_message: prior,
+    });
+    expect(withPrior).toContain("Close the pending loop.");
+    expect(withPrior).toContain(
+      "repeat your immediately preceding user-facing answer unchanged",
+    );
+    expect(withPrior).not.toContain(prior);
+
+    const withoutPrior = completionContinuationReason(
+      "Close the pending loop.",
+    );
+    expect(withoutPrior).toContain(
+      "provide the task's normal user-facing final answer",
+    );
+    expect(withoutPrior).toContain(
+      "Do not replace it with hook, receipt, or Remembrance status text",
+    );
   });
 
   it("detects self-corrections that should become remembrance contributions", () => {
@@ -4063,11 +4862,11 @@ describe("hook-core context budget", () => {
           skills: [
             richCandidate(1, "possible"),
             richCandidate(2, "possible"),
-            richCandidate(3, "exploratory"),
+            richCandidate(3, "possible"),
           ],
           resources: [
             { ...richCandidate(4, "possible"), kind: "reference" },
-            { ...richCandidate(5, "exploratory"), kind: "playbook" },
+            { ...richCandidate(5, "possible"), kind: "playbook" },
           ],
           contribution_directive: { message: directive },
         },

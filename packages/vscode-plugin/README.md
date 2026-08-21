@@ -157,11 +157,15 @@ remains available.** It must not retry or automatically create a handoff.
 The local `prepare_private_lesson_candidate` tool canonicalizes and redacts a
 routine organization lesson in memory, then stores only an encrypted
 post-redaction draft. The separate `submit_private_lesson_candidate` tool sends
-those exact bytes to the private verifier queue and can never create or
-automatically propagate public content. Unresolved and terminal drafts never
-expire or auto-delete. Verified submissions discard encrypted lesson content
-immediately; their content-free completion markers are automatically deleted
-after 14 days.
+those exact bytes to the private verifier queue. This action always submits
+privately and never falls back to anonymous or public submission. After the
+private outcome is accepted, a separate server-owned process may create a
+freshly redacted public candidate only when the organization admin enabled
+**Contribution propagation**; the submitting agent neither chooses nor sees
+that process, and the derivative must pass the complete public pipeline.
+Unresolved and terminal drafts never expire or auto-delete. Verified
+submissions discard encrypted lesson content immediately; their content-free
+completion markers are automatically deleted after 14 days.
 
 The signed policy pins the corrected `private-lesson-redaction-v2` profile and
 its exact digest. Unsupported-profile drafts become terminal

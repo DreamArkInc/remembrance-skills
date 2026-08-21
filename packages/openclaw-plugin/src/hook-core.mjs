@@ -60,6 +60,21 @@ const VALUE_EPISODE_MARKER_LIMIT = 20;
 const VALUE_EPISODE_MARKER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DIRECT_SELECTION_MARKER_LIMIT = 20;
 const DIRECT_SELECTION_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
+const COMPLETION_OBLIGATION_LIMIT = 64;
+const COMPLETION_OBLIGATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const COMPLETION_OBLIGATION_VERSION = "completion-obligation-v1";
+const COMPLETION_CONTRIBUTION_TOOLS = new Set([
+  "submit_query_feedback",
+  "submit_feedback",
+  "submit_remembrance",
+  "propose_skill_idea",
+  "propose_private_skill",
+  "submit_private_lesson_candidate",
+  "retry_private_lesson_candidate",
+  "submit_suggestion",
+  "submit_resource",
+  "submit_resource_review",
+]);
 const PREFERENCE_EVIDENCE_SKILL_LIMIT = 2;
 const PREFERENCE_EVIDENCE_SETTING_LIMIT = 4;
 const PREFERENCE_EVIDENCE_CONTEXT_CHARS = 520;
@@ -181,7 +196,8 @@ const SERVICE_PATTERNS = [
   /\b(vercel|heroku|netlify|cloudflare|aws|gcp|azure)\b/i,
   /\b(github actions?|circleci|gitlab ci|buildkite|jenkins)\b/i,
   /\b(stripe|x402|mpp|model payment protocol|mcp servers?)\b/i,
-  /\b(openai|anthropic|claude|cursor|codex|voyage|mongodb atlas)\b/i,
+  /\b(?:openai|anthropic|claude|voyage|mongodb atlas)\b.{0,80}\b(?:api|sdk|provider|gateway|model|embedding|integration|authentication|authorization|credential|request|endpoint)\b/i,
+  /\b(?:api|sdk|provider|gateway|model|embedding|integration|authentication|authorization|credential|request|endpoint)\b.{0,80}\b(?:openai|anthropic|claude|voyage|mongodb atlas)\b/i,
 ];
 
 const TOOL_PATTERNS = [
@@ -857,10 +873,13 @@ export function formatContext(
   const skills = Array.isArray(body?.skills)
     ? body.skills
         .filter((item) => publicSkillCandidateAllowed(body, item))
+        .filter(autoQueryResponseCandidateAllowed)
         .slice(0, itemLimit)
     : [];
   const resources = Array.isArray(body?.resources)
-    ? body.resources.slice(0, itemLimit)
+    ? body.resources
+        .filter(autoQueryResponseCandidateAllowed)
+        .slice(0, itemLimit)
     : [];
   const noResults = body?.no_results ?? null;
   if (skills.length === 0 && resources.length === 0 && !noResults) {
@@ -1394,6 +1413,7 @@ export async function runPromptHook(prompt, options = {}) {
   const includeSharedConfigCredentialNotice =
     options.includeSharedConfigCredentialNotice !== false;
   const redacted = redactPrompt(String(prompt ?? ""));
+  const correctionCapture = userCorrectionCaptureDirective(redacted);
   const preferenceCapture = genericPreferenceCaptureDirective(redacted, {
     env,
     projectPath: options.projectPath,
@@ -1419,9 +1439,12 @@ export async function runPromptHook(prompt, options = {}) {
       return {
         consumed: false,
         context: appendPreferenceCapture(
-          appendPrivateLessonLifecycleRecovery(
-            continuationQueryContext(directive),
-            privateLessonRecovery,
+          appendUserCorrectionCapture(
+            appendPrivateLessonLifecycleRecovery(
+              continuationQueryContext(directive),
+              privateLessonRecovery,
+            ),
+            correctionCapture,
           ),
           preferenceCapture,
         ),
@@ -1430,15 +1453,21 @@ export async function runPromptHook(prompt, options = {}) {
         reason: "contextual_continuation",
       };
     }
-    if (preferenceCapture) {
+    if (preferenceCapture || correctionCapture) {
       return {
         consumed: false,
-        context: appendPrivateLessonLifecycleRecovery(
+        context: appendPreferenceCapture(
+          appendUserCorrectionCapture(
+            appendPrivateLessonLifecycleRecovery(
+              "Remembrance capture routing:",
+              privateLessonRecovery,
+            ),
+            correctionCapture,
+          ),
           preferenceCapture,
-          privateLessonRecovery,
         ),
-        eligible: false,
-        reason: "preference_capture",
+        eligible: Boolean(correctionCapture),
+        reason: correctionCapture ? "user_correction" : "preference_capture",
       };
     }
     if (privateLessonRecovery) {
@@ -1473,14 +1502,17 @@ export async function runPromptHook(prompt, options = {}) {
     return {
       consumed: false,
       context: appendPreferenceCapture(
-        appendPrivateLessonLifecycleRecovery(
-          includeSharedConfigCredentialNotice
-            ? withSharedConfigCredentialNotice(
-                unavailableQueryContext(env),
-                env,
-              )
-            : unavailableQueryContext(env),
-          privateLessonRecovery,
+        appendUserCorrectionCapture(
+          appendPrivateLessonLifecycleRecovery(
+            includeSharedConfigCredentialNotice
+              ? withSharedConfigCredentialNotice(
+                  unavailableQueryContext(env),
+                  env,
+                )
+              : unavailableQueryContext(env),
+            privateLessonRecovery,
+          ),
+          correctionCapture,
         ),
         preferenceCapture,
       ),
@@ -1492,27 +1524,35 @@ export async function runPromptHook(prompt, options = {}) {
     consumed: true,
     matched: queryResponseHasMatches(response),
     context: appendPreferenceCapture(
-      appendPrivateLessonLifecycleRecovery(
-        includeSharedConfigCredentialNotice
-          ? withSharedConfigCredentialNotice(
-              formatContext(response, decision.reason, limitFromEnv(env)) ??
-                emptyQueryContext(decision.reason),
-              env,
-            )
-          : (formatContext(response, decision.reason, limitFromEnv(env)) ??
-              emptyQueryContext(decision.reason)),
-        privateLessonRecovery,
+      appendUserCorrectionCapture(
+        appendPrivateLessonLifecycleRecovery(
+          includeSharedConfigCredentialNotice
+            ? withSharedConfigCredentialNotice(
+                formatContext(response, decision.reason, limitFromEnv(env)) ??
+                  emptyQueryContext(decision.reason),
+                env,
+              )
+            : (formatContext(response, decision.reason, limitFromEnv(env)) ??
+                emptyQueryContext(decision.reason)),
+          privateLessonRecovery,
+        ),
+        correctionCapture,
       ),
       preferenceCapture,
     ),
     eligible: true,
     highMatch: highMatchFromResponse(response),
+    queryFeedback: queryFeedbackTrackingFromResponse(response),
     valueEpisode: valueEpisodeFromResponse(response),
     reason: decision.reason,
   };
 }
 
 function appendPreferenceCapture(context, directive) {
+  return directive ? `${context}\n\n${directive}` : context;
+}
+
+function appendUserCorrectionCapture(context, directive) {
   return directive ? `${context}\n\n${directive}` : context;
 }
 
@@ -1523,10 +1563,41 @@ function appendPrivateLessonLifecycleRecovery(context, instruction) {
 export function queryResponseHasMatches(response) {
   const body = responseBodyFromToolResponse(response);
   const skills = Array.isArray(body?.skills)
-    ? body.skills.filter((item) => publicSkillCandidateAllowed(body, item))
+    ? body.skills
+        .filter((item) => publicSkillCandidateAllowed(body, item))
+        .filter(autoQueryResponseCandidateAllowed)
     : [];
-  const resources = Array.isArray(body?.resources) ? body.resources : [];
+  const resources = Array.isArray(body?.resources)
+    ? body.resources.filter(autoQueryResponseCandidateAllowed)
+    : [];
   return skills.length > 0 || resources.length > 0;
+}
+
+function autoQueryResponseCandidateAllowed(candidate) {
+  if (candidate?.applicability?.fit === "unlikely") return false;
+  if (!candidate?.match_tier) return true;
+  if (candidate?.match_tier === "high") return true;
+  if (candidate?.match_tier !== "possible") return false;
+  const lexical = candidate?.why_matched?.lexical_signal;
+  const semantic = candidate?.why_matched?.semantic_signal;
+  if (!lexical && !semantic) return true;
+  return (
+    lexical === "strong" ||
+    semantic === "strong" ||
+    (lexical === "moderate" &&
+      semantic === "moderate" &&
+      candidate?.why_matched?.domain_match === true)
+  );
+}
+
+export function queryFeedbackTrackingFromResponse(response) {
+  const body = responseBodyFromToolResponse(response);
+  const queryFeedback = body?.query_feedback;
+  const queryId =
+    queryFeedback?.available === true
+      ? completionIdentifier(queryFeedback.query_id ?? body?.query_id)
+      : "";
+  return queryId ? { available: true, query_id: queryId } : null;
 }
 
 function withSharedConfigCredentialNotice(context, env) {
@@ -1605,7 +1676,7 @@ export function contributionReason(
   options = {},
 ) {
   const signalLine = signal
-    ? `High-value lesson detected: ${signal}. Capture it unless it was already submitted.`
+    ? `High-value lesson detected: ${signal}. Capture this specific lesson unless it was already submitted. A lower-value earlier capture does not satisfy this obligation; compare it with the most valuable reusable lesson formed since.`
     : null;
   const highMatchLine = highMatch
     ? highMatchClosureInstruction(highMatch)
@@ -1712,9 +1783,25 @@ export function privateLessonCompletionGuidance({
     .join("\n");
 }
 
+export function completionContinuationReason(reason, input = {}) {
+  const priorAnswer = String(
+    input?.last_assistant_message ??
+      input?.lastAssistantMessage ??
+      input?.assistant_message ??
+      input?.message ??
+      "",
+  ).trim();
+  const finalAnswerInstruction = priorAnswer
+    ? "After the silent cleanup, preserve the task result: repeat your immediately preceding user-facing answer unchanged, preceded only by any Remembrance failure or required action that must be surfaced. Do not replace the task answer with hook, receipt, or Remembrance status text."
+    : "After the silent cleanup, provide the task's normal user-facing final answer. Do not replace it with hook, receipt, or Remembrance status text.";
+  return [String(reason ?? "").trim(), finalAnswerInstruction]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function taskClosureReason(signal = null, options = {}) {
   const signalLine = signal
-    ? `High-value lesson detected: ${signal}. Capture it unless it was already submitted.`
+    ? `High-value lesson detected: ${signal}. Capture this specific lesson unless it was already submitted. A lower-value earlier capture does not satisfy this obligation; compare it with the most valuable reusable lesson formed since.`
     : null;
   return [
     "Before finishing, silently recover the pending Remembrance query for this reusable task using the full conversation; no completed Remembrance query/use was recorded.",
@@ -1793,6 +1880,26 @@ export function decideStop(input, options = {}) {
   const engagementCount = Math.max(useCount, eligibilityCount);
   const readPrompted = options.readPromptedCount ?? readPromptedCount;
   const promptedCount = readPrompted(sessionId, env);
+  const readObligations =
+    options.readCompletionObligations ?? readCompletionObligations;
+  const unpromptedObligations = readObligations(sessionId, env).filter(
+    (obligation) => !obligation.prompted_at,
+  );
+  const highValueSignal = detectHighValueLessonSignal(input);
+  if (unpromptedObligations.length > 0 && !highValueSignal) {
+    return {
+      allow: false,
+      why: "prompt_pending_obligations",
+      reason: completionObligationInstruction(unpromptedObligations),
+      useCount: Math.max(
+        engagementCount,
+        ...unpromptedObligations.map(
+          (obligation) => obligation.engagement_count,
+        ),
+      ),
+      obligationIds: unpromptedObligations.map((obligation) => obligation.id),
+    };
+  }
   const readHighMatch = options.readHighMatch ?? readHighMatchSurface;
   const highMatch = readHighMatch(sessionId, env);
   const directSelections = options.readDirectSelections
@@ -1808,7 +1915,6 @@ export function decideStop(input, options = {}) {
   );
   const hasUnclosedEligibility =
     eligibilityCount > useCount && newDirectSelections.length === 0;
-  const highValueSignal = detectHighValueLessonSignal(input);
   const privateLessonAuthorized = organizationPrivateLessonAuthorized(env);
   const privateLessonRecovery = privateLessonAuthorized
     ? privateLessonLifecycleRecoveryInstruction(env)
@@ -1816,18 +1922,25 @@ export function decideStop(input, options = {}) {
   if (
     newDirectSelections.length > 0 &&
     feedbackDirectSelections.length === 0 &&
-    !privateLessonRecovery
+    !privateLessonRecovery &&
+    unpromptedObligations.length === 0
   ) {
     return { allow: true, why: "direct_feedback_unavailable" };
   }
-  if (engagementCount === 0 && !highValueSignal && !privateLessonRecovery) {
+  if (
+    engagementCount === 0 &&
+    !highValueSignal &&
+    !privateLessonRecovery &&
+    unpromptedObligations.length === 0
+  ) {
     return { allow: true, why: "registry_not_used" };
   }
   if (
     privateLessonRecovery &&
     promptedCount > 0 &&
     engagementCount <= promptedCount &&
-    !highValueSignal
+    !highValueSignal &&
+    unpromptedObligations.length === 0
   ) {
     return { allow: true, why: "no_new_usage" };
   }
@@ -1835,14 +1948,16 @@ export function decideStop(input, options = {}) {
     engagementCount <= promptedCount &&
     newDirectSelections.length === 0 &&
     !highValueSignal &&
-    !privateLessonRecovery
+    !privateLessonRecovery &&
+    unpromptedObligations.length === 0
   ) {
     return { allow: true, why: "no_new_usage" };
   }
   if (
     highValueSignal &&
     promptedCount > 0 &&
-    engagementCount <= promptedCount
+    engagementCount <= promptedCount &&
+    unpromptedObligations.length === 0
   ) {
     return { allow: true, why: "high_value_lesson_already_prompted" };
   }
@@ -1855,7 +1970,10 @@ export function decideStop(input, options = {}) {
         : privateLessonRecovery && engagementCount === 0
           ? "prompt_private_lesson_retry"
           : "prompt_contribution",
-    reason:
+    reason: [
+      unpromptedObligations.length > 0
+        ? completionObligationInstruction(unpromptedObligations)
+        : null,
       privateLessonRecovery && engagementCount === 0 && !highValueSignal
         ? [
             privateLessonRecovery,
@@ -1878,10 +1996,14 @@ export function decideStop(input, options = {}) {
                 includeLifecycleRecovery: true,
               },
             ),
+    ]
+      .filter(Boolean)
+      .join("\n"),
     useCount:
       highValueSignal || privateLessonRecovery
         ? Math.max(engagementCount, promptedCount + 1, 1)
         : engagementCount,
+    obligationIds: unpromptedObligations.map((obligation) => obligation.id),
   };
 }
 
@@ -1904,6 +2026,8 @@ function highMatchClosureInstruction(match) {
 //                     no query result was consumed.
 //   <hash>.prompt  — the use count at which the stop adapter last prompted.
 //   <hash>.high-match.json — latest high result until its exact detail opens.
+//   <hash>.obligations/*.json — content-free query/feedback/lesson actions,
+//                               each closed only by its correlated tool call.
 // The stop adapter compares max(.use, .eligible) with .prompt, then records the
 // new engagement count. This reproduces the Claude hook's sentinel behavior
 // without retaining a transcript.
@@ -1961,6 +2085,18 @@ function directivePath(sessionId, env) {
   return join(usageDir(env), `${sessionHash(sessionId)}.directive.json`);
 }
 
+function completionObligationDir(sessionId, env) {
+  return join(usageDir(env), `${sessionHash(sessionId)}.obligations`);
+}
+
+function completionObligationPath(sessionId, obligationId, env) {
+  const hash = createHash("sha256")
+    .update(String(obligationId), "utf8")
+    .digest("hex")
+    .slice(0, 32);
+  return join(completionObligationDir(sessionId, env), `${hash}.json`);
+}
+
 function readCountFile(path) {
   try {
     const raw = readFileSync(path, "utf8");
@@ -1995,6 +2131,507 @@ function writeCountFile(path, count) {
   return writePrivateUsageMarker(path, String(count));
 }
 
+function currentEngagementCount(sessionId, env = process.env) {
+  return Math.max(
+    readRegistryUseCount(sessionId, env),
+    readTaskEligibilityCount(sessionId, env),
+  );
+}
+
+function completionObligationId(kind, parts) {
+  return [kind, ...parts.map((part) => completionIdentifier(part))].join(":");
+}
+
+function completionIdentifier(value, maxLength = 160) {
+  const text = String(value ?? "").trim();
+  return text ? safeText(text, maxLength) : "";
+}
+
+function normalizeCompletionObligation(value) {
+  if (
+    !value ||
+    value.version !== COMPLETION_OBLIGATION_VERSION ||
+    ![
+      "query_feedback",
+      "post_use_feedback",
+      "remembrance_followup",
+      "private_lesson",
+    ].includes(value.kind) ||
+    typeof value.id !== "string" ||
+    !value.id ||
+    !Number.isInteger(value.engagement_count) ||
+    value.engagement_count < 1
+  ) {
+    return null;
+  }
+  const createdAt = Date.parse(String(value.created_at ?? ""));
+  const promptedAt = value.prompted_at
+    ? Date.parse(String(value.prompted_at))
+    : null;
+  if (!Number.isFinite(createdAt)) return null;
+  return {
+    version: COMPLETION_OBLIGATION_VERSION,
+    id: safeText(value.id, 420),
+    kind: value.kind,
+    engagement_count: Math.min(1_000_000, value.engagement_count),
+    query_id: value.query_id ? safeText(value.query_id, 160) : null,
+    result_id: value.result_id ? safeText(value.result_id, 160) : null,
+    draft_id: value.draft_id ? safeText(value.draft_id, 160) : null,
+    skill_slug: value.skill_slug ? safeText(value.skill_slug, 160) : null,
+    payload_digest:
+      typeof value.payload_digest === "string" &&
+      /^sha256:[a-f0-9]{64}$/.test(value.payload_digest)
+        ? value.payload_digest
+        : null,
+    created_at: new Date(createdAt).toISOString(),
+    prompted_at:
+      promptedAt !== null && Number.isFinite(promptedAt)
+        ? new Date(promptedAt).toISOString()
+        : null,
+  };
+}
+
+export function readCompletionObligations(sessionId, env = process.env) {
+  const directory = completionObligationDir(sessionId, env);
+  try {
+    const now = Date.now();
+    const obligations = [];
+    for (const name of readdirSync(directory).sort().slice(0, 256)) {
+      if (!/^[a-f0-9]{32}\.json$/.test(name)) continue;
+      const path = join(directory, name);
+      try {
+        const stat = lstatSync(path);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8 * 1024) {
+          continue;
+        }
+        const obligation = normalizeCompletionObligation(
+          JSON.parse(readFileSync(path, "utf8")),
+        );
+        if (!obligation) continue;
+        if (
+          Date.parse(obligation.created_at) + COMPLETION_OBLIGATION_TTL_MS <
+          now
+        ) {
+          rmSync(path, { force: true });
+          continue;
+        }
+        obligations.push(obligation);
+      } catch {
+        // One malformed marker must not hide other pending work.
+      }
+    }
+    return obligations
+      .sort(
+        (left, right) =>
+          Date.parse(left.created_at) - Date.parse(right.created_at) ||
+          left.id.localeCompare(right.id),
+      )
+      .slice(0, COMPLETION_OBLIGATION_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function writeCompletionObligation(sessionId, obligation, env) {
+  const normalized = normalizeCompletionObligation(obligation);
+  if (!normalized) return null;
+  const existing = readCompletionObligations(sessionId, env);
+  if (
+    !existing.some((item) => item.id === normalized.id) &&
+    existing.length >= COMPLETION_OBLIGATION_LIMIT
+  ) {
+    return null;
+  }
+  return writePrivateUsageMarker(
+    completionObligationPath(sessionId, normalized.id, env),
+    `${JSON.stringify(normalized)}\n`,
+  )
+    ? normalized
+    : null;
+}
+
+function addCompletionObligation(
+  sessionId,
+  obligation,
+  env = process.env,
+) {
+  const existing = readCompletionObligations(sessionId, env).find(
+    (item) => item.id === obligation.id,
+  );
+  return writeCompletionObligation(
+    sessionId,
+    {
+      version: COMPLETION_OBLIGATION_VERSION,
+      ...obligation,
+      created_at: existing?.created_at ?? new Date().toISOString(),
+      prompted_at: existing?.prompted_at ?? null,
+    },
+    env,
+  );
+}
+
+function removeCompletionObligations(sessionId, predicate, env) {
+  const removed = [];
+  for (const obligation of readCompletionObligations(sessionId, env)) {
+    if (!predicate(obligation)) continue;
+    try {
+      rmSync(completionObligationPath(sessionId, obligation.id, env), {
+        force: true,
+      });
+      removed.push(obligation);
+    } catch {
+      // Fail open: a retained marker can cause one reminder, never data loss.
+    }
+  }
+  return removed;
+}
+
+function normalizedCompletionToolName(toolName) {
+  const normalized = String(toolName ?? "").trim().toLowerCase();
+  for (const candidate of [
+    "query_skills",
+    "get_skill",
+    "get_resource",
+    "invoke_skill",
+    "prepare_private_lesson_candidate",
+    "submit_private_lesson_candidate",
+    "retry_private_lesson_candidate",
+    "submit_query_feedback",
+    "submit_feedback",
+    "submit_remembrance",
+    "propose_skill_idea",
+    "propose_private_skill",
+    "submit_suggestion",
+    "submit_resource",
+    "submit_resource_review",
+  ]) {
+    if (normalized.endsWith(candidate)) return candidate;
+  }
+  return normalized;
+}
+
+function completionPayloadDigest(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  try {
+    const normalized = JSON.parse(JSON.stringify(payload));
+    delete normalized.verified_attestation;
+    return `sha256:${createHash("sha256")
+      .update(canonicalHookJson(normalized), "utf8")
+      .digest("hex")}`;
+  } catch {
+    // Host SDK payloads should be JSON, but observation must never break a turn.
+    return null;
+  }
+}
+
+export function recordQueryFeedbackObligation(
+  sessionId,
+  response,
+  env = process.env,
+  engagementCount = currentEngagementCount(sessionId, env),
+) {
+  const tracking =
+    response?.available === true && response?.query_id
+      ? response
+      : queryFeedbackTrackingFromResponse(response);
+  const queryId = completionIdentifier(tracking?.query_id);
+  if (!queryId) return null;
+  return addCompletionObligation(
+    sessionId,
+    {
+      id: completionObligationId("query_feedback", [queryId]),
+      kind: "query_feedback",
+      engagement_count: Math.max(1, engagementCount),
+      query_id: queryId,
+    },
+    env,
+  );
+}
+
+export function recordPostUseFeedbackObligation(
+  sessionId,
+  {
+    query_id: queryId,
+    result_id: resultId,
+    skill_slug: skillSlug = null,
+    feedback_available: feedbackAvailable = true,
+  } = {},
+  env = process.env,
+  engagementCount = currentEngagementCount(sessionId, env),
+) {
+  const query = completionIdentifier(queryId);
+  const result = completionIdentifier(resultId);
+  if (!feedbackAvailable || !query || !result) return null;
+  return addCompletionObligation(
+    sessionId,
+    {
+      id: completionObligationId("post_use_feedback", [query, result]),
+      kind: "post_use_feedback",
+      engagement_count: Math.max(1, engagementCount),
+      query_id: query,
+      result_id: result,
+      skill_slug: skillSlug ? safeText(skillSlug, 160) : null,
+    },
+    env,
+  );
+}
+
+export function recordPrivateLessonObligation(
+  sessionId,
+  response,
+  env = process.env,
+  engagementCount = currentEngagementCount(sessionId, env),
+) {
+  const body = responseBodyFromToolResponse(response);
+  const draftId = completionIdentifier(body?.draft_id);
+  if (!/^pld_[A-Za-z0-9_-]{8,96}$/.test(draftId)) return null;
+  if (["submitted", "superseded_redactor"].includes(body?.state)) return null;
+  return addCompletionObligation(
+    sessionId,
+    {
+      id: completionObligationId("private_lesson", [draftId]),
+      kind: "private_lesson",
+      engagement_count: Math.max(1, engagementCount),
+      draft_id: draftId,
+    },
+    env,
+  );
+}
+
+function recordRemembranceFollowupObligation(
+  sessionId,
+  response,
+  fallback,
+  env,
+  engagementCount,
+) {
+  const payload =
+    responseBodyFromToolResponse(response)?.next_step
+      ?.submit_remembrance_payload;
+  const digest = completionPayloadDigest(payload);
+  if (!digest) return null;
+  const queryId = completionIdentifier(
+    payload?.interaction?.query_id ?? fallback?.query_id,
+  );
+  const resultId = completionIdentifier(
+    payload?.interaction?.result_id ?? fallback?.result_id,
+  );
+  return addCompletionObligation(
+    sessionId,
+    {
+      id: completionObligationId("remembrance_followup", [digest]),
+      kind: "remembrance_followup",
+      engagement_count: Math.max(1, engagementCount),
+      query_id: queryId || null,
+      result_id: resultId || null,
+      payload_digest: digest,
+    },
+    env,
+  );
+}
+
+function markEngagementHandledWhenClear(sessionId, env) {
+  const count = currentEngagementCount(sessionId, env);
+  const hasPending = readCompletionObligations(sessionId, env).length > 0;
+  if (!hasPending && count > 0) {
+    writePromptedCount(sessionId, count, env);
+  }
+  return { count, hasPending };
+}
+
+export function observeSuccessfulCompletionTool(
+  sessionId,
+  toolName,
+  args = {},
+  response = null,
+  env = process.env,
+) {
+  const tool = normalizedCompletionToolName(toolName);
+  const input =
+    args && typeof args === "object" && !Array.isArray(args) ? args : {};
+  const engagementCount = currentEngagementCount(sessionId, env);
+  const opened = [];
+  let closed = [];
+
+  if (tool === "query_skills") {
+    const obligation = recordQueryFeedbackObligation(
+      sessionId,
+      response,
+      env,
+      engagementCount,
+    );
+    if (obligation) opened.push(obligation);
+  } else if (tool === "invoke_skill") {
+    const selection = directSelectionFromResponse(response);
+    const obligation = selection
+      ? recordPostUseFeedbackObligation(
+          sessionId,
+          {
+            query_id: selection.query_id,
+            result_id: selection.result_id,
+            skill_slug: selection.slug,
+            feedback_available: selection.feedback_available,
+          },
+          env,
+          engagementCount,
+        )
+      : null;
+    if (obligation) opened.push(obligation);
+  } else if (tool === "get_skill" || tool === "get_resource") {
+    const obligation = recordPostUseFeedbackObligation(
+      sessionId,
+      {
+        query_id: input.query_id,
+        result_id: input.result_id,
+        skill_slug: input.slug,
+      },
+      env,
+      engagementCount,
+    );
+    if (obligation) opened.push(obligation);
+  } else if (tool === "prepare_private_lesson_candidate") {
+    const obligation = recordPrivateLessonObligation(
+      sessionId,
+      response,
+      env,
+      engagementCount,
+    );
+    if (obligation) opened.push(obligation);
+  } else if (tool === "submit_query_feedback") {
+    const queryId = completionIdentifier(input.query_id);
+    closed = removeCompletionObligations(
+      sessionId,
+      (obligation) =>
+        obligation.kind === "query_feedback" &&
+        Boolean(queryId) &&
+        obligation.query_id === queryId,
+      env,
+    );
+  } else if (tool === "submit_feedback") {
+    const queryId = completionIdentifier(input.query_id);
+    const resultId = completionIdentifier(input.result_id);
+    closed = removeCompletionObligations(
+      sessionId,
+      (obligation) =>
+        obligation.kind === "post_use_feedback" &&
+        Boolean(queryId) &&
+        Boolean(resultId) &&
+        obligation.query_id === queryId &&
+        obligation.result_id === resultId,
+      env,
+    );
+    const followup = recordRemembranceFollowupObligation(
+      sessionId,
+      response,
+      input,
+      env,
+      engagementCount,
+    );
+    if (followup) opened.push(followup);
+  } else if (tool === "submit_remembrance") {
+    const digest = completionPayloadDigest(input);
+    const queryId = completionIdentifier(input?.interaction?.query_id);
+    const resultId = completionIdentifier(input?.interaction?.result_id);
+    const pendingFollowups = readCompletionObligations(sessionId, env).filter(
+      (obligation) => obligation.kind === "remembrance_followup",
+    );
+    closed = removeCompletionObligations(
+      sessionId,
+      (obligation) =>
+        obligation.kind === "remembrance_followup" &&
+        ((digest && obligation.payload_digest === digest) ||
+          (queryId &&
+            resultId &&
+            obligation.query_id === queryId &&
+            obligation.result_id === resultId) ||
+          (!queryId && !resultId && pendingFollowups.length === 1)),
+      env,
+    );
+  } else if (
+    tool === "submit_private_lesson_candidate" ||
+    tool === "retry_private_lesson_candidate"
+  ) {
+    const body = responseBodyFromToolResponse(response);
+    const draftId = completionIdentifier(input.draft_id ?? body?.draft_id);
+    closed = removeCompletionObligations(
+      sessionId,
+      (obligation) =>
+        obligation.kind === "private_lesson" &&
+        Boolean(draftId) &&
+        obligation.draft_id === draftId,
+      env,
+    );
+  }
+
+  const handled = COMPLETION_CONTRIBUTION_TOOLS.has(tool)
+    ? markEngagementHandledWhenClear(sessionId, env)
+    : {
+        count: engagementCount,
+        hasPending: readCompletionObligations(sessionId, env).length > 0,
+      };
+  return {
+    tool,
+    opened,
+    closed,
+    pending: readCompletionObligations(sessionId, env),
+    handled_count: handled.hasPending ? 0 : handled.count,
+  };
+}
+
+export function markCompletionObligationsPrompted(
+  sessionId,
+  obligationIds = null,
+  env = process.env,
+  engagementCount = Number.POSITIVE_INFINITY,
+) {
+  const ids = Array.isArray(obligationIds) ? new Set(obligationIds) : null;
+  let marked = 0;
+  for (const obligation of readCompletionObligations(sessionId, env)) {
+    if (
+      obligation.prompted_at ||
+      obligation.engagement_count > engagementCount ||
+      (ids && !ids.has(obligation.id))
+    ) {
+      continue;
+    }
+    if (
+      writeCompletionObligation(
+        sessionId,
+        { ...obligation, prompted_at: new Date().toISOString() },
+        env,
+      )
+    ) {
+      marked += 1;
+    }
+  }
+  return marked;
+}
+
+function completionObligationInstruction(obligations) {
+  const lines = obligations.slice(0, 12).map((obligation) => {
+    if (obligation.kind === "query_feedback") {
+      return `- Query fit: call submit_query_feedback for query_id ${obligation.query_id}.`;
+    }
+    if (obligation.kind === "post_use_feedback") {
+      return `- Post-use feedback${obligation.skill_slug ? ` for ${obligation.skill_slug}` : ""}: call submit_feedback with query_id ${obligation.query_id} and result_id ${obligation.result_id}.`;
+    }
+    if (obligation.kind === "remembrance_followup") {
+      return "- Reusable evidence: submit the exact next_step.submit_remembrance_payload returned by the preceding feedback call.";
+    }
+    return `- Private lesson: call submit_private_lesson_candidate with draft_id ${obligation.draft_id}.`;
+  });
+  if (obligations.length > lines.length) {
+    lines.push(`- ${obligations.length - lines.length} additional pending action(s) remain in this session.`);
+  }
+  return [
+    "Before finishing, silently complete only these pending Remembrance actions:",
+    ...lines,
+    "Do not mention routine hook, tool, or receipt output. Surface only a failure or required user action.",
+  ].join("\n");
+}
+
 // Increment (and return) the per-session registry-use counter. Prompt and tool
 // adapters call this only after an authorized registry match or explicit skill
 // invocation. A legitimate empty query remains eligible for completion recovery
@@ -2011,7 +2648,7 @@ export function markCurrentEngagementHandled(sessionId, env = process.env) {
     readRegistryUseCount(sessionId, env),
     readTaskEligibilityCount(sessionId, env),
   );
-  if (count > 0) {
+  if (count > 0 && readCompletionObligations(sessionId, env).length === 0) {
     writePromptedCount(sessionId, count, env);
   }
   return count;
@@ -2182,6 +2819,7 @@ export function responseBodyFromToolResponse(value, depth = 0) {
   if (typeof value !== "object") return null;
   if (
     typeof value.query_id === "string" ||
+    typeof value.draft_id === "string" ||
     value.selection_mode === "explicit" ||
     (value.next_step && typeof value.next_step === "object") ||
     Array.isArray(value.skills) ||
@@ -2997,6 +3635,7 @@ export function writePromptedCount(sessionId, count, env = process.env) {
   const written = writeCountFile(promptPath(sessionId, env), count);
   if (written) {
     markDirectSelectionSurfacesPrompted(sessionId, count, env);
+    markCompletionObligationsPrompted(sessionId, null, env, count);
   }
   return written;
 }
@@ -5016,6 +5655,33 @@ export function promptProvidesPreferenceCorrection(prompt) {
   return /\b(?:too many comments?|fewer comments?|less verbose|too verbose|overly verbose|stop (?:using|adding|writing)|do not (?:use|add|write)|don't (?:use|add|write)|i (?:do not|don't) (?:want|like)|instead,? (?:use|keep|make))\b/i.test(
     String(prompt ?? ""),
   );
+}
+
+const USER_CORRECTION_CAPTURE_PATTERNS = [
+  /\b(?:that|this|it)(?:\s+(?:(?:completed|proposed|current|chosen)\s+)?(?:approach|implementation|design|result))?(?:'s|\s+(?:is|was|looks?|feels?))\s+(?:wrong|incorrect|overkill|too much|overcomplicated|the wrong (?:way|approach|direction))\b/i,
+  /\b(?:wrong (?:way|approach|direction)|do (?:this|it) differently|use a different approach)\b/i,
+  /\b(?:you|we)\s+(?:missed|forgot|overlooked|ignored|did not address|didn't address|failed to address)\b/i,
+  /\b(?:i already (?:asked|said|told you)|as i (?:said|asked|explained)|you keep (?:missing|forgetting|doing|adding|removing))\b/i,
+  /\bi (?:do not|don't) (?:like|agree with|want) (?:this|that|the) (?:approach|direction|implementation|design|result)\b/i,
+  /\b(?:revert|undo|discard|reject) (?:that|this|the (?:approach|implementation|change|design|result))\b/i,
+];
+
+export function promptContainsUserCorrection(prompt) {
+  const text = String(prompt ?? "").trim();
+  return (
+    text.length >= 8 &&
+    USER_CORRECTION_CAPTURE_PATTERNS.some((pattern) => pattern.test(text))
+  );
+}
+
+export function userCorrectionCaptureDirective(prompt) {
+  if (!promptContainsUserCorrection(prompt)) return null;
+  return [
+    "Remembrance user-correction capture:",
+    "The user appears to have corrected, rejected, or repeated guidance about the approach. Resolve the correction in this turn, then decide whether the corrected lesson is reusable beyond this person and repository.",
+    "For a compact general failure, correction, or evidence lesson, prepare and submit one private lesson before finishing. For a complete reusable workflow, propose a private skill instead. Store person-, repository-, or machine-specific facts only in the host's local memory.",
+    "Writing local memory does not satisfy organization-shared capture. Do not send raw repository content, the user's wording, paths, URLs, identifiers, or secrets; generalize first and use the private organization lane.",
+  ].join("\n");
 }
 
 function promptDisclaimsDurablePreference(prompt) {

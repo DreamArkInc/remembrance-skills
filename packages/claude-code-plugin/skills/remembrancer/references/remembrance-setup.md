@@ -284,8 +284,12 @@ This is the only host-visible network action in the flow. Approve or persist
 approval for this exact action, not every Remembrance write. The server derives
 the organization and private visibility from the authenticated key, verifies a
 signed organization policy plus purpose-bound attestation, and returns a signed
-content-free receipt. The endpoint can never create or automatically propagate
-public content.
+content-free receipt. The action always submits privately and never falls back
+to anonymous or public submission. After an accepted private outcome, a
+separate server-owned process may create a freshly redacted public candidate
+only when the organization admin enabled the **Contribution propagation**
+setting; the submitting agent neither chooses nor sees that process, and the
+derivative must pass the complete public pipeline.
 
 If the host denies the action, no candidate content was sent. The encrypted
 draft remains on the device in `awaiting_authorization`; do not retry it

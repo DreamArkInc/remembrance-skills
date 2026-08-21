@@ -18,6 +18,7 @@ import {
   recordHighMatchSurface,
   recordDirectiveSurface,
   recordPluginLifecycleHealth,
+  recordQueryFeedbackObligation,
   recordRegistryUse,
   recordTaskEligibility,
   recordValueEpisodeSurface,
@@ -132,6 +133,11 @@ export async function handleQuery(input, options = {}) {
     const recordValueEpisode =
       options.recordValueEpisode ?? recordValueEpisodeSurface;
     recordValueEpisode(sessionId, result.valueEpisode ?? null, env);
+  }
+  if (result.queryFeedback) {
+    const recordQueryFeedback =
+      options.recordQueryFeedbackObligation ?? recordQueryFeedbackObligation;
+    recordQueryFeedback(sessionId, result.queryFeedback, env);
   }
   // An intentional hosted-MCP override is configured separately from this
   // hook. When its URL differs from the hook API URL, tell the agent so it

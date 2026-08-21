@@ -99,6 +99,9 @@ describe("OpenClaw completion hook (before_agent_finalize)", () => {
       "submit_private_lesson_candidate",
     );
     expect(result.retry.instruction).toContain("Never auto-delete a draft");
+    expect(result.retry.instruction).toContain(
+      "provide the task's normal user-facing final answer",
+    );
     expect(result.reason).not.toBe(contributionReason());
     // It records the new prompted count so it won't re-revise the same use.
     expect(written).toEqual([["r1", 1]]);

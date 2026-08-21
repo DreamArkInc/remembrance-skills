@@ -43,7 +43,7 @@ describe("Codex contribute-on-stop adapter", () => {
     );
     expect(result.allow).toBe(false);
     expect(result.output.decision).toBe("block");
-    expect(result.output.reason).toBe(contributionReason());
+    expect(result.output.reason).toContain(contributionReason());
     expect(result.output.reason).toContain(
       "Use Remembrance MCP tools when available",
     );
@@ -54,9 +54,29 @@ describe("Codex contribute-on-stop adapter", () => {
     expect(result.output.reason).toContain("submit_remembrance");
     expect(result.output.reason).toContain("propose_private_skill");
     expect(result.output.reason).toContain("propose_skill_idea");
-    expect(result.output.reason.length).toBeLessThan(1_200);
+    expect(result.output.reason).toContain(
+      "provide the task's normal user-facing final answer",
+    );
+    expect(result.output.reason.length).toBeLessThan(1_500);
     // It records the new prompted count so it won't re-block the same use.
     expect(written).toEqual([["t1", 1]]);
+  });
+
+  it("replays the prior task answer after a necessary visible Stop fallback", () => {
+    const prior = "Committed the feature as db0da1a and verified the release gate.";
+    const result = handleStop(
+      {
+        turn_id: "t-preserve-final",
+        stop_hook_active: false,
+        last_assistant_message: prior,
+      },
+      base(),
+    );
+
+    expect(result.output.reason).toContain(
+      "repeat your immediately preceding user-facing answer unchanged",
+    );
+    expect(result.output.reason).not.toContain(prior);
   });
 
   it("routes new organization lessons through the exact private two-stage action", () => {

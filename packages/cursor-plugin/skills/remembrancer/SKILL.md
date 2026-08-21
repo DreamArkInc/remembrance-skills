@@ -97,6 +97,20 @@ Also use this skill when:
 
 Do not directly mutate shared skills. Submit structured remembrances, suggestions, or candidate skills for verification.
 
+Route memory by audience, not by which write tool is most convenient:
+
+- Host-local memory is for facts about this human, repository, installation, or machine.
+- Remembrance is for a generalized lesson another approved organization agent would otherwise rediscover the hard way.
+- A local-memory write does not satisfy organization-shared capture. Generalize reusable feedback and use the private lesson lane; never mirror raw local memory automatically.
+
+`get_connection_status` exposes content-free recent contribution outcomes for
+the current installation principal, or for the current API key when an older
+client has no principal. Use it when the user asks whether prior contributions
+were accepted, recognized as duplicates, remain pending, need review, or were
+rejected. It covers remembrances, private skill ideas, skill suggestions,
+resource submissions, and resource reviews. It never returns lesson text,
+titles, rejection prose, actor identity, or private payload data.
+
 Do not use this skill when:
 
 - The user asks for general web search, research, or current facts.
@@ -190,14 +204,18 @@ terminal count, retained bytes, reason, and explicit deletion guidance without
 returning draft content or a local path.
 
 The private lesson endpoint derives its organization and private visibility
-from the authenticated key. It cannot create public content and never falls
-back to public submission. Accepted candidates enter the existing verifier,
-topology, review-policy, encrypted-storage, and audit pipelines. Rich content,
-raw traces, URLs, code blocks, attachments, secrets, paths, identifiers, or
-ambiguous material stays local and must not be forced through by confirmation.
-Use `inspect_private_lesson_outbox` to inspect content-free state, retry a
-selected draft with `retry_private_lesson_candidate`, and delete only with
-`delete_private_lesson_candidate` plus explicit confirmation.
+from the authenticated key. The action always submits privately and never
+falls back to anonymous or public submission. Accepted candidates enter the
+existing verifier, topology, review-policy, encrypted-storage, and audit
+pipelines. After an accepted private outcome, a separate server-owned process
+may create a freshly redacted public candidate only when the organization admin
+enabled **Contribution propagation**; the agent neither chooses nor sees that
+process, and the derivative must pass the complete public pipeline. Rich
+content, raw traces, URLs, code blocks, attachments, secrets, paths,
+identifiers, or ambiguous material stays local and must not be forced through
+by confirmation. Use `inspect_private_lesson_outbox` to inspect content-free
+state, retry a selected draft with `retry_private_lesson_candidate`, and delete
+only with `delete_private_lesson_candidate` plus explicit confirmation.
 
 When health reporting is enabled, a held draft may use the same exact submit
 action to send only a `held_safety_event`: event type, held category counts,

@@ -46,6 +46,7 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
     const recorded = [];
     const eligible = [];
     const highMatches = [];
+    const queryFeedback = [];
     const recordHealth = vi.fn();
     const result = await handlePrePrompt(
       event("Fix this Vercel Next.js build error in GitHub Actions."),
@@ -54,6 +55,8 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
         recordUse: (id) => recorded.push(id),
         recordEligibility: (id) => eligible.push(id),
         recordHighMatch: (id, match) => highMatches.push({ id, match }),
+        recordQueryFeedback: (id, tracking) =>
+          queryFeedback.push({ id, tracking }),
         recordHealth,
         fetchImpl: vi.fn(async (url, init) => {
           calls.push({
@@ -78,6 +81,11 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
               },
             ],
             resources: [],
+            query_feedback: {
+              available: true,
+              query_id: "rq_openclaw",
+              result_ids: ["qres_openclaw"],
+            },
           });
         }),
       },
@@ -127,6 +135,12 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
         }),
       },
     ]);
+    expect(queryFeedback).toEqual([
+      {
+        id: "r1",
+        tracking: { available: true, query_id: "rq_openclaw" },
+      },
+    ]);
   });
 
   it("injects a full-conversation reminder for contextual follow-ups", async () => {
@@ -161,6 +175,27 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
         }),
       },
     ]);
+  });
+
+  it("captures a user correction in the same turn without querying", async () => {
+    const fetchImpl = vi.fn();
+    const eligible = [];
+    const result = await handlePrePrompt(
+      event("That completed approach is overkill; keep the fix focused.", {
+        runId: "r-correction",
+      }),
+      {
+        env: testEnv(),
+        fetchImpl,
+        recordEligibility: (id) => eligible.push(id),
+      },
+    );
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(eligible).toEqual(["r-correction"]);
+    expect(result?.appendSystemContext).toContain(
+      "Remembrance user-correction capture",
+    );
   });
 
   it("really increments the on-disk use marker on a hit", async () => {

@@ -45,21 +45,21 @@ import {
   decideStop,
   directSelectionFromResponse,
   highMatchFromResponse,
-  markCurrentEngagementHandled,
   markHostPolicyAlertDelivered,
+  observeSuccessfulCompletionTool,
   recordDirectiveFollowThroughForTool,
   recordDirectSelectionSurface,
   recordDirectiveSurface,
   recordHighMatchSurface,
   recordPluginLifecycleHealth,
   recordHostPolicyDenial,
+  recordQueryFeedbackObligation,
   recordRegistryUse,
   recordTaskEligibility,
   recordValueEpisodeSurface,
   queryResponseHasMatches,
   reportDirectiveEvent,
   reportTaskOutcomesOnStop,
-  responseRequestsRemembranceFollowup,
   resolveApiCredential,
   runPromptHook,
   toolResponseIndicatesFailure,
@@ -76,6 +76,8 @@ const CONTRIBUTION_TOOLS = [
   "submit_remembrance",
   "propose_skill_idea",
   "propose_private_skill",
+  "submit_private_lesson_candidate",
+  "retry_private_lesson_candidate",
   "submit_suggestion",
   "submit_resource",
   "submit_resource_review",
@@ -371,6 +373,7 @@ export const Remembrance = async (context = {}) => {
         highMatch: result?.highMatch ?? null,
         text: guidance.trim(),
         countsAsUse: Boolean(result?.consumed && result?.matched),
+        queryFeedback: result?.queryFeedback ?? null,
         valueEpisode: result?.valueEpisode ?? null,
       });
     }
@@ -412,6 +415,11 @@ export const Remembrance = async (context = {}) => {
         recordHighMatchSurface(sessionId, guidance.highMatch, env);
         recordValueEpisodeSurface(sessionId, guidance.valueEpisode, env);
       }
+      recordQueryFeedbackObligation(
+        sessionId,
+        guidance.queryFeedback,
+        env,
+      );
       recordDirectiveSurface(sessionId, guidance.directive, env);
       if (guidance.directive) {
         await reportDirectiveEvent(
@@ -487,7 +495,6 @@ export const Remembrance = async (context = {}) => {
       });
       const decision = decideStop({ session_id: sessionId }, { env });
       if (decision?.allow !== false || !decision?.reason) return;
-      markCurrentEngagementHandled(sessionId, env);
       writePromptedCount(sessionId, decision.useCount ?? 1, env);
       await notify(client, decision.reason);
     } catch (error) {
@@ -555,6 +562,7 @@ export const Remembrance = async (context = {}) => {
         const tool = toolNameFromEvent(input, output);
         if (!tool) return;
         const normalizedTool = tool.toLowerCase();
+        const toolArguments = toolArgumentsFromEvent(input);
         if (toolResponseIndicatesFailure(output)) {
           await observeHostPolicyDenial({
             eventType: "tool.execute.after",
@@ -573,6 +581,13 @@ export const Remembrance = async (context = {}) => {
           recordValueEpisodeSurface(
             sessionId,
             valueEpisodeFromResponse(output),
+            env,
+          );
+          observeSuccessfulCompletionTool(
+            sessionId,
+            tool,
+            toolArguments,
+            output,
             env,
           );
           await recordDirectiveFollowThroughForTool(sessionId, tool, output, {
@@ -599,6 +614,23 @@ export const Remembrance = async (context = {}) => {
             selection.slug,
             env,
           );
+          observeSuccessfulCompletionTool(
+            sessionId,
+            tool,
+            toolArguments,
+            output,
+            env,
+          );
+          return;
+        }
+        if (normalizedTool.endsWith("prepare_private_lesson_candidate")) {
+          observeSuccessfulCompletionTool(
+            sessionId,
+            tool,
+            toolArguments,
+            output,
+            env,
+          );
           return;
         }
         if (
@@ -613,19 +645,26 @@ export const Remembrance = async (context = {}) => {
             normalizedTool.endsWith(candidate),
           )
         ) {
-          if (
-            normalizedTool.endsWith("submit_feedback") &&
-            responseRequestsRemembranceFollowup(output)
-          ) {
-            return;
-          }
-          markCurrentEngagementHandled(sessionId, env);
+          observeSuccessfulCompletionTool(
+            sessionId,
+            tool,
+            toolArguments,
+            output,
+            env,
+          );
           return;
         }
         clearHighMatchSurfaceIfOpened(
           sessionId,
           tool,
-          toolArgumentsFromEvent(input),
+          toolArguments,
+          env,
+        );
+        observeSuccessfulCompletionTool(
+          sessionId,
+          tool,
+          toolArguments,
+          output,
           env,
         );
       } catch (error) {

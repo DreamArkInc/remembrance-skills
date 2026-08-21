@@ -199,6 +199,27 @@ describe("Remembrance Claude Code prompt hook", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("captures a user correction in the same turn without requiring a query", async () => {
+    const fetchImpl = vi.fn();
+    const recordEligibility = vi.fn();
+    const output = await handleHookInput(
+      {
+        prompt: "That approach is overkill; keep the existing abstraction.",
+        session_id: "claude-correction",
+      },
+      { env: testEnv(), fetchImpl, recordEligibility },
+    );
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(recordEligibility).toHaveBeenCalledWith(
+      "claude-correction",
+      expect.any(Object),
+    );
+    expect(output?.hookSpecificOutput.additionalContext).toContain(
+      "Remembrance user-correction capture",
+    );
+  });
+
   it("injects a full-thread query reminder for contextual follow-ups", async () => {
     const fetchImpl = vi.fn(async (url) => {
       expect(String(url)).toContain("/api/v1/agent/directive-events");
@@ -297,6 +318,59 @@ describe("Remembrance Claude Code prompt hook", () => {
     expect(cache).not.toContain("Vercel Next.js");
     expect(cache).not.toContain("sk_live_");
     expect(cache).toContain("vercel-cache-debug");
+  });
+
+  it("records the exact query-feedback obligation on network and cache delivery", async () => {
+    const fetchImpl = vi.fn(async () =>
+      Response.json({
+        query_id: "rq_claude_feedback",
+        skills: [
+          {
+            slug: "vercel-feedback-debug",
+            description: "Debug Vercel feedback failures.",
+            result_id: "qres_claude_feedback",
+          },
+        ],
+        resources: [],
+        query_feedback: {
+          available: true,
+          query_id: "rq_claude_feedback",
+          result_ids: ["qres_claude_feedback"],
+        },
+      }),
+    );
+    const env = testEnv({ REMEMBRANCE_API_URL: "https://remembrance.dev" });
+    const input = {
+      prompt: "Review this Vercel deployment workflow.",
+      session_id: "claude-query-feedback",
+    };
+    const recordQueryFeedbackObligation = vi.fn();
+
+    await handleHookInput(input, {
+      env,
+      fetchImpl,
+      recordQueryFeedbackObligation,
+    });
+    await handleHookInput(input, {
+      env,
+      fetchImpl,
+      recordQueryFeedbackObligation,
+    });
+
+    expect(queryCallCount(fetchImpl)).toBe(1);
+    expect(recordQueryFeedbackObligation).toHaveBeenCalledTimes(2);
+    expect(recordQueryFeedbackObligation).toHaveBeenNthCalledWith(
+      1,
+      "claude-query-feedback",
+      { available: true, query_id: "rq_claude_feedback" },
+      env,
+    );
+    expect(recordQueryFeedbackObligation).toHaveBeenNthCalledWith(
+      2,
+      "claude-query-feedback",
+      { available: true, query_id: "rq_claude_feedback" },
+      env,
+    );
   });
 
   it("caches empty responses without counting them as registry consumption", async () => {
@@ -558,15 +632,31 @@ describe("Remembrance Claude Code prompt hook", () => {
     expect(hooks.hooks.Stop[0].hooks[0].command).toContain(
       "contribute-on-stop.mjs",
     );
-    expect(hooks.hooks.PostToolUse[0].hooks[0].command).toContain(
+    const localMemoryHook = hooks.hooks.PostToolUse.find((entry) =>
+      entry.hooks[0].command.includes("route-local-memory.mjs"),
+    );
+    const remembranceToolHook = hooks.hooks.PostToolUse.find((entry) =>
+      entry.hooks[0].command.includes("record-detail-open.mjs"),
+    );
+    expect(localMemoryHook?.matcher).toBe("^(?:Write|Edit|Memory|AutoMemory)$");
+    expect(remembranceToolHook?.hooks[0].command).toContain(
       "record-detail-open.mjs",
     );
-    expect(hooks.hooks.PostToolUse[0].matcher).toContain("query_skills");
+    expect(remembranceToolHook?.matcher).toContain("query_skills");
+    expect(remembranceToolHook?.matcher).toContain(
+      "submit_private_lesson_candidate",
+    );
+    expect(remembranceToolHook?.matcher).toContain(
+      "retry_private_lesson_candidate",
+    );
     for (const event of ["PostToolUseFailure", "PermissionDenied"]) {
       expect(hooks.hooks[event][0].hooks[0].command).toContain(
         "report-host-policy-denial.mjs",
       );
       expect(hooks.hooks[event][0].matcher).toContain("propose_private_skill");
+      expect(hooks.hooks[event][0].matcher).toContain(
+        "submit_private_lesson_candidate",
+      );
     }
     expect(plugin.mcpServers).toBe("./.mcp.json");
     expect(mcp.mcpServers.remembrance).toMatchObject({
@@ -708,6 +798,12 @@ describe("Remembrance Claude Code prompt hook", () => {
     expect(shouldQueryPrompt("Search the web for current news")).toMatchObject({
       likely_match: false,
     });
+    expect(
+      shouldQueryPrompt("Review the latest notes from Claude and Codex"),
+    ).toEqual({ likely_match: false, reason: "no_trigger_match" });
+    expect(
+      shouldQueryPrompt("Integrate the Anthropic API with its SDK"),
+    ).toEqual({ likely_match: true, reason: "external_service" });
     expect(redactPrompt("api_key=secret123 for Vercel")).toContain(
       "[redacted-secret]",
     );

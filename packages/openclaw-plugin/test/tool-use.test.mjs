@@ -84,13 +84,27 @@ describe("OpenClaw after_tool_call hook", () => {
 
   it("records a successful query against the active directive", async () => {
     const recordDirectiveFollowThrough = vi.fn(async () => true);
+    const observeCompletionTool = vi.fn(() => ({
+      opened: [{ kind: "query_feedback" }],
+      closed: [],
+      pending: [{ kind: "query_feedback" }],
+      handled_count: 0,
+    }));
     const result = await handleAfterToolCall(
       {
         toolName: "mcp__remembrance__query_skills",
-        result: { body: { query_id: "rq_openclaw_directive" } },
+        result: {
+          body: {
+            query_id: "rq_openclaw_directive",
+            query_feedback: {
+              available: true,
+              query_id: "rq_openclaw_directive",
+            },
+          },
+        },
         context: { runId: "run_directive" },
       },
-      { env: {}, recordDirectiveFollowThrough },
+      { env: {}, recordDirectiveFollowThrough, observeCompletionTool },
     );
 
     expect(result).toEqual({
@@ -101,9 +115,18 @@ describe("OpenClaw after_tool_call hook", () => {
     expect(recordDirectiveFollowThrough).toHaveBeenCalledWith(
       "run_directive",
       "mcp__remembrance__query_skills",
-      { body: { query_id: "rq_openclaw_directive" } },
+      {
+        body: {
+          query_id: "rq_openclaw_directive",
+          query_feedback: {
+            available: true,
+            query_id: "rq_openclaw_directive",
+          },
+        },
+      },
       expect.objectContaining({ env: {} }),
     );
+    expect(observeCompletionTool).toHaveBeenCalledOnce();
   });
 
   it("observes collapsed Remembrance MCP tool names defensively", async () => {
@@ -214,7 +237,12 @@ describe("OpenClaw after_tool_call hook", () => {
   });
 
   it("marks successful contribution tools as handled", async () => {
-    const markCurrentEngagementHandled = vi.fn(() => 2);
+    const observeCompletionTool = vi.fn(() => ({
+      opened: [],
+      closed: [],
+      pending: [],
+      handled_count: 2,
+    }));
     expect(
       await handleAfterToolCall(
         {
@@ -222,7 +250,7 @@ describe("OpenClaw after_tool_call hook", () => {
           result: { accepted: true },
           context: { runId: "run_feedback" },
         },
-        { env: {}, markCurrentEngagementHandled },
+        { env: {}, observeCompletionTool },
       ),
     ).toEqual({
       recorded: true,
@@ -232,8 +260,35 @@ describe("OpenClaw after_tool_call hook", () => {
     });
   });
 
+  it.each([
+    "submit_private_lesson_candidate",
+    "retry_private_lesson_candidate",
+  ])("marks successful %s calls as handled", async (toolName) => {
+    const observeCompletionTool = vi.fn(() => ({
+      opened: [],
+      closed: [{ kind: "private_lesson" }],
+      pending: [],
+      handled_count: 1,
+    }));
+    expect(
+      await handleAfterToolCall(
+        {
+          toolName,
+          params: { draft_id: "pld_openclawlesson" },
+          result: { accepted_private_candidate: true },
+          context: { runId: "run_private_lesson" },
+        },
+        { env: {}, observeCompletionTool },
+      ),
+    ).toMatchObject({
+      recorded: true,
+      why: "contribution_handled",
+      count: 1,
+    });
+  });
+
   it("observes preference compatibility feedback without closing post-use contribution", async () => {
-    const markCurrentEngagementHandled = vi.fn();
+    const observeCompletionTool = vi.fn();
     const clearHighMatchSurfaceIfOpened = vi.fn();
     expect(
       await handleAfterToolCall(
@@ -244,7 +299,7 @@ describe("OpenClaw after_tool_call hook", () => {
         },
         {
           env: {},
-          markCurrentEngagementHandled,
+          observeCompletionTool,
           clearHighMatchSurfaceIfOpened,
         },
       ),
@@ -253,12 +308,12 @@ describe("OpenClaw after_tool_call hook", () => {
       cleared: false,
       why: "preference_compatibility_feedback_recorded",
     });
-    expect(markCurrentEngagementHandled).not.toHaveBeenCalled();
+    expect(observeCompletionTool).not.toHaveBeenCalled();
     expect(clearHighMatchSurfaceIfOpened).not.toHaveBeenCalled();
   });
 
   it("does not mark an HTTP-rejected contribution as handled", async () => {
-    const markCurrentEngagementHandled = vi.fn();
+    const observeCompletionTool = vi.fn();
     expect(
       await handleAfterToolCall(
         {
@@ -270,14 +325,19 @@ describe("OpenClaw after_tool_call hook", () => {
           },
           context: { runId: "run_rejected_feedback" },
         },
-        { env: {}, markCurrentEngagementHandled },
+        { env: {}, observeCompletionTool },
       ),
     ).toEqual({ cleared: false, why: "tool_failed" });
-    expect(markCurrentEngagementHandled).not.toHaveBeenCalled();
+    expect(observeCompletionTool).not.toHaveBeenCalled();
   });
 
   it("keeps completion pending for a feedback-generated remembrance", async () => {
-    const markCurrentEngagementHandled = vi.fn();
+    const observeCompletionTool = vi.fn(() => ({
+      opened: [{ kind: "remembrance_followup" }],
+      closed: [],
+      pending: [{ kind: "remembrance_followup" }],
+      handled_count: 0,
+    }));
     expect(
       await handleAfterToolCall(
         {
@@ -292,13 +352,13 @@ describe("OpenClaw after_tool_call hook", () => {
           },
           context: { runId: "run_feedback_followup" },
         },
-        { env: {}, markCurrentEngagementHandled },
+        { env: {}, observeCompletionTool },
       ),
     ).toEqual({
-      recorded: false,
+      recorded: true,
       cleared: false,
       why: "remembrance_followup_pending",
     });
-    expect(markCurrentEngagementHandled).not.toHaveBeenCalled();
+    expect(observeCompletionTool).toHaveBeenCalledOnce();
   });
 });

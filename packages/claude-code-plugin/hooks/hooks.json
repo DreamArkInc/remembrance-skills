@@ -24,7 +24,16 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "^(?:(?:mcp__(?:remembrance|plugin_remembrance_remembrance)(?:__)?)?(?:run_connection_doctor|get_connection_status|query_skills|list_skills|get_skill|get_resource|invoke_skill|get_value_proof|get_effective_preferences|record_preference|submit_preference_compatibility_feedback|link_current_installation|report_task_outcome|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|propose_private_skill|queue_private_skill_import|submit_suggestion|submit_resource|submit_resource_review|bootstrap_agent_identity|register_agent_key|request_attestation_challenge)|remembrance[._].*)$",
+        "matcher": "^(?:Write|Edit|Memory|AutoMemory)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/route-local-memory.mjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "^(?:(?:mcp__(?:remembrance|plugin_remembrance_remembrance)(?:__)?)?(?:run_connection_doctor|get_connection_status|query_skills|list_skills|get_skill|get_resource|invoke_skill|get_value_proof|get_effective_preferences|record_preference|submit_preference_compatibility_feedback|link_current_installation|report_task_outcome|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|propose_private_skill|queue_private_skill_import|get_private_lesson_policy|prepare_private_lesson_candidate|submit_private_lesson_candidate|inspect_private_lesson_outbox|retry_private_lesson_candidate|delete_private_lesson_candidate|submit_suggestion|submit_resource|submit_resource_review|bootstrap_agent_identity|register_agent_key|request_attestation_challenge)|remembrance[._].*)$",
         "hooks": [
           {
             "type": "command",
@@ -35,7 +44,7 @@
     ],
     "PostToolUseFailure": [
       {
-        "matcher": "^(?:(?:mcp__(?:remembrance|plugin_remembrance_remembrance)(?:__)?)?(?:run_connection_doctor|get_connection_status|query_skills|list_skills|get_skill|get_resource|invoke_skill|get_value_proof|get_effective_preferences|record_preference|submit_preference_compatibility_feedback|link_current_installation|report_task_outcome|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|propose_private_skill|queue_private_skill_import|submit_suggestion|submit_resource|submit_resource_review|bootstrap_agent_identity|register_agent_key|request_attestation_challenge)|remembrance[._].*)$",
+        "matcher": "^(?:(?:mcp__(?:remembrance|plugin_remembrance_remembrance)(?:__)?)?(?:run_connection_doctor|get_connection_status|query_skills|list_skills|get_skill|get_resource|invoke_skill|get_value_proof|get_effective_preferences|record_preference|submit_preference_compatibility_feedback|link_current_installation|report_task_outcome|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|propose_private_skill|queue_private_skill_import|get_private_lesson_policy|prepare_private_lesson_candidate|submit_private_lesson_candidate|inspect_private_lesson_outbox|retry_private_lesson_candidate|delete_private_lesson_candidate|submit_suggestion|submit_resource|submit_resource_review|bootstrap_agent_identity|register_agent_key|request_attestation_challenge)|remembrance[._].*)$",
         "hooks": [
           {
             "type": "command",
@@ -46,7 +55,7 @@
     ],
     "PermissionDenied": [
       {
-        "matcher": "^(?:(?:mcp__(?:remembrance|plugin_remembrance_remembrance)(?:__)?)?(?:run_connection_doctor|get_connection_status|query_skills|list_skills|get_skill|get_resource|invoke_skill|get_value_proof|get_effective_preferences|record_preference|submit_preference_compatibility_feedback|link_current_installation|report_task_outcome|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|propose_private_skill|queue_private_skill_import|submit_suggestion|submit_resource|submit_resource_review|bootstrap_agent_identity|register_agent_key|request_attestation_challenge)|remembrance[._].*)$",
+        "matcher": "^(?:(?:mcp__(?:remembrance|plugin_remembrance_remembrance)(?:__)?)?(?:run_connection_doctor|get_connection_status|query_skills|list_skills|get_skill|get_resource|invoke_skill|get_value_proof|get_effective_preferences|record_preference|submit_preference_compatibility_feedback|link_current_installation|report_task_outcome|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|propose_private_skill|queue_private_skill_import|get_private_lesson_policy|prepare_private_lesson_candidate|submit_private_lesson_candidate|inspect_private_lesson_outbox|retry_private_lesson_candidate|delete_private_lesson_candidate|submit_suggestion|submit_resource|submit_resource_review|bootstrap_agent_identity|register_agent_key|request_attestation_challenge)|remembrance[._].*)$",
         "hooks": [
           {
             "type": "command",

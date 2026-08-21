@@ -76,6 +76,32 @@ describe("Cursor beforeSubmitPrompt eligibility observer", () => {
     );
   });
 
+  it("records a user correction immediately without a query or directive request", async () => {
+    const recordEligibility = vi.fn();
+    const fetchImpl = vi.fn();
+    const result = await handlePromptEligibility(
+      {
+        prompt: "That completed approach is overkill; keep the fix focused.",
+        session_id: "cursor-correction",
+      },
+      {
+        env: {},
+        fetchImpl,
+        recordEligibility,
+        recordHealth: vi.fn(),
+        recordPreferences: vi.fn(async () => 0),
+      },
+    );
+
+    expect(result).toMatchObject({
+      eligible: true,
+      reason: "user_correction",
+      directive_id: null,
+    });
+    expect(recordEligibility).toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("records context-dependent follow-ups so Stop can recover a missed query", async () => {
     const recordEligibility = vi.fn(() => 1);
     const result = await handlePromptEligibility(

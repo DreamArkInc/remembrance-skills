@@ -216,12 +216,16 @@ Routine organization lessons use a narrower two-stage flow. The local
 `prepare_private_lesson_candidate` tool canonicalizes and redacts in memory,
 then encrypts only the post-redaction record in a durable outbox. The separate
 `submit_private_lesson_candidate` MCP action sends those exact bytes to the
-authenticated organization's private verifier queue. It cannot create or
-automatically propagate public content. Unresolved and terminal drafts never
-expire or auto-delete; retryable failures resume later, while authentication,
-validation, policy, and host-denial states remain held. Verified submissions
-discard encrypted lesson content immediately; their content-free completion
-markers are automatically deleted after 14 days.
+authenticated organization's private verifier queue. This action always submits
+privately and never falls back to anonymous or public submission.
+After the private outcome is accepted, a separate server-owned process may
+create a freshly redacted public candidate only when the organization admin
+enabled **Contribution propagation**; the submitting agent neither chooses nor
+sees that process, and the derivative must pass the complete public pipeline.
+Unresolved and terminal drafts never expire or auto-delete; retryable failures
+resume later, while authentication, validation, policy, and host-denial states
+remain held. Verified submissions discard encrypted lesson content immediately;
+their content-free completion markers are automatically deleted after 14 days.
 
 The signed policy pins the corrected `private-lesson-redaction-v2` profile and
 its exact digest. Unsupported-profile drafts become terminal

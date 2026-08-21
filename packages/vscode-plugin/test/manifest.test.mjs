@@ -64,6 +64,19 @@ describe("VS Code agent plugin manifest", () => {
     );
   });
 
+  it("observes private-lesson submission and retry tools", () => {
+    const hooks = readJson("hooks/hooks.json").hooks;
+    const matcher = new RegExp(hooks.PostToolUse[0].matcher);
+    expect(
+      matcher.test("mcp__remembrance__submit_private_lesson_candidate"),
+    ).toBe(true);
+    expect(
+      matcher.test(
+        "mcp__plugin_remembrance_remembrance__retry_private_lesson_candidate",
+      ),
+    ).toBe(true);
+  });
+
   it("keeps the manifest version in step with the package version", () => {
     expect(readJson(".claude-plugin/plugin.json").version).toBe(
       readJson("package.json").version,

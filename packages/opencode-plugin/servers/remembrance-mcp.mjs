@@ -5570,9 +5570,9 @@ function builtInPreferenceDefinition(key) {
 
 // ../core/src/agent-guidance.ts
 var REMEMBRANCE_QUERY_TOOL_DESCRIPTION = "Call before non-trivial service, API, tool, library, workflow, UI, review, test, security, or deployment work to find relevant Remembrance skills and resources. For short context-dependent follow-ups, infer the concrete task from the full conversation, preserve any plugin-supplied client_context.directive_id/runtime/trigger_reason, and query anyway. Compare each candidate's bounded why_matched evidence and applicability conditions before opening it; discard stated unlikely or corner-case mismatches. High matches should be fetched before custom work; possible and exploratory matches remain optional. Do not use for broad web search or one-off facts.";
-var REMEMBRANCE_CONNECTION_STATUS_TOOL_DESCRIPTION = "Inspect the active Remembrance transport, credential source, and authenticated registry scope without exposing credentials. Call this before diagnosing authentication, checking environment variables, or making anonymous REST/browser probes. Local or bundled MCP can read REMEMBRANCE_API_KEY or ~/.config/remembrance/config.json; hosted MCP cannot read local files and authenticates from its request header. When a declared native lifecycle is degraded, local MCP may submit bounded, content-free health evidence unless REMEMBRANCE_HEALTH_REPORTING=0. Never infer the plugin's scope from REMEMBRANCE_API_KEY alone.";
+var REMEMBRANCE_CONNECTION_STATUS_TOOL_DESCRIPTION = "Inspect the active Remembrance transport, credential source, authenticated registry scope, and content-free recent contribution outcomes for the current installation or API key without exposing credentials or lesson content. Call this before diagnosing authentication, checking environment variables, or making anonymous REST/browser probes. Local or bundled MCP can read REMEMBRANCE_API_KEY or ~/.config/remembrance/config.json; hosted MCP cannot read local files and authenticates from its request header. When a declared native lifecycle is degraded, local MCP may submit bounded, content-free health evidence unless REMEMBRANCE_HEALTH_REPORTING=0. Never infer the plugin's scope from REMEMBRANCE_API_KEY alone.";
 var REMEMBRANCE_CONNECTION_DOCTOR_TOOL_DESCRIPTION = "Run a bounded, non-mutating Remembrance connection diagnostic. It verifies the active transport, a redacted registry destination, authenticated scope, query authorization, a real catalog read, and organization submission capability. Local MCP also checks shared-config permissions, destination consistency, native plugin lifecycle, and signing identity; hosted MCP marks local-only checks unavailable. It never submits content, creates query demand, opens a review item, or returns credentials, absolute paths, private registry URLs, prompts, or repository data.";
-var REMEMBRANCE_MCP_SERVER_INSTRUCTIONS = "Remembrance is shared operational memory for agents. Before claiming that Remembrance is anonymous, unconfigured, partially active, or missing an organization key, call run_connection_doctor for the transport you will actually use. It performs a safe catalog read and returns exact bounded remediation without submitting content. Use get_connection_status only when you need the underlying transport and lifecycle fields. An unset REMEMBRANCE_API_KEY does not prove that a local plugin is anonymous because local hooks and bundled MCP may read ~/.config/remembrance/config.json. Conversely, hosted MCP cannot read that local file. Anonymous curl or browser probes describe only those requests, not plugin authentication. Never print or request the raw key. When the user explicitly names an authorized Remembrance skill or supplies a remembrance://skills/{slug} URI, resolve ambiguous names with list_skills using its normalized slug-prefix filter, then call invoke_skill with an exact returned slug. Never guess a slug. list_skills is catalog resolution, not relevance search; use query_skills when the user wants relevant candidates rather than a known selection. invoke_skill rechecks authorization and organization policy, resolves the current reviewed version, and returns the only full instruction body. Catalog listings and MCP resource reads are lightweight handles, not skill use. Do not run query_skills merely to rediscover that explicit selection, and do not submit query-fit feedback for it. After meaningful direct use, follow the returned task-outcome and post-use feedback instructions once. BEFORE non-trivial service/API/tool/library/workflow/UI/review/test/security/deployment work, call query_skills to reuse proven skills and resources instead of rediscovering them. A local repository change still qualifies when it involves a reusable workflow or lesson; skip only genuinely trivial throwaway edits and one-off facts. For short follow-ups such as 'fix these issues', 'continue', or 'try again', infer the concrete task, domain, and constraints from the full conversation and still call query_skills; do not wait for the current prompt to repeat trigger keywords. Treat match_tier as a decision aid, then inspect why_matched and applicability before opening a result. These fields show bounded matched terms/capabilities, satisfied and missed constraints, qualitative lexical/semantic evidence, declared scope, use conditions, and exclusions without exposing unstable raw ranking scores. Discard an unlikely or irrelevant corner-case result and report fit: poor; do not force its use. For a remaining high match, call get_skill or get_resource before custom work and pass the returned query_id/result_id so the surfaced-to-fetch funnel closes; possible and exploratory matches are optional. The response also includes approximate context tokens, verified uses, risk, tags, permissions, dependencies, and contraindications so you can weigh the detour safely. Honor query_skills.skill_access on every response. When policy is org_only, use only returned organization skills and never substitute bundled or live public skill references; if an organization key is configured and the query is unavailable, fail closed because the policy cannot be confirmed. AFTER query_skills, call submit_query_feedback once with one complete set of explicit good/partial/poor judgments using the returned query_id and result_id values; leave unrated results neutral, and remember that a poor query match is not the same as a globally bad skill. Reuse the same organization or anonymous auth scope as the query. AFTER you actually use a skill or resource, close the post-use loop with submit_feedback (useful true/false plus a one-line lesson and the originating query_id/result_id; it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable. If nothing fit and you built a new workflow, use propose_private_skill for an organization-private candidate. With an organization key, propose_skill_idea also remains organization-private. Never remove, suppress, or bypass that key to force a public submission; submit privately, then use the reviewed public-propagation flow when the organization chooses to share it. When delegating, pass the selected slug, exact version, query_id, and result_id to the subagent; it should invoke/fetch that result or run its own full-context query. The parent reports the terminal outcome unless the subagent creates its own invocation. Before finishing any reusable task, self-check for a missed query. If you catch your own mistake, the user catches one, CI/deploy fails, a security issue appears, or you fix a release/versioning miss, submit a failure_report remembrance even if no skill was used; raw MCP clients have no plugin Stop hook to remind you later. A host privacy or tenant-policy denial happens before Remembrance receives the request. Tell the user: 'Remembrance was blocked by host policy before reaching Remembrance. Nothing was sent. Querying remains available.' Do not retry the blocked content through another transport or claim submission. Attach evidence (reproduction detail, artifact hashes, or an attestation); evidence-less public reports wait in unverified intake until corroborated. Redact secrets, private URLs, credentials, raw logs, and proprietary content; submit summaries and hashes, not raw traces.";
+var REMEMBRANCE_MCP_SERVER_INSTRUCTIONS = "Remembrance is shared operational memory for agents. Before claiming that Remembrance is anonymous, unconfigured, partially active, or missing an organization key, call run_connection_doctor for the transport you will actually use. It performs a safe catalog read and returns exact bounded remediation without submitting content. Use get_connection_status only when you need the underlying transport and lifecycle fields. An unset REMEMBRANCE_API_KEY does not prove that a local plugin is anonymous because local hooks and bundled MCP may read ~/.config/remembrance/config.json. Conversely, hosted MCP cannot read that local file. Anonymous curl or browser probes describe only those requests, not plugin authentication. Never print or request the raw key. When the user explicitly names an authorized Remembrance skill or supplies a remembrance://skills/{slug} URI, resolve ambiguous names with list_skills using its normalized slug-prefix filter, then call invoke_skill with an exact returned slug. Never guess a slug. list_skills is catalog resolution, not relevance search; use query_skills when the user wants relevant candidates rather than a known selection. invoke_skill rechecks authorization and organization policy, resolves the current reviewed version, and returns the only full instruction body. Catalog listings and MCP resource reads are lightweight handles, not skill use. Do not run query_skills merely to rediscover that explicit selection, and do not submit query-fit feedback for it. After meaningful direct use, follow the returned task-outcome and post-use feedback instructions once. BEFORE non-trivial service/API/tool/library/workflow/UI/review/test/security/deployment work, call query_skills to reuse proven skills and resources instead of rediscovering them. A local repository change still qualifies when it involves a reusable workflow or lesson; skip only genuinely trivial throwaway edits and one-off facts. For short follow-ups such as 'fix these issues', 'continue', or 'try again', infer the concrete task, domain, and constraints from the full conversation and still call query_skills; do not wait for the current prompt to repeat trigger keywords. Treat match_tier as a decision aid, then inspect why_matched and applicability before opening a result. These fields show bounded matched terms/capabilities, satisfied and missed constraints, qualitative lexical/semantic evidence, declared scope, use conditions, and exclusions without exposing unstable raw ranking scores. Discard an unlikely or irrelevant corner-case result and report fit: poor; do not force its use. For a remaining high match, call get_skill or get_resource before custom work and pass the returned query_id/result_id so the surfaced-to-fetch funnel closes; possible and exploratory matches are optional. The response also includes approximate context tokens, verified uses, risk, tags, permissions, dependencies, and contraindications so you can weigh the detour safely. Honor query_skills.skill_access on every response. When policy is org_only, use only returned organization skills and never substitute bundled or live public skill references; if an organization key is configured and the query is unavailable, fail closed because the policy cannot be confirmed. AFTER query_skills, call submit_query_feedback once with one complete set of explicit good/partial/poor judgments using the returned query_id and result_id values; leave unrated results neutral, and remember that a poor query match is not the same as a globally bad skill. Reuse the same organization or anonymous auth scope as the query. AFTER you actually use a skill or resource, close the post-use loop with submit_feedback (useful true/false plus a one-line lesson and the originating query_id/result_id; it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable. If nothing fit and you built a new workflow, use propose_private_skill for an organization-private candidate. With an organization key, propose_skill_idea also remains organization-private. Never remove, suppress, or bypass that key to force a public submission; submit privately, then use the reviewed public-propagation flow when the organization chooses to share it. When delegating, pass the selected slug, exact version, query_id, and result_id to the subagent; it should invoke/fetch that result or run its own full-context query. The parent reports the terminal outcome unless the subagent creates its own invocation. Route memory deliberately: host-local memory is for facts about this human, repository, or machine; Remembrance is for generalized lessons another approved organization agent would otherwise rediscover. A local-memory write does not satisfy organization-shared capture. Before finishing any reusable task, self-check for a missed query. If you catch your own mistake, the user catches one, CI/deploy fails, a security issue appears, or you fix a release/versioning miss, submit a failure_report remembrance even if no skill was used; raw MCP clients have no plugin Stop hook to remind you later. A host privacy or tenant-policy denial happens before Remembrance receives the request. Tell the user: 'Remembrance was blocked by host policy before reaching Remembrance. Nothing was sent. Querying remains available.' Do not retry the blocked content through another transport or claim submission. Attach evidence (reproduction detail, artifact hashes, or an attestation); evidence-less public reports wait in unverified intake until corroborated. Redact secrets, private URLs, credentials, raw logs, and proprietary content; submit summaries and hashes, not raw traces.";
 
 // ../core/src/redaction.ts
 var SECRET_PATTERN_SPECS = [
@@ -5730,6 +5730,20 @@ var PRIVATE_LESSON_TAG_IDENTITY_HINTS = /* @__PURE__ */ new Set([
   "repository",
   "tenant",
   "user"
+]);
+var PRIVATE_LESSON_TAG_IDENTITY_LABEL_SUFFIXES = /* @__PURE__ */ new Set([
+  "corp",
+  "org",
+  "organization"
+]);
+var PRIVATE_LESSON_TAG_RELATIONAL_PREFIXES = /* @__PURE__ */ new Set([
+  "cross",
+  "inter",
+  "intra",
+  "multi",
+  "per",
+  "single",
+  "sub"
 ]);
 var privateLessonCanonicalTagSchema = privateLessonTagSyntaxSchema.superRefine((tag, ctx) => {
   const inspected = inspectPrivateLessonTag(tag);
@@ -6125,8 +6139,14 @@ function computePrivateLessonRedactorDigest() {
       metadata: {
         correlation_ids: "domain-separated-sha256-v1",
         tag_syntax: PRIVATE_LESSON_TAG_PATTERN.source,
-        tag_safety: "redaction-plus-identity-hints-v1",
+        tag_safety: "redaction-plus-identity-hints-v2",
         tag_identity_hints: [...PRIVATE_LESSON_TAG_IDENTITY_HINTS].sort(),
+        tag_identity_label_suffixes: [
+          ...PRIVATE_LESSON_TAG_IDENTITY_LABEL_SUFFIXES
+        ].sort(),
+        tag_relational_prefixes: [
+          ...PRIVATE_LESSON_TAG_RELATIONAL_PREFIXES
+        ].sort(),
         tag_aliases: PRIVATE_LESSON_SAFE_TAG_ALIASES
       },
       rules: REPLACEMENTS.map(({ category, pattern, hold }) => ({
@@ -6150,7 +6170,10 @@ function inspectPrivateLessonTag(value) {
   const identityHints = new Set(
     aliased.split(/[-_]/u).filter((segment) => PRIVATE_LESSON_TAG_IDENTITY_HINTS.has(segment))
   );
-  if (!privateLessonTagSyntaxSchema.safeParse(aliased).success || redacted.text !== aliased || identityHints.size >= 2) {
+  const segments = aliased.split(/[-_]/u);
+  const isGenericOrganizationRelationship = segments.length === 2 && PRIVATE_LESSON_TAG_RELATIONAL_PREFIXES.has(segments[0] ?? "") && PRIVATE_LESSON_TAG_IDENTITY_LABEL_SUFFIXES.has(segments[1] ?? "");
+  const hasLikelyIdentityLabel = segments.length >= 2 && !isGenericOrganizationRelationship && PRIVATE_LESSON_TAG_IDENTITY_LABEL_SUFFIXES.has(segments.at(-1) ?? "") && segments.slice(0, -1).some((segment) => !PRIVATE_LESSON_TAG_IDENTITY_HINTS.has(segment));
+  if (!privateLessonTagSyntaxSchema.safeParse(aliased).success || redacted.text !== aliased || identityHints.size >= 2 || hasLikelyIdentityLabel) {
     if (held.size === 0) {
       counts.identifier = Math.min(999, (counts.identifier ?? 0) + 1);
       held.add("identifier");
@@ -6177,11 +6200,17 @@ function pseudonymizeCorrelationId(value) {
   return `corr_${digest.slice(0, 48)}`;
 }
 var CURRENT_PRIVATE_LESSON_REDACTOR_DIGEST = computePrivateLessonRedactorDigest();
+var PRIVATE_LESSON_LEGACY_V2_REDACTOR_DIGEST = "sha256:bca83ac50b0124a0401f806b3498bbb1ec977c02c1975d5345cb8d0b85c00b75";
 var PRIVATE_LESSON_SUPPORTED_REDACTOR_PROFILES = Object.freeze({
   [PRIVATE_LESSON_REDACTION_VERSION]: Object.freeze({
     [CURRENT_PRIVATE_LESSON_REDACTOR_DIGEST]: Object.freeze({
       version: PRIVATE_LESSON_REDACTION_VERSION,
       digest: CURRENT_PRIVATE_LESSON_REDACTOR_DIGEST,
+      normalization: "unicode-nfc-lf-space-v1"
+    }),
+    [PRIVATE_LESSON_LEGACY_V2_REDACTOR_DIGEST]: Object.freeze({
+      version: PRIVATE_LESSON_REDACTION_VERSION,
+      digest: PRIVATE_LESSON_LEGACY_V2_REDACTOR_DIGEST,
       normalization: "unicode-nfc-lf-space-v1"
     })
   })
@@ -7610,7 +7639,7 @@ var seedSkills = [
     summary: "Operational setup and troubleshooting workflow for Remembrance across Claude Code, Codex, OpenClaw, Cursor, Gemini, MCP, REST, skill-only installs, enterprise keys, and local agent identity.",
     status: "active",
     visibility: "public",
-    version: "0.1.24",
+    version: "0.1.25",
     domains: ["agent-skills", "mcp", "resource-discovery"],
     tags: [
       "remembrance",
@@ -7661,7 +7690,7 @@ var seedSkills = [
         "gemini",
         "rest"
       ],
-      version: "0.1.24",
+      version: "0.1.25",
       status: "active",
       visibility: "public",
       providers: ["codex", "claude", "cursor", "openclaw", "generic"],
@@ -8016,8 +8045,12 @@ This is the only host-visible network action in the flow. Approve or persist
 approval for this exact action, not every Remembrance write. The server derives
 the organization and private visibility from the authenticated key, verifies a
 signed organization policy plus purpose-bound attestation, and returns a signed
-content-free receipt. The endpoint can never create or automatically propagate
-public content.
+content-free receipt. The action always submits privately and never falls back
+to anonymous or public submission. After an accepted private outcome, a
+separate server-owned process may create a freshly redacted public candidate
+only when the organization admin enabled the **Contribution propagation**
+setting; the submitting agent neither chooses nor sees that process, and the
+derivative must pass the complete public pipeline.
 
 If the host denies the action, no candidate content was sent. The encrypted
 draft remains on the device in \`awaiting_authorization\`; do not retry it
@@ -10859,7 +10892,7 @@ var toolDefinitions = [
   ),
   tool(
     "submit_private_lesson_candidate",
-    "Submit exactly one canonical, challenge-attested organization-private lesson candidate or one content-free held-safety telemetry event. Local plugin clients normally pass only the draft_id returned by prepare_private_lesson_candidate; raw or hosted clients pass the strict candidate-or-hold union. The action can never create or automatically promote public content. Held telemetry contains no lesson prose and can never enter verification, review, topology, or skill materialization. Exact replay is idempotent; host denial leaves the local draft untouched.",
+    "Submit exactly one canonical, challenge-attested organization-private lesson candidate or one content-free held-safety telemetry event. Local plugin clients normally pass only the draft_id returned by prepare_private_lesson_candidate; raw or hosted clients pass the strict candidate-or-hold union. The action always creates only an organization-private submission and never falls back to anonymous or public submission. Held telemetry contains no lesson prose and can never enter verification, review, topology, or skill materialization. Exact replay is idempotent; host denial leaves the local draft untouched.",
     "/api/v1/agent/private-lessons",
     privateLessonSubmissionToolSchema
   ),
@@ -13529,7 +13562,7 @@ async function readConcurrentPrivateLessonFallbackKey(path) {
 // src/server.ts
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.1.74" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.1.76" : "0.0.0-dev";
 var tools = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var inputBuffer = Buffer.alloc(0);

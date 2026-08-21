@@ -28,6 +28,7 @@
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
+  completionContinuationReason,
   decideStop,
   recordPluginLifecycleHealth,
   reportTaskOutcomesOnStop,
@@ -49,7 +50,10 @@ export function handleStop(input, options = {}) {
   return {
     allow: false,
     why: decision.why,
-    output: { decision: "block", reason: decision.reason },
+    output: {
+      decision: "block",
+      reason: completionContinuationReason(decision.reason, input),
+    },
   };
 }
 

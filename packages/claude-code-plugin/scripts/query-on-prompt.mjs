@@ -35,6 +35,7 @@ import {
   readRemembranceConfig,
   redactPrompt,
   recordPluginLifecycleHealth,
+  recordQueryFeedbackObligation,
   recordRegistryUse,
   recordDirectiveSurface,
   recordExplicitPreferenceObservations,
@@ -42,6 +43,7 @@ import {
   recordTaskEligibility,
   recordValueEpisodeSurface,
   queryResponseHasMatches,
+  queryFeedbackTrackingFromResponse,
   queryRemembrance as querySharedRemembrance,
   resolveApiKey,
   resolveApiCredential,
@@ -50,6 +52,7 @@ import {
   shouldQueryPrompt,
   continuationQueryContext,
   unavailableQueryContext,
+  userCorrectionCaptureDirective,
   valueEpisodeFromResponse,
 } from "./hook-core.mjs";
 
@@ -132,6 +135,7 @@ export async function handleHookInput(input, options = {}) {
   }
   const prompt = String(input?.prompt ?? "");
   const redacted = redactPrompt(prompt);
+  const correctionCapture = userCorrectionCaptureDirective(redacted);
   void recordExplicitPreferenceObservations(redacted, {
     env,
     fetchImpl: options.fetchImpl ?? fetch,
@@ -151,9 +155,17 @@ export async function handleHookInput(input, options = {}) {
       recordEligibility(input, env, options);
       recordDirective(input, directive, env, options);
       return withCredentialNotice(
-        outputForContext(continuationQueryContext(directive)),
+        withAdditionalContext(
+          outputForContext(continuationQueryContext(directive)),
+          correctionCapture,
+        ),
         env,
       );
+    }
+    if (correctionCapture) {
+      recordEligibility(input, env, options);
+      recordDirective(input, null, env, options);
+      return withCredentialNotice(outputForContext(correctionCapture), env);
     }
     debugLog(env, "skip", { reason: decision.reason }, options);
     return null;
@@ -178,7 +190,11 @@ export async function handleHookInput(input, options = {}) {
     if (cached.matched) {
       recordUse(input, env, options, cached.highMatch ?? null);
     }
-    return withCredentialNotice(output, env);
+    recordQueryFeedback(input, cached.queryFeedback, env, options);
+    return withCredentialNotice(
+      withAdditionalContext(output, correctionCapture),
+      env,
+    );
   }
   debugLog(env, "cache_miss", { key: shortCacheKey(cacheKey) }, options);
 
@@ -192,7 +208,10 @@ export async function handleHookInput(input, options = {}) {
   );
   if (!response) {
     return withCredentialNotice(
-      outputForContext(unavailableQueryContext(env)),
+      withAdditionalContext(
+        outputForContext(unavailableQueryContext(env)),
+        correctionCapture,
+      ),
       env,
     );
   }
@@ -202,11 +221,24 @@ export async function handleHookInput(input, options = {}) {
   const output = outputForContext(context);
   const highMatch = highMatchFromResponse(response);
   const matched = queryResponseHasMatches(response);
-  await writeCachedOutput(cacheKey, output, highMatch, matched, env, options);
+  const queryFeedback = queryFeedbackTrackingFromResponse(response);
+  await writeCachedOutput(
+    cacheKey,
+    output,
+    highMatch,
+    matched,
+    queryFeedback,
+    env,
+    options,
+  );
   if (matched) {
     recordUse(input, env, options, highMatch, response);
   }
-  return withCredentialNotice(output, env);
+  recordQueryFeedback(input, queryFeedback, env, options);
+  return withCredentialNotice(
+    withAdditionalContext(output, correctionCapture),
+    env,
+  );
 }
 
 function outputForContext(context) {
@@ -214,6 +246,16 @@ function outputForContext(context) {
     hookSpecificOutput: {
       hookEventName: "UserPromptSubmit",
       additionalContext: context,
+    },
+  };
+}
+
+function withAdditionalContext(output, context) {
+  if (!context) return output;
+  return {
+    hookSpecificOutput: {
+      ...output.hookSpecificOutput,
+      additionalContext: `${output.hookSpecificOutput.additionalContext}\n\n${context}`,
     },
   };
 }
@@ -253,6 +295,13 @@ function recordUse(input, env, options, highMatch = null, response = null) {
   }
 }
 
+function recordQueryFeedback(input, tracking, env, options) {
+  if (!tracking) return;
+  const record =
+    options.recordQueryFeedbackObligation ?? recordQueryFeedbackObligation;
+  record(sessionIdFor(input), tracking, env);
+}
+
 async function queryRemembrance(payload, options) {
   return querySharedRemembrance(payload, {
     ...options,
@@ -282,10 +331,17 @@ async function readCachedOutput(cacheKey, env, options = {}) {
       output: entry.output,
       highMatch: entry.high_match ?? null,
       matched: entry.matched === true,
+      queryFeedback: entry.query_feedback ?? null,
     };
   } catch (error) {
     debugLog(env, "cache_read_error", { error: errorName(error) }, options);
-    return { hit: false, output: null, highMatch: null, matched: false };
+    return {
+      hit: false,
+      output: null,
+      highMatch: null,
+      matched: false,
+      queryFeedback: null,
+    };
   }
 }
 
@@ -294,6 +350,7 @@ async function writeCachedOutput(
   output,
   highMatch,
   matched,
+  queryFeedback,
   env,
   options = {},
 ) {
@@ -308,6 +365,7 @@ async function writeCachedOutput(
       output,
       high_match: highMatch,
       matched,
+      query_feedback: queryFeedback,
       touched_at: now,
       expires_at: now + CACHE_TTL_MS,
     });

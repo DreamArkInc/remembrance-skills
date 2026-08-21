@@ -38,11 +38,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  completionContinuationReason,
   contributeDisabled,
   contributionReason,
   countRegistryConsumption,
   countTaskEligibility,
   decideStop,
+  markCompletionObligationsPrompted,
   markDirectSelectionSurfacesPrompted,
   readDirectSelectionSurfaces,
   readPromptedCount as readSharedPromptedCount,
@@ -70,7 +72,7 @@ export function sessionUsedRemembrance(transcript) {
   }
   return (
     /Remembrance auto-query context/i.test(text) ||
-    /mcp__[a-z0-9_]*remembrance[a-z0-9_]*__(query_skills|get_skill|get_resource|invoke_skill|submit_remembrance|submit_query_feedback|submit_feedback|submit_suggestion|submit_resource|propose_skill_idea|propose_private_skill)/i.test(
+    /mcp__[a-z0-9_]*remembrance[a-z0-9_]*__(query_skills|get_skill|get_resource|invoke_skill|submit_remembrance|submit_query_feedback|submit_feedback|submit_suggestion|submit_resource|propose_skill_idea|propose_private_skill|submit_private_lesson_candidate|retry_private_lesson_candidate)/i.test(
       text,
     ) ||
     /\/api\/v1\/agent\/(query|query-feedback|skill-invocations|remembrances|skill-ideas|suggestions|feedback)\b/i.test(
@@ -157,6 +159,7 @@ export function decideContribution(input, options = {}) {
       readEligibilityCount: () =>
         Math.max(transcriptEligibility, readEligibility(sessionId, env)),
       readPromptedCount: () => readCount(sessionId),
+      readCompletionObligations: options.readCompletionObligations,
       readHighMatch: options.readHighMatch,
       readDirectSelections:
         options.readDirectSelections ?? readDirectSelectionSurfaces,
@@ -169,6 +172,7 @@ export function decideContribution(input, options = {}) {
         why: decision.why,
         reason: decision.reason,
         consumption: decision.useCount,
+        obligationIds: decision.obligationIds ?? [],
       };
 }
 
@@ -200,6 +204,15 @@ export async function handleStopHook(input, options = {}) {
   }
   const writeCount = options.writeCount ?? writePromptedCount;
   writeCount(input?.session_id ?? "unknown", decision.consumption);
+  const markObligations =
+    options.markCompletionObligationsPrompted ??
+    markCompletionObligationsPrompted;
+  markObligations(
+    input?.session_id ?? "unknown",
+    decision.obligationIds,
+    env,
+    decision.consumption,
+  );
   const markDirectSelections =
     options.markDirectSelectionsPrompted ?? markDirectSelectionSurfacesPrompted;
   markDirectSelections(
@@ -210,7 +223,10 @@ export async function handleStopHook(input, options = {}) {
   return {
     allow: false,
     why: decision.why,
-    output: { decision: "block", reason: decision.reason },
+    output: {
+      decision: "block",
+      reason: completionContinuationReason(decision.reason, input),
+    },
   };
 }
 

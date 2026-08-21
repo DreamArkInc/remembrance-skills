@@ -6,6 +6,12 @@ describe("Cursor afterMCPExecution hook", () => {
     const recordRegistryUse = vi.fn(() => 3);
     const recordDirectiveFollowThrough = vi.fn(async () => true);
     const recordHealth = vi.fn();
+    const observeCompletionTool = vi.fn(() => ({
+      opened: [{ kind: "query_feedback" }],
+      closed: [],
+      pending: [{ kind: "query_feedback" }],
+      handled_count: 0,
+    }));
     const result = await handleMcpUse(
       {
         tool_name: "query_skills",
@@ -14,6 +20,10 @@ describe("Cursor afterMCPExecution hook", () => {
           body: {
             skills: [{ slug: "release-review" }],
             resources: [],
+            query_feedback: {
+              available: true,
+              query_id: "rq_cursor_observed",
+            },
           },
         },
       },
@@ -22,6 +32,7 @@ describe("Cursor afterMCPExecution hook", () => {
         recordRegistryUse,
         recordDirectiveFollowThrough,
         recordHealth,
+        observeCompletionTool,
       },
     );
 
@@ -37,6 +48,10 @@ describe("Cursor afterMCPExecution hook", () => {
       "query_skills",
       {
         body: {
+          query_feedback: {
+            available: true,
+            query_id: "rq_cursor_observed",
+          },
           resources: [],
           skills: [{ slug: "release-review" }],
         },
@@ -47,6 +62,20 @@ describe("Cursor afterMCPExecution hook", () => {
       expect.objectContaining({
         surface: "cursor",
         component: "tool_observer",
+      }),
+      {},
+    );
+    expect(observeCompletionTool).toHaveBeenCalledWith(
+      "conv_123",
+      "query_skills",
+      {},
+      expect.objectContaining({
+        body: expect.objectContaining({
+          query_feedback: {
+            available: true,
+            query_id: "rq_cursor_observed",
+          },
+        }),
       }),
       {},
     );
@@ -344,14 +373,17 @@ describe("Cursor afterMCPExecution hook", () => {
   });
 
   it("marks the current use as handled after an explicit contribution", async () => {
-    const writePromptedCount = vi.fn();
+    const observeCompletionTool = vi.fn(() => ({
+      opened: [],
+      closed: [],
+      pending: [],
+      handled_count: 2,
+    }));
     const result = await handleMcpUse(
       { tool_name: "propose_private_skill", session_id: "session_1" },
       {
         env: {},
-        readRegistryUseCount: () => 2,
-        readTaskEligibilityCount: () => 0,
-        writePromptedCount,
+        observeCompletionTool,
       },
     );
 
@@ -361,11 +393,47 @@ describe("Cursor afterMCPExecution hook", () => {
       tool: "propose_private_skill",
       count: 2,
     });
-    expect(writePromptedCount).toHaveBeenCalledWith("session_1", 2, {});
+    expect(observeCompletionTool).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    "submit_private_lesson_candidate",
+    "retry_private_lesson_candidate",
+  ])("marks %s as a completed contribution", async (toolName) => {
+    const observeCompletionTool = vi.fn(() => ({
+      opened: [],
+      closed: [{ kind: "private_lesson" }],
+      pending: [],
+      handled_count: 1,
+    }));
+    const result = await handleMcpUse(
+      {
+        tool_name: toolName,
+        session_id: "session_private_lesson",
+        arguments: { draft_id: "pld_cursorlesson" },
+      },
+      {
+        env: {},
+        observeCompletionTool,
+      },
+    );
+
+    expect(result).toMatchObject({
+      recorded: true,
+      kind: "contribution",
+      tool: toolName,
+      count: 1,
+    });
+    expect(observeCompletionTool).toHaveBeenCalledOnce();
   });
 
   it("keeps completion pending for a feedback-generated remembrance", async () => {
-    const writePromptedCount = vi.fn();
+    const observeCompletionTool = vi.fn(() => ({
+      opened: [{ kind: "remembrance_followup" }],
+      closed: [],
+      pending: [{ kind: "remembrance_followup" }],
+      handled_count: 0,
+    }));
     const result = await handleMcpUse(
       {
         tool_name: "submit_feedback",
@@ -381,18 +449,16 @@ describe("Cursor afterMCPExecution hook", () => {
       },
       {
         env: {},
-        readRegistryUseCount: () => 1,
-        readTaskEligibilityCount: () => 0,
-        writePromptedCount,
+        observeCompletionTool,
       },
     );
 
     expect(result).toEqual({
-      recorded: false,
+      recorded: true,
       kind: "remembrance_followup_pending",
       tool: "submit_feedback",
     });
-    expect(writePromptedCount).not.toHaveBeenCalled();
+    expect(observeCompletionTool).toHaveBeenCalledOnce();
   });
 
   it("observes preference compatibility feedback without closing post-use contribution", async () => {
@@ -454,14 +520,17 @@ describe("Cursor afterMCPExecution hook", () => {
   });
 
   it("treats explicit query-fit feedback as a completed contribution", async () => {
-    const writePromptedCount = vi.fn();
+    const observeCompletionTool = vi.fn(() => ({
+      opened: [],
+      closed: [{ kind: "query_feedback" }],
+      pending: [],
+      handled_count: 1,
+    }));
     const result = await handleMcpUse(
       { tool_name: "submit_query_feedback", session_id: "session_query_fit" },
       {
         env: {},
-        readRegistryUseCount: () => 1,
-        readTaskEligibilityCount: () => 0,
-        writePromptedCount,
+        observeCompletionTool,
       },
     );
 
@@ -471,23 +540,26 @@ describe("Cursor afterMCPExecution hook", () => {
       tool: "submit_query_feedback",
       count: 1,
     });
-    expect(writePromptedCount).toHaveBeenCalledWith("session_query_fit", 1, {});
+    expect(observeCompletionTool).toHaveBeenCalledOnce();
   });
 
   it("marks an eligibility-only task handled after proactive contribution", async () => {
-    const writePromptedCount = vi.fn();
+    const observeCompletionTool = vi.fn(() => ({
+      opened: [],
+      closed: [],
+      pending: [],
+      handled_count: 1,
+    }));
     const result = await handleMcpUse(
       { tool_name: "submit_remembrance", session_id: "session-eligible" },
       {
         env: {},
-        readRegistryUseCount: () => 0,
-        readTaskEligibilityCount: () => 1,
-        writePromptedCount,
+        observeCompletionTool,
       },
     );
 
     expect(result).toMatchObject({ recorded: true, count: 1 });
-    expect(writePromptedCount).toHaveBeenCalledWith("session-eligible", 1, {});
+    expect(observeCompletionTool).toHaveBeenCalledOnce();
   });
 
   it("ignores unrelated MCP tools", async () => {

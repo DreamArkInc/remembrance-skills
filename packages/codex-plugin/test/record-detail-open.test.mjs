@@ -209,7 +209,12 @@ describe("native post-tool detail tracking", () => {
   });
 
   it("marks successful feedback as handled so completion does not repeat it", async () => {
-    const markCurrentEngagementHandled = vi.fn(() => 2);
+    const observeCompletionTool = vi.fn(() => ({
+      opened: [],
+      closed: [{ kind: "post_use_feedback" }],
+      pending: [],
+      handled_count: 2,
+    }));
     expect(
       await handlePostToolUse(
         {
@@ -217,7 +222,7 @@ describe("native post-tool detail tracking", () => {
           tool_name: "mcp__remembrance__submit_feedback",
           tool_response: { accepted: true },
         },
-        { env: {}, markCurrentEngagementHandled },
+        { env: {}, observeCompletionTool },
       ),
     ).toEqual({
       recorded: true,
@@ -225,14 +230,17 @@ describe("native post-tool detail tracking", () => {
       why: "contribution_handled",
       count: 2,
     });
-    expect(markCurrentEngagementHandled).toHaveBeenCalledWith(
+    expect(observeCompletionTool).toHaveBeenCalledWith(
       "turn_feedback",
+      "mcp__remembrance__submit_feedback",
+      {},
+      { accepted: true },
       {},
     );
   });
 
   it("observes preference compatibility feedback without closing post-use contribution", async () => {
-    const markCurrentEngagementHandled = vi.fn();
+    const observeCompletionTool = vi.fn();
     const clearHighMatchSurfaceIfOpened = vi.fn();
     expect(
       await handlePostToolUse(
@@ -244,7 +252,7 @@ describe("native post-tool detail tracking", () => {
         },
         {
           env: {},
-          markCurrentEngagementHandled,
+          observeCompletionTool,
           clearHighMatchSurfaceIfOpened,
         },
       ),
@@ -253,12 +261,17 @@ describe("native post-tool detail tracking", () => {
       cleared: false,
       why: "preference_compatibility_feedback_recorded",
     });
-    expect(markCurrentEngagementHandled).not.toHaveBeenCalled();
+    expect(observeCompletionTool).not.toHaveBeenCalled();
     expect(clearHighMatchSurfaceIfOpened).not.toHaveBeenCalled();
   });
 
   it("marks an explicit private-skill proposal as a handled contribution", async () => {
-    const markCurrentEngagementHandled = vi.fn(() => 1);
+    const observeCompletionTool = vi.fn(() => ({
+      opened: [],
+      closed: [],
+      pending: [],
+      handled_count: 1,
+    }));
     expect(
       await handlePostToolUse(
         {
@@ -266,7 +279,7 @@ describe("native post-tool detail tracking", () => {
           tool_name: "mcp__remembrance__propose_private_skill",
           tool_response: { ok: true, status: 201 },
         },
-        { env: {}, markCurrentEngagementHandled },
+        { env: {}, observeCompletionTool },
       ),
     ).toMatchObject({
       recorded: true,
@@ -274,8 +287,36 @@ describe("native post-tool detail tracking", () => {
     });
   });
 
+  it.each([
+    "submit_private_lesson_candidate",
+    "retry_private_lesson_candidate",
+  ])("marks a successful %s as handled", async (toolName) => {
+    const observeCompletionTool = vi.fn(() => ({
+      opened: [],
+      closed: [{ kind: "private_lesson" }],
+      pending: [],
+      handled_count: 1,
+    }));
+    expect(
+      await handlePostToolUse(
+        {
+          turn_id: `turn_${toolName}`,
+          tool_name: `mcp__remembrance__${toolName}`,
+          tool_input: { draft_id: "pld_adapterlesson" },
+          tool_response: { accepted_private_candidate: true },
+        },
+        { env: {}, observeCompletionTool },
+      ),
+    ).toMatchObject({
+      recorded: true,
+      why: "contribution_handled",
+      count: 1,
+    });
+    expect(observeCompletionTool).toHaveBeenCalledOnce();
+  });
+
   it("does not mark an HTTP-rejected contribution as handled", async () => {
-    const markCurrentEngagementHandled = vi.fn();
+    const observeCompletionTool = vi.fn();
     expect(
       await handlePostToolUse(
         {
@@ -294,14 +335,19 @@ describe("native post-tool detail tracking", () => {
             ],
           },
         },
-        { env: {}, markCurrentEngagementHandled },
+        { env: {}, observeCompletionTool },
       ),
     ).toEqual({ cleared: false, why: "tool_failed" });
-    expect(markCurrentEngagementHandled).not.toHaveBeenCalled();
+    expect(observeCompletionTool).not.toHaveBeenCalled();
   });
 
   it("keeps completion pending when feedback requests a remembrance follow-up", async () => {
-    const markCurrentEngagementHandled = vi.fn();
+    const observeCompletionTool = vi.fn(() => ({
+      opened: [{ kind: "remembrance_followup" }],
+      closed: [{ kind: "post_use_feedback" }],
+      pending: [{ kind: "remembrance_followup" }],
+      handled_count: 0,
+    }));
     expect(
       await handlePostToolUse(
         {
@@ -318,13 +364,13 @@ describe("native post-tool detail tracking", () => {
             },
           },
         },
-        { env: {}, markCurrentEngagementHandled },
+        { env: {}, observeCompletionTool },
       ),
     ).toEqual({
-      recorded: false,
+      recorded: true,
       cleared: false,
       why: "remembrance_followup_pending",
     });
-    expect(markCurrentEngagementHandled).not.toHaveBeenCalled();
+    expect(observeCompletionTool).toHaveBeenCalledOnce();
   });
 });

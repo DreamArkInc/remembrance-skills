@@ -18,6 +18,7 @@ import {
   recordTaskEligibility,
   redactPrompt,
   resolveApiCredential,
+  promptContainsUserCorrection,
   shouldQueryPrompt,
 } from "./hook-core.mjs";
 import { cursorSessionId } from "./record-mcp-use.mjs";
@@ -67,11 +68,20 @@ export async function handlePromptEligibility(input, options = {}) {
   }).catch(() => 0);
   const decision = shouldQueryPrompt(redacted);
   const continuation = isContextualContinuationPrompt(redacted);
-  if (!decision.likely_match && !continuation) {
+  const correction = promptContainsUserCorrection(redacted);
+  if (!decision.likely_match && !continuation && !correction) {
     return { eligible: false, reason: decision.reason };
   }
   const record = options.recordEligibility ?? recordTaskEligibility;
   record(sessionId, env);
+  if (correction && !decision.likely_match && !continuation) {
+    return {
+      eligible: true,
+      reason: "user_correction",
+      directive_id: null,
+      sessionId,
+    };
+  }
   const reason = continuation ? "contextual_continuation" : decision.reason;
   const directive = await createContinuationDirective({
     env,

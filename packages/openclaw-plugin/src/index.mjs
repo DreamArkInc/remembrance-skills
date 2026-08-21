@@ -50,6 +50,7 @@ import { accessSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import process from "node:process";
 import {
+  completionContinuationReason,
   HOST_POLICY_ALERT_TEXT,
   checkForClientUpdate,
   clearHighMatchSurfaceIfOpened,
@@ -59,8 +60,8 @@ import {
   decideStop,
   directSelectionFromResponse,
   highMatchFromResponse,
-  markCurrentEngagementHandled,
   markHostPolicyAlertDelivered,
+  observeSuccessfulCompletionTool,
   readPendingHostPolicyAlert,
   readRegistryUseCount,
   readTaskEligibilityCount,
@@ -69,6 +70,7 @@ import {
   recordDirectiveSurface,
   recordHighMatchSurface,
   recordPluginLifecycleHealth,
+  recordQueryFeedbackObligation,
   recordHostPolicyDenial,
   recordRegistryUse,
   queryResponseHasMatches,
@@ -98,6 +100,8 @@ const CONTRIBUTION_TOOLS = [
   "submit_remembrance",
   "propose_skill_idea",
   "propose_private_skill",
+  "submit_private_lesson_candidate",
+  "retry_private_lesson_candidate",
   "submit_suggestion",
   "submit_resource",
   "submit_resource_review",
@@ -230,6 +234,9 @@ export async function handlePrePrompt(event, options = {}) {
     }
     const recordDirective = options.recordDirective ?? recordDirectiveSurface;
     recordDirective(sessionId, result.directive ?? null, env);
+    const recordQueryFeedback =
+      options.recordQueryFeedback ?? recordQueryFeedbackObligation;
+    recordQueryFeedback(sessionId, result.queryFeedback, env);
     if (result.consumed && result.matched) {
       const record = options.recordUse ?? recordRegistryUse;
       record(sessionId, env);
@@ -297,6 +304,8 @@ export async function handleAfterToolCall(event, options = {}) {
   }
   const toolName = event?.toolName ?? event?.tool_name ?? "";
   const normalizedToolName = String(toolName).toLowerCase();
+  const toolArguments =
+    event?.params ?? event?.arguments ?? event?.tool_input ?? {};
   if (normalizedToolName.endsWith("query_skills")) {
     if (queryResponseHasMatches(response)) {
       const recordUse = options.recordRegistryUse ?? recordRegistryUse;
@@ -315,6 +324,9 @@ export async function handleAfterToolCall(event, options = {}) {
     const recordValueEpisode =
       options.recordValueEpisode ?? recordValueEpisodeSurface;
     recordValueEpisode(sessionId, valueEpisodeFromResponse(response), env);
+    const observe =
+      options.observeCompletionTool ?? observeSuccessfulCompletionTool;
+    observe(sessionId, toolName, toolArguments, response, env);
     return {
       cleared: false,
       directive_followed: followed,
@@ -338,6 +350,9 @@ export async function handleAfterToolCall(event, options = {}) {
       options.clearHighMatchSurfaceForExplicitSelection ??
       clearHighMatchSurfaceForExplicitSelection;
     const cleared = clearExplicit(sessionId, selection.slug, env);
+    const observe =
+      options.observeCompletionTool ?? observeSuccessfulCompletionTool;
+    observe(sessionId, toolName, toolArguments, response, env);
     return {
       recorded: true,
       cleared,
@@ -356,35 +371,58 @@ export async function handleAfterToolCall(event, options = {}) {
       why: "preference_compatibility_feedback_recorded",
     };
   }
+  if (normalizedToolName.endsWith("prepare_private_lesson_candidate")) {
+    const observe =
+      options.observeCompletionTool ?? observeSuccessfulCompletionTool;
+    const observation = observe(
+      sessionId,
+      toolName,
+      toolArguments,
+      response,
+      env,
+    );
+    return {
+      recorded: observation.opened.length > 0,
+      cleared: false,
+      why: "private_lesson_prepared",
+    };
+  }
   if (CONTRIBUTION_TOOLS.some((tool) => normalizedToolName.endsWith(tool))) {
+    const observe =
+      options.observeCompletionTool ?? observeSuccessfulCompletionTool;
+    const observation = observe(
+      sessionId,
+      toolName,
+      toolArguments,
+      response,
+      env,
+    );
     if (
       normalizedToolName.endsWith("submit_feedback") &&
       responseRequestsRemembranceFollowup(response)
     ) {
       return {
-        recorded: false,
+        recorded: true,
         cleared: false,
         why: "remembrance_followup_pending",
       };
     }
-    const markHandled =
-      options.markCurrentEngagementHandled ?? markCurrentEngagementHandled;
-    const count = markHandled(sessionId, env);
     return {
-      recorded: count > 0,
+      recorded: true,
       cleared: false,
-      why: "contribution_handled",
-      count,
+      why:
+        observation.pending.length > 0
+          ? "contribution_recorded_pending"
+          : "contribution_handled",
+      count: observation.handled_count,
     };
   }
   const clear =
     options.clearHighMatchSurfaceIfOpened ?? clearHighMatchSurfaceIfOpened;
-  const cleared = clear(
-    sessionId,
-    toolName,
-    event?.params ?? event?.arguments ?? event?.tool_input ?? {},
-    env,
-  );
+  const cleared = clear(sessionId, toolName, toolArguments, env);
+  const observe =
+    options.observeCompletionTool ?? observeSuccessfulCompletionTool;
+  observe(sessionId, toolName, toolArguments, response, env);
   return {
     cleared,
     why: cleared ? "matched_detail_open" : "not_current_match",
@@ -454,6 +492,7 @@ export function handleCompletion(event, options = {}) {
         readEligibilityCount:
           options.readEligibilityCount ?? readTaskEligibilityCount,
         readPromptedCount: options.readPromptedCount,
+        readCompletionObligations: options.readCompletionObligations,
         readHighMatch: options.readHighMatch,
       },
     );
@@ -465,11 +504,15 @@ export function handleCompletion(event, options = {}) {
     // stop_hook_active flag).
     const writePrompted = options.writePromptedCount ?? writePromptedCount;
     writePrompted(sessionId, decision.useCount, env);
+    const continuationReason = completionContinuationReason(
+      decision.reason ?? contributionReason(),
+      { last_assistant_message: completionMessageFromEvent(event) },
+    );
     return {
       action: "revise",
-      reason: decision.reason ?? contributionReason(),
+      reason: continuationReason,
       retry: {
-        instruction: decision.reason ?? contributionReason(),
+        instruction: continuationReason,
         maxAttempts: 1,
       },
       why: decision.why,
