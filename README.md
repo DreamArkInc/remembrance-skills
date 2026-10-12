@@ -80,9 +80,26 @@ claude plugin install remembrance@remembrance
 (The `claude plugin …` CLI works in every environment; the interactive
 `/plugin` slash command is equivalent but only inside a `claude` session.)
 
-The prompt hook queries explicit reusable work and reminds short follow-ups such
-as "fix these issues" to query from the full conversation. The Stop hook closes
-the contribution loop or recovers a missed query once per task.
+**Node.js runtime.** The hooks and the bundled MCP server need Node.js 18.17.0
+or newer that the host can find. A host started from the Dock, Finder or an IDE
+may not have your shell's PATH, so a Node.js installed by nvm, fnm, volta, asdf,
+nodenv or mise can be missing from it; the symptom is `spawn node ENOENT` or "No
+such file or directory". The plugin starts its hooks and bundled MCP server
+through `scripts/node-launcher`, which uses `REMEMBRANCE_NODE` when it is set,
+else `node` on PATH, else Node.js 18.17.0+ from nvm, volta, fnm, n, asdf,
+nodenv, mise, Homebrew, `/usr/local` or `/usr/bin`. In Claude Code, set
+`REMEMBRANCE_NODE=/absolute/path/to/node` (from `command -v node` in a terminal)
+in the `env` map of `~/.claude/settings.json`; it reaches the hooks and the
+bundled MCP server. Then fully quit and restart Claude Code; a failed server
+shows "Failed to connect" in `/mcp` and `claude mcp list`.
+`packages/claude-code-plugin/README.md` covers the desktop app, the VS Code
+extension and Windows.
+
+The prompt hook queries explicit reusable work and any other task-shaped prompt
+of at least 40 characters, and reminds short follow-ups such as "fix these
+issues" to query from the full conversation. A task-shaped search that finds
+nothing adds nothing of its own to the context. The Stop hook closes the
+contribution loop or recovers a missed query once per task.
 
 For **org-scoped (enterprise) access**, write the org key once to the shared
 mode-0600 config that both plugin hooks and bundled local MCP read, then fully
@@ -124,6 +141,18 @@ The plugin registers the Remembrance MCP server, installs the Remembrancer skill
 adds an always-apply Cursor rule that tells the agent when to call
 `query_skills`, records explicit and contextual reusable prompts, and uses the
 Stop hook to recover a missed query or prompt one redacted contribution.
+
+**Node.js runtime.** The hooks need Node.js 18.17.0 or newer that Cursor can
+find, and the plugin's MCP entry runs `npx -y @remembrance-ai/mcp-server`, which
+also needs npm. A host started from the Dock, Finder or an IDE may not have your
+shell's PATH, so a Node.js installed by nvm, fnm, volta, asdf, nodenv or mise
+can be missing from it; the symptom is `spawn node ENOENT` or "No such file or
+directory". The hooks start through `scripts/node-launcher`, which uses
+`REMEMBRANCE_NODE` when it is set, else `node` on PATH, else Node.js 18.17.0+
+from nvm, volta, fnm, n, asdf, nodenv, mise, Homebrew, `/usr/local` or
+`/usr/bin`. `npx` starts `node` through PATH, so if the MCP server does not
+start, start Cursor from a terminal where `npx` works. On Windows, Cursor runs
+hooks in PowerShell, where they need `sh` (Git for Windows `usr\bin`) on PATH.
 
 For org-scoped access, write the shared Remembrance config once:
 
@@ -182,6 +211,23 @@ chmod 600 ~/.config/remembrance/config.json
 Restart VS Code, call `run_connection_doctor`, and confirm `local_stdio_mcp`,
 active plugin health, and the expected organization scope.
 
+**Node.js runtime.** The hooks and the bundled MCP server need Node.js 18.17.0
+or newer that VS Code can find. A host started from the Dock, Finder or an IDE
+may not have your shell's PATH, so a Node.js installed by nvm, fnm, volta, asdf,
+nodenv or mise can be missing from it; the symptom is `spawn node ENOENT` or "No
+such file or directory". The plugin starts its hooks and bundled MCP server
+through `scripts/node-launcher`, which uses `REMEMBRANCE_NODE` when it is set,
+else `node` on PATH, else Node.js 18.17.0+ from nvm, volta, fnm, n, asdf,
+nodenv, mise, Homebrew, `/usr/local` or `/usr/bin`. In VS Code only PATH and
+that search apply: start VS Code with `code .` from a terminal where `node`
+works, or install Node.js 18.17.0+ in one of those locations, then restart VS
+Code. On Windows, VS Code runs each hook's `windows` form, which calls `node`
+directly and needs no `sh`, but skips the launcher: the first `node` on the PATH
+VS Code sees runs the hooks without the Node.js 18.17.0 floor check, so keep
+Node.js 18.17.0+ first on that PATH. The MCP entry still starts the launcher
+with `sh`, so it needs `sh` (Git for Windows `usr\bin`) on the PATH VS Code
+sees.
+
 ### Gemini CLI
 
 Use the hosted MCP endpoint in Gemini's MCP settings, or run the local stdio
@@ -234,12 +280,27 @@ Fully quit and reopen Codex, then call `run_connection_doctor`. Confirm
 Visible skills without native hooks or MCP tools is a degraded partial install,
 not a successful setup.
 
+**Node.js runtime.** The hooks and the bundled MCP server need Node.js 18.17.0
+or newer that Codex can find. A host started from the Dock, Finder or an IDE may
+not have your shell's PATH, so a Node.js installed by nvm, fnm, volta, asdf,
+nodenv or mise can be missing from it; the symptom is `spawn node ENOENT` or "No
+such file or directory". The plugin starts its hooks and bundled MCP server
+through `scripts/node-launcher`, which uses `REMEMBRANCE_NODE` when it is set,
+else `node` on PATH, else Node.js 18.17.0+ from nvm, volta, fnm, n, asdf,
+nodenv, mise, Homebrew, `/usr/local` or `/usr/bin`. The ChatGPT desktop app may
+not have your shell's PATH either: install Node.js 18.17.0+ in one of those
+locations, or start Codex from a terminal where `node` works, then fully quit
+and reopen Codex. On native Windows, the hooks and the MCP entry start the
+launcher with `sh`, so they need `sh` (Git for Windows `usr\bin`) on the PATH
+Codex sees.
+
 Codex will not run new or changed plugin hooks until their exact definitions are
 trusted. If Codex shows a **Hooks need review** screen, choose **Review hooks**
 and trust only the Remembrance `SessionStart`, `UserPromptSubmit`,
-`PostToolUse`, and `Stop` hooks. If no review screen appears, continue: Codex
-may be reusing an existing valid trust decision. Changed hook definitions show
-the same review screen again. Fully restart Codex before verification.
+`PostToolUse`, `Stop`, and `SubagentStop` hooks. If no review screen appears,
+continue: Codex may be reusing an existing valid trust decision. Changed hook
+definitions show the same review screen again. Fully restart Codex before
+verification.
 
 ### OpenClaw — plugin (skill + tools + conversation hooks)
 
@@ -269,6 +330,15 @@ runtime. Restart OpenClaw, then run
 `openclaw mcp doctor remembrance --probe`; the package README includes the full
 managed config block.
 
+**Node.js runtime.** `openclaw remembrance setup` registers the bundled MCP
+server under the absolute Node.js that runs OpenClaw, so the gateway's PATH does
+not matter for it. A host started from the Dock, Finder or an IDE may not have
+your shell's PATH, so a Node.js installed by nvm, fnm, volta, asdf, nodenv or
+mise can be missing from it; the symptom is `spawn node ENOENT` or "No such file
+or directory". A manual `mcp.servers.remembrance` entry therefore needs Node.js
+18.17.0 or newer by its absolute path (from `command -v node` in a terminal) as
+`command`, because a bare `node` is looked up on the gateway's PATH.
+
 OpenClaw's pre-prompt hook handles explicit tasks, contextual follow-ups, empty
 results, and query failures without blocking work. Its completion hook recovers
 missed queries and reusable contributions once per task.
@@ -284,6 +354,16 @@ version-matched OpenCode plugin plus local Remembrance MCP server. For
 organization access, use the same mode-0600 shared config shown above. Restart
 OpenCode, call `run_connection_doctor`, and confirm the expected organization
 scope before private contribution work.
+
+**Node.js runtime.** The MCP entry that setup writes runs `npx`, so Node.js
+18.17.0 or newer and npm must be on the PATH OpenCode starts with. A host
+started from the Dock, Finder or an IDE may not have your shell's PATH, so a
+Node.js installed by nvm, fnm, volta, asdf, nodenv or mise can be missing from
+it; the symptom is `spawn node ENOENT` or "No such file or directory". `npx`
+starts `node` through PATH, so an absolute `npx` alone is not enough: if the
+host cannot find them, set `command` to the absolute `npx` (`command -v npx` in
+a terminal) and put that directory first in the entry's environment `PATH`, for
+example `/Users/you/.nvm/versions/node/v22.12.0/bin:/usr/bin:/bin`.
 
 The plugin queries eligible turns, injects bounded matching guidance before
 model dispatch, observes completed Remembrance tools, and prompts once for
@@ -327,6 +407,16 @@ Endpoints and payloads: https://remembrance.dev/llms.txt
 ```bash
 npx @remembrance-ai/mcp-server
 ```
+
+**Node.js runtime.** The `command` of a command-based MCP server is looked up on
+a PATH the host provides, so Node.js 18.17.0 or newer and npm must be on it. A
+host started from the Dock, Finder or an IDE may not have your shell's PATH, so
+a Node.js installed by nvm, fnm, volta, asdf, nodenv or mise can be missing from
+it; the symptom is `spawn node ENOENT` or "No such file or directory". `npx`
+starts `node` through PATH, so an absolute `npx` alone is not enough: if the
+host cannot find them, set `command` to the absolute `npx` (`command -v npx` in
+a terminal) and put that directory first in the entry's environment `PATH`, for
+example `/Users/you/.nvm/versions/node/v22.12.0/bin:/usr/bin:/bin`.
 
 Local and hosted MCP initialize with the same standing instructions for
 full-conversation queries, missed-query self-checks, redaction, and reusable

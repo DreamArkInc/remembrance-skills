@@ -11,11 +11,12 @@ REST/HTTPS, skill-only installs, enterprise org keys, local identity, and common
   Cursor, Gemini, or another agent.
 - The user has an enterprise/org API key and needs to make an agent use
   org-scoped skills or private overlays.
-- MCP tools such as run_connection_doctor, get_connection_status, query_skills, list_skills,
-  invoke_skill, submit_query_feedback, submit_feedback, submit_remembrance,
-  propose_private_skill, queue_private_skill_import, report_task_outcome,
-  get_value_proof, get_skill, get_resource, or bootstrap_agent_identity are
-  missing.
+- MCP tools such as run_connection_doctor, get_connection_status, query_skills,
+  list_skills, invoke_skill, submit_query_feedback, submit_feedback,
+  report_task_outcome, get_value_proof, get_skill, or get_resource are missing.
+  Local plugins additionally expose capture_learning and the exact private
+  lesson/skill draft actions; hosted MCP retains submit_remembrance and
+  propose_private_skill because it has no durable device outbox.
 - A native plugin appears installed but hooks, trust prompts, or MCP tools do
   not work.
 - A request fails with 401, 403, 404, 413, 422, 429, or a missing-key error.
@@ -67,15 +68,15 @@ organization scope or anonymous scope; any active key for that organization is
 valid. Identical retries are
 safe, but later changed judgments conflict. Query receipts expire after 30 days
 by default. Use submit_feedback only after actually using a skill, and pass the
-same `query_id` and `result_id` so the surfaced-to-use funnel closes. The server automatically
-collects query-fit profiles, shadow-evaluates them, and trains a pairwise
-reranker only from diverse authenticated organization-key comparisons between
-public results. Anonymous feedback remains low weight, never trains the shared
-model, and never directly affects organization rankings; self-reported agent IDs
-do not establish identity. Private organization comparisons remain
-organization-scoped, and labels rerank candidates rather than rewriting
-content-derived embeddings. Fresh-feedback gates promote improvements and roll
-back regressions automatically.
+same `query_id` and `result_id` so the surfaced-to-use funnel closes.
+Organization verdicts shape only that organization's rankings unless its admin
+opts in to shared learning, which shares only weekly counts per public skill
+version. Anonymous feedback remains low weight, never trains a shared model, and
+never directly affects organization rankings; self-reported agent IDs do not
+establish identity. No learned reranker is trained or served. Labels adjust
+bounded retrieval profiles rather than rewriting content-derived embeddings.
+Retrieval profiles move through collecting, shadow and active stages
+automatically and do not change global skill usefulness.
 
 When a high, accepted, current, non-high-risk result has fresh grade A/B proof
 for the exact skill version, observed model revision, reasoning effort, task
@@ -127,12 +128,12 @@ Codex requires it.
 Codex will not execute plugin hooks until their exact definitions are trusted.
 In the Codex window opened by the installer, if Codex shows a **Hooks need
 review** screen, choose **Review hooks** and trust only the Remembrance
-`SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` hooks.
-If no review screen appears, continue: Codex may be reusing an existing valid
-trust decision. Changed hook definitions show the same review screen again;
-never use the automation-only trust bypass for normal installation. Fully
-restart Codex, submit one prompt, use one Remembrance tool, complete one turn,
-and run `run_connection_doctor`.
+`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, and
+`SubagentStop` hooks. If no review screen appears, continue: Codex may be
+reusing an existing valid trust decision. Changed hook definitions
+show the same review screen again; never use the automation-only trust bypass
+for normal installation. Fully restart Codex, submit one prompt, use one
+Remembrance tool, complete one turn, and run `run_connection_doctor`.
 
 OpenClaw:
 
@@ -144,13 +145,18 @@ openclaw remembrance setup
 If ClawHub search shows multiple Remembrance matches, use the official package
 that points to "dreamarkinc/remembrance-skills", mentions the Remembrance agent
 skill/resource service, and exposes the expected Remembrance MCP tools such as
-run_connection_doctor, get_connection_status, query_skills, list_skills, invoke_skill,
-submit_query_feedback, submit_remembrance, get_skill, and get_resource, plus
-report_task_outcome and get_value_proof. Do not install
+run_connection_doctor, get_connection_status, query_skills, list_skills,
+invoke_skill, submit_query_feedback, capture_learning,
+submit_private_lesson_candidate, submit_private_skill_candidate, get_skill, and
+get_resource, plus report_task_outcome and get_value_proof. Do not install
 unrelated roots, genealogy, ancestry, or memorial packages.
 
 The setup command preserves existing OpenClaw settings, enables conversation
 access, and registers the bundled local MCP by its installed absolute path.
+Before that grant, OpenClaw already runs the plugin's prompt, tool and
+subagent-end hooks and holds only its completion hook (before_agent_finalize):
+the prompt hook reads each prompt and, unless `REMEMBRANCE_AUTO_QUERY=0`,
+sends a reusable-looking prompt, redacted, as a registry query.
 In centrally managed environments, apply this equivalent configuration in
 "~/.openclaw/openclaw.json":
 
@@ -269,12 +275,13 @@ Remembrance; do not classify it as a Remembrance rejection.
 
 ### Organization-private lesson autopilot
 
-Routine organization lessons use one narrow, reviewable write instead of a
-broad remembrance payload. The local plugin first calls
-`prepare_private_lesson_candidate`. That tool generalizes, canonicalizes, and
-redacts a failure, correction, or reusable workflow lesson in memory; encrypts
-only the canonical safe record in a local outbox; and returns a draft ID. It
-never writes the original input to disk, logs, telemetry, or error output. Tags
+Routine organization learning uses one local router and narrow, reviewable
+network writes instead of broad contribution payloads. The local plugin calls
+`capture_learning`, which selects a compact lesson, complete private skill,
+or preference route. For a lesson it generalizes, canonicalizes, and redacts in
+memory, encrypts only the canonical safe record in a local outbox, and returns
+a draft ID. It never writes the original input to disk, logs, telemetry, or
+error output. Tags
 use an open, bounded lowercase slug vocabulary; new technical terms survive,
 while malformed or privacy-sensitive tags hold the draft instead of being
 silently removed.
@@ -357,8 +364,11 @@ processor, a Codex administrator should do all of the following:
    then allow only `remembrance.dev`. Hosted MCP does not need shell-network
    permission.
 4. Keep the organization API key scoped to `agent:query` and
-   `submission:create`; use `propose_private_skill` for repository-derived
-   skills so the destination cannot silently become public.
+   `submission:create`. Local plugins route repository-derived skills through
+   `capture_learning.private_skill` and the exact
+   `submit_private_skill_candidate` action. Hosted/raw MCP clients use
+   `propose_private_skill`; both paths are organization-private and cannot
+   silently become public.
 
 With an organization key, generic `propose_skill_idea` submissions also stay
 inside that organization's review queue. Never remove, suppress, or bypass the
@@ -407,12 +417,19 @@ enabled_tools = [
   "submit_feedback",
   "submit_preference_compatibility_feedback",
   "report_task_outcome",
-  "submit_remembrance",
-  "propose_private_skill",
   "submit_suggestion",
   "record_preference",
   "link_current_installation",
   "submit_private_lesson_candidate",
+  "acknowledge_feedback_denial",
+  "decline_pending_action",
+  "capture_learning",
+  "inspect_private_learning_outbox",
+  "submit_private_skill_candidate",
+  "retry_private_lesson_candidate",
+  "delete_private_lesson_candidate",
+  "retry_private_skill_candidate",
+  "delete_private_skill_candidate",
 ]
 default_tools_approval_mode = "writes"
 ~~~
@@ -422,12 +439,14 @@ the vetted Remembrance plugin hooks permitted or deploy equivalent managed
 query/completion hooks; otherwise MCP calls may work while the query and
 feedback reminders never run.
 
-The MCP annotation for `propose_private_skill` is non-read-only and
+The hosted/raw MCP annotation for `propose_private_skill` is non-read-only and
 closed-world: it makes a network request, but can change only the authenticated
 organization's private review queue and cannot change publicly visible internet
-state. Closed-world does not mean zero-network. Only
-`queue_private_skill_import` is a local, zero-network handoff tool, and it
-should run only when an organization admin explicitly requests that handoff.
+state. Closed-world does not mean zero-network. Local plugins replace that broad
+payload with `capture_learning.private_skill` and the exact
+`submit_private_skill_candidate` action. Only `queue_private_skill_import`
+is a local, zero-network handoff tool, and it should run only when an
+organization admin explicitly requests that handoff.
 
 Example text to merge into the tenant-specific guardian policy:
 
@@ -496,8 +515,9 @@ data-governance policy decides whether repository-derived content may leave the
 workspace. Use the host-specific controls below; do not use a wildcard server,
 all-network rule, or blanket permission bypass.
 
-The recommended organization allowlist includes discovery, direct skill use,
-bounded feedback/outcomes, and organization-private contribution:
+Hosted MCP cannot retain an encrypted device outbox, so its recommended
+organization allowlist includes discovery, direct skill use, bounded
+feedback/outcomes, and the existing organization-private contribution calls:
 
 ~~~text
 get_connection_status
@@ -514,23 +534,56 @@ submit_query_feedback
 submit_feedback
 submit_preference_compatibility_feedback
 report_task_outcome
-submit_remembrance
-propose_private_skill
 submit_suggestion
 record_preference
 link_current_installation
 submit_private_lesson_candidate
+submit_remembrance
+propose_private_skill
 ~~~
 
-It intentionally omits `propose_skill_idea`, `submit_resource`,
+Local plugin and command-based MCP hosts should instead use the version-matched
+capture allowlist. It preserves query-fit feedback, routes reusable learning
+through `capture_learning`, and exposes both exact draft submission actions:
+
+~~~text
+get_connection_status
+run_connection_doctor
+query_skills
+list_skills
+invoke_skill
+get_effective_preferences
+get_private_lesson_policy
+get_skill
+get_resource
+get_value_proof
+submit_query_feedback
+submit_feedback
+submit_preference_compatibility_feedback
+report_task_outcome
+submit_suggestion
+record_preference
+link_current_installation
+submit_private_lesson_candidate
+acknowledge_feedback_denial
+decline_pending_action
+capture_learning
+inspect_private_learning_outbox
+submit_private_skill_candidate
+retry_private_lesson_candidate
+delete_private_lesson_candidate
+retry_private_skill_candidate
+delete_private_skill_candidate
+~~~
+
+Both defaults intentionally omit `propose_skill_idea`, `submit_resource`,
 `submit_resource_review`, `request_attestation_challenge`, and
 `register_agent_key`. Add those dual-scope/public, resource, or identity tools
 only when the organization explicitly approves them. With a verified
 organization key, `propose_skill_idea` remains private, but it is excluded from
 the managed default because the same tool creates a public candidate when used
-anonymously. `bootstrap_agent_identity` and
-`queue_private_skill_import` are local-only tools and never belong in a
-hosted MCP allowlist.
+anonymously. `bootstrap_agent_identity` and `queue_private_skill_import` are
+optional local-only tools and never belong in a hosted MCP allowlist.
 
 ### Approve Claude Code
 
@@ -586,12 +639,12 @@ Merge this into managed settings:
       "mcp__remembrance__submit_feedback",
       "mcp__remembrance__submit_preference_compatibility_feedback",
       "mcp__remembrance__report_task_outcome",
-      "mcp__remembrance__submit_remembrance",
-      "mcp__remembrance__propose_private_skill",
       "mcp__remembrance__submit_suggestion",
       "mcp__remembrance__record_preference",
       "mcp__remembrance__link_current_installation",
       "mcp__remembrance__submit_private_lesson_candidate",
+      "mcp__remembrance__submit_remembrance",
+      "mcp__remembrance__propose_private_skill",
     ]
   },
   "sandbox": {
@@ -647,12 +700,19 @@ narrow server/tool set:
       "submit_feedback",
       "submit_preference_compatibility_feedback",
       "report_task_outcome",
-      "submit_remembrance",
-      "propose_private_skill",
       "submit_suggestion",
       "record_preference",
       "link_current_installation",
       "submit_private_lesson_candidate",
+      "acknowledge_feedback_denial",
+      "decline_pending_action",
+      "capture_learning",
+      "inspect_private_learning_outbox",
+      "submit_private_skill_candidate",
+      "retry_private_lesson_candidate",
+      "delete_private_lesson_candidate",
+      "retry_private_skill_candidate",
+      "delete_private_skill_candidate",
       ],
       "trust": false
     }
@@ -671,9 +731,10 @@ and [MCP settings](https://google-gemini.github.io/gemini-cli/docs/tools/mcp-ser
 
 ### Approve OpenClaw
 
-Pin the exact plugin id, enable its conversation hooks, and filter the saved
-Remembrance MCP server. `plugins.deny` wins over the allowlist. The `minimal`
-tool profile hides MCP tools, and `tools.deny: ["bundle-mcp"]` disables them:
+Pin the exact plugin id, grant its conversation access (without it, OpenClaw
+holds only the completion hook), and filter the saved Remembrance MCP server.
+`plugins.deny` wins over the allowlist. The `minimal` tool profile hides
+MCP tools, and `tools.deny: ["bundle-mcp"]` disables them:
 
 ~~~json
 {
@@ -706,12 +767,19 @@ tool profile hides MCP tools, and `tools.deny: ["bundle-mcp"]` disables them:
       "submit_feedback",
       "submit_preference_compatibility_feedback",
       "report_task_outcome",
-      "submit_remembrance",
-      "propose_private_skill",
       "submit_suggestion",
       "record_preference",
       "link_current_installation",
       "submit_private_lesson_candidate",
+      "acknowledge_feedback_denial",
+      "decline_pending_action",
+      "capture_learning",
+      "inspect_private_learning_outbox",
+      "submit_private_skill_candidate",
+      "retry_private_lesson_candidate",
+      "delete_private_lesson_candidate",
+      "retry_private_skill_candidate",
+      "delete_private_skill_candidate",
           ]
         }
       }
@@ -838,11 +906,29 @@ Cursor MCP fallback config (use this only when plugin install is unavailable):
 }
 ~~~
 
-Codex local MCP config uses "mcp_servers", not "mcpServers":
+Node.js runtime for command-based MCP: a bare `command` such as `node` is
+looked up on a PATH the host provides (for Claude Code, the PATH of the Claude
+Code process). A host started from the Dock, Finder or an IDE may not have your
+shell's PATH, so a Node.js installed by nvm, fnm, volta, asdf, nodenv or mise
+can be missing from it; the symptom is `spawn node ENOENT` or "No such file or
+directory". Use Node.js 18.17.0 or newer by its absolute path (the
+output of `command -v node` in a terminal) in manual entries. The Claude Code,
+VS Code and Codex plugins start their hooks and bundled MCP server, and the
+Cursor plugin its hooks, through `scripts/node-launcher`, which uses
+`REMEMBRANCE_NODE` when it is set, else `node` on PATH, else Node.js
+18.17.0+ from nvm, volta, fnm, n, asdf, nodenv, mise, Homebrew, `/usr/local`
+or `/usr/bin`. In Claude Code, set `REMEMBRANCE_NODE=/absolute/path/to/node`
+in the `env` map of `~/.claude/settings.json`; it reaches the hooks and the
+bundled MCP server. Fully restart the host after a fix. `npx` starts `node`
+through PATH, so an `npx` entry also needs that Node.js directory first in the
+entry's environment PATH.
+
+Codex local MCP config uses "mcp_servers", not "mcpServers"; use absolute paths
+for both the Node.js executable and the server:
 
 ~~~toml
 [mcp_servers.remembrance]
-command = "node"
+command = "/absolute/path/to/node"
 args = ["/absolute/path/to/remembrance-mcp.mjs"]
 
 [mcp_servers.remembrance.env]
@@ -851,15 +937,19 @@ REMEMBRANCE_API_KEY = "YOUR_ORG_KEY"
 ~~~
 
 OpenClaw MCP config uses "mcp.servers", not "mcpServers" or "mcp_servers".
-OpenClaw does not define a portable plugin-root variable for MCP args; use an
-absolute path or the OpenClaw MCP CLI. Also keep the enterprise key in the MCP
-server env if OpenClaw does not inherit shell exports:
+OpenClaw does not define a portable plugin-root variable for MCP args; use
+absolute paths for the Node.js executable and the server, or run
+`openclaw remembrance setup`, which registers the absolute Node.js that runs
+OpenClaw. Also keep the enterprise key in the MCP server env if OpenClaw does
+not inherit shell exports:
 
 ~~~json
 {
   "mcp": {
     "servers": {
       "remembrance": {
+        "command": "/absolute/path/to/node",
+        "args": ["/absolute/path/to/remembrance-mcp.mjs"],
         "env": {
           "REMEMBRANCE_API_URL": "https://remembrance.dev",
           "REMEMBRANCE_API_KEY": "YOUR_ORG_KEY"
@@ -893,15 +983,22 @@ which Codex, Claude Code, Cursor, OpenClaw, VS Code, OpenCode, or MCP host must
 be reloaded, reopened, or fully restarted. Set
 `REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable only this advisory check.
 
+Set `REMEMBRANCE_SESSION_SKILLS=0` to stop the Claude Code, VS Code, Codex, and
+Cursor session-start hooks from asking the agent to load the organization's
+session skills.
+
 ## Validate after setup
 
 1. Start a fresh agent session.
-2. Check whether Remembrance MCP tools are visible. Expected tools include
-   run_connection_doctor, get_connection_status, query_skills, list_skills, invoke_skill, get_skill,
-   get_resource, submit_query_feedback, submit_feedback, submit_remembrance,
-   propose_private_skill, report_task_outcome, get_value_proof, and
-   bootstrap_agent_identity. Local MCP also exposes
-   queue_private_skill_import. Clients
+2. Check whether Remembrance MCP tools are visible. Every path should include
+   run_connection_doctor, get_connection_status, query_skills, list_skills,
+   invoke_skill, get_skill, get_resource, submit_query_feedback,
+   submit_feedback, report_task_outcome, and get_value_proof. A current local
+   plugin/MCP must also expose capture_learning plus
+   submit_private_lesson_candidate and submit_private_skill_candidate. Hosted
+   and legacy MCP instead expose submit_remembrance and propose_private_skill.
+   Optional local administration tools such as bootstrap_agent_identity and
+   queue_private_skill_import are not installation-health requirements. Clients
    with MCP resource discovery should also expose paginated
    `remembrance://skills/{slug}` handles.
 3. Call run_connection_doctor and require `safe_to_query: true`. Confirm the
@@ -936,18 +1033,23 @@ be reloaded, reopened, or fully restarted. Set
    completion or abandonment with report_task_outcome, then ask it to submit
    feedback with the same query/result IDs. When a qualified potential-savings
    estimate exists, fetch and verify its signed token-only proof.
-   A complete loop has a feedback/remembrance receipt such as a public id or
-   verification job id. Hooks should help, but explicit receipts prove the
-   agent actually contributed evidence.
-11. Ask the agent to submit a `failure_report` remembrance for one reusable
-   failure lesson: a self-correction, a user-caught miss, a CI/deploy failure,
-   or a release/versioning miss. This validates non-plugin contribution paths
-   that have no Stop hook.
+   A complete loop has a feedback receipt. Query-fit feedback remains separate:
+   submit_query_feedback judges search matches, while submit_feedback records
+   usefulness only after actual use.
+11. Ask the agent to capture one disposable redacted failure lesson: a
+   self-correction, a user-caught miss, a CI/deploy failure, or a
+   release/versioning miss. On current local MCP, require
+   `capture_learning.lesson` followed by the exact returned action and a
+   private draft receipt. On hosted/legacy MCP, require a `failure_report`
+   through submit_remembrance. This validates both capability states without
+   mixing their schemas.
 12. If using an org key, list and invoke an org-only skill or private overlay
    that should not appear anonymously.
-13. With an organization submission key, submit one disposable redacted skill
-   through propose_private_skill and verify it appears only in that
-   organization's review queue. In a separate negative scenario, simulate a
+13. With an organization submission key, submit one disposable redacted skill.
+   Current local MCP must use `capture_learning.private_skill` followed by
+   submit_private_skill_candidate; hosted/legacy MCP must use
+   propose_private_skill. Verify it appears only in that organization's review
+   queue. In a separate negative scenario, simulate a
    host-policy denial and verify the plugin reports the fixed content-free alert
    once, persists no blocked content, performs no retry, and creates no handoff.
    Test queue_private_skill_import only as a separate administrator-requested
@@ -989,10 +1091,20 @@ be reloaded, reopened, or fully restarted. Set
 - "Hosted MCP works but plugin does not": use hosted MCP as a temporary
   fallback, then inspect plugin marketplace install, trust approval, and
   runtime-specific config shape.
+- "An older integration rejects the private-learning capture contract": as a
+  temporary compatibility downgrade only, set
+  `REMEMBRANCE_ENABLE_LEGACY_BROAD_WRITES=1` and restart the local MCP process.
+  This restores the legacy broad contribution tools and
+  `submit_feedback.lesson`, and stops advertising private-learning capture so
+  server instructions and schemas remain aligned. Current local plugins should
+  leave this unset; do not use it as routine authentication or host-policy
+  repair.
 - "OpenClaw search found another Remembrance package": do not install it unless
   it points to dreamarkinc/remembrance-skills and exposes the Remembrance MCP
   tools.
-- "OpenClaw hooks do nothing": run "openclaw remembrance setup", verify
+- "OpenClaw hooks do nothing": without allowConversationAccess, OpenClaw holds
+  only the completion hook (before_agent_finalize) and still runs the prompt,
+  tool and subagent-end hooks. Run "openclaw remembrance setup", verify
   allowConversationAccess is true, run "openclaw mcp doctor remembrance
   --probe", and restart OpenClaw after plugin install/config changes.
 - "Claude desktop ignores env vars": put env in the user-scoped Claude settings

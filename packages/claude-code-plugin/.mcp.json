@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "remembrance": {
-      "command": "node",
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher",
       "args": ["${CLAUDE_PLUGIN_ROOT}/servers/remembrance-mcp.mjs"],
       "env": {
         "REMEMBRANCE_API_URL": "${REMEMBRANCE_API_URL:-}",

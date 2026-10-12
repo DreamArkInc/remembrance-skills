@@ -8,28 +8,32 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import nodeFs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import {
   createHash,
   createPublicKey,
   generateKeyPairSync,
   verify as verifySignature,
 } from "node:crypto";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  agentLedgerIdFor,
   autoQueryTimeoutMs,
   buildQueryPayload,
+  capturePrivateSkillNativeUserPrompt,
   checkForClientUpdate,
   clientUserAgent,
   clearHighMatchSurfaceIfOpened,
   clearHighMatchSurfaceForExplicitSelection,
   completionContinuationReason,
+  composeBoundedHookContext,
   contributionReason,
-  countRegistryConsumption,
-  countTaskEligibility,
   detectHighValueLessonSignal,
   detectHighValueLessonSignalInText,
   directSelectionFromResponse,
@@ -44,6 +48,7 @@ import {
   hostPolicyAlertTextForOperation,
   hostPolicyAlertWasReported,
   isContextualContinuationPrompt,
+  isHostNotificationPrompt,
   hostedMcpSplitNotice,
   inferDomain,
   installedClientVersion,
@@ -60,6 +65,8 @@ import {
   markHostPolicyAlertDelivered,
   markCompletionObligationsPrompted,
   observeSuccessfulCompletionTool,
+  pendingCompletionRecovery,
+  pendingCompletionRecoveryInstruction,
   readCompletionObligations,
   readDirectSelectionSurface,
   readDirectSelectionSurfaces,
@@ -74,10 +81,12 @@ import {
   readTaskEligibilityCount,
   readRemembranceConfig,
   readValueEpisodeSurfaces,
+  queryFeedbackTrackingFromResponse,
   queryResponseHasMatches,
   recordRegistryUse,
   recordDirectiveFollowThroughForTool,
   recordDirectSelectionSurface,
+  recordDirectSelectionUse,
   recordDirectiveSurface,
   recordHighMatchSurface,
   recordHostPolicyDenial,
@@ -101,23 +110,100 @@ import {
   shouldQueryPrompt,
   classifyHostPolicyDenial,
   toolResponseIndicatesFailure,
+  transferSubagentObligations,
   valueEpisodeFromResponse,
   warmPrincipalSession,
   projectKeyForHook,
   userCorrectionCaptureDirective,
   writePromptedCount,
 } from "../scripts/hook-core.mjs";
+import { KEYWORDS_ONLY } from "./fixtures/task-shape.mjs";
+import {
+  HOST_NOTIFICATION_SHAPES,
+  ORDINARY_HUMAN_PROMPTS,
+} from "./fixtures/host-notification-corpus.mjs";
+import {
+  noResultResponse,
+  summaryEchoProposal,
+  templateProposal,
+} from "./fixtures/skill-idea-proposals.mjs";
+import {
+  PRIVATE_LEARNING_INSPECTOR_DIGEST,
+  completeDirectiveUnits,
+} from "../scripts/private-learning-hook-policy.mjs";
+import {
+  inventoryRetainedKeyConsumers,
+  readPendingActionPayload,
+  resupplyPayloadDigest,
+} from "../scripts/pending-action-payload.mjs";
 
 const tempRoot = mkdtempSync(join(tmpdir(), "remembrance-codex-core-"));
 let counter = 0;
+
+// Calls that omit an env field fall back to HOME, the XDG roots, or TMPDIR;
+// keep those defaults inside this suite's temp root, never the real profile.
+beforeAll(() => {
+  for (const [key, name] of [
+    ["HOME", "home"],
+    ["XDG_CONFIG_HOME", "config"],
+    ["XDG_STATE_HOME", "state"],
+    ["XDG_CACHE_HOME", "cache"],
+    ["TMPDIR", "tmp"],
+  ]) {
+    mkdirSync(join(tempRoot, name), { recursive: true });
+    vi.stubEnv(key, join(tempRoot, name));
+  }
+});
+
+// The most an obligation record holds (the hook core's
+// COMPLETION_OBLIGATION_MAX_BYTES, pending-action-payload.mjs's
+// OBLIGATION_MAX_BYTES).
+const OBLIGATION_RECORD_MAX_BYTES = 12 * 1024;
 
 // Point the marker mechanism at an isolated temp dir per test.
 function markerEnv(extra = {}) {
   counter += 1;
   return {
     REMEMBRANCE_USAGE_DIR: join(tempRoot, `usage-${counter}`),
+    XDG_STATE_HOME: join(tempRoot, `marker-state-${counter}`),
+    XDG_CONFIG_HOME: join(tempRoot, `marker-config-${counter}`),
+    REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY: "1",
     ...extra,
   };
+}
+
+// A ledger's durable home, where the hook keeps a record whose payload is
+// sealed for an unresolved action (review R2, Task 15).
+function sealedLedgerDirectory(env, ledgerId) {
+  return join(
+    env.XDG_STATE_HOME,
+    "remembrance",
+    "private-learning-lifecycle",
+    "retained",
+    `${createHash("sha256").update(ledgerId).digest("hex").slice(0, 16)}.obligations`,
+  );
+}
+
+// Every record file a ledger holds, in its durable home first, then in the
+// temporary usage directory where a record without a sealed payload stays.
+function ledgerRecordFiles(env, ledgerId) {
+  const name = `${createHash("sha256").update(ledgerId).digest("hex").slice(0, 16)}.obligations`;
+  return [
+    sealedLedgerDirectory(env, ledgerId),
+    join(env.REMEMBRANCE_USAGE_DIR, name),
+  ].flatMap((directory) =>
+    existsSync(directory)
+      ? readdirSync(directory).map((file) => join(directory, file))
+      : [],
+  );
+}
+
+// The line a demand shows for a payload it keeps but does not show: the
+// handle the local get_pending_action_payload takes.
+function retainedHandle(ledgerId, obligation, payload) {
+  const hash = (value) =>
+    createHash("sha256").update(value, "utf8").digest("hex");
+  return `- Reusable evidence for query_id ${obligation.query_id} and result_id ${obligation.result_id}: payload kept on this machine (${Buffer.byteLength(JSON.stringify(payload))} bytes, ${obligation.payload_digest}); call local get_pending_action_payload with action_id ${hash(obligation.id).slice(0, 16)} and ledger ${hash(ledgerId).slice(0, 16)}, then submit_remembrance with exactly the payload it returns.`;
 }
 
 function privateLessonEnv(extra = {}) {
@@ -126,6 +212,7 @@ function privateLessonEnv(extra = {}) {
     XDG_STATE_HOME: join(tempRoot, `private-lesson-state-${counter}`),
     XDG_CONFIG_HOME: join(tempRoot, `private-lesson-config-${counter}`),
     REMEMBRANCE_API_KEY: `rk_private_lesson_${counter}`,
+    REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY: "1",
     REMEMBRANCE_PLUGIN_ALERT_DIR: join(
       tempRoot,
       `private-lesson-alerts-${counter}`,
@@ -139,6 +226,7 @@ function writePrivateLessonEnvelope(
   draftId,
   state,
   holdTelemetryStatus = state === "held_safety" ? "pending" : "not_required",
+  lastErrorCode = null,
 ) {
   const directory = join(env.XDG_STATE_HOME, "remembrance", "private-lessons");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -152,6 +240,7 @@ function writePrivateLessonEnvelope(
       state,
       payload_digest: `sha256:${"a".repeat(64)}`,
       hold_telemetry_status: holdTelemetryStatus,
+      last_error_code: lastErrorCode,
       next_retry_at:
         state === "retry_scheduled" || holdTelemetryStatus === "retry_scheduled"
           ? "2026-08-14T00:01:00.000Z"
@@ -581,7 +670,8 @@ describe("principal-session bootstrap and preference capture", () => {
     const directive = genericPreferenceCaptureDirective(prompt, {
       env: isolatedPrincipalEnv(),
     });
-    expect(directive).toContain("call record_preference once");
+    expect(directive).toContain("call capture_learning once with preference");
+    expect(directive).toContain("returned record_preference next_action");
     expect(directive).toContain(
       '"key":"<presentation|workflow|strategy_selection>.<stable_concept>"',
     );
@@ -941,12 +1031,21 @@ describe("principal-session bootstrap and preference capture", () => {
 
 describe("autoQueryTimeoutMs", () => {
   it("keeps the fail-open default while allowing a bounded remote-integration override", () => {
-    expect(autoQueryTimeoutMs({})).toBe(2_000);
+    // The search waits 3 s (the judge may take 2 s on the hook); the hook's
+    // other registry requests pass their own 2 s default.
+    expect(autoQueryTimeoutMs({})).toBe(3_000);
+    expect(autoQueryTimeoutMs({}, 2_000)).toBe(2_000);
     expect(
       autoQueryTimeoutMs({ REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS: "30000" }),
     ).toBe(30_000);
     expect(
+      autoQueryTimeoutMs({ REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS: "30000" }, 2_000),
+    ).toBe(30_000);
+    expect(
       autoQueryTimeoutMs({ REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS: "30001" }),
+    ).toBe(3_000);
+    expect(
+      autoQueryTimeoutMs({ REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS: "99" }, 2_000),
     ).toBe(2_000);
   });
 });
@@ -1664,20 +1763,21 @@ describe("host policy denial observations", () => {
 });
 
 describe("policy-approved private lesson hook behavior", () => {
-  it("uses the exact two-stage organization-private action and one authorization request", () => {
+  it("uses one private router and one exact authorization request", () => {
     const guidance = privateLessonCompletionGuidance({
       includeLifecycleRecovery: false,
       env: privateLessonEnv(),
     });
-    expect(guidance).toContain("silently generalize");
-    expect(guidance).toContain("prepare_private_lesson_candidate");
-    expect(guidance).toContain("submit_private_lesson_candidate");
-    expect(guidance).toContain("with exactly its draft_id");
-    expect(guidance).toContain("not already a complete skill");
-    expect(guidance).toContain("separate skill-proposal guidance");
-    expect(guidance).toContain("do not compress a finished skill");
+    expect(guidance).toContain("capture_learning once per new item");
+    expect(guidance).toContain("lesson for a compact generalized");
+    expect(guidance).toContain("private_skill with complete instructions");
+    expect(guidance).toContain("preference for a durable working preference");
+    expect(guidance).toContain("exact next_action or bounded agent_recovery");
+    expect(guidance).toContain("reformulation updates the retained draft");
     expect(guidance).toContain(PRIVATE_LESSON_HOST_POLICY_ALERT_TEXT);
-    expect(guidance).toContain("do not substitute submit_remembrance");
+    expect(guidance).toContain("Do not substitute a legacy broad write");
+    expect(guidance).not.toContain("prepare_private_lesson_candidate");
+    expect(guidance).not.toContain("propose_private_skill");
     expect(guidance).toMatch(
       /do not retry that draft through another transport/i,
     );
@@ -1707,23 +1807,22 @@ describe("policy-approved private lesson hook behavior", () => {
         readDirectSelections: () => [],
       },
     );
-    expect(organizationDecision.reason).toContain(
-      "prepare_private_lesson_candidate",
-    );
-    expect(organizationDecision.reason).toContain(
-      "submit_private_lesson_candidate",
-    );
+    expect(organizationDecision.reason).toContain("capture_learning");
+    expect(organizationDecision.reason).toContain("exact next_action");
     expect(organizationDecision.reason).toContain("submit_query_feedback");
     expect(organizationDecision.reason).toContain("submit_feedback");
-    expect(organizationDecision.reason).toContain("propose_private_skill");
+    expect(organizationDecision.reason).not.toContain("propose_private_skill");
     expect(organizationDecision.reason).toContain(
-      "Do not mention routine Remembrance calls",
+      "Do not mention routine calls, hooks, or receipts",
     );
 
     const anonymousDecision = decideStop(
       { turn_id: "private-lesson-public" },
       {
-        env: { XDG_CONFIG_HOME: join(tempRoot, "anonymous-private-lesson") },
+        env: {
+          XDG_CONFIG_HOME: join(tempRoot, "anonymous-private-lesson"),
+          REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY: "1",
+        },
         readUseCount: () => 1,
         readEligibilityCount: () => 1,
         readPromptedCount: () => 0,
@@ -1753,27 +1852,65 @@ describe("policy-approved private lesson hook behavior", () => {
     expect(readPrivateLessonLifecycleState(env)).toEqual({
       ready: 1,
       retry_scheduled: 1,
+      awaiting_authorization: 1,
+      next_authorization_draft_id: "pld_authorize12",
       hold_telemetry_pending: 1,
       hold_telemetry_retry_scheduled: 0,
+      awaiting_compatible_profile: 0,
+      held_policy_refresh: 0,
+      hold_telemetry_awaiting_compatible_profile: 0,
       host_denial_active: false,
     });
     const instruction = privateLessonLifecycleRecoveryInstruction(env);
-    expect(instruction).toContain("inspect_private_lesson_outbox");
+    expect(instruction).toContain("inspect_private_learning_outbox");
     expect(instruction).toContain("submit_private_lesson_candidate");
-    expect(instruction).toContain("retry_private_lesson_candidate");
-    expect(instruction).toContain("telemetry retry is due");
-    expect(instruction).toContain("Do not retry awaiting_authorization");
+    expect(instruction).toContain("matching retry tool only for a due retry");
+    expect(instruction).toContain("1 content-free hold event");
+    expect(instruction).toContain("Do not retry authorization");
     expect(instruction).toContain(
-      "never delete an unresolved draft automatically",
+      "Never delete an unresolved draft automatically",
     );
-    expect(instruction).toContain("markers expire after 14 days");
     expect(paths.every((path) => statSync(path).isFile())).toBe(true);
     expect(
       readPrivateLessonLifecycleState({ ...env, REMEMBRANCE_API_KEY: "" }),
     ).toBeNull();
   });
 
-  it("keeps authorization, disabled holds, and superseded profiles out of automatic lifecycle retry", () => {
+  it("automatically revalidates refreshable policy holds on the next lifecycle", () => {
+    const env = privateLessonEnv();
+    for (const [index, code] of [
+      "policy_expired",
+      "policy_changed",
+      "policy_sequence_conflict",
+      "unsupported_redaction_version",
+      "unsupported_redactor_digest",
+    ].entries()) {
+      writePrivateLessonEnvelope(
+        env,
+        `pld_policy${String(index).padStart(8, "0")}`,
+        "held_policy",
+        "not_required",
+        code,
+      );
+    }
+    writePrivateLessonEnvelope(
+      env,
+      "pld_policyblocked",
+      "held_policy",
+      "not_required",
+      "policy_audience_changed",
+    );
+
+    expect(readPrivateLessonLifecycleState(env)).toMatchObject({
+      held_policy_refresh: 5,
+    });
+    const instruction = privateLessonLifecycleRecoveryInstruction(env);
+    expect(instruction).toContain("5 lesson candidates");
+    expect(instruction).toContain("matching retry tool only for a due retry");
+    expect(instruction).toContain("Do not retry authorization");
+  });
+
+  it("recovers old authorization holds without retrying disabled or superseded work", () => {
     const env = privateLessonEnv();
     writePrivateLessonEnvelope(
       env,
@@ -1792,8 +1929,14 @@ describe("policy-approved private lesson hook behavior", () => {
       "superseded_redactor",
       "disabled",
     );
-    expect(readPrivateLessonLifecycleState(env)).toBeNull();
-    expect(privateLessonLifecycleRecoveryInstruction(env)).toBeNull();
+    expect(readPrivateLessonLifecycleState(env)).toMatchObject({
+      awaiting_authorization: 1,
+    });
+    const instruction = privateLessonLifecycleRecoveryInstruction(env);
+    expect(instruction).toContain("1 authorization retry");
+    expect(instruction).not.toContain("pld_safety_only");
+    expect(instruction).not.toContain("pld_superseded1");
+    expect(instruction).toContain("pld_authorization_only");
   });
 
   it("does not recover safety-hold telemetry when health reporting is disabled", () => {
@@ -1811,9 +1954,11 @@ describe("policy-approved private lesson hook behavior", () => {
     expect(promptResult).toMatchObject({
       consumed: false,
       eligible: false,
-      reason: "private_lesson_lifecycle_recovery",
+      reason: "private_learning_lifecycle_recovery",
     });
-    expect(promptResult.context).toContain("retry_private_lesson_candidate");
+    expect(promptResult.context).toContain(
+      "matching retry tool only for a due retry",
+    );
     expect(fetchImpl).not.toHaveBeenCalled();
 
     const first = decideStop(
@@ -1832,7 +1977,7 @@ describe("policy-approved private lesson hook behavior", () => {
       why: "prompt_private_lesson_retry",
       useCount: 1,
     });
-    expect(first.reason).toContain("retry_private_lesson_candidate");
+    expect(first.reason).toContain("matching retry tool only for a due retry");
     expect(
       decideStop(
         { turn_id: "private-lesson-recovery" },
@@ -1885,7 +2030,7 @@ describe("policy-approved private lesson hook behavior", () => {
     );
   });
 
-  it("treats retained private-lesson submission states as failed tool outcomes", () => {
+  it("observes retained delivery outcomes without confusing them with accepted submissions", () => {
     for (const status of ["not_submitted", "held_safety"]) {
       expect(
         toolResponseIndicatesFailure({
@@ -1901,7 +2046,7 @@ describe("policy-approved private lesson hook behavior", () => {
             },
           ],
         }),
-      ).toBe(true);
+      ).toBe(status === "held_safety");
     }
     for (const status of [
       "accepted_private_candidate",
@@ -2093,6 +2238,7 @@ describe("Codex hosted MCP credential registration parsing", () => {
 });
 
 afterAll(() => {
+  vi.unstubAllEnvs();
   rmSync(tempRoot, { recursive: true, force: true });
 });
 
@@ -2146,6 +2292,15 @@ describe("hook-core trigger + payload helpers", () => {
                 behavior: "Keep explanations concise and focused.",
                 effect: "presentation",
                 strength: "prefer",
+                source: "explicit_member",
+              },
+              {
+                key: "workflow.release_approval",
+                value: "written",
+                label: "Release approval",
+                behavior: "Never deploy without written approval.",
+                effect: "workflow",
+                strength: "prefer",
                 source: "mandatory_org",
               },
             ],
@@ -2156,7 +2311,7 @@ describe("hook-core trigger + payload helpers", () => {
                   key: "explanation_depth",
                   skill_value: "detailed",
                   effective_value: "concise",
-                  source: "mandatory_org",
+                  source: "explicit_member",
                 },
               ],
             },
@@ -2176,12 +2331,17 @@ describe("hook-core trigger + payload helpers", () => {
     expect(context).toContain("capabilities query_registry");
     expect(context).toContain("constraints met reviewed memory");
     expect(context).toContain("signals lexical strong, semantic moderate");
-    expect(context).toContain("applicability likely/general");
-    expect(context).toContain("use only when Reusable operational work");
     expect(context).toContain(
-      "preference sidecar Explanation depth [presentation, required organization]: prefer Keep explanations concise and focused.",
+      "applicability likely/general: A stated use condition matches this task",
     );
-    expect(context).toContain("preserve every hard constraint");
+    // A stated use condition only promotes (plan 15.8, owner decision 43 = A).
+    expect(context).toContain("use when Reusable operational work");
+    expect(context).not.toContain("use only when");
+    // The capped decision note carries discretionary preferences only.
+    expect(context).toContain(
+      "preference sidecar Explanation depth [presentation, explicit_member]: prefer Keep explanations concise and focused.; replaces discretionary skill defaults for explanation_depth; preserve every hard constraint.",
+    );
+    expect(context).not.toContain("Release approval");
     expect(context).toContain(
       "5.2k-8.7k potential tokens saved (grade B signed proof)",
     );
@@ -2358,6 +2518,71 @@ describe("hook-core trigger + payload helpers", () => {
         ],
       },
     ]);
+  });
+
+  it("shows one complete custom preference with the cross-family rule and bounds the rest", () => {
+    const words =
+      "delegate implementation to worker agents and review each result before merging ";
+    const customPreference = (suffix) => ({
+      key: `strategy.delegation_${suffix}`,
+      value: "workers_with_review",
+      label: `${suffix} ${words.repeat(2)}`.slice(0, 96),
+      behavior: `${suffix} ${words.repeat(5)}`.slice(0, 320),
+      effect: "strategy_selection",
+      strength: "prefer",
+      definition_version: 1,
+      source: "explicit_installation",
+    });
+    const shownText = (preference) =>
+      `${preference.label.trim()} [strategy_selection, explicit_installation]: prefer ${preference.behavior.trim()}`;
+    const contextFor = (preferences) =>
+      formatContext({
+        body: {
+          query_id: "rq_cross_family",
+          effective_preferences: preferences,
+          skills: [
+            {
+              slug: "verified-workflow",
+              description: "A reviewed workflow.",
+              result_id: "qres_cross_family",
+              match_tier: "possible",
+            },
+          ],
+          resources: [],
+        },
+      });
+    const preferenceLine = (context) =>
+      context
+        .split("\n")
+        .find((line) =>
+          line.startsWith(
+            "Apply these persisted discretionary preferences silently",
+          ),
+        );
+
+    const first = customPreference("first");
+    expect(first.label).toHaveLength(96);
+    expect(first.behavior).toHaveLength(320);
+    const single = preferenceLine(contextFor([first]));
+    expect(single).toContain(shownText(first));
+    expect(single).toContain(
+      "Follow the part of a preference written for this host. Unlike an outage, one naming a model, tool, or agent this host lacks, with no part for this host, was written for another agent family: apply the closest equivalent this host supports and say which. When none is safe to assume, ask the user; if you cannot ask, keep your default and say so.",
+    );
+    expect(single).toContain("Do not ask the user to reconfirm them");
+    expect(single).not.toContain("omitted");
+    expect(single.length).toBeLessThanOrEqual(1200);
+
+    const second = customPreference("second");
+    const bounded = preferenceLine(contextFor([first, second]));
+    expect(bounded).toContain(shownText(first));
+    expect(bounded).not.toContain(shownText(second));
+    expect(bounded).toContain(
+      "+1 discretionary preference omitted. Call get_effective_preferences",
+    );
+    expect(bounded).toContain(
+      "apply the closest equivalent this host supports",
+    );
+    expect(bounded.length).toBeLessThanOrEqual(1200);
   });
 
   it("does not invent preference evidence from malformed or non-durable values", () => {
@@ -2628,6 +2853,66 @@ describe("hook-core trigger + payload helpers", () => {
     ).toBe(0);
   });
 
+  // Owner decision 40 = B lengthens only the search's wait (3 s); the Stop
+  // hook's outcome report keeps the other registry requests' 2 s.
+  it("gives up on a hanging task outcome report after 2 s, not the search's 3 s", async () => {
+    const env = markerEnv({
+      REMEMBRANCE_API_URL: "https://registry.example",
+      REMEMBRANCE_API_KEY: "org_test_key",
+      REMEMBRANCE_API_KEY_ORIGIN: "https://registry.example",
+    });
+    const sessionId = "value-outcome-timeout-session";
+    const episode = valueEpisodeFromResponse({
+      body: {
+        query_id: "rq_value_timeout",
+        task_outcome: {
+          available: true,
+          eligible_result_ids: ["qres_value_timeout"],
+        },
+        skills: [
+          {
+            result_id: "qres_value_timeout",
+            value_estimate_id: "vpr_value_timeout",
+            task_outcome_eligible: true,
+          },
+        ],
+      },
+    });
+    expect(recordValueEpisodeSurface(sessionId, episode, env)).toBe(true);
+    expect(
+      markValueEpisodeSelection(
+        sessionId,
+        "rq_value_timeout",
+        "qres_value_timeout",
+        env,
+      ),
+    ).toBe(true);
+    const fetchImpl = vi.fn(
+      (_url, init = {}) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () =>
+            reject(new DOMException("The operation was aborted.", "AbortError")),
+          );
+        }),
+    );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let settled = false;
+      const pending = reportTaskOutcomesOnStop(sessionId, {}, { env, fetchImpl }).finally(
+        () => {
+          settled = true;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toBe(0);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses the exact pair bundle when two of three surfaced results are selected", async () => {
     const env = markerEnv({
       REMEMBRANCE_API_URL: "https://registry.example",
@@ -2742,9 +3027,54 @@ describe("hook-core trigger + payload helpers", () => {
     expect(shouldQueryPrompt("fix these issues")).toMatchObject({
       likely_match: false,
     });
+    expect(shouldQueryPrompt("heroku is logged in")).toEqual({
+      likely_match: false,
+      reason: "status_acknowledgment",
+    });
+    expect(shouldQueryPrompt("I am connected to Heroku.")).toEqual({
+      likely_match: false,
+      reason: "status_acknowledgment",
+    });
+    expect(shouldQueryPrompt("Heroku login succeeded.")).toEqual({
+      likely_match: false,
+      reason: "status_acknowledgment",
+    });
+    for (const provider of ["new-service", "example.dev", "another_cli"]) {
+      for (const prompt of [
+        `${provider} is logged in`,
+        `I am connected to ${provider}.`,
+        `${provider} login succeeded.`,
+      ]) {
+        expect(shouldQueryPrompt(prompt)).toEqual({
+          likely_match: false,
+          reason: "status_acknowledgment",
+        });
+      }
+    }
+    for (const prompt of [
+      "Deploy to Heroku",
+      "Configure Heroku",
+      "Fix Redis",
+    ]) {
+      expect(shouldQueryPrompt(prompt).likely_match).toBe(true);
+    }
+    expect(shouldQueryPrompt("Heroku login is failing")).toEqual({
+      likely_match: true,
+      reason: "external_service",
+    });
     expect(
-      shouldQueryPrompt("Review the latest comments from Claude and Codex"),
+      shouldQueryPrompt("Heroku is logged in; continue the deployment."),
+    ).toEqual({ likely_match: true, reason: "external_service" });
+    expect(
+      shouldQueryPrompt(
+        "Review the latest comments from Claude and Codex",
+        KEYWORDS_ONLY,
+      ),
     ).toEqual({ likely_match: false, reason: "no_trigger_match" });
+    // The task-shape default (owner decision 34C) searches it as a task.
+    expect(
+      shouldQueryPrompt("Review the latest comments from Claude and Codex", {}),
+    ).toEqual({ likely_match: true, reason: "task_shape" });
     expect(
       shouldQueryPrompt(
         "Integrate the Anthropic API through its TypeScript SDK",
@@ -2752,6 +3082,9 @@ describe("hook-core trigger + payload helpers", () => {
     ).toEqual({ likely_match: true, reason: "external_service" });
     expect(isContextualContinuationPrompt("fix these issues")).toBe(true);
     expect(isContextualContinuationPrompt("continue")).toBe(true);
+    expect(isContextualContinuationPrompt("do it")).toBe(true);
+    expect(isContextualContinuationPrompt("go ahead")).toBe(true);
+    expect(isContextualContinuationPrompt("heroku is logged in")).toBe(false);
     expect(
       shouldQueryPrompt(
         "Use remembrance://skills/web-ui-ux-qa for this dashboard",
@@ -2784,33 +3117,272 @@ describe("hook-core trigger + payload helpers", () => {
     ).toBe(false);
   });
 
-  it("detects user corrections when the lesson forms, without treating ordinary bug prose as feedback", async () => {
-    for (const prompt of [
+  it("detects direct user corrections without treating quoted, negated, or third-party prose as feedback", async () => {
+    const genuineCorrections = [
       "That approach is overkill; keep the change focused.",
       "That completed approach is overkill; keep the change focused.",
+      "This implementation is wrong.",
+      "It is incorrect.",
+      "No, that’s wrong.",
+      "Actually, this design feels overcomplicated.",
+      "That result was the wrong direction.",
+      "Please do this differently.",
+      "Use a different approach.",
       "You missed the actual failure mode again.",
+      "You forgot the requirement to preserve the response shape.",
+      "We overlooked the edge case in the empty response.",
+      "You ignored the constraint about private data.",
+      "You did not address the regression.",
+      "This is not what I asked.",
+      "This isn't what I asked for.",
+      "That’s not what I requested.",
+      "That wasn't what I requested.",
+      "You broke it.",
+      "You regressed the build.",
+      "I already asked you to preserve this behavior.",
+      "I already asked for a bounded result.",
+      "I already said that the old API must remain available.",
       "I already told you not to rewrite the whole module.",
+      "As I explained, the original bytes must remain unchanged.",
+      "You keep missing the requirement.",
+      "You keep doing the wrong thing.",
       "I don't like this implementation direction.",
+      "I do not agree with that design approach.",
       "Revert that approach and use the existing abstraction.",
-    ]) {
+      "Undo this implementation.",
+      "Reject that design.",
+      "Feedback from me: you missed the actual requirement.",
+      "Feedback from us: you missed the actual requirement.",
+      "The issue: you missed the actual requirement.",
+      "The issue - you missed the actual requirement.",
+      "In review: you missed the actual requirement.",
+      "Security: you missed the actual requirement.",
+      "Client-side - you missed the actual requirement.",
+      "Per the plan we agreed on, you missed the actual requirement.",
+      "Per the agreed plan, you missed the actual requirement.",
+      "Feedback from myself: you missed the actual requirement.",
+      "Per my code review, you missed the actual requirement.",
+      "Per my design review, you missed the actual requirement.",
+      "According to our internal review, you missed the actual requirement.",
+      "From our security finding: you missed the actual requirement.",
+      "Claude said that approach is wrong, and I agree: you broke the build.",
+      "Feedback from me: Use the durable queue instead.",
+      "Feedback from us: Use the durable queue instead.",
+      "The issue: Use the durable queue instead.",
+      "The issue - Use the durable queue instead.",
+      "In review: Use the durable queue instead.",
+      "Security: Use the durable queue instead.",
+      "Client-side - Use the durable queue instead.",
+      "Per the plan we agreed on, use the durable queue instead.",
+      "According to the plan I wrote, use the durable queue instead.",
+      "We agree: Use the durable queue instead.",
+      "I confirm: Use the durable queue instead.",
+      "I accept this: Use the durable queue instead.",
+      "I believe: Use the durable queue instead.",
+      "Speaking for myself: Use the durable queue instead.",
+      "My correction: Use the durable queue instead.",
+      "My runbook says: Use the durable queue instead.",
+      "My test plan requires: Use the durable queue instead.",
+    ];
+    for (const prompt of genuineCorrections) {
       expect(promptContainsUserCorrection(prompt), prompt).toBe(true);
       expect(userCorrectionCaptureDirective(prompt), prompt).toContain(
         "Remembrance user-correction capture",
       );
     }
-    for (const prompt of [
+    for (const leadIn of [
+      "Also, ",
+      "Sorry, but ",
+      "Quick note: ",
+      "Hmm, ",
+      "Look, ",
+      "For clarity, ",
+    ]) {
+      for (const correction of genuineCorrections) {
+        const prompt = `${leadIn}${correction}`;
+        expect(promptContainsUserCorrection(prompt), prompt).toBe(true);
+        expect(userCorrectionCaptureDirective(prompt), prompt).toContain(
+          "Remembrance user-correction capture",
+        );
+      }
+    }
+
+    const wrappers = [
+      (value) => `The docs say "${value}"`,
+      (value) => `Claude said ${value}`,
+      (value) => `Translate to Spanish: ${value}`,
+      (value) => `Summarize this: ${value}`,
+      (value) => `Commit message: ${value}`,
+      (value) => `\`\`\`text\n${value}\n\`\`\``,
+      (value) => `> ${value}`,
+      (value) => `Never mind. ${value}`,
+      (value) => `Not a correction: ${value}`,
+      (value) => `One-off: ${value}`,
+      (value) => `Do not save this as a lesson. ${value}`,
+      (value) => `Don't remember this. ${value}`,
+      (value) => `No need to learn from this. ${value}`,
+      (value) => `Please do not capture this. ${value}`,
+      (value) => `Do not turn this into a lesson. ${value}`,
+      (value) => `Do not remember any of this. ${value}`,
+      (value) => `Never mind about capture. ${value}`,
+      (value) => `This was a one-off. ${value}`,
+      (value) => `Here is Claude feedback: ${value}`,
+      (value) => `Copied from the issue: ${value}`,
+      (value) => `Summary from Claude: ${value}`,
+      (value) => `Suggested commit message: ${value}`,
+      (value) => `Please turn this into a commit message: ${value}`,
+      (value) => `"${value}\nThe quote continues."`,
+      (value) => `\u201c${value}\nThe quote continues.\u201d`,
+      (value) => `"""${value}\nThe quote continues."""`,
+    ];
+    const wrapperEligibleCorrections = genuineCorrections.filter(
+      (correction) =>
+        !/\b(?:(?:i|we)\s+(?:accept|adopt|agree|believe|concur|confirm|disagree|endorse|think)|in\s+(?:my|our)\s+view|speaking\s+for\s+(?:myself|ourselves|us)|(?:my|our)\s+correction)\b/iu.test(
+          correction,
+        ),
+    );
+    for (const correction of wrapperEligibleCorrections) {
+      for (const wrap of wrappers) {
+        const prompt = wrap(correction);
+        expect(promptContainsUserCorrection(prompt), prompt).toBe(false);
+        expect(userCorrectionCaptureDirective(prompt), prompt).toBeNull();
+      }
+    }
+    expect(
+      promptContainsUserCorrection(
+        "Shared by reviewer: Claude said that approach is wrong. I agree: use the durable queue instead.",
+      ),
+    ).toBe(true);
+
+    const nonCorrections = [
       "The tests are wrong when the cache expires.",
       "Fix this implementation bug.",
       "The parser rejects the wrong input.",
-    ]) {
+      "This is not wrong.",
+      "That approach is not incorrect.",
+      "Never mind, move to the next file.",
+      "That approach is wrong. Never-mind.",
+      "You missed the requirement, but don't learn from it.",
+      "Revert that change. No need to remember this.",
+      "You forgot the requirement. Not a correction, just FYI.",
+      "Don't record this: that approach is wrong.",
+      "Do not save this as a lesson. That implementation is wrong.",
+      "This is a hypothetical scenario: that approach is wrong.",
+      'The docs say "that approach is wrong."',
+      "The docs say “you missed the requirement.”",
+      "The log contains `this is wrong` after a timeout.",
+      "```text\nThat approach is wrong.\n```",
+      "> That approach is wrong.",
+      "Claude said that approach is wrong.",
+      "The reviewer reported you missed the requirement.",
+      "Feedback from Claude: Use the durable queue instead.",
+      "The reviewer says: Use the durable queue instead.",
+      "Their runbook says: Use the durable queue instead.",
+      "Her test plan requires: Use the durable queue instead.",
+      "Shared by QA: Use the durable queue instead.",
+      "Copied from the issue: Use the durable queue instead.",
+      "A user wrote: Use the durable queue instead.",
+      "A user wrote that you missed the actual requirement.",
+      "A user writes: Use the durable queue instead.",
+      "The plan says: Use the durable queue instead.",
+      "The plan says to use the durable queue instead.",
+      "According to the plan, use the durable queue instead.",
+      "According to a user, use the durable queue instead.",
+      "Per the plan, use the durable queue instead.",
+      "Per a user, use the durable queue instead.",
+      "According to the docs, this is wrong.",
+      "She thinks you broke it.",
+      "We missed the bus.",
+      "You forgot your keys.",
+      "I already said hello.",
+      "You keep doing great work.",
+      "Wrong approach is a label in this table.",
+      "The wrong direction points north.",
+      "Eso esta mal en el registro de terceros.",
+      "Cette approche est incorrecte dans la citation.",
+      "The test says this is wrong when the cache is cold.",
+      "Per the reviewer, you missed the actual requirement.",
+      "Feedback from the beta group: you missed the actual requirement.",
+      "In the linked issue: you missed the actual requirement.",
+      "Customer email: you missed the actual requirement.",
+      "Ticket JIRA-42: that design is overkill.",
+      "The support thread - that approach is wrong.",
+      "Per compliance, that implementation is overcomplicated.",
+      "Per our reviewer, you missed the actual requirement.",
+      "According to my teammate, you missed the actual requirement.",
+      "From the reviewer: you missed the actual requirement.",
+      "Claude feedback: you missed the actual requirement.",
+      "External review: you missed the actual requirement.",
+      "I heard from QA that you missed the actual requirement.",
+      "I think, according to Claude, you missed the actual requirement.",
+      "Per my teammate's review, you missed the actual requirement.",
+      "Feedback from our reviewer's report: you missed the actual requirement.",
+      "Here is Claude feedback: you missed the actual requirement.",
+      "Copied from the issue: you missed the actual requirement.",
+      "Summary from Claude: you missed the actual requirement.",
+      "Suggested commit message: you missed the actual requirement.",
+      "Please turn this into a commit message: you missed the actual requirement.",
+      "Review feedback: you missed the requirement. You broke the build.",
+      "Translate to Spanish: you missed the requirement. You broke the build.",
+      "Review feedback: you missed the requirement.\n\nYou broke the build.",
+      '"You missed the requirement.\nYou broke the build."',
+      "\u201cYou missed the requirement.\nYou broke the build.\u201d",
+      "'''You missed the requirement.\nYou broke the build.'''",
+      '<task_notification task_id="private-path">You missed the requirement.</task_notification>',
+    ];
+    expect(
+      genuineCorrections.length * (wrappers.length + 1) + nonCorrections.length,
+    ).toBeGreaterThan(60);
+    for (const prompt of nonCorrections) {
       expect(promptContainsUserCorrection(prompt), prompt).toBe(false);
       expect(userCorrectionCaptureDirective(prompt), prompt).toBeNull();
     }
 
+    for (const prompt of [
+      "Never mind. You missed the requirement. You broke the build.",
+      "You missed the requirement. You broke the build. Never mind.",
+      "Not a correction. You missed the requirement. You broke the build.",
+      "You missed the requirement. You broke the build. Do not capture this.",
+      "Do not turn this into a lesson. You missed the requirement. You broke the build.",
+      "You missed the requirement. Do not remember any of this. You broke the build.",
+      "Never mind about capture. You missed the requirement. You broke the build.",
+      "You missed the requirement. This was a one-off. You broke the build.",
+    ]) {
+      expect(promptContainsUserCorrection(prompt), prompt).toBe(false);
+      expect(userCorrectionCaptureDirective(prompt), prompt).toBeNull();
+    }
+    expect(
+      promptContainsUserCorrection(
+        "Never mind about the earlier file. You missed the requirement. You broke the build.",
+      ),
+    ).toBe(true);
+    expect(
+      promptContainsUserCorrection(
+        "Review feedback: you missed the requirement.\n\nYou broke the build.",
+      ),
+    ).toBe(false);
+    expect(
+      promptContainsUserCorrection(
+        "Review feedback: you missed the requirement.\n\nI agree: preserve the requested behavior. You broke the build.",
+      ),
+    ).toBe(true);
+    expect(
+      promptContainsUserCorrection(
+        '"You missed the requirement.\nQuoted payload." You broke the build.',
+      ),
+    ).toBe(true);
+
+    const directive = userCorrectionCaptureDirective(
+      "That approach is wrong; preserve the existing behavior.",
+    );
+    expect(directive).toContain("may contain");
+    expect(directive).toContain("Decide from the full conversation whether");
+    expect(directive).not.toContain("The user corrected");
+
     const fetchImpl = vi.fn();
     const result = await runPromptHook(
       "That approach is the wrong direction; preserve the existing behavior.",
-      { env: {}, fetchImpl },
+      { env: { ...KEYWORDS_ONLY }, fetchImpl },
     );
     expect(result).toMatchObject({
       consumed: false,
@@ -2821,7 +3393,572 @@ describe("hook-core trigger + payload helpers", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("defensively suppresses weak possible and exploratory auto-query responses", () => {
+  it("keeps the final-audit correction ownership matrix at the hook boundary", () => {
+    const correction =
+      "You missed the actual requirement. You broke the build.";
+    const captureOptOuts = [
+      "Do not save a lesson from this.",
+      "Please forget all of this.",
+      "Do not retain this as a lesson.",
+      "This is one time only.",
+      "This is just an example.",
+    ];
+    for (const optOut of captureOptOuts) {
+      for (const prompt of [
+        `${optOut} ${correction}`,
+        `${correction} ${optOut}`,
+      ]) {
+        expect(promptContainsUserCorrection(prompt), prompt).toBe(false);
+        expect(userCorrectionCaptureDirective(prompt), prompt).toBeNull();
+      }
+    }
+
+    for (const prompt of [
+      `Never mind the earlier file. ${correction}`,
+      `Never mind about the earlier file. ${correction}`,
+      "Never mind the prior test; however, you missed the actual requirement.",
+    ]) {
+      expect(promptContainsUserCorrection(prompt), prompt).toBe(true);
+      expect(userCorrectionCaptureDirective(prompt), prompt).toContain(
+        "Remembrance user-correction capture",
+      );
+    }
+    for (const prompt of [
+      "Never mind the prior test where you missed the actual requirement.",
+      `Never mind about capture. ${correction}`,
+      `Never mind this lesson. ${correction}`,
+    ]) {
+      expect(promptContainsUserCorrection(prompt), prompt).toBe(false);
+      expect(userCorrectionCaptureDirective(prompt), prompt).toBeNull();
+    }
+
+    const wrappers = [
+      "The following is from Claude",
+      "This came from the reviewer",
+      "I am quoting Claude",
+      "Spanish translation",
+      "Proposed commit message",
+      "Paste this in the review",
+    ];
+    for (const wrapper of wrappers) {
+      const attributed = `${wrapper}: ${correction}\n\n${correction}`;
+      expect(promptContainsUserCorrection(attributed), attributed).toBe(false);
+      expect(userCorrectionCaptureDirective(attributed), attributed).toBeNull();
+      for (const pivot of [
+        "I agree with Claude",
+        "I concur",
+        "I adopt this",
+        "In my view",
+      ]) {
+        const adopted = `${attributed}\n\n${pivot}: You broke the build.`;
+        expect(promptContainsUserCorrection(adopted), adopted).toBe(true);
+        expect(userCorrectionCaptureDirective(adopted), adopted).toContain(
+          "Remembrance user-correction capture",
+        );
+      }
+    }
+
+    const sourceFrames = [
+      ["my architecture review", true],
+      ["our postmortem", true],
+      ["the requirements I wrote", true],
+      ["my architect's review", false],
+      ["our reviewer's postmortem", false],
+      ["the requirements Claude wrote", false],
+    ];
+    for (const [source, expected] of sourceFrames) {
+      const prompt = `Per ${source}, you missed the actual requirement.`;
+      expect(promptContainsUserCorrection(prompt), prompt).toBe(expected);
+      const directive = userCorrectionCaptureDirective(prompt);
+      if (expected) {
+        expect(directive, prompt).toContain(
+          "Remembrance user-correction capture",
+        );
+      } else {
+        expect(directive, prompt).toBeNull();
+      }
+    }
+
+    const quotedCorrections = [
+      "‹You missed the actual requirement.›",
+      "„You missed the actual requirement.“",
+      "「You missed the actual requirement.」",
+      "『You missed the actual requirement.』",
+      "〝You missed the actual requirement.〞",
+      "'Outer 'You broke the build.' quote.'",
+      '\\"You missed the actual requirement.\\"',
+      '"You missed the actual requirement.\nUnclosed quote',
+    ];
+    for (const prompt of quotedCorrections) {
+      expect(promptContainsUserCorrection(prompt), prompt).toBe(false);
+      expect(userCorrectionCaptureDirective(prompt), prompt).toBeNull();
+    }
+    for (const prompt of [
+      "Don't forget the requirement; you broke the build.",
+      "Users' settings are intact; you missed the actual requirement.",
+      "'Quoted correction.' You broke the build.",
+      '"Unclosed quoted correction\n\nYou broke the build.',
+    ]) {
+      expect(promptContainsUserCorrection(prompt), prompt).toBe(true);
+      expect(userCorrectionCaptureDirective(prompt), prompt).toContain(
+        "Remembrance user-correction capture",
+      );
+    }
+  });
+
+  it("keeps rejected-audit semantic pairs at the hook boundary", () => {
+    const pairs = [
+      ["Please use a different approach because that path is stale.", true],
+      ["Use this instead.", true],
+      ["Use that instead.", true],
+      ["Use it instead.", true],
+      ["Use the following instead.", true],
+      ["Use this as a commit message: You broke the build.", false],
+      ["Don't add this to memory. You broke the build.", false],
+      ["Please refrain from learning from this. You broke the build.", false],
+      ["Nothing here should be retained. You broke the build.", false],
+      ["This is for this task only. You broke the build.", false],
+      ["Do not preserve this as a skill. You broke the build.", false],
+      ["CI output says: Use the durable queue instead.", false],
+      ["Suggested PR comment: Use the durable queue instead.", false],
+      [
+        "I previously believed we should use the stale queue instead, but that was mistaken.",
+        false,
+      ],
+      ["I no longer agree with this approach.", true],
+      [
+        "Claude said use stale. I explicitly adopt this: Use the durable queue instead.",
+        true,
+      ],
+      [
+        "Claude said use stale. This is also my view: Use the durable queue instead.",
+        true,
+      ],
+      [
+        "Claude said use stale. I own this correction: Use the durable queue instead.",
+        true,
+      ],
+      ["Per my implementation notes, use the durable queue instead.", true],
+      ["You ignored the requested behavior.", true],
+    ];
+    for (const [prompt, expected] of pairs) {
+      expect(promptContainsUserCorrection(prompt), prompt).toBe(expected);
+      const directive = userCorrectionCaptureDirective(prompt);
+      if (expected) {
+        expect(directive, prompt).toContain(
+          "Remembrance user-correction capture",
+        );
+      } else {
+        expect(directive, prompt).toBeNull();
+      }
+    }
+  });
+
+  it("keeps compositional correction ownership transitions at the hook boundary", () => {
+    const pairs = [
+      [
+        "I do not consent to this being remembered. You broke the build.",
+        false,
+      ],
+      [
+        "Never mind about the memory allocator. My current correction: use the durable queue instead.",
+        true,
+      ],
+      ["I claimed you missed the requirement; I take that back.", false],
+      ["The linter warns: You broke the build.", false],
+      ["Formulate this as a PR comment: You broke the build.", false],
+      [
+        "The incident report says: use the stale queue. My assessment: You broke the build.",
+        true,
+      ],
+    ];
+
+    for (const [prompt, expected] of pairs) {
+      expect(promptContainsUserCorrection(prompt), prompt).toBe(expected);
+      const directive = userCorrectionCaptureDirective(prompt);
+      if (expected) {
+        expect(directive, prompt).toContain(
+          "Remembrance user-correction capture",
+        );
+      } else {
+        expect(directive, prompt).toBeNull();
+      }
+    }
+  });
+
+  it("ignores host notifications before querying, preference capture, or fallback generation", async () => {
+    const notifications = [
+      '<task_notification task_id="tsk_123" path="/private/project">Background deployment completed.</task_notification>',
+      '<task-notification task-id="tsk_234">Background deployment completed.</task-notification>',
+      '<background_completion tool_use_id="tool_456">Fix the Vercel integration.</background_completion>',
+      '<?xml version="1.0"?><system_status run_id="run_789">Set up MongoDB.</system_status>',
+      "<system>Set up Heroku and propose a skill.</system>",
+    ];
+    for (const prompt of notifications) {
+      const fetchImpl = vi.fn();
+      expect(isHostNotificationPrompt(prompt)).toBe(true);
+      expect(shouldQueryPrompt(prompt)).toEqual({
+        likely_match: false,
+        reason: "host_notification",
+      });
+      await expect(
+        runPromptHook(prompt, { env: {}, fetchImpl }),
+      ).resolves.toBeNull();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
+  });
+
+  // Shapes read from the hosts' own builders; see the corpus for sources.
+  it.each(
+    HOST_NOTIFICATION_SHAPES.map((item) => [
+      `${item.host} ${item.label}`,
+      item,
+    ]),
+  )(
+    "keeps host-generated text out of the prompt hook: %s",
+    async (_label, item) => {
+      const fetchImpl = vi.fn();
+      expect(isHostNotificationPrompt(item.prompt)).toBe(true);
+      expect(shouldQueryPrompt(item.prompt)).toEqual({
+        likely_match: false,
+        reason: "host_notification",
+      });
+      expect(isContextualContinuationPrompt(item.prompt)).toBe(false);
+      expect(redactPrompt(item.prompt)).toBe("");
+      expect(buildQueryPayload(item.prompt, markerEnv()).task.summary).toBe("");
+      await expect(
+        runPromptHook(item.prompt, {
+          env: markerEnv(),
+          fetchImpl,
+          sessionId: "host-generated-text",
+        }),
+      ).resolves.toBeNull();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(ORDINARY_HUMAN_PROMPTS)(
+    "queries an ordinary prompt exactly as the user wrote it: %s",
+    async (prompt) => {
+      expect(isHostNotificationPrompt(prompt)).toBe(false);
+      expect(redactPrompt(prompt)).toBe(prompt);
+      expect(shouldQueryPrompt(prompt).likely_match).toBe(true);
+      const summaries = [];
+      const fetchImpl = vi.fn(async (url, init) => {
+        if (String(url).endsWith("/api/v1/agent/query")) {
+          summaries.push(JSON.parse(String(init.body)).task.summary);
+        }
+        return Response.json({ skills: [], resources: [] });
+      });
+      await runPromptHook(prompt, { env: markerEnv(), fetchImpl });
+      expect(summaries).toEqual([prompt]);
+    },
+  );
+
+  it.each(["Deploy Next.js", "do it", "continue", "heroku is logged in"])(
+    "classifies and redacts only the request outside an envelope: %s",
+    (request) => {
+      const prompt = `<system-reminder>Deploy to Heroku with MongoDB.</system-reminder>\n${request}`;
+      expect(isHostNotificationPrompt(prompt)).toBe(false);
+      expect(shouldQueryPrompt(prompt)).toEqual(shouldQueryPrompt(request));
+      expect(isContextualContinuationPrompt(prompt)).toBe(
+        isContextualContinuationPrompt(request),
+      );
+      expect(redactPrompt(prompt)).toBe(request);
+      expect(buildQueryPayload(prompt, markerEnv()).task).toEqual(
+        buildQueryPayload(request, markerEnv()).task,
+      );
+    },
+  );
+
+  it.each([
+    ["incomplete opening", "<system-reminder"],
+    ["unclosed body", "<system-reminder>Deploy to Heroku."],
+    ["inexact closing tag", "<system>Deploy to Heroku.</system-design>"],
+    ["byte limit", `<system>${"x".repeat(64 * 1024)}</system>Deploy Next.js`],
+    ["token limit", `${"<system/>".repeat(257)}Deploy Next.js`],
+  ])("does not expose notification content at the %s", (_label, prompt) => {
+    expect(isHostNotificationPrompt(prompt)).toBe(true);
+    expect(shouldQueryPrompt(prompt).reason).toBe("host_notification");
+    expect(isContextualContinuationPrompt(prompt)).toBe(false);
+    expect(redactPrompt(prompt)).toBe("");
+    expect(buildQueryPayload(prompt, markerEnv()).task.summary).toBe("");
+  });
+
+  // A body is host text, not markup: a closing tag in it (a command's output,
+  // a subagent's message) ends its envelope early. Each case below is caught
+  // by one rule alone, and none of what follows reaches the prompt.
+  it.each([
+    [
+      "a notification nested in a reminder",
+      '<system-reminder>\n<task-notification>\n<summary>Background command "npm run build" completed</summary>\n</task-notification>\nbuild log</system-reminder>\nDeploy the Next.js app to Vercel.',
+    ],
+    [
+      "the notification header inside a reminder",
+      "<system-reminder>[SYSTEM NOTIFICATION - NOT USER INPUT]\nThe background build finished.</system-reminder>\nDeploy the Next.js app to Vercel.",
+    ],
+    [
+      "a subagent notification",
+      '<subagent_notification>{"agent_path":"/root/deployer","status":{"completed":"Deployed."}}</subagent_notification>\nDeploy the Next.js app to Vercel.',
+    ],
+    [
+      "an envelope whose closing tag appears again after its end",
+      "<local-command-stdout>built </local-command-stdout>Deploy the Next.js app to Vercel.</local-command-stdout>",
+    ],
+  ])("takes nothing after %s for the user's prompt", async (_label, prompt) => {
+    const fetchImpl = vi.fn();
+    expect(isHostNotificationPrompt(prompt)).toBe(true);
+    expect(shouldQueryPrompt(prompt).reason).toBe("host_notification");
+    expect(isContextualContinuationPrompt(prompt)).toBe(false);
+    expect(redactPrompt(prompt)).toBe("");
+    expect(buildQueryPayload(prompt, markerEnv()).task.summary).toBe("");
+    await expect(
+      runPromptHook(prompt, { env: markerEnv(), fetchImpl }),
+    ).resolves.toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("takes the text after well-formed leading envelopes, several of one kind", () => {
+    const request =
+      "Why does </task-notification> appear in our logs? Fix the Node.js parser.";
+    for (const prefix of [
+      "<system-reminder>A</system-reminder>\n<system-reminder>B</system-reminder>\n",
+      "<local-command-caveat>Caveat</local-command-caveat>\n<command-name>/deploy</command-name>\n<local-command-stdout>ok</local-command-stdout>\n",
+    ]) {
+      expect(isHostNotificationPrompt(prefix + request)).toBe(false);
+      expect(redactPrompt(prefix + request)).toBe(request);
+    }
+  });
+
+  it("preserves a large user request after a bounded closed envelope", () => {
+    const request = `Deploy Next.js. ${"x".repeat(64 * 1024)}`;
+    expect(redactPrompt(`<system>Task finished.</system>\n${request}`)).toBe(
+      request,
+    );
+    expect(redactPrompt(`${"<system/>".repeat(256)}Deploy Next.js`)).toBe(
+      "Deploy Next.js",
+    );
+  });
+
+  it("captures only trailing user text for pending native recovery", async () => {
+    const env = privateLessonEnv();
+    const draftId = "psd_envelope_boundary_test";
+    const directory = join(env.XDG_STATE_HOME, "remembrance", "private-skills");
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(directory, `${draftId}.json`),
+      JSON.stringify({
+        version: "private-skill-outbox-envelope-v1",
+        draft_id: draftId,
+        state: "held_validation",
+        updated_at: "2026-08-20T00:00:00.000Z",
+        inspector_digest: PRIVATE_LEARNING_INSPECTOR_DIGEST,
+        next_action: {
+          version: "private-skill-recovery-action-v1",
+          kind: "capture_native_context",
+          candidate_digest: `sha256:${"1".repeat(64)}`,
+          inspector_digest: PRIVATE_LEARNING_INSPECTOR_DIGEST,
+          draft_updated_at: "2026-08-20T00:00:00.000Z",
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const nativeContextBridge = vi.fn(async () => ({ status: "recorded" }));
+    const options = {
+      env,
+      nativeContextBridge,
+      nativeSessionId: "envelope-test",
+    };
+    const prefix =
+      "<system-reminder>You missed the requirement.</system-reminder>";
+    await expect(
+      capturePrivateSkillNativeUserPrompt(prefix, options),
+    ).resolves.toEqual({ status: "ignored" });
+    expect(nativeContextBridge).not.toHaveBeenCalled();
+    await capturePrivateSkillNativeUserPrompt(
+      `${prefix}\nDeploy Next.js`,
+      options,
+    );
+    expect(nativeContextBridge).toHaveBeenCalledExactlyOnceWith(
+      {
+        kind: "user_prompt",
+        origin: "user",
+        session_id: "envelope-test",
+        prompt: "Deploy Next.js",
+      },
+      { env },
+    );
+  });
+
+  it.each(["system-design", "system:design", "task-notification-extra"])(
+    "does not treat the user XML tag %s as host markup in proposals",
+    (tag) => {
+      const context = formatContext({
+        body: {
+          skills: [],
+          resources: [],
+          no_results: {
+            propose_skill_idea_payload: {
+              title: `Validate <${tag}> markup`,
+              description: `Build a validator for the user-defined <${tag}> tag.`,
+            },
+          },
+        },
+      });
+      expect(context).toContain("Proposed skill idea payload");
+      expect(context).toContain(`<${tag}>`);
+    },
+  );
+
+  it("does not surface skill proposals derived from host event markup", () => {
+    const unsafeContext = formatContext({
+      body: {
+        query_id: "rq_host_markup",
+        skills: [],
+        resources: [],
+        no_results: {
+          propose_skill_idea_payload: {
+            title: "<task-notification>Deploy completed</task-notification>",
+            description:
+              "Create a reusable workflow from <system>background status</system>.",
+            domain_slug: "deployments-cicd",
+          },
+        },
+        contribution_directive: {
+          message: "Submit query-fit feedback for this no-result query.",
+        },
+      },
+    });
+
+    expect(unsafeContext).toContain("No matching skill/resource.");
+    expect(unsafeContext).toContain("Submit query-fit feedback");
+    expect(unsafeContext).not.toContain("Proposed skill idea payload");
+    expect(unsafeContext).not.toContain("task-notification");
+    expect(unsafeContext).not.toContain("background status");
+
+    const safeContext = formatContext({
+      body: {
+        skills: [],
+        resources: [],
+        no_results: {
+          propose_skill_idea_payload: {
+            title: "heroku-deploy-triage",
+            description: "A reusable workflow for Heroku deploy failures.",
+            domain_slug: "deployments-cicd",
+          },
+        },
+      },
+    });
+    expect(safeContext).toContain("Proposed skill idea payload");
+    expect(safeContext).toContain("heroku-deploy-triage");
+  });
+
+  it.each([
+    [
+      "the notification header",
+      "[SYSTEM NOTIFICATION - NOT USER INPUT] Deploy completed",
+    ],
+    [
+      "a local command's output",
+      "<local-command-stdout>Deployed to Vercel</local-command-stdout>",
+    ],
+    [
+      "a Codex shell command",
+      "<user_shell_command>npm run deploy</user_shell_command>",
+    ],
+  ])("does not surface a skill proposal carrying %s", (_label, title) => {
+    const context = formatContext({
+      body: {
+        skills: [],
+        resources: [],
+        no_results: {
+          propose_skill_idea_payload: {
+            title,
+            description: "A reusable deploy workflow.",
+          },
+        },
+      },
+    });
+    expect(context).toContain("No matching skill/resource.");
+    expect(context).not.toContain("Proposed skill idea payload");
+  });
+
+  const promptSummary = "Deploy the Next.js app to Vercel with GitHub Actions.";
+  const longPromptSummary =
+    "Migrate the Heroku worker to Vercel cron jobs, keep the MongoDB indexes as they are, and verify the GitHub Actions deploy.";
+  it.each([
+    ["a short prompt", promptSummary, summaryEchoProposal(promptSummary)],
+    [
+      "a long prompt cut to a title",
+      longPromptSummary,
+      summaryEchoProposal(longPromptSummary),
+    ],
+    [
+      "the prompt as the title only",
+      promptSummary,
+      { ...templateProposal("rq_echo"), title: promptSummary },
+    ],
+    [
+      "a long prompt cut to the title only",
+      longPromptSummary,
+      {
+        ...templateProposal("rq_echo"),
+        title: summaryEchoProposal(longPromptSummary).title,
+      },
+    ],
+    [
+      "the prompt as the description only",
+      promptSummary,
+      { ...templateProposal("rq_echo"), description: promptSummary },
+    ],
+    [
+      "the prompt in other spacing and case",
+      promptSummary,
+      {
+        ...templateProposal("rq_echo"),
+        title: promptSummary.toUpperCase().replaceAll(" ", "\n  "),
+      },
+    ],
+    [
+      "the prompt inside a longer description",
+      promptSummary,
+      {
+        ...templateProposal("rq_echo"),
+        description: `A reusable workflow for: ${promptSummary}`,
+      },
+    ],
+  ])(
+    "does not offer a skill idea repeating %s",
+    (_label, summary, proposal) => {
+      const context = formatContext(
+        noResultResponse("rq_echo", proposal),
+        "trigger_match",
+        undefined,
+        { querySummary: summary },
+      );
+      expect(context).toContain("No matching skill/resource.");
+      expect(context).not.toContain("Proposed skill idea payload");
+      expect(context.toLowerCase()).not.toContain(
+        summary.slice(0, 30).toLowerCase(),
+      );
+    },
+  );
+
+  it("offers the server's template skill idea for the same prompt", () => {
+    const context = formatContext(
+      noResultResponse("rq_template", templateProposal("rq_template")),
+      "trigger_match",
+      undefined,
+      { querySummary: promptSummary },
+    );
+    expect(context).toContain("Proposed skill idea payload");
+    expect(context).toContain("Reusable agent workflow");
+    expect(context).toContain('"origin_query_receipt":"rq_template"');
+  });
+
+  it("accepts every possible skill the server returns, but no exploratory or inapplicable one", () => {
+    // Plan 15.4, P1 step 6: the server's tier floor decides what the hook
+    // shows; the client no longer re-applies the old floor to skills.
     const weak = {
       slug: "remembrancer",
       description: "Meta guidance",
@@ -2833,25 +3970,159 @@ describe("hook-core trigger + payload helpers", () => {
       },
       applicability: { fit: "unknown" },
     };
-    const strong = {
-      slug: "provider-integration",
-      description: "Provider workflow",
+    const exploratory = {
+      slug: "tangent-skill",
+      description: "Tangent workflow",
+      match_tier: "exploratory",
+      why_matched: {
+        lexical_signal: "strong",
+        semantic_signal: "strong",
+        domain_match: true,
+      },
+      applicability: { fit: "unknown" },
+    };
+    const inapplicable = {
+      slug: "excluded-skill",
+      description: "Excluded workflow",
       match_tier: "possible",
       why_matched: {
         lexical_signal: "strong",
-        semantic_signal: "moderate",
-        domain_match: false,
+        semantic_signal: "strong",
+        domain_match: true,
       },
-      applicability: { fit: "likely" },
+      applicability: { fit: "unlikely" },
     };
     const weakOnly = { body: { skills: [weak], resources: [] } };
-    expect(queryResponseHasMatches(weakOnly)).toBe(false);
-    expect(formatContext(weakOnly)).toBeNull();
+    expect(queryResponseHasMatches(weakOnly)).toBe(true);
+    expect(formatContext(weakOnly)).toContain("remembrancer");
+    for (const dropped of [exploratory, inapplicable]) {
+      const only = { body: { skills: [dropped], resources: [] } };
+      expect(queryResponseHasMatches(only), dropped.slug).toBe(false);
+      expect(formatContext(only), dropped.slug).toBeNull();
+    }
+    const mixed = {
+      body: { skills: [exploratory, weak, inapplicable], resources: [] },
+    };
+    expect(formatContext(mixed)).toContain("remembrancer");
+    expect(formatContext(mixed)).not.toContain("tangent-skill");
+    expect(formatContext(mixed)).not.toContain("excluded-skill");
+    // A skill without a tier (an older server's response) is still shown.
+    const untiered = {
+      body: {
+        skills: [{ slug: "untiered-skill", description: "Untiered workflow" }],
+        resources: [],
+      },
+    };
+    expect(queryResponseHasMatches(untiered)).toBe(true);
+    expect(formatContext(untiered)).toContain("untiered-skill");
+  });
 
-    const mixed = { body: { skills: [weak, strong], resources: [] } };
+  it("says who stated a result's applicability: generated, reviewed or mixed; nothing for an author's or an unknown one", () => {
+    const response = (provenance) => ({
+      body: {
+        query_id: "rq_provenance",
+        skills: [
+          {
+            slug: "provenance-skill",
+            description: "Provenance workflow.",
+            match_tier: "high",
+            applicability: {
+              fit: "likely",
+              scope: "general",
+              reason: "General scope with no detected applicability conflict",
+              use_when: ["A release needs review"],
+              avoid_when: ["The change is docs only"],
+              ...(provenance === undefined ? {} : { provenance }),
+            },
+          },
+        ],
+        resources: [],
+      },
+    });
+    const labelFor = (provenance) => formatContext(response(provenance));
+    // The kept high match carries only a known label.
+    for (const [sent, kept] of [
+      ["generated_unreviewed", "generated_unreviewed"],
+      ["mixed", "mixed"],
+      ["author_provided", "author_provided"],
+      ["trusted", "unknown"],
+      [7, "unknown"],
+      [undefined, "unknown"],
+    ]) {
+      expect(
+        highMatchFromResponse(response(sent)).applicability.provenance,
+        String(sent),
+      ).toBe(kept);
+    }
+    const line = (note) =>
+      `applicability likely/general${note}: General scope with no detected applicability conflict; use when A release needs review; avoid when The change is docs only`;
+    expect(labelFor("generated_unreviewed")).toContain(line(" (generated, unreviewed)"));
+    expect(labelFor("reviewed")).toContain(line(" (reviewed)"));
+    expect(labelFor("mixed")).toContain(line(" (mixed provenance)"));
+    for (const provenance of ["author_provided", "unknown", undefined, "trusted", 7]) {
+      expect(labelFor(provenance), String(provenance)).toContain(line(""));
+    }
+  });
+
+  it("shows a skill the relevance judge chose whatever its tier, but never an inapplicable one", () => {
+    // Plan 15.8: the judge chooses from the top 20, so its choice may carry a
+    // lower tier than the hook would otherwise show. An exclusion its author
+    // stated or a person reviewed (applicability "unlikely") still drops it:
+    // the judge never sees an author's own.
+    const judged = (slug, tier, fit) => ({
+      slug,
+      description: `${slug} workflow`,
+      match_tier: tier,
+      applicability: { fit },
+      relevance_judge: { fit: "direct" },
+    });
+    const exploratory = judged("judged-exploratory", "exploratory", "unknown");
+    const inapplicable = judged("judged-inapplicable", "possible", "unlikely");
+    const both = { body: { skills: [exploratory, inapplicable], resources: [] } };
+    expect(queryResponseHasMatches(both)).toBe(true);
+    const context = formatContext(both);
+    expect(context).toContain("judged-exploratory");
+    expect(context).toContain("relevance judge: direct fit");
+    expect(context).not.toContain("judged-inapplicable");
+    const onlyInapplicable = { body: { skills: [inapplicable], resources: [] } };
+    expect(queryResponseHasMatches(onlyInapplicable)).toBe(false);
+    expect(formatContext(onlyInapplicable)).toBeNull();
+    // Without the judge's mark the exploratory skill is dropped as before,
+    // and a malformed mark counts as none.
+    const { relevance_judge: _judge, ...unjudged } = exploratory;
+    for (const skill of [
+      unjudged,
+      { ...unjudged, relevance_judge: { fit: "maybe" } },
+    ]) {
+      const only = { body: { skills: [skill], resources: [] } };
+      expect(queryResponseHasMatches(only)).toBe(false);
+      expect(formatContext(only)).toBeNull();
+    }
+  });
+
+  it("keeps today's defensive filter for resources", () => {
+    const resource = (slug, lexical, semantic, domainMatch) => ({
+      slug,
+      name: slug,
+      kind: "api",
+      description: "Resource",
+      match_tier: "possible",
+      why_matched: {
+        lexical_signal: lexical,
+        semantic_signal: semantic,
+        domain_match: domainMatch,
+      },
+      applicability: { fit: "unknown" },
+    });
+    const weak = resource("weak-resource", "weak", "moderate", true);
+    const strong = resource("strong-resource", "strong", "none", false);
+    expect(
+      queryResponseHasMatches({ body: { skills: [], resources: [weak] } }),
+    ).toBe(false);
+    const mixed = { body: { skills: [], resources: [weak, strong] } };
     expect(queryResponseHasMatches(mixed)).toBe(true);
-    expect(formatContext(mixed)).toContain("provider-integration");
-    expect(formatContext(mixed)).not.toContain("remembrancer");
+    expect(formatContext(mixed)).toContain("strong-resource");
+    expect(formatContext(mixed)).not.toContain("weak-resource");
   });
 
   it("infers seeded domains and clamps the limit", () => {
@@ -3034,39 +4305,6 @@ describe("hook-core trigger + payload helpers", () => {
       expect(redacted).not.toContain("@");
       expect(redacted).toContain("[redacted-secret]");
     }
-  });
-});
-
-describe("hook-core countRegistryConsumption", () => {
-  const usedTranscript =
-    '{"content":"Remembrance auto-query context: Trigger: external_service."}\n';
-  const twoUses = `${usedTranscript}{"tool":"mcp__plugin_remembrance_remembrance__query_skills"}\n`;
-
-  it("counts consumption markers, not submissions", () => {
-    expect(countRegistryConsumption(usedTranscript)).toBe(1);
-    expect(countRegistryConsumption(twoUses)).toBe(2);
-    expect(countRegistryConsumption('{"content":"rename a variable"}')).toBe(0);
-    // Submissions are not consumption, so contributing never counts.
-    expect(
-      countRegistryConsumption(
-        "POST /api/v1/agent/remembrances and mcp__x_remembrance__submit_feedback",
-      ),
-    ).toBe(0);
-    expect(
-      countRegistryConsumption(
-        '{"tool":"mcp__remembrance__invoke_skill"}\nPOST /api/v1/agent/skill-invocations',
-      ),
-    ).toBe(2);
-  });
-
-  it("counts each unresolved contextual or unavailable-query task", () => {
-    expect(
-      countTaskEligibility(
-        "Remembrance task-continuation reminder\n" +
-          "Remembrance query-unavailable context",
-      ),
-    ).toBe(2);
-    expect(countTaskEligibility(usedTranscript)).toBe(0);
   });
 });
 
@@ -3468,12 +4706,167 @@ describe("hook-core marker round-trip", () => {
     ).toBe(0);
   });
 
+  it("keeps session-scoped selections out of turn feedback, obligations, and outcomes", async () => {
+    const env = markerEnv({ REMEMBRANCE_API_URL: "https://registry.example" });
+    const sessionId = "session-scope-core";
+    const invocation = (slug, queryId, resultId, extra = {}) => ({
+      ...extra,
+      selection_mode: "explicit",
+      query_id: queryId,
+      result_id: resultId,
+      skill: {
+        slug,
+        version: 1,
+        version_id: `skv_${slug}`,
+        skill_md: "# Instructions",
+        task_outcome_eligible: true,
+      },
+      feedback: { available: true },
+      task_outcome: { available: true, eligible_result_ids: [resultId] },
+    });
+    const sessionResponse = invocation(
+      "pairing-mode",
+      "rinv_core_session",
+      "qres_core_session",
+      { scope: "session" },
+    );
+    const taskResponse = invocation(
+      "release-checklist",
+      "rinv_core_task",
+      "qres_core_task",
+    );
+    expect(directSelectionFromResponse(sessionResponse).scope).toBe("session");
+    expect(directSelectionFromResponse(taskResponse).scope).toBe("task");
+    // Anything other than "session" is one task.
+    expect(
+      directSelectionFromResponse({ ...taskResponse, scope: "forever" }).scope,
+    ).toBe("task");
+
+    // The shared observer helper stores a session-scoped invocation at the
+    // current use count instead of advancing it.
+    const useCounts = [];
+    for (const response of [sessionResponse, taskResponse]) {
+      const selection = directSelectionFromResponse(response);
+      useCounts.push(recordDirectSelectionUse(sessionId, selection, env));
+      recordValueEpisodeSurface(
+        sessionId,
+        valueEpisodeFromResponse(response),
+        env,
+      );
+      observeSuccessfulCompletionTool(
+        sessionId,
+        "mcp__remembrance__invoke_skill",
+        { slug: selection.slug },
+        response,
+        env,
+      );
+    }
+    expect(useCounts).toEqual([0, 1]);
+    expect(readRegistryUseCount(sessionId, env)).toBe(1);
+    expect(
+      readDirectSelectionSurfaces(sessionId, env).map((item) => [
+        item.scope,
+        item.use_count,
+      ]),
+    ).toEqual([
+      ["session", 0],
+      ["task", 1],
+    ]);
+    expect(
+      readCompletionObligations(sessionId, env).map((item) => item.id),
+    ).toEqual(["post_use_feedback:rinv_core_task:qres_core_task"]);
+
+    markCompletionObligationsPrompted(sessionId, null, env);
+    const decision = decideStop(
+      { session_id: sessionId },
+      { env, readHighMatch: () => null },
+    );
+    expect(decision).toMatchObject({
+      allow: false,
+      why: "prompt_contribution",
+      useCount: 1,
+    });
+    expect(decision.reason).toContain("release-checklist");
+    expect(decision.reason).not.toContain("pairing-mode");
+    writePromptedCount(sessionId, decision.useCount, env);
+    expect(
+      decideStop({ session_id: sessionId }, { env, readHighMatch: () => null }),
+    ).toEqual({ allow: true, why: "no_new_usage" });
+    expect(
+      readDirectSelectionSurfaces(sessionId, env).map((item) => [
+        item.slug,
+        item.prompted_at === null,
+      ]),
+    ).toEqual([
+      ["pairing-mode", true],
+      ["release-checklist", false],
+    ]);
+
+    const requests = [];
+    expect(
+      await reportTaskOutcomesOnStop(
+        sessionId,
+        {},
+        {
+          env,
+          fetchImpl: async (url, init) => {
+            requests.push(JSON.parse(init.body));
+            return { ok: true };
+          },
+        },
+      ),
+    ).toBe(1);
+    expect(requests.map((body) => body.query_id)).toEqual(["rinv_core_task"]);
+    expect(
+      readValueEpisodeSurfaces(sessionId, env).map((episode) => [
+        episode.query_id,
+        episode.scope,
+        episode.reported_at === null,
+      ]),
+    ).toEqual([
+      ["rinv_core_session", "session", true],
+      ["rinv_core_task", "task", false],
+    ]);
+  });
+
+  it("names session-scoped skills as already selected in the task-closure prompt", () => {
+    const env = markerEnv();
+    const sessionId = "session-scope-closure";
+    recordTaskEligibility(sessionId, env);
+    const sessionSelection = {
+      slug: "pairing-mode",
+      scope: "session",
+      feedback_available: true,
+      use_count: 0,
+      prompted_at: null,
+    };
+    // A turn whose only Remembrance action was the session-scoped invoke keeps
+    // the ordinary closure prompt for its eligible task.
+    const decision = decideStop(
+      { session_id: sessionId },
+      {
+        env,
+        readHighMatch: () => null,
+        readDirectSelections: () => [sessionSelection, { ...sessionSelection }],
+      },
+    );
+    expect(decision).toMatchObject({
+      allow: false,
+      why: "prompt_task_closure",
+      useCount: 1,
+    });
+    expect(decision.reason).toContain(
+      "Skills already selected for this session (pairing-mode) stay active; do not invoke or query them again.",
+    );
+    expect(decision.reason).not.toContain("invoke_skill");
+  });
+
   it("does not prompt a direct invocation when feedback is unavailable", () => {
     expect(
       decideStop(
         { session_id: "query-only" },
         {
-          env: {},
+          env: markerEnv(),
           readUseCount: () => 1,
           readEligibilityCount: () => 1,
           readPromptedCount: () => 0,
@@ -3483,6 +4876,7 @@ describe("hook-core marker round-trip", () => {
             use_count: 1,
             feedback_available: false,
           }),
+          visibleCompletionRecovery: true,
         },
       ),
     ).toEqual({ allow: true, why: "direct_feedback_unavailable" });
@@ -3916,12 +5310,18 @@ describe("hook-core marker round-trip", () => {
     expect(readPromptedCount(sessionId, env)).toBe(1);
   });
 
-  it("stores only a digest for a feedback-generated remembrance follow-up", () => {
+  // Owner decision 3 reversed the earlier content-free marker design: the
+  // exact payload is kept, whole, in a private bounded file, only so a later
+  // demand can re-supply it after compaction or in a fresh context. Owner
+  // decision 2 (Task 13) keeps it sealed with the private-learning outbox
+  // key, never in plaintext.
+  it("keeps a feedback-generated remembrance payload whole and sealed in a private local file", () => {
     const env = markerEnv();
-    const sessionId = "feedback-followup-digest";
+    const sessionId = "feedback-followup-payload";
     const payload = {
       type: "skill_feedback",
-      lesson: "A proprietary correction that must not enter marker state.",
+      lesson:
+        "Pin the toolchain before bisecting. Compare lockfiles first! Still flaky? Check the authorization and preference capture steps too.",
       interaction: {
         query_id: "rq_followup",
         result_id: "qres_followup",
@@ -3945,27 +5345,76 @@ describe("hook-core marker round-trip", () => {
       expect.objectContaining({
         kind: "remembrance_followup",
         payload_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        local_resupply_payload: null,
+        local_resupply_envelope: expect.objectContaining({
+          version: "completion-resupply-envelope-v1",
+          algorithm: "aes-256-gcm",
+          key_source: "mode_0600_file",
+        }),
+        local_resupply_payload_omitted: null,
       }),
     ]);
-    const obligationDirectory = readdirSync(env.REMEMBRANCE_USAGE_DIR).find(
-      (name) => name.endsWith(".obligations"),
+    // A sealed payload's record lives in the durable ledger.
+    const retainedRoot = join(
+      env.XDG_STATE_HOME,
+      "remembrance",
+      "private-learning-lifecycle",
+      "retained",
     );
-    const markerText = readdirSync(
-      join(env.REMEMBRANCE_USAGE_DIR, obligationDirectory),
-    )
-      .map((name) =>
-        readFileSync(
-          join(env.REMEMBRANCE_USAGE_DIR, obligationDirectory, name),
-          "utf8",
+    const obligationDirectory = join(
+      retainedRoot,
+      readdirSync(retainedRoot).find((name) => name.endsWith(".obligations")),
+    );
+    // No record of it stays in the temporary usage directory.
+    expect(
+      readdirSync(env.REMEMBRANCE_USAGE_DIR)
+        .filter((name) => name.endsWith(".obligations"))
+        .flatMap((name) =>
+          readdirSync(join(env.REMEMBRANCE_USAGE_DIR, name)),
         ),
-      )
-      .join("\n");
-    expect(markerText).not.toContain(payload.lesson);
+    ).toEqual([]);
+    const markers = readdirSync(obligationDirectory);
+    expect(markers).toHaveLength(1);
+    const markerPath = join(obligationDirectory, markers[0]);
+    const marker = readFileSync(markerPath, "utf8");
+    // Nothing of the payload's prose is on disk in the clear.
+    expect(marker).not.toContain("Pin the toolchain");
+    expect(marker).not.toContain("lockfiles");
+    expect(JSON.parse(marker).local_resupply_payload).toBeNull();
+    expect(statSync(markerPath).size).toBeLessThanOrEqual(8 * 1024);
+    // The key is the private-learning outbox's file key, made on first use.
+    const keyPath = join(
+      env.XDG_CONFIG_HOME,
+      "remembrance",
+      "private-lesson-outbox.key",
+    );
+    expect(
+      Buffer.from(readFileSync(keyPath, "utf8").trim(), "base64url"),
+    ).toHaveLength(32);
+    if (process.platform !== "win32") {
+      expect(statSync(markerPath).mode & 0o777).toBe(0o600);
+      expect(statSync(obligationDirectory).mode & 0o777).toBe(0o700);
+      expect(statSync(keyPath).mode & 0o777).toBe(0o600);
+      expect(statSync(dirname(keyPath)).mode & 0o777).toBe(0o700);
+    }
+
+    // The demand repeats it on the line after its instruction, as one
+    // directive unit whose JSON is the exact payload.
+    const lines = pendingCompletionRecoveryInstruction(sessionId, env).split(
+      "\n",
+    );
+    const lead = lines.indexOf(
+      "- Reusable evidence for query_id rq_followup and result_id qres_followup: call submit_remembrance with exactly the payload on the next line, which submit_feedback returned and Remembrance keeps on this machine only to re-supply it.",
+    );
+    expect(lead).toBeGreaterThan(-1);
+    const payloadLine = lines[lead + 1].trim();
+    expect(JSON.parse(payloadLine)).toEqual(payload);
+    expect(completeDirectiveUnits(payloadLine)).toEqual([payloadLine]);
 
     const submitted = observeSuccessfulCompletionTool(
       sessionId,
       "submit_remembrance",
-      payload,
+      JSON.parse(payloadLine),
       { accepted: true },
       env,
     );
@@ -3973,6 +5422,1150 @@ describe("hook-core marker round-trip", () => {
     expect(submitted.closed).toEqual([
       expect.objectContaining({ kind: "remembrance_followup" }),
     ]);
+  });
+
+  it("keeps a re-supply payload whole or not at all, with room for every later rewrite", () => {
+    const parent = "followup-at-bound";
+    // The longest agent id a host can send, and a transcript path as long
+    // as a record keeps.
+    const stop = {
+      hook_event_name: "SubagentStop",
+      session_id: parent,
+      agent_id: "a".repeat(256),
+      agent_transcript_path: "/abc".repeat(128),
+    };
+    const sessionId = agentLedgerIdFor(stop);
+    const ledgerFile = (env, ledgerId) => {
+      const [path, ...others] = ledgerRecordFiles(env, ledgerId);
+      expect(others).toEqual([]);
+      return path;
+    };
+    const recordFollowup = (lessonLength) => {
+      const env = markerEnv();
+      const payload = {
+        type: "skill_feedback",
+        lesson: "x".repeat(lessonLength),
+        interaction: { query_id: "rq_bound", result_id: "qres_bound" },
+      };
+      observeSuccessfulCompletionTool(
+        sessionId,
+        "submit_feedback",
+        { query_id: "rq_bound", result_id: "qres_bound" },
+        { body: { next_step: { submit_remembrance_payload: payload } } },
+        env,
+      );
+      const path = ledgerFile(env, sessionId);
+      return {
+        env,
+        path,
+        payload,
+        size: statSync(path).size,
+        text: readFileSync(path, "utf8"),
+        obligation: readCompletionObligations(sessionId, env)[0],
+      };
+    };
+    // Each lesson character adds at least one byte (sealed, about four
+    // thirds). Past the length that fills the bound as written, a payload is
+    // never kept; find the longest one kept.
+    const sealed = (obligation) => obligation.local_resupply_envelope !== null;
+    let kept = 100;
+    let dropped =
+      100 + OBLIGATION_RECORD_MAX_BYTES - recordFollowup(100).size + 1;
+    expect(sealed(recordFollowup(kept).obligation)).toBe(true);
+    expect(sealed(recordFollowup(dropped).obligation)).toBe(false);
+    while (dropped - kept > 1) {
+      const middle = Math.floor((kept + dropped) / 2);
+      if (sealed(recordFollowup(middle).obligation)) {
+        kept = middle;
+      } else {
+        dropped = middle;
+      }
+    }
+    // A stop shows every payload it can open, here the whole one kept.
+    const stopPayloads = (env, input) =>
+      decideStop(input, { env, visibleCompletionRecovery: true })
+        .reason.split("\n")
+        .filter((line) => line.includes('"lesson"'))
+        .map((line) => JSON.parse(line));
+    const tampered = recordFollowup(kept);
+    expect(tampered.obligation.local_resupply_payload).toBeNull();
+    expect(stopPayloads(tampered.env, stop)).toEqual([tampered.payload]);
+    // A sealed payload that no longer opens is not re-supplied: the demand
+    // shows its handle instead.
+    const ciphertext = JSON.parse(tampered.text).local_resupply_envelope
+      .ciphertext;
+    writeFileSync(
+      tampered.path,
+      tampered.text.replace(
+        ciphertext,
+        `${ciphertext[0] === "A" ? "B" : "A"}${ciphertext.slice(1)}`,
+      ),
+    );
+    expect(stopPayloads(tampered.env, stop)).toEqual([]);
+    expect(
+      decideStop(stop, { env: tampered.env, visibleCompletionRecovery: true })
+        .reason,
+    ).toContain(
+      retainedHandle(sessionId, tampered.obligation, tampered.payload),
+    );
+
+    // Marked prompted, moved to a parent with a wider engagement count and
+    // the longest provenance, and marked prompted there, the longest kept
+    // payload is never dropped.
+    const whole = recordFollowup(kept);
+    for (let use = 0; use < 10; use += 1) recordRegistryUse(parent, whole.env);
+    markCompletionObligationsPrompted(sessionId, null, whole.env);
+    expect(
+      readCompletionObligations(sessionId, whole.env)[0]
+        .local_resupply_envelope,
+    ).toEqual(whole.obligation.local_resupply_envelope);
+    expect(transferSubagentObligations(stop, whole.env)).toBe(1);
+    // It opens in the parent's ledger, sealed as it was.
+    expect(
+      stopPayloads(whole.env, { session_id: parent, hook_event_name: "Stop" }),
+    ).toEqual([whole.payload]);
+    markCompletionObligationsPrompted(parent, null, whole.env);
+    const [moved] = readCompletionObligations(parent, whole.env);
+    expect(moved).toMatchObject({
+      engagement_count: 10,
+      local_resupply_payload: null,
+      local_resupply_envelope: whole.obligation.local_resupply_envelope,
+      transferred_from: {
+        agent_id: stop.agent_id,
+        transcript_path: stop.agent_transcript_path,
+      },
+    });
+    expect(moved.prompted_at).not.toBeNull();
+    // Only the engagement count's unused digits are left over.
+    const movedSize = statSync(ledgerFile(whole.env, parent)).size;
+    expect(movedSize).toBeLessThanOrEqual(OBLIGATION_RECORD_MAX_BYTES);
+    expect(movedSize).toBeGreaterThan(OBLIGATION_RECORD_MAX_BYTES - 8);
+
+    const omitted = recordFollowup(dropped);
+    expect(omitted.obligation).toMatchObject({
+      kind: "remembrance_followup",
+      local_resupply_payload: null,
+      local_resupply_envelope: null,
+      local_resupply_payload_omitted: "too_large",
+    });
+    expect(omitted.text).not.toContain("x".repeat(32));
+    expect(omitted.size).toBeLessThan(1024);
+    const demand = pendingCompletionRecoveryInstruction(sessionId, omitted.env);
+    expect(demand).toContain(
+      "- Reusable evidence for query_id rq_bound and result_id qres_bound: payload too large to retain;",
+    );
+    expect(demand).not.toContain("x".repeat(32));
+  });
+
+  // Review S3: sealed, a payload takes about four thirds of its bytes, so
+  // the 8 KiB record that kept a 6,739-byte payload in plaintext (the
+  // largest it kept with the longest provenance) kept only 4,896 bytes
+  // sealed. The record now holds 12 KiB, so that payload is kept again.
+  it("keeps sealed, through every later rewrite, the largest payload the 8 KiB plaintext record kept", async () => {
+    const env = markerEnv();
+    const parent = "followup-plaintext-largest";
+    const stop = {
+      hook_event_name: "SubagentStop",
+      session_id: parent,
+      agent_id: "a".repeat(256),
+      agent_transcript_path: "/abc".repeat(128),
+    };
+    const sessionId = agentLedgerIdFor(stop);
+    const payload = {
+      type: "skill_feedback",
+      lesson: "x".repeat(6639),
+      interaction: { query_id: "rq_bound", result_id: "qres_bound" },
+    };
+    expect(Buffer.byteLength(JSON.stringify(payload))).toBe(6739);
+    observeSuccessfulCompletionTool(
+      sessionId,
+      "submit_feedback",
+      { query_id: "rq_bound", result_id: "qres_bound" },
+      { body: { next_step: { submit_remembrance_payload: payload } } },
+      env,
+    );
+    const [kept] = readCompletionObligations(sessionId, env);
+    expect(kept).toMatchObject({
+      local_resupply_payload: null,
+      local_resupply_payload_omitted: null,
+    });
+    expect(kept.local_resupply_envelope).toMatchObject({
+      version: "completion-resupply-envelope-v1",
+    });
+
+    // Prompted, moved to a parent with a wider engagement count and the
+    // longest provenance, it opens there as it was sealed, and a stop
+    // re-supplies it whole.
+    for (let use = 0; use < 10; use += 1) recordRegistryUse(parent, env);
+    markCompletionObligationsPrompted(sessionId, null, env);
+    expect(transferSubagentObligations(stop, env)).toBe(1);
+    expect(
+      decideStop(
+        { session_id: parent, hook_event_name: "Stop" },
+        { env, visibleCompletionRecovery: true },
+      )
+        .reason.split("\n")
+        .filter((line) => line.includes('"lesson"'))
+        .map((line) => JSON.parse(line)),
+    ).toEqual([payload]);
+    // Prompted there too, it is still sealed as it was, in a record larger
+    // than the earlier bound and within this one.
+    markCompletionObligationsPrompted(parent, null, env);
+    const [moved] = readCompletionObligations(parent, env);
+    expect(moved.prompted_at).not.toBeNull();
+    expect(moved.local_resupply_envelope).toEqual(kept.local_resupply_envelope);
+    const hash = (value) =>
+      createHash("sha256").update(value, "utf8").digest("hex");
+    const directory = sealedLedgerDirectory(env, parent);
+    const [name] = readdirSync(directory);
+    const size = statSync(join(directory, name)).size;
+    expect(size).toBeGreaterThan(8 * 1024);
+    expect(size).toBeLessThanOrEqual(OBLIGATION_RECORD_MAX_BYTES);
+
+    // The local retrieval tool returns it unchanged.
+    const key = Buffer.from(
+      readFileSync(
+        join(env.XDG_CONFIG_HOME, "remembrance", "private-lesson-outbox.key"),
+        "utf8",
+      ).trim(),
+      "base64url",
+    );
+    const retrieved = await readPendingActionPayload(
+      {
+        action_id: hash(moved.id).slice(0, 16),
+        ledger: hash(parent).slice(0, 16),
+      },
+      env,
+      { readKey: async (source) => (source === "mode_0600_file" ? key : null) },
+    );
+    expect(retrieved).toMatchObject({
+      status: "retrieved",
+      provenance: "second_hand",
+      payload_bytes: 6739,
+    });
+    expect(retrieved.payload).toEqual(payload);
+  });
+
+  it("reads an obligation record of exactly the bound, and neither reader one byte over it", async () => {
+    const env = markerEnv();
+    const sessionId = "followup-read-bound";
+    const payload = {
+      type: "skill_feedback",
+      lesson: "Pin the toolchain before bisecting.",
+      interaction: { query_id: "rq_read", result_id: "qres_read" },
+    };
+    observeSuccessfulCompletionTool(
+      sessionId,
+      "submit_feedback",
+      { query_id: "rq_read", result_id: "qres_read" },
+      { body: { next_step: { submit_remembrance_payload: payload } } },
+      env,
+    );
+    const hash = (value) =>
+      createHash("sha256").update(value, "utf8").digest("hex");
+    const directory = sealedLedgerDirectory(env, sessionId);
+    const [name] = readdirSync(directory);
+    const path = join(directory, name);
+    const record = readFileSync(path, "utf8");
+    const [obligation] = readCompletionObligations(sessionId, env);
+    const key = Buffer.from(
+      readFileSync(
+        join(env.XDG_CONFIG_HOME, "remembrance", "private-lesson-outbox.key"),
+        "utf8",
+      ).trim(),
+      "base64url",
+    );
+    const retrieve = () =>
+      readPendingActionPayload(
+        {
+          action_id: hash(obligation.id).slice(0, 16),
+          ledger: hash(sessionId).slice(0, 16),
+        },
+        env,
+        { readKey: async () => key },
+      );
+    // JSON after the record's own bytes is only whitespace: the record
+    // reads the same at any size its reader takes.
+    const padTo = (bytes) =>
+      writeFileSync(
+        path,
+        `${record}${" ".repeat(bytes - Buffer.byteLength(record))}`,
+      );
+
+    padTo(OBLIGATION_RECORD_MAX_BYTES);
+    expect(statSync(path).size).toBe(OBLIGATION_RECORD_MAX_BYTES);
+    expect(readCompletionObligations(sessionId, env)).toEqual([obligation]);
+    expect(await retrieve()).toMatchObject({ status: "retrieved", payload });
+
+    padTo(OBLIGATION_RECORD_MAX_BYTES + 1);
+    expect(readCompletionObligations(sessionId, env)).toEqual([]);
+    expect(await retrieve()).toMatchObject({ status: "not_found" });
+  });
+
+  it("drops a subagent transcript path longer than the room a record keeps for it", () => {
+    const env = markerEnv();
+    const stop = {
+      hook_event_name: "SubagentStop",
+      session_id: "long-path-parent",
+      agent_id: "a2222222222222222",
+    };
+    const move = (agentTranscriptPath) => {
+      recordQueryFeedbackObligation(
+        agentLedgerIdFor(stop),
+        { available: true, query_id: "rq_long_path" },
+        env,
+      );
+      transferSubagentObligations(
+        { ...stop, agent_transcript_path: agentTranscriptPath },
+        env,
+      );
+      const [moved] = readCompletionObligations("long-path-parent", env);
+      observeSuccessfulCompletionTool(
+        "long-path-parent",
+        "submit_query_feedback",
+        { query_id: "rq_long_path" },
+        null,
+        env,
+      );
+      return moved.transferred_from;
+    };
+    // 512 characters, but two bytes each in JSON.
+    expect(move("é".repeat(512))).toEqual({
+      agent_id: stop.agent_id,
+      transcript_path: null,
+    });
+    expect(move("/abc".repeat(128))).toEqual({
+      agent_id: stop.agent_id,
+      transcript_path: "/abc".repeat(128),
+    });
+  });
+
+  it("re-supplies one payload per prompt, oldest first, a handle for each other one, and every payload at a stop", () => {
+    const env = markerEnv();
+    const sessionId = "one-payload-per-prompt";
+    const sent = [0, 1, 2].map((index) => {
+      const interaction = {
+        query_id: `rq_several_${index}`,
+        result_id: `qres_several_${index}`,
+      };
+      const payload = {
+        type: "skill_feedback",
+        lesson: `Lesson ${index}. ${"w".repeat(1000)}`,
+        interaction,
+      };
+      observeSuccessfulCompletionTool(
+        sessionId,
+        "submit_feedback",
+        interaction,
+        { body: { next_step: { submit_remembrance_payload: payload } } },
+        env,
+      );
+      return payload;
+    });
+    const pending = readCompletionObligations(sessionId, env);
+    const payloads = (text) =>
+      text
+        .split("\n")
+        .filter((line) => line.trim().startsWith('{"type"'))
+        .map((line) => JSON.parse(line));
+
+    const prompt = pendingCompletionRecoveryInstruction(sessionId, env);
+    expect(payloads(prompt)).toEqual([sent[0]]);
+    expect(prompt.split("\n")).toEqual(
+      expect.arrayContaining([
+        retainedHandle(sessionId, pending[1], sent[1]),
+        retainedHandle(sessionId, pending[2], sent[2]),
+      ]),
+    );
+    // A stop's reason does not share the task's context; it repeats all.
+    const stop = decideStop(
+      { session_id: sessionId, hook_event_name: "Stop" },
+      { env, visibleCompletionRecovery: true },
+    );
+    expect(payloads(stop.reason)).toEqual(sent);
+    expect(stop.reason).not.toContain("get_pending_action_payload");
+
+    // Once the oldest is submitted, the next prompt shows the next one.
+    observeSuccessfulCompletionTool(
+      sessionId,
+      "submit_remembrance",
+      sent[0],
+      { accepted: true },
+      env,
+    );
+    expect(
+      payloads(pendingCompletionRecoveryInstruction(sessionId, env)),
+    ).toEqual([sent[1]]);
+  });
+
+  it("re-supplies the oldest payload a prompt can carry, and a handle for each other one", async () => {
+    const env = markerEnv();
+    const sessionId = "oversized-oldest";
+    // Oldest first: a payload over the prompt cap, five older debts with long
+    // ids, a payload under the cap, and a small one.
+    const older = [0, 1, 2, 3, 4].map((index) => ({
+      query_id: `rq_older_${index}_${"q".repeat(140)}`,
+      result_id: `qres_older_${index}_${"r".repeat(140)}`,
+    }));
+    const start = Date.now() - 60_000;
+    const sent = new Map();
+    const feedback = (id, length) => {
+      const interaction = { query_id: `rq_${id}`, result_id: `qres_${id}` };
+      const payload = {
+        type: "skill_feedback",
+        lesson: `Lesson ${id}. ${"w".repeat(length)}`,
+        interaction,
+      };
+      sent.set(`rq_${id}`, payload);
+      observeSuccessfulCompletionTool(
+        sessionId,
+        "submit_feedback",
+        interaction,
+        { body: { next_step: { submit_remembrance_payload: payload } } },
+        env,
+      );
+    };
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(start);
+      feedback("capped", 2500);
+      older.forEach((ids, index) => {
+        vi.setSystemTime(start + 1000 + index);
+        recordPostUseFeedbackObligation(
+          sessionId,
+          { ...ids, skill_slug: "release-checklist" },
+          env,
+          1,
+        );
+      });
+      vi.setSystemTime(start + 2000);
+      feedback("medium", 1700);
+      vi.setSystemTime(start + 3000);
+      feedback("small", 400);
+    } finally {
+      vi.useRealTimers();
+    }
+    const retained = readCompletionObligations(sessionId, env).filter(
+      (obligation) => obligation.local_resupply_envelope,
+    );
+    expect(retained.map((obligation) => obligation.query_id)).toEqual([
+      "rq_capped",
+      "rq_medium",
+      "rq_small",
+    ]);
+    const [capped, medium, small] = retained.map((obligation) => ({
+      ...obligation,
+      local_resupply_payload: sent.get(obligation.query_id),
+    }));
+    const payloads = (text) =>
+      text
+        .split("\n")
+        .filter((line) => line.includes('"lesson"'))
+        .map((line) => JSON.parse(line));
+    const status = (obligation, text) =>
+      `- Reusable evidence for query_id ${obligation.query_id} and result_id ${obligation.result_id}: ${text}`;
+    const overCap = retainedHandle(
+      sessionId,
+      capped,
+      capped.local_resupply_payload,
+    );
+    const waits = retainedHandle(
+      sessionId,
+      medium,
+      medium.local_resupply_payload,
+    );
+    const close = (ids) =>
+      observeSuccessfulCompletionTool(
+        sessionId,
+        "submit_feedback",
+        { ...ids, outcome: "success" },
+        { body: { accepted: true } },
+        env,
+      );
+    const correctionPrompt = async () =>
+      (
+        await runPromptHook(
+          "That approach is the wrong direction; preserve the existing behavior.",
+          { env, sessionId, fetchImpl: vi.fn() },
+        )
+      ).context;
+
+    // The five older debts leave the medium payload no room even alone. It
+    // fits a demand holding only its own lines, so it waits rather than being
+    // called too large for any prompt, and the small one is shown.
+    const alone = pendingCompletionRecoveryInstruction(sessionId, env);
+    expect(payloads(alone)).toEqual([small.local_resupply_payload]);
+    expect(alone.split("\n")).toEqual(expect.arrayContaining([overCap, waits]));
+    expect(alone.match(/on the next line/gu)).toHaveLength(1);
+    // A context that keeps a payload line without the pointer above it does
+    // not carry that payload.
+    const orphaning = pendingCompletionRecovery(
+      sessionId,
+      env,
+    )((text) =>
+      text
+        .split("\n")
+        .filter((line) => !line.includes("on the next line"))
+        .join("\n"),
+    );
+    expect(payloads(orphaning)).toEqual([]);
+    // A stop's reason does not share the task's context; it shows all three.
+    const stop = decideStop(
+      { session_id: sessionId, hook_event_name: "Stop" },
+      { env },
+    );
+    expect(payloads(stop.reason)).toEqual(
+      [capped, medium, small].map(
+        (obligation) => obligation.local_resupply_payload,
+      ),
+    );
+
+    // With two older debts closed the medium payload fits alone, but not
+    // beside a correction prompt's capture directive.
+    older.slice(0, 2).forEach(close);
+    expect(
+      payloads(pendingCompletionRecoveryInstruction(sessionId, env)),
+    ).toEqual([medium.local_resupply_payload]);
+    const crowded = await correctionPrompt();
+    const lines = crowded.split("\n");
+    expect(crowded).toContain("Decide from the full conversation whether");
+    expect(lines).toEqual(expect.arrayContaining([overCap, waits]));
+    expect(payloads(crowded)).toEqual([small.local_resupply_payload]);
+    const pointer = lines.findIndex((line) =>
+      line.startsWith(
+        status(
+          small,
+          "call submit_remembrance with exactly the payload on the next line",
+        ),
+      ),
+    );
+    expect(JSON.parse(lines[pointer + 1])).toEqual(
+      small.local_resupply_payload,
+    );
+
+    // Once the older debts close, the same prompt shows the medium payload.
+    older.slice(2).forEach(close);
+    expect(payloads(await correctionPrompt())).toEqual([
+      medium.local_resupply_payload,
+    ]);
+  });
+
+  it("shows a payload whose line is exactly the cap, and a handle for one a character longer in either mode", () => {
+    const env = markerEnv();
+    const sessionId = "cap-boundary";
+    // No sentence punctuation before whitespace, so a payload's line is its
+    // JSON.
+    const payloadOf = (id, length) => {
+      const base = {
+        type: "skill_feedback",
+        lesson: "",
+        interaction: { query_id: `rq_${id}`, result_id: `qres_${id}` },
+      };
+      return {
+        ...base,
+        lesson: "w".repeat(length - JSON.stringify(base).length),
+      };
+    };
+    const start = Date.now() - 60_000;
+    const sent = [];
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      for (const [index, [id, length]] of [
+        ["over", 2001],
+        ["at", 2000],
+      ].entries()) {
+        vi.setSystemTime(start + index * 1000);
+        const payload = payloadOf(id, length);
+        sent.push(payload);
+        observeSuccessfulCompletionTool(
+          sessionId,
+          "submit_feedback",
+          payload.interaction,
+          { body: { next_step: { submit_remembrance_payload: payload } } },
+          env,
+        );
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    const [over, at] = readCompletionObligations(sessionId, env);
+    expect(sent.map((payload) => JSON.stringify(payload).length)).toEqual([
+      2001, 2000,
+    ]);
+    expect([over.query_id, at.query_id]).toEqual(["rq_over", "rq_at"]);
+
+    // The handle is the same whether or not a stop would show the payload.
+    for (const mode of ["1", "0"]) {
+      const demand = pendingCompletionRecoveryInstruction(sessionId, {
+        ...env,
+        REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY: mode,
+      }).split("\n");
+      expect(demand).toContain(retainedHandle(sessionId, over, sent[0]));
+      const shown = demand
+        .filter((line) => line.includes('"lesson"'))
+        .map((line) => line.trim());
+      expect(shown).toEqual([JSON.stringify(sent[1])]);
+      expect(shown[0]).toHaveLength(2000);
+    }
+  });
+
+  it("keeps the pre-agent-keying explanation on the first tagged line, even in a crowded prompt", () => {
+    const env = markerEnv();
+    const sessionId = "tagged-in-crowd";
+    const start = Date.now() - 60_000;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      // A debt this version records, whose lesson happens to hold the tag.
+      vi.setSystemTime(start + 100);
+      const interaction = { query_id: "rq_own", result_id: "qres_own" };
+      observeSuccessfulCompletionTool(
+        sessionId,
+        "submit_feedback",
+        interaction,
+        {
+          body: {
+            next_step: {
+              submit_remembrance_payload: {
+                type: "skill_feedback",
+                lesson: `Keep [pre-agent-keying] short. ${"w".repeat(1000)}`,
+                interaction,
+              },
+            },
+          },
+        },
+        env,
+      );
+      // Nothing is tagged, so nothing is explained.
+      const own = pendingCompletionRecoveryInstruction(sessionId, env);
+      expect(own).toContain('"lesson":"Keep [pre-agent-keying] short.');
+      expect(own).not.toContain("recorded before per-agent keying");
+
+      // Eleven older debts, rewritten as an older client wrote them.
+      for (let index = 0; index < 11; index += 1) {
+        vi.setSystemTime(start + index);
+        recordPostUseFeedbackObligation(
+          sessionId,
+          {
+            query_id: `rq_legacy_${index}`,
+            result_id: `qres_legacy_${index}`,
+            skill_slug: "vercel-build-debug",
+          },
+          env,
+          1,
+        );
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    const directory = join(
+      env.REMEMBRANCE_USAGE_DIR,
+      `${createHash("sha256").update(sessionId, "utf8").digest("hex").slice(0, 16)}.obligations`,
+    );
+    for (const name of readdirSync(directory)) {
+      const path = join(directory, name);
+      const { agent_keyed: _stamp, ...record } = JSON.parse(
+        readFileSync(path, "utf8"),
+      );
+      if (record.kind === "post_use_feedback") {
+        writeFileSync(path, `${JSON.stringify(record)}\n`);
+      }
+    }
+
+    // Beside the review's 40-line auto-query context, the payload is shown
+    // and every tagged line is kept; the first one carries the explanation.
+    const crowd = `Remembrance auto-query context:\nTrigger: external_service. Skills: vercel-build-debug.\n${Array.from({ length: 40 }, (_, index) => `- Skill ${index}: vercel-build-debug detail line ${index} explaining the build cache and env var checks.`).join("\n")}`;
+    const compose = (text) =>
+      composeBoundedHookContext(crowd, [
+        { id: "private_learning_recovery", kind: "completion", text },
+      ]);
+    const context = compose(pendingCompletionRecovery(sessionId, env)(compose));
+    const lines = context.split("\n");
+    expect(context.length).toBeLessThanOrEqual(4000);
+    expect(
+      lines.some((line) =>
+        line.includes('"lesson":"Keep [pre-agent-keying] short.'),
+      ),
+    ).toBe(true);
+    const tagged = lines.filter((line) =>
+      line.startsWith(
+        "- Post-use feedback for vercel-build-debug [pre-agent-keying",
+      ),
+    );
+    expect(tagged).toHaveLength(11);
+    expect(tagged[0]).toBe(
+      "- Post-use feedback for vercel-build-debug [pre-agent-keying: this and every debt tagged so were recorded before per-agent keying and may be a subagent's; decline one with not_observed_by_this_agent if you did not receive it]: call submit_feedback with query_id rq_legacy_0 and result_id qres_legacy_0.",
+    );
+    expect(context.match(/recorded before per-agent keying/gu)).toHaveLength(1);
+  });
+
+  it("explains each provenance tag once and keeps a subagent_identity stamp through a prompted rewrite", () => {
+    const env = markerEnv();
+    const sessionId = "two-tags";
+    const start = Date.now() - 60_000;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      for (let index = 0; index < 5; index += 1) {
+        vi.setSystemTime(start + index);
+        recordPostUseFeedbackObligation(
+          sessionId,
+          {
+            query_id: `rq_tag_${index}`,
+            result_id: `qres_tag_${index}`,
+            skill_slug: "vercel-build-debug",
+          },
+          env,
+          1,
+        );
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+    // Two as an older client wrote them, two where the host named no agent
+    // (one with a value this version does not know), one this client's own.
+    const directory = join(
+      env.REMEMBRANCE_USAGE_DIR,
+      `${createHash("sha256").update(sessionId, "utf8").digest("hex").slice(0, 16)}.obligations`,
+    );
+    for (const name of readdirSync(directory)) {
+      const path = join(directory, name);
+      const { agent_keyed: stamp, ...record } = JSON.parse(
+        readFileSync(path, "utf8"),
+      );
+      const index = Number(record.query_id.slice(-1));
+      const rewritten =
+        index < 2
+          ? record
+          : index < 4
+            ? {
+                ...record,
+                agent_keyed: stamp,
+                subagent_identity: "unavailable",
+              }
+            : { ...record, agent_keyed: stamp, subagent_identity: "maybe" };
+      writeFileSync(path, `${JSON.stringify(rewritten)}\n`);
+    }
+    const line = (index, from) =>
+      `- Post-use feedback for vercel-build-debug${from}: call submit_feedback with query_id rq_tag_${index} and result_id qres_tag_${index}.`;
+    const demand = pendingCompletionRecoveryInstruction(sessionId, env).split(
+      "\n",
+    );
+    expect(demand.filter((text) => text.startsWith("- Post-use"))).toEqual([
+      line(
+        0,
+        " [pre-agent-keying: this and every debt tagged so were recorded before per-agent keying and may be a subagent's; decline one with not_observed_by_this_agent if you did not receive it]",
+      ),
+      line(1, " [pre-agent-keying]"),
+      line(
+        2,
+        " [subagent identity unavailable: this host does not say whether you or a subagent received this and every debt tagged so; decline one with not_observed_by_this_agent if you did not receive it]",
+      ),
+      line(3, " [subagent identity unavailable]"),
+      line(4, ""),
+    ]);
+    const ids = readCompletionObligations(sessionId, env).map(
+      (obligation) => obligation.id,
+    );
+    markCompletionObligationsPrompted(sessionId, ids, env, 1);
+    const stamps = readCompletionObligations(sessionId, env).map(
+      ({ query_id, prompted_at, subagent_identity }) => [
+        query_id,
+        Boolean(prompted_at),
+        subagent_identity ?? null,
+      ],
+    );
+    expect(stamps).toEqual(
+      expect.arrayContaining([
+        ["rq_tag_2", true, "unavailable"],
+        ["rq_tag_3", true, "unavailable"],
+        ["rq_tag_4", true, null],
+      ]),
+    );
+    for (const name of readdirSync(directory)) {
+      const record = JSON.parse(readFileSync(join(directory, name), "utf8"));
+      expect(record.subagent_identity).toBe(
+        ["rq_tag_2", "rq_tag_3"].includes(record.query_id)
+          ? "unavailable"
+          : undefined,
+      );
+    }
+  });
+
+  it("keeps a re-supplied payload whole in a bounded prompt context and never offers one beyond it", () => {
+    const recoveryFor = (lesson) => {
+      const env = markerEnv();
+      const sessionId = "followup-in-context";
+      observeSuccessfulCompletionTool(
+        sessionId,
+        "submit_feedback",
+        { query_id: "rq_context", result_id: "qres_context" },
+        {
+          body: {
+            next_step: {
+              submit_remembrance_payload: {
+                type: "skill_feedback",
+                lesson,
+                interaction: {
+                  query_id: "rq_context",
+                  result_id: "qres_context",
+                },
+              },
+            },
+          },
+        },
+        env,
+      );
+      return {
+        id: "private_learning_recovery",
+        kind: "completion",
+        text: pendingCompletionRecoveryInstruction(sessionId, env),
+      };
+    };
+    const payloadLines = (context) =>
+      context.split("\n").filter((line) => line.includes('"lesson"'));
+    const crowd = `Remembrance auto-query context:\n${"Skill detail line. ".repeat(300)}`;
+
+    // A payload that fits is essential context: a crowded prompt keeps it
+    // whole.
+    const lesson = `${"Rebuild the cache. Then rerun it! ".repeat(40)}Done?`;
+    const kept = composeBoundedHookContext(crowd, [recoveryFor(lesson)]);
+    expect(kept.length).toBeLessThanOrEqual(4000);
+    expect(payloadLines(kept).map((line) => JSON.parse(line).lesson)).toEqual([
+      lesson,
+    ]);
+
+    // One larger than the whole budget is not offered at all, so nothing
+    // points at a payload line the context cannot carry.
+    const long = `${"Rebuild the cache. Then rerun it! ".repeat(130)}Done?`;
+    const dropped = composeBoundedHookContext(crowd, [recoveryFor(long)]);
+    expect(dropped.length).toBeLessThanOrEqual(4000);
+    expect(payloadLines(dropped)).toEqual([]);
+    expect(dropped).toContain(
+      "- Reusable evidence for query_id rq_context and result_id qres_context: payload kept on this machine (",
+    );
+    expect(dropped).toContain("call local get_pending_action_payload");
+    expect(dropped).not.toContain("on the next line");
+  });
+
+  // Review F5 (Task 14): a durable preference's record_preference arguments
+  // are kept like a follow-up's payload: sealed whole or not at all, within
+  // the same 12 KiB record and with room for every later rewrite, and a
+  // demand that cannot keep them says so.
+  it("keeps a durable preference's arguments sealed whole or not at all, and says when they were too large", async () => {
+    const parent = "preference-at-bound";
+    const stop = {
+      hook_event_name: "SubagentStop",
+      session_id: parent,
+      agent_id: "a".repeat(256),
+      agent_transcript_path: "/abc".repeat(128),
+    };
+    const sessionId = agentLedgerIdFor(stop);
+    const hash = (value) =>
+      createHash("sha256").update(value, "utf8").digest("hex");
+    const capture = (behaviorLength) => {
+      const env = markerEnv();
+      const preference = {
+        setting: {
+          key: "workflow.release_notes",
+          value: "changelog_first",
+          behavior: "y".repeat(behaviorLength),
+        },
+        scope: "member",
+      };
+      observeSuccessfulCompletionTool(
+        sessionId,
+        "capture_learning",
+        { preference },
+        {
+          capture_route: "preference",
+          persisted_locally: false,
+          next_action: { tool: "record_preference", arguments: preference },
+        },
+        env,
+      );
+      const [path, ...others] = ledgerRecordFiles(env, sessionId);
+      expect(others).toEqual([]);
+      return {
+        env,
+        preference,
+        path,
+        text: readFileSync(path, "utf8"),
+        obligation: readCompletionObligations(sessionId, env)[0],
+      };
+    };
+    const sealed = (obligation) => obligation.local_resupply_envelope !== null;
+    let kept = 100;
+    let dropped = 100 + OBLIGATION_RECORD_MAX_BYTES;
+    expect(sealed(capture(kept).obligation)).toBe(true);
+    expect(sealed(capture(dropped).obligation)).toBe(false);
+    while (dropped - kept > 1) {
+      const middle = Math.floor((kept + dropped) / 2);
+      if (sealed(capture(middle).obligation)) kept = middle;
+      else dropped = middle;
+    }
+
+    // The longest kept survives being prompted and moved to a parent with
+    // the longest provenance, still sealed as it was, and opens there.
+    const whole = capture(kept);
+    markCompletionObligationsPrompted(sessionId, null, whole.env);
+    expect(transferSubagentObligations(stop, whole.env)).toBe(1);
+    markCompletionObligationsPrompted(parent, null, whole.env);
+    const [moved] = readCompletionObligations(parent, whole.env);
+    expect(moved).toMatchObject({
+      kind: "capture_next_action",
+      local_resupply_payload: null,
+      local_resupply_envelope: whole.obligation.local_resupply_envelope,
+      transferred_from: { agent_id: stop.agent_id },
+    });
+    const key = Buffer.from(
+      readFileSync(
+        join(
+          whole.env.XDG_CONFIG_HOME,
+          "remembrance",
+          "private-lesson-outbox.key",
+        ),
+        "utf8",
+      ).trim(),
+      "base64url",
+    );
+    const retrieved = await readPendingActionPayload(
+      {
+        action_id: hash(moved.id).slice(0, 16),
+        ledger: hash(parent).slice(0, 16),
+      },
+      whole.env,
+      { readKey: async () => key },
+    );
+    expect(retrieved).toMatchObject({
+      status: "retrieved",
+      kind: "capture_next_action",
+      provenance: "second_hand",
+    });
+    expect(JSON.stringify(retrieved.arguments)).toBe(
+      JSON.stringify(whole.preference),
+    );
+
+    // One byte past it is never kept, and the record says why truthfully.
+    const omitted = capture(dropped);
+    expect(omitted.obligation).toMatchObject({
+      kind: "capture_next_action",
+      local_resupply_payload: null,
+      local_resupply_envelope: null,
+      local_resupply_payload_omitted: "too_large",
+    });
+    expect(omitted.text).not.toContain("y".repeat(32));
+    expect(omitted.text.length).toBeLessThan(1024);
+    expect(
+      pendingCompletionRecoveryInstruction(sessionId, omitted.env).split("\n"),
+    ).toContain(
+      "- Durable preference: arguments too large to retain; call record_preference with the arguments capture_learning returned only if you still hold them verbatim; otherwise repeat the original request so the exact arguments can be supplied again.",
+    );
+    expect(
+      await readPendingActionPayload(
+        {
+          action_id: hash(omitted.obligation.id).slice(0, 16),
+          ledger: hash(sessionId).slice(0, 16),
+        },
+        omitted.env,
+        { readKey: async () => key },
+      ),
+    ).toMatchObject({
+      status: "not_retained",
+      kind: "capture_next_action",
+      reason: "too_large",
+    });
+  });
+
+  // The envelope's authenticated data is the obligation id, which names the
+  // kind, so one payload kept both as a follow-up and as a preference's
+  // arguments opens only as the kind it was sealed for.
+  it("binds a sealed payload to its kind: a follow-up's envelope never answers for a preference, nor the reverse", async () => {
+    const env = markerEnv();
+    const sessionId = "kind-bound";
+    const hash = (value) =>
+      createHash("sha256").update(value, "utf8").digest("hex");
+    const same = {
+      type: "skill_feedback",
+      lesson: "Pin the toolchain before bisecting.",
+      interaction: { query_id: "rq_kind", result_id: "qres_kind" },
+    };
+    observeSuccessfulCompletionTool(
+      sessionId,
+      "submit_feedback",
+      { query_id: "rq_kind", result_id: "qres_kind" },
+      { body: { next_step: { submit_remembrance_payload: same } } },
+      env,
+    );
+    observeSuccessfulCompletionTool(
+      sessionId,
+      "capture_learning",
+      {},
+      {
+        capture_route: "preference",
+        persisted_locally: false,
+        next_action: { tool: "record_preference", arguments: same },
+      },
+      env,
+    );
+    const pending = readCompletionObligations(sessionId, env);
+    const followup = pending.find(
+      (item) => item.kind === "remembrance_followup",
+    );
+    const preference = pending.find(
+      (item) => item.kind === "capture_next_action",
+    );
+    expect(followup.payload_digest).toBe(preference.payload_digest);
+    const key = Buffer.from(
+      readFileSync(
+        join(env.XDG_CONFIG_HOME, "remembrance", "private-lesson-outbox.key"),
+        "utf8",
+      ).trim(),
+      "base64url",
+    );
+    const directory = sealedLedgerDirectory(env, sessionId);
+    const pathOf = (obligation) =>
+      join(directory, `${hash(obligation.id).slice(0, 32)}.json`);
+    const retrieve = (obligation) =>
+      readPendingActionPayload(
+        {
+          action_id: hash(obligation.id).slice(0, 16),
+          ledger: hash(sessionId).slice(0, 16),
+        },
+        env,
+        { readKey: async () => key },
+      );
+    // Each answers as its own kind, under its own field.
+    const asFollowup = await retrieve(followup);
+    expect(asFollowup).toMatchObject({
+      status: "retrieved",
+      kind: "remembrance_followup",
+      payload: same,
+    });
+    expect(asFollowup).not.toHaveProperty("arguments");
+    expect(asFollowup.guidance).toContain("submit_remembrance");
+    expect(asFollowup.guidance).not.toContain("record_preference");
+    const asPreference = await retrieve(preference);
+    expect(asPreference).toMatchObject({
+      status: "retrieved",
+      kind: "capture_next_action",
+      action_tool: "record_preference",
+      arguments: same,
+    });
+    expect(asPreference).not.toHaveProperty("payload");
+    expect(asPreference.guidance).toContain("record_preference");
+    expect(asPreference.guidance).not.toContain("submit_remembrance");
+
+    // Swapped envelopes open as neither.
+    const followupText = readFileSync(pathOf(followup), "utf8");
+    const preferenceText = readFileSync(pathOf(preference), "utf8");
+    const swap = (text, envelope) =>
+      `${JSON.stringify({ ...JSON.parse(text), local_resupply_envelope: envelope })}\n`;
+    writeFileSync(
+      pathOf(followup),
+      swap(followupText, preference.local_resupply_envelope),
+    );
+    writeFileSync(
+      pathOf(preference),
+      swap(preferenceText, followup.local_resupply_envelope),
+    );
+    for (const obligation of [followup, preference]) {
+      const refused = await retrieve(obligation);
+      expect(refused).toMatchObject({
+        status: "refused",
+        reason: "decryption_failed",
+      });
+      expect(refused).not.toHaveProperty("payload");
+      expect(refused).not.toHaveProperty("arguments");
+    }
+
+    // A record that names another kind than its id is refused, never
+    // answered as the kind it claims.
+    writeFileSync(
+      pathOf(preference),
+      `${JSON.stringify({ ...JSON.parse(preferenceText), kind: "remembrance_followup" })}\n`,
+    );
+    const relabeled = await retrieve(preference);
+    expect(relabeled).toMatchObject({
+      status: "refused",
+      kind: "remembrance_followup",
+      reason: "digest_mismatch",
+    });
+    expect(relabeled).not.toHaveProperty("payload");
+    writeFileSync(
+      pathOf(followup),
+      `${JSON.stringify({ ...JSON.parse(followupText), kind: "capture_next_action", action_tool: "record_preference" })}\n`,
+    );
+    const claimed = await retrieve(followup);
+    expect(claimed).toMatchObject({
+      status: "refused",
+      kind: "capture_next_action",
+      reason: "digest_mismatch",
+    });
+    expect(claimed).not.toHaveProperty("arguments");
+    // Without the action its kind binds, it is no preference at all.
+    writeFileSync(
+      pathOf(followup),
+      `${JSON.stringify({ ...JSON.parse(followupText), kind: "capture_next_action" })}\n`,
+    );
+    expect(await retrieve(followup)).toMatchObject({ status: "not_found" });
+  });
+
+  it("names a durable preference's kept arguments only by handle in prompt and stop demands, beside an inline follow-up", () => {
+    const env = markerEnv();
+    const sessionId = "preference-handle-only";
+    const hash = (value) =>
+      createHash("sha256").update(value, "utf8").digest("hex");
+    const preference = {
+      setting: { key: "workflow.notes", value: "marker_7q_terse" },
+      scope: "member",
+    };
+    observeSuccessfulCompletionTool(
+      sessionId,
+      "capture_learning",
+      { preference },
+      {
+        capture_route: "preference",
+        persisted_locally: false,
+        next_action: { tool: "record_preference", arguments: preference },
+      },
+      env,
+    );
+    const payload = {
+      type: "skill_feedback",
+      lesson: "Pin the toolchain before bisecting.",
+      interaction: { query_id: "rq_beside", result_id: "qres_beside" },
+    };
+    observeSuccessfulCompletionTool(
+      sessionId,
+      "submit_feedback",
+      { query_id: "rq_beside", result_id: "qres_beside" },
+      { body: { next_step: { submit_remembrance_payload: payload } } },
+      env,
+    );
+    const [obligation] = readCompletionObligations(sessionId, env).filter(
+      (item) => item.kind === "capture_next_action",
+    );
+    const handle = `- Durable preference: arguments kept on this machine (${Buffer.byteLength(JSON.stringify(preference))} bytes, ${obligation.payload_digest}); call local get_pending_action_payload with action_id ${hash(obligation.id).slice(0, 16)} and ledger ${hash(sessionId).slice(0, 16)}, then record_preference with exactly the arguments it returns.`;
+    const demands = [
+      pendingCompletionRecoveryInstruction(sessionId, env),
+      decideStop(
+        { session_id: sessionId, hook_event_name: "Stop" },
+        { env, visibleCompletionRecovery: true },
+      ).reason,
+    ];
+    for (const demand of demands) {
+      const lines = demand.split("\n");
+      expect(lines).toContain(handle);
+      expect(lines[lines.indexOf(handle) + 1]).toBe(
+        `  action_id ${hash(obligation.id).slice(0, 16)}`,
+      );
+      expect(demand).not.toContain("marker_7q_terse");
+      // The follow-up beside it is still re-supplied inline.
+      expect(
+        lines
+          .filter((line) => line.includes('"lesson"'))
+          .map((line) => JSON.parse(line)),
+      ).toEqual([payload]);
+    }
   });
 
   it("does not let a standalone contribution suppress the next real task", () => {
@@ -4177,6 +6770,361 @@ describe("hook-core marker round-trip", () => {
     expect(readCompletionObligations(sessionId, env)).toEqual([]);
   });
 
+  it("declines one listed action by its action id, only in the caller's own ledger", () => {
+    const env = markerEnv();
+    const caller = "decline-caller";
+    const other = "decline-other";
+    for (const session of [caller, other]) {
+      recordQueryFeedbackObligation(
+        session,
+        { available: true, query_id: "rq_decline" },
+        env,
+      );
+    }
+    recordPostUseFeedbackObligation(
+      caller,
+      { query_id: "rq_keep", result_id: "qres_keep" },
+      env,
+    );
+    recordPrivateLessonObligation(
+      caller,
+      { body: { draft_id: "pld_declinehint", state: "ready" } },
+      env,
+    );
+
+    // Each listed action carries its id on the line under it, and one line
+    // says how to decline.
+    const recovery = pendingCompletionRecoveryInstruction(caller, env).split(
+      "\n",
+    );
+    const idUnder = (line) => {
+      const index = recovery.indexOf(line);
+      expect(index, line).toBeGreaterThan(-1);
+      return /^ {2}action_id ([a-f0-9]{16})$/u.exec(recovery[index + 1])?.[1];
+    };
+    const queryAction = idUnder(
+      "- Query fit: call submit_query_feedback for query_id rq_decline.",
+    );
+    const keptAction = idUnder(
+      "- Post-use feedback: call submit_feedback with query_id rq_keep and result_id qres_keep.",
+    );
+    expect(queryAction).toMatch(/^[a-f0-9]{16}$/u);
+    expect(keptAction).toMatch(/^[a-f0-9]{16}$/u);
+    expect(queryAction).not.toBe(keptAction);
+    expect(
+      recovery.filter((line) => line.includes("decline_pending_action")),
+    ).toEqual([
+      "If you cannot complete an action, call local decline_pending_action with the action_id under it and one reason (not_observed_by_this_agent, agent_exited, not_reusable, or duplicate) instead of guessing.",
+    ]);
+    const decline = (session, args) =>
+      observeSuccessfulCompletionTool(
+        session,
+        "mcp__remembrance__decline_pending_action",
+        args,
+        {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ status: "declined", ...args }),
+            },
+          ],
+        },
+        env,
+      );
+    const held = (session) =>
+      readCompletionObligations(session, env)
+        .map((item) => `${item.kind}:${item.query_id}`)
+        .sort();
+
+    // An unknown reason, an unknown id, or a private-learning hint's id
+    // closes nothing.
+    decline(caller, { action_id: queryAction, reason: "host_policy_denied" });
+    decline(caller, { action_id: "0000000000000000", reason: "duplicate" });
+    const hint = readCompletionObligations(caller, env).find(
+      (item) => item.kind === "private_lesson",
+    );
+    decline(caller, {
+      action_id: createHash("sha256")
+        .update(hint.id, "utf8")
+        .digest("hex")
+        .slice(0, 16),
+      reason: "not_reusable",
+    });
+    expect(held(caller)).toEqual([
+      "post_use_feedback:rq_keep",
+      "private_lesson:null",
+      "query_feedback:rq_decline",
+    ]);
+
+    // The id closes exactly that action, and only in the caller's ledger.
+    expect(
+      decline(caller, {
+        action_id: queryAction,
+        reason: "not_observed_by_this_agent",
+      }).closed.map((item) => item.kind),
+    ).toEqual(["query_feedback"]);
+    expect(held(caller)).toEqual([
+      "post_use_feedback:rq_keep",
+      "private_lesson:null",
+    ]);
+    expect(held(other)).toEqual([
+      "private_lesson:null",
+      "query_feedback:rq_decline",
+    ]);
+  });
+
+  it("offers no decline for a private-learning hint, which has its own outbox path", () => {
+    const env = markerEnv({ REMEMBRANCE_API_KEY: "rk_hook_org_test" });
+    recordPrivateLessonObligation(
+      "decline-hints-only",
+      { body: { draft_id: "pld_declinehint", state: "ready" } },
+      env,
+    );
+
+    const recovery = pendingCompletionRecoveryInstruction(
+      "decline-hints-only",
+      env,
+    );
+    expect(recovery).toContain(
+      "- Private lesson: call submit_private_lesson_candidate with draft_id pld_declinehint.",
+    );
+    expect(recovery).not.toContain("action_id");
+    expect(recovery).not.toContain("decline_pending_action");
+  });
+
+  it("counts debts a full ledger cannot record and reports them until it drains", () => {
+    const env = markerEnv();
+    const session = "overflow-ledger";
+    for (let index = 0; index < 64; index += 1) {
+      recordQueryFeedbackObligation(
+        session,
+        { available: true, query_id: `rq_full_${index}` },
+        env,
+      );
+    }
+    expect(
+      recordQueryFeedbackObligation(
+        session,
+        { available: true, query_id: "rq_dropped" },
+        env,
+      ),
+    ).toBeNull();
+    expect(
+      recordPostUseFeedbackObligation(
+        session,
+        { query_id: "rq_dropped", result_id: "qres_dropped" },
+        env,
+      ),
+    ).toBeNull();
+    const pending = readCompletionObligations(session, env);
+    expect(pending).toHaveLength(64);
+    expect(pending.some((item) => item.query_id === "rq_dropped")).toBe(false);
+
+    const markers = () =>
+      readdirSync(env.REMEMBRANCE_USAGE_DIR).filter((name) =>
+        name.endsWith(".obligations-overflow.json"),
+      );
+    expect(markers()).toHaveLength(1);
+    const markerPath = join(env.REMEMBRANCE_USAGE_DIR, markers()[0]);
+    const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+    expect(marker).toEqual({
+      version: "completion-obligation-overflow-v1",
+      count: 2,
+      first_dropped_at: expect.any(String),
+      last_dropped_at: expect.any(String),
+      kinds: ["post_use_feedback", "query_feedback"],
+    });
+    expect(marker.first_dropped_at <= marker.last_dropped_at).toBe(true);
+    if (process.platform !== "win32") {
+      expect(statSync(markerPath).mode & 0o777).toBe(0o600);
+    }
+
+    // Both demand channels report the count.
+    const notice = `- 2 obligations could not be recorded since ${marker.first_dropped_at} (post_use_feedback, query_feedback): the pending list was full.`;
+    const stop = decideStop(
+      { session_id: session, hook_event_name: "Stop", stop_hook_active: false },
+      { env, visibleCompletionRecovery: true },
+    );
+    expect(stop.why).toBe("prompt_pending_obligations");
+    expect(stop.reason.split("\n")).toContain(notice);
+    expect(
+      pendingCompletionRecoveryInstruction(session, env).split("\n"),
+    ).toContain(notice);
+
+    // It stays while any debt is pending and retires once the ledger drains.
+    const pay = (index) =>
+      observeSuccessfulCompletionTool(
+        session,
+        "submit_query_feedback",
+        { query_id: `rq_full_${index}` },
+        { body: { accepted: true } },
+        env,
+      );
+    for (let index = 0; index < 63; index += 1) pay(index);
+    expect(
+      pendingCompletionRecoveryInstruction(session, env).split("\n"),
+    ).toContain(notice);
+    pay(63);
+    expect(existsSync(markerPath)).toBe(false);
+    recordQueryFeedbackObligation(
+      session,
+      { available: true, query_id: "rq_after" },
+      env,
+    );
+    expect(pendingCompletionRecoveryInstruction(session, env)).not.toContain(
+      "could not be recorded",
+    );
+  });
+
+  it("does not count a private-learning hint the full private ledger cannot take", () => {
+    const env = markerEnv();
+    for (let index = 0; index < 65; index += 1) {
+      recordPrivateLessonObligation(
+        "overflow-private",
+        {
+          body: {
+            draft_id: `pld_overflow${String(index).padStart(4, "0")}`,
+            state: "ready",
+          },
+        },
+        env,
+      );
+    }
+    // Checked before any further read, which would retire a count kept for
+    // a session with no other debts.
+    const usage = env.REMEMBRANCE_USAGE_DIR;
+    expect(
+      existsSync(usage)
+        ? readdirSync(usage).filter((name) =>
+            name.endsWith(".obligations-overflow.json"),
+          )
+        : [],
+    ).toEqual([]);
+    expect(readCompletionObligations("overflow-private", env)).toHaveLength(64);
+  });
+
+  it("keeps a subagent's debt when the parent's ledger cannot be written, though not full", () => {
+    const env = markerEnv();
+    const parent = "unwritable-parent";
+    const stop = {
+      hook_event_name: "SubagentStop",
+      session_id: parent,
+      agent_id: "a3333333333333333",
+    };
+    const agentLedger = agentLedgerIdFor(stop);
+    recordQueryFeedbackObligation(
+      agentLedger,
+      { available: true, query_id: "rq_unwritable" },
+      env,
+    );
+    // A file where the parent's ledger directory belongs fails every write.
+    const parentDirectory = join(
+      env.REMEMBRANCE_USAGE_DIR,
+      `${createHash("sha256").update(parent).digest("hex").slice(0, 16)}.obligations`,
+    );
+    writeFileSync(parentDirectory, "");
+    expect(transferSubagentObligations(stop, env)).toBe(0);
+    expect(readCompletionObligations(agentLedger, env)).toEqual([
+      expect.objectContaining({ query_id: "rq_unwritable" }),
+    ]);
+
+    // The next stop that can write the parent's ledger moves it.
+    rmSync(parentDirectory);
+    expect(transferSubagentObligations(stop, env)).toBe(1);
+    expect(readCompletionObligations(agentLedger, env)).toEqual([]);
+    expect(readCompletionObligations(parent, env)).toEqual([
+      expect.objectContaining({
+        query_id: "rq_unwritable",
+        transferred_from: { agent_id: stop.agent_id, transcript_path: null },
+      }),
+    ]);
+  });
+
+  it("gives a transferred debt the parent's engagement count, not the subagent's", () => {
+    const env = markerEnv();
+    const parent = "engagement-parent";
+    const input = { session_id: parent, agent_id: "a1111111111111111" };
+    const agentLedger = agentLedgerIdFor(input);
+    for (let use = 0; use < 6; use += 1) recordRegistryUse(agentLedger, env);
+    recordQueryFeedbackObligation(
+      agentLedger,
+      { available: true, query_id: "rq_engagement_sub" },
+      env,
+    );
+    expect(
+      readCompletionObligations(agentLedger, env)[0].engagement_count,
+    ).toBe(6);
+    recordRegistryUse(parent, env);
+
+    transferSubagentObligations(
+      { ...input, hook_event_name: "SubagentStop" },
+      env,
+    );
+    expect(readCompletionObligations(parent, env)).toEqual([
+      expect.objectContaining({
+        query_id: "rq_engagement_sub",
+        engagement_count: 1,
+      }),
+    ]);
+    // The parent's stop asks for it and records only the parent's own use,
+    // so the parent's next use is still new.
+    expect(
+      decideStop(
+        { session_id: parent, hook_event_name: "Stop" },
+        { env, visibleCompletionRecovery: true },
+      ),
+    ).toMatchObject({
+      allow: false,
+      why: "prompt_pending_obligations",
+      useCount: 1,
+    });
+  });
+
+  it("counts a subagent's debts a full parent ledger cannot take, with the subagent's own count", () => {
+    const env = markerEnv();
+    const parent = "overflow-parent";
+    const exit = {
+      session_id: parent,
+      hook_event_name: "SubagentStop",
+      agent_id: "agent-overflow",
+      agent_transcript_path: "/fixture/agent-overflow.jsonl",
+    };
+    const child = agentLedgerIdFor(exit);
+    for (let index = 0; index < 64; index += 1) {
+      recordQueryFeedbackObligation(
+        parent,
+        { available: true, query_id: `rq_parent_${index}` },
+        env,
+      );
+      recordQueryFeedbackObligation(
+        child,
+        { available: true, query_id: `rq_child_${index}` },
+        env,
+      );
+    }
+    // The subagent's own full ledger has already dropped one.
+    recordPostUseFeedbackObligation(
+      child,
+      { query_id: "rq_child_dropped", result_id: "qres_child_dropped" },
+      env,
+    );
+    const markers = () =>
+      readdirSync(env.REMEMBRANCE_USAGE_DIR).filter((name) =>
+        name.endsWith(".obligations-overflow.json"),
+      );
+    expect(markers()).toHaveLength(1);
+
+    expect(transferSubagentObligations(exit, env)).toBe(64);
+    expect(readCompletionObligations(child, env)).toEqual([]);
+    const pending = readCompletionObligations(parent, env);
+    expect(pending).toHaveLength(64);
+    expect(pending.every((item) => item.transferred_from === null)).toBe(true);
+    // The parent's count now covers all 65.
+    expect(pendingCompletionRecoveryInstruction(parent, env)).toMatch(
+      /^- 65 obligations could not be recorded since \S+ \(post_use_feedback, query_feedback\): the pending list was full\.$/mu,
+    );
+  });
+
   it("bounds obligation storage and ignores malformed, expired, oversized, and symlink markers", () => {
     const boundedEnv = markerEnv();
     for (let index = 0; index < 64; index += 1) {
@@ -4236,9 +7184,13 @@ describe("hook-core marker round-trip", () => {
       JSON.stringify({ version: "wrong-version" }),
       { mode: 0o600 },
     );
-    writeFileSync(join(directory, `${"b".repeat(32)}.json`), "x".repeat(9_000), {
-      mode: 0o600,
-    });
+    writeFileSync(
+      join(directory, `${"b".repeat(32)}.json`),
+      "x".repeat(9_000),
+      {
+        mode: 0o600,
+      },
+    );
     writeFileSync(join(directory, "ignore-me.txt"), "not an obligation", {
       mode: 0o600,
     });
@@ -4249,7 +7201,7 @@ describe("hook-core marker round-trip", () => {
   });
 
   it("renders and marks only the selected pending obligation kinds", () => {
-    const env = markerEnv();
+    const env = markerEnv({ REMEMBRANCE_API_KEY: "rk_synthetic_hook_marker" });
     const sessionId = "selected-obligation-prompt";
     recordTaskEligibility(sessionId, env);
     const query = recordQueryFeedbackObligation(
@@ -4297,12 +7249,7 @@ describe("hook-core marker round-trip", () => {
     expect(first.reason).toContain("Reusable evidence");
     expect(first.reason).toContain("pld_selectedlesson");
     expect(
-      markCompletionObligationsPrompted(
-        sessionId,
-        [query.id],
-        env,
-        1,
-      ),
+      markCompletionObligationsPrompted(sessionId, [query.id], env, 1),
     ).toBe(1);
 
     const second = decideStop({ session_id: sessionId }, { env });
@@ -4457,7 +7404,7 @@ describe("hook-core marker round-trip", () => {
     ).toEqual([expect.objectContaining({ kind: "private_lesson" })]);
   });
 
-  it("matches a remembrance follow-up by correlation without retaining its prose", () => {
+  it("matches a remembrance follow-up by correlation when the submitted payload differs", () => {
     const env = markerEnv();
     const sessionId = "correlated-remembrance-followup";
     recordTaskEligibility(sessionId, env);
@@ -4551,7 +7498,10 @@ describe("hook-core marker round-trip", () => {
     });
     expect(withPrior).toContain("Close the pending loop.");
     expect(withPrior).toContain(
-      "repeat your immediately preceding user-facing answer unchanged",
+      "preserve the task result in the user-facing final answer",
+    );
+    expect(withPrior).toContain(
+      "Do not repeat already reported Remembrance warnings",
     );
     expect(withPrior).not.toContain(prior);
 
@@ -4911,17 +7861,179 @@ describe("hook-core context budget", () => {
         },
       },
     });
+    // Eight 300-plus-character required behaviors cannot all fit: the line
+    // names every exact key and requires the complete fetch instead of
+    // presenting shortened rules as "apply all".
+    const requiredFetch = `Required organization settings (8; complete text not shown here). Required next step before acting: call get_effective_preferences with ${JSON.stringify(
+      {
+        keys: Array.from(
+          { length: 8 },
+          (_, index) => `workflow.preference_${index}`,
+        ),
+      },
+    )} and apply every returned setting in full;`;
     expect(context.length).toBeLessThanOrEqual(4000);
     expect(context).toContain(
       "Organization policy: use organization skills only",
     );
-    expect(context).toContain("Required organization settings (apply all)");
-    expect(context).toContain("workflow.preference_0=choice_0");
-    expect(context).toContain("workflow.preference_7=choice_7");
+    expect(context).toContain(requiredFetch);
+    expect(context).not.toContain("(apply all)");
     expect(context).toContain("HIGH MATCH");
+    expect(context).toContain("Query receipt: rq_preference_budget");
+    expect(context).toContain("checkout-payment-retry-orchestration-runbook-1");
     expect(context).toContain("After using Remembrance");
     expect(context).toContain("get_effective_preferences");
     expect(context).toContain("Delegating this task?");
+
+    const composed = composeBoundedHookContext(context, [
+      `Remembrance user-correction capture: ${"correction ".repeat(250)}`,
+      `Persisted preference capture: ${"preference ".repeat(250)}`,
+      `Private learning recovery: ${"recovery ".repeat(250)}`,
+    ]);
+    expect(composed.length).toBeLessThanOrEqual(4000);
+    expect(composed).toContain(requiredFetch);
+    expect(composed).toContain("Query receipt: rq_preference_budget");
+    expect(composed).toContain("HIGH MATCH");
+    expect(composed).toContain(
+      "checkout-payment-retry-orchestration-runbook-1",
+    );
+  });
+
+  it("keeps maximal HIGH MATCH action arguments syntactically complete under pressure", () => {
+    const slug = `org/${"s".repeat(116)}`;
+    const queryId = `rq_${"q".repeat(77)}`;
+    const resultId = `rs_${"r".repeat(77)}`;
+    const context = formatContext(
+      {
+        body: {
+          query_id: queryId,
+          skill_access: { policy: "org_only" },
+          effective_preferences: Array.from({ length: 8 }, (_, index) => ({
+            key: `policy.setting_${index}`,
+            value: `required_${index}_${"v".repeat(80)}`,
+            label: `Mandatory setting ${index}`,
+            behavior: `Preserve this authority ${"detail ".repeat(40)}`,
+            source: "mandatory_org",
+          })),
+          skills: [],
+          resources: [
+            {
+              slug,
+              result_id: resultId,
+              match_tier: "high",
+              kind: "runbook",
+              match_reason: "Exact organization runbook",
+              description: "d".repeat(600),
+              estimated_tokens: 900,
+              verified_uses: 12,
+              risk_level: "low",
+            },
+          ],
+          contribution_directive: {
+            message: `Close every feedback loop ${"safely ".repeat(100)}`,
+          },
+        },
+      },
+      "workflow_shape",
+      10,
+    );
+    const composed = composeBoundedHookContext(context, [
+      {
+        kind: "consent",
+        text: `Private egress authorization requires the exact action. ${"consent ".repeat(120)}`,
+      },
+      {
+        kind: "retention",
+        text: `The unresolved draft remains retained locally. ${"retention ".repeat(120)}`,
+      },
+      {
+        kind: "credential",
+        text: `Remembrance credential source: shared organization config. ${"credential ".repeat(120)}`,
+      },
+    ]);
+
+    expect(composed.length).toBeLessThanOrEqual(4_000);
+    const action = composed
+      .split("\n")
+      .find((line) => line.startsWith("HIGH MATCH — required next step:"));
+    expect(action).toBeDefined();
+    const json = action.match(/with (\{.*\}) before proceeding\./u)?.[1];
+    expect(json).toBeDefined();
+    expect(JSON.parse(json)).toEqual({
+      slug,
+      query_id: queryId,
+      result_id: resultId,
+    });
+  });
+
+  it("preserves every safety class across base lengths, match counts, and credential notices", () => {
+    const credentialNotices = [
+      "Remembrance credential source: shared config organization key.",
+      "Remembrance credential source: environment organization key.",
+      "Remembrance setup needs attention: organization credential unavailable.",
+    ];
+    for (const baseLength of [0, 64, 512, 2_000, 3_900, 8_000]) {
+      for (let matchCount = 0; matchCount <= 10; matchCount += 1) {
+        for (const credential of credentialNotices) {
+          const context = [
+            `Organization policy: preserve mandatory authority. ${"x".repeat(baseLength)}`,
+            "Query receipt: rq_allocator_matrix",
+            "Private egress authorization: use only the exact approved action and never switch destination or visibility.",
+            "An unresolved draft remains retained locally; never auto-delete it.",
+            credential,
+            "Before finishing, close query feedback and reusable-learning loops independently.",
+            ...Array.from(
+              { length: matchCount },
+              (_, index) =>
+                `- [${index === 0 ? "HIGH" : "POSSIBLE"} MATCH] candidate-${index}: ${"detail ".repeat(180)}`,
+            ),
+          ].join("\n");
+          const composed = composeBoundedHookContext(context, [
+            `Remembrance user-correction capture: ${"correction ".repeat(400)}`,
+            `Persisted preference capture: ${"preference ".repeat(400)}`,
+            {
+              kind: "completion",
+              text: [
+                "Private learning recovery: one retained draft is due.",
+                "Silently call inspect_private_learning_outbox. Submit ready lessons with submit_private_lesson_candidate and ready complete skills with submit_private_skill_candidate.",
+                "Do not retry authorization, policy, validation, safety, or terminal holds through another transport. Never delete an unresolved draft automatically.",
+              ].join("\n"),
+            },
+          ]);
+          expect(composed.length).toBeLessThanOrEqual(4_000);
+          for (const directive of [
+            "Organization policy: preserve mandatory authority.",
+            "Query receipt: rq_allocator_matrix",
+            "Private egress authorization: use only the exact approved action and never switch destination or visibility.",
+            "An unresolved draft remains retained locally; never auto-delete it.",
+            credential,
+            "Before finishing, close query feedback and reusable-learning loops independently.",
+            "inspect_private_learning_outbox",
+            "submit_private_lesson_candidate",
+            "submit_private_skill_candidate",
+            "Do not retry authorization, policy, validation, safety, or terminal holds through another transport.",
+            "Never delete an unresolved draft automatically.",
+          ]) {
+            expect(composed).toContain(directive);
+          }
+          expect(composed).not.toMatch(
+            /Silently call[^\n]*validation, safety, or terminal holds/iu,
+          );
+        }
+      }
+    }
+  });
+
+  it("hard-cuts within the last 96 characters when no safe boundary exists", () => {
+    const composed = composeBoundedHookContext(
+      `Organization policy: ${"x".repeat(10_000)}`,
+    );
+    expect(composed.length).toBeGreaterThan(300);
+    expect(composed.length).toBeLessThanOrEqual(4_000);
+    expect(composed).toContain("Remaining authority context omitted");
+    expect(composed).toContain(
+      "lower-priority Remembrance context was omitted",
+    );
   });
 
   it("keeps small responses byte-complete with no omission note", () => {
@@ -4997,6 +8109,1750 @@ describe("hook-core context budget boundary sweep", () => {
           "it should fetch that result or run its own full-context query before custom work.",
         ),
       ).toBe(true);
+    }
+  });
+});
+
+describe("hook-core MCP query_skills result shapes", () => {
+  // An MCP query_skills result states each working preference once: results
+  // refer to it by key or fingerprint. REST bodies, and MCP results from a
+  // server that does not shape them, repeat it in every result. Each reader of
+  // an MCP tool response must return the same answer for both.
+  const QUERY_ID = "rq_result_shapes";
+  const DEPTH_FINGERPRINT = `sha256:${"a".repeat(64)}`;
+  const TIMING_FINGERPRINT = `sha256:${"b".repeat(64)}`;
+  const depth = {
+    key: "explanation_depth",
+    value: "concise",
+    label: "Explanation depth",
+    behavior:
+      "Keep explanations concise and focused on decisions and outcomes.",
+    effect: "presentation",
+    strength: "prefer",
+    definition_version: 1,
+  };
+  const timing = {
+    key: "workflow.test_timing",
+    value: "before_commit",
+    label: "Test timing",
+    behavior: "Run tests before a commit rather than after every edit.",
+    effect: "workflow",
+    strength: "prefer",
+    definition_version: 3,
+  };
+  const statements = [
+    {
+      ...depth,
+      scope: "member",
+      source: "explicit_member",
+      confidence: 1,
+      profile_revision: 4,
+    },
+    {
+      ...timing,
+      scope: "organization",
+      source: "recommended_org",
+      confidence: 1,
+      profile_revision: 4,
+    },
+  ];
+  const rules = {
+    preserves: ["safety", "authorization", "privacy", "applicability"],
+    instruction:
+      "Apply applied_preferences only as a surgical sidecar to discretionary choices.",
+  };
+  const candidates = [
+    {
+      slug: "verified-workflow",
+      result_id: "qres_shapes_1",
+      version_id: "skv_shapes_1",
+      match_tier: "high",
+      value_estimate_id: "vest_shapes_1",
+    },
+    {
+      slug: "second-workflow",
+      result_id: "qres_shapes_2",
+      version_id: "skv_shapes_2",
+      match_tier: "possible",
+      value_estimate_id: null,
+    },
+  ];
+  const description = "Verify the dashboard at every breakpoint. ".repeat(30);
+
+  function commonSkill(candidate) {
+    return {
+      result_id: candidate.result_id,
+      task_outcome_eligible: true,
+      name: candidate.slug,
+      slug: candidate.slug,
+      version: "3",
+      match_tier: candidate.match_tier,
+      match_reason: "Strong task coverage",
+      estimated_tokens: 900,
+      verified_uses: 4,
+      risk_level: "low",
+      source: "public",
+      why_matched: {
+        matched_terms: ["dashboard"],
+        matched_capabilities: ["viewport_matrix"],
+        domain_match: true,
+        satisfied_constraints: [],
+        missed_constraints: [],
+        lexical_signal: "strong",
+        semantic_signal: "strong",
+      },
+      applicability: {
+        fit: "likely",
+        scope: "general",
+        reason: "Covers dashboard review.",
+        use_when: [],
+        avoid_when: [],
+      },
+      ...(candidate.value_estimate_id
+        ? { value_estimate_id: candidate.value_estimate_id }
+        : {}),
+    };
+  }
+
+  function fullSkill(candidate) {
+    return {
+      ...commonSkill(candidate),
+      description,
+      effective_preferences: statements,
+      preference_compatibility_feedback: {
+        available: true,
+        query_id: QUERY_ID,
+        result_id: candidate.result_id,
+        skill_version_id: candidate.version_id,
+        preferences: [
+          { preference_fingerprint: DEPTH_FINGERPRINT, setting: depth },
+          { preference_fingerprint: TIMING_FINGERPRINT, setting: timing },
+        ],
+      },
+      preference_application: {
+        mode: "surgical_overlay",
+        runtime_compatibility: "not_evaluated",
+        applied_preferences: [
+          { ...depth, source: "explicit_member", authority: "explicit" },
+          { ...timing, source: "recommended_org", authority: "default" },
+        ],
+        blocked_preferences: [],
+        overridden_skill_defaults: [],
+        ...rules,
+      },
+    };
+  }
+
+  function compactSkill(candidate) {
+    return {
+      ...commonSkill(candidate),
+      description: `${description.slice(0, 797)} …`,
+      description_truncated: true,
+      effective_preference_keys: ["explanation_depth", "workflow.test_timing"],
+      preference_compatibility_feedback: {
+        available: true,
+        skill_version_id: candidate.version_id,
+        preference_fingerprints: [DEPTH_FINGERPRINT, TIMING_FINGERPRINT],
+      },
+      preference_application: {
+        mode: "surgical_overlay",
+        runtime_compatibility: "not_evaluated",
+        applied_preferences: [
+          { key: "explanation_depth", authority: "explicit" },
+          { key: "workflow.test_timing", authority: "default" },
+        ],
+      },
+    };
+  }
+
+  function lifecycle() {
+    return {
+      skill_bundles: [
+        {
+          bundle_id: "bundle_shapes",
+          result_ids: ["qres_shapes_1", "qres_shapes_2"],
+          task_outcome_eligible: true,
+        },
+      ],
+      task_outcome: {
+        available: true,
+        eligible_result_ids: ["qres_shapes_1", "qres_shapes_2"],
+        query_id: QUERY_ID,
+      },
+      query_feedback: {
+        available: true,
+        query_id: QUERY_ID,
+        result_ids: ["qres_shapes_1", "qres_shapes_2"],
+      },
+    };
+  }
+
+  function fullBody() {
+    return {
+      query_id: QUERY_ID,
+      effective_preferences: statements,
+      skills: candidates.map(fullSkill),
+      resources: [],
+      ...lifecycle(),
+    };
+  }
+
+  function compactBody() {
+    const { skill_bundles: skillBundles, ...rest } = lifecycle();
+    return {
+      query_id: QUERY_ID,
+      skills: candidates.map(compactSkill),
+      resources: [],
+      skill_bundles: skillBundles,
+      effective_preferences: [
+        { ...statements[0], preference_fingerprint: DEPTH_FINGERPRINT },
+        { ...statements[1], preference_fingerprint: TIMING_FINGERPRINT },
+      ],
+      preference_application_rules: rules,
+      ...rest,
+    };
+  }
+
+  function toolResult(body, indent) {
+    const envelope = {
+      ok: true,
+      status: 200,
+      idempotency_status: null,
+      rate_limit_remaining: "59",
+      retry_after: null,
+      etag: null,
+      body,
+    };
+    return {
+      content: [{ type: "text", text: JSON.stringify(envelope, null, indent) }],
+    };
+  }
+
+  const expectedEvidence = candidates.map((candidate) => ({
+    query_id: QUERY_ID,
+    result_id: candidate.result_id,
+    skill_slug: candidate.slug,
+    skill_version_id: candidate.version_id,
+    preferences: [
+      { preference_fingerprint: DEPTH_FINGERPRINT, setting: depth },
+      { preference_fingerprint: TIMING_FINGERPRINT, setting: timing },
+    ],
+  }));
+
+  it("reads the same compatibility evidence from REST, full MCP, and compact MCP results", () => {
+    const compact = toolResult(compactBody());
+    for (const [label, response] of [
+      ["REST body", { body: fullBody() }],
+      ["unshaped MCP result", toolResult(fullBody(), 2)],
+      ["compact MCP result", compact],
+      ["compact MCP content blocks", compact.content],
+      ["compact MCP text", compact.content[0].text],
+    ]) {
+      expect(
+        preferenceCompatibilityEvidenceFromResponse(response),
+        label,
+      ).toEqual(expectedEvidence);
+    }
+  });
+
+  it("reads a response that keeps one result's full offer beside compact ones", () => {
+    const body = compactBody();
+    body.skills[1] = {
+      ...body.skills[1],
+      preference_compatibility_feedback: fullSkill(candidates[1])
+        .preference_compatibility_feedback,
+    };
+    expect(
+      preferenceCompatibilityEvidenceFromResponse(toolResult(body)),
+    ).toEqual(expectedEvidence);
+  });
+
+  it("never guesses evidence for a compact offer it cannot resolve", () => {
+    const evidenceFor = (mutate) => {
+      const body = compactBody();
+      mutate(body);
+      return preferenceCompatibilityEvidenceFromResponse(toolResult(body));
+    };
+
+    // An unknown fingerprint is skipped; the resolvable one remains.
+    expect(
+      evidenceFor((body) => {
+        body.skills[0].preference_compatibility_feedback.preference_fingerprints =
+          [`sha256:${"c".repeat(64)}`, TIMING_FINGERPRINT];
+      })[0].preferences,
+    ).toEqual([
+      { preference_fingerprint: TIMING_FINGERPRINT, setting: timing },
+    ]);
+    // Two statements claiming one fingerprint are ambiguous, and nothing
+    // carries the other fingerprint, so no setting can be named.
+    expect(
+      evidenceFor((body) => {
+        body.effective_preferences[1].preference_fingerprint =
+          DEPTH_FINGERPRINT;
+      }),
+    ).toEqual([]);
+    expect(
+      evidenceFor((body) => {
+        delete body.query_id;
+      }),
+    ).toEqual([]);
+    expect(
+      evidenceFor((body) => {
+        for (const skill of body.skills) delete skill.result_id;
+      }),
+    ).toEqual([]);
+    expect(
+      evidenceFor((body) => {
+        for (const skill of body.skills) {
+          skill.preference_compatibility_feedback.available = false;
+        }
+      }),
+    ).toEqual([]);
+    expect(
+      evidenceFor((body) => {
+        body.effective_preferences = "not a list";
+      }),
+    ).toEqual([]);
+    // A malformed statement is sanitized exactly like a malformed setting.
+    expect(
+      evidenceFor((body) => {
+        body.effective_preferences[0].key = "Unsafe Key";
+      }).map((entry) => entry.preferences),
+    ).toEqual([
+      [{ preference_fingerprint: TIMING_FINGERPRINT, setting: timing }],
+      [{ preference_fingerprint: TIMING_FINGERPRINT, setting: timing }],
+    ]);
+  });
+
+  it("keeps every post-tool reader's answer on the compact shape", async () => {
+    const full = toolResult(fullBody(), 2);
+    const compact = toolResult(compactBody());
+    const withoutTimestamp = (episode) => {
+      const { created_at: createdAt, ...rest } = episode;
+      expect(Number.isNaN(Date.parse(createdAt))).toBe(false);
+      return rest;
+    };
+
+    expect(queryResponseHasMatches(compact)).toBe(true);
+    expect(queryResponseHasMatches(full)).toBe(true);
+    expect(highMatchFromResponse(compact)).toEqual(highMatchFromResponse(full));
+    expect(highMatchFromResponse(compact)).toMatchObject({
+      query_id: QUERY_ID,
+      result_id: "qres_shapes_1",
+      target_type: "skill",
+      slug: "verified-workflow",
+      value_estimate_id: "vest_shapes_1",
+    });
+    expect(queryFeedbackTrackingFromResponse(compact)).toEqual({
+      available: true,
+      query_id: QUERY_ID,
+    });
+    expect(queryFeedbackTrackingFromResponse(full)).toEqual(
+      queryFeedbackTrackingFromResponse(compact),
+    );
+    expect(withoutTimestamp(valueEpisodeFromResponse(compact))).toEqual(
+      withoutTimestamp(valueEpisodeFromResponse(full)),
+    );
+    expect(withoutTimestamp(valueEpisodeFromResponse(compact))).toMatchObject({
+      query_id: QUERY_ID,
+      interaction_kind: "query",
+      candidates: [
+        { result_id: "qres_shapes_1", value_estimate_id: "vest_shapes_1" },
+        { result_id: "qres_shapes_2", value_estimate_id: null },
+      ],
+      bundles: [
+        {
+          bundle_id: "bundle_shapes",
+          result_ids: ["qres_shapes_1", "qres_shapes_2"],
+        },
+      ],
+    });
+    expect(toolResponseIndicatesFailure(compact)).toBe(false);
+    expect(directSelectionFromResponse(compact)).toBeNull();
+
+    const env = markerEnv();
+    const observed = observeSuccessfulCompletionTool(
+      "sess-compact-query",
+      "mcp__remembrance__query_skills",
+      { task: { domain: "web-ui-qa", summary: "Review a dashboard" } },
+      compact,
+      env,
+    );
+    expect(observed.opened).toEqual([
+      expect.objectContaining({ kind: "query_feedback", query_id: QUERY_ID }),
+    ]);
+
+    recordDirectiveSurface(
+      "sess-compact-directive",
+      {
+        directive_id: "dir_1234567890abcdef1234567890abcdef",
+        runtime: "codex",
+        trigger_reason: "contextual_continuation",
+        shown_at: new Date().toISOString(),
+      },
+      env,
+    );
+    const calls = [];
+    expect(
+      await recordDirectiveFollowThroughForTool(
+        "sess-compact-directive",
+        "mcp__remembrance__query_skills",
+        compact,
+        {
+          env,
+          fetchImpl: vi.fn(async (url, init) => {
+            calls.push(JSON.parse(String(init.body)));
+            return Response.json({ recorded: true });
+          }),
+        },
+      ),
+    ).toBe(true);
+    expect(calls).toEqual([
+      {
+        event: "followed",
+        directive_id: "dir_1234567890abcdef1234567890abcdef",
+        query_id: QUERY_ID,
+      },
+    ]);
+  });
+
+  it("still reports a compact failed query as a failure", () => {
+    const failed = {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            ok: false,
+            status: 503,
+            body: { error: "Service unavailable" },
+            tool_error: { code: "remembrance_api_unavailable" },
+          }),
+        },
+      ],
+      isError: true,
+    };
+    expect(toolResponseIndicatesFailure(failed)).toBe(true);
+    expect(preferenceCompatibilityEvidenceFromResponse(failed)).toEqual([]);
+  });
+});
+
+// Review R2 (Task 15): a durable preference's exact arguments, kept sealed
+// for an unresolved debt, are never aged out of the ledger: only a marker
+// without content keeps the inherited seven-day cleanup. Digests computed
+// when the arguments were sealed stand in for them in every comparison.
+describe("unresolved retained arguments past seven days (review R2)", () => {
+  const hash = (value) =>
+    createHash("sha256").update(value, "utf8").digest("hex");
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  // An obligation's record file, wherever the hook keeps it.
+  function recordPath(env, sessionId, obligation) {
+    const name = `${hash(obligation.id).slice(0, 32)}.json`;
+    const ledger = `${hash(sessionId).slice(0, 16)}.obligations`;
+    return [
+      join(
+        env.XDG_STATE_HOME,
+        "remembrance",
+        "private-learning-lifecycle",
+        "retained",
+        ledger,
+        name,
+      ),
+      join(env.REMEMBRANCE_USAGE_DIR, ledger, name),
+    ].find((path) => existsSync(path));
+  }
+  function age(path, days) {
+    const aged = new Date(Date.now() - days * DAY_MS);
+    const record = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(
+      path,
+      `${JSON.stringify({ ...record, created_at: aged.toISOString() })}\n`,
+      { mode: 0o600 },
+    );
+    utimesSync(path, aged, aged);
+  }
+
+  it("keeps a sealed preference, byte-identical and retrievable, past seven days while an aged marker goes", async () => {
+    const env = markerEnv();
+    const sessionId = "r2-aged-preference";
+    let preferenceArguments = {
+      setting: {
+        key: "workflow.changelog_first",
+        value: "before_code",
+        label: "Changelog first",
+        behavior: "Write the changelog entry before changing the code.",
+        effect: "workflow",
+      },
+      scope: "member",
+    };
+    const sealedDigest = resupplyPayloadDigest(preferenceArguments);
+    observeSuccessfulCompletionTool(
+      sessionId,
+      "capture_learning",
+      {},
+      {
+        capture_route: "preference",
+        persisted_locally: false,
+        next_action: {
+          tool: "record_preference",
+          arguments: preferenceArguments,
+        },
+      },
+      env,
+    );
+    preferenceArguments = null;
+    recordQueryFeedbackObligation(
+      sessionId,
+      { available: true, query_id: "rq_r2_marker" },
+      env,
+    );
+    const pending = readCompletionObligations(sessionId, env);
+    const preference = pending.find(
+      (item) => item.kind === "capture_next_action",
+    );
+    const marker = pending.find((item) => item.kind === "query_feedback");
+    expect(preference).toMatchObject({
+      payload_digest: sealedDigest,
+      local_resupply_envelope: expect.objectContaining({
+        key_source: "mode_0600_file",
+      }),
+    });
+    const preferencePath = recordPath(env, sessionId, preference);
+    const markerPath = recordPath(env, sessionId, marker);
+    age(preferencePath, 8);
+    age(markerPath, 8);
+    const bytes = readFileSync(preferencePath);
+
+    expect(
+      readCompletionObligations(sessionId, env).map((item) => item.id),
+    ).toEqual([preference.id]);
+    expect(readFileSync(preferencePath)).toEqual(bytes);
+    expect(existsSync(markerPath)).toBe(false);
+    const actionId = hash(preference.id).slice(0, 16);
+    expect(pendingCompletionRecoveryInstruction(sessionId, env)).toContain(
+      `call local get_pending_action_payload with action_id ${actionId} and ledger ${hash(sessionId).slice(0, 16)}`,
+    );
+    const key = Buffer.from(
+      readFileSync(
+        join(env.XDG_CONFIG_HOME, "remembrance", "private-lesson-outbox.key"),
+        "utf8",
+      ).trim(),
+      "base64url",
+    );
+    const retrieved = await readPendingActionPayload(
+      { action_id: actionId, ledger: hash(sessionId).slice(0, 16) },
+      env,
+      { readKey: async () => key },
+    );
+    expect(retrieved).toMatchObject({
+      status: "retrieved",
+      kind: "capture_next_action",
+      payload_digest: sealedDigest,
+    });
+    expect(resupplyPayloadDigest(retrieved.arguments)).toBe(sealedDigest);
+    expect(readFileSync(preferencePath)).toEqual(bytes);
+  });
+});
+
+// Review R2 (Task 15): an unresolved sealed record leaves only through its
+// resolution; a subagent's record moves to its parent only once the parent
+// holds an equal copy; capacity never evicts one; an earlier build's record
+// in the temporary directory moves to the durable one; and two first uses
+// make one key.
+describe("unresolved retained records: resolution, transfer, capacity, promotion and first use", () => {
+  const hash = (value) =>
+    createHash("sha256").update(value, "utf8").digest("hex");
+  const ledgerOf = (ledgerId) => hash(ledgerId).slice(0, 16);
+  const keyFile = (env) =>
+    join(env.XDG_CONFIG_HOME, "remembrance", "private-lesson-outbox.key");
+  const readKey = (env) => async () =>
+    Buffer.from(readFileSync(keyFile(env), "utf8").trim(), "base64url");
+  const retainedRoot = (env) =>
+    join(env.XDG_STATE_HOME, "remembrance", "private-learning-lifecycle", "retained");
+  const pointerFiles = (env, ledgerId) => {
+    const directory = join(retainedRoot(env), `${ledgerOf(ledgerId)}.pointers`);
+    return existsSync(directory) ? readdirSync(directory) : [];
+  };
+  function preferenceArguments(value) {
+    return {
+      setting: {
+        key: "workflow.changelog_first",
+        value,
+        label: "Changelog first",
+        behavior: "Write the changelog entry before changing the code.",
+        effect: "workflow",
+      },
+      scope: "member",
+    };
+  }
+  // A capture_learning preference route the hook observes; only the digest
+  // computed at seal time leaves this function.
+  function capturePreference(env, ledgerId, value) {
+    const digest = resupplyPayloadDigest(preferenceArguments(value));
+    observeSuccessfulCompletionTool(
+      ledgerId,
+      "capture_learning",
+      {},
+      {
+        capture_route: "preference",
+        persisted_locally: false,
+        next_action: {
+          tool: "record_preference",
+          arguments: preferenceArguments(value),
+        },
+      },
+      env,
+    );
+    const obligation = readCompletionObligations(ledgerId, env).find(
+      (item) =>
+        item.kind === "capture_next_action" &&
+        item.payload_digest === digest &&
+        !item.ledger,
+    );
+    return { digest, id: obligation?.id, actionId: hash(`capture_next_action:${digest}`).slice(0, 16) };
+  }
+  const recordFile = (env, ledgerId, id) =>
+    join(
+      sealedLedgerDirectory(env, ledgerId),
+      `${hash(id).slice(0, 32)}.json`,
+    );
+  const fillLedger = (env, ledgerId, count = 64) => {
+    for (let index = 0; index < count; index += 1) {
+      recordQueryFeedbackObligation(
+        ledgerId,
+        { available: true, query_id: `rq_${ledgerId.length}_${index}` },
+        env,
+      );
+    }
+  };
+  // What get_pending_action_payload says for a preference a subagent left.
+  const SECOND_HAND_PREFERENCE =
+    "Nothing was recorded or applied. A subagent captured this preference and left it unrecorded when it exited: call record_preference with exactly these arguments only if the user stated this preference, otherwise decline it with decline_pending_action.";
+
+  it("removes a sealed preference only through a matching record_preference, never through another one", () => {
+    const env = markerEnv();
+    const session = "r2-resolution";
+    const kept = capturePreference(env, session, "before_code");
+    const path = recordFile(env, session, kept.id);
+    const bytes = readFileSync(path);
+
+    observeSuccessfulCompletionTool(
+      session,
+      "record_preference",
+      preferenceArguments("after_code"),
+      { recorded: true },
+      env,
+    );
+    expect(readFileSync(path)).toEqual(bytes);
+    expect(
+      readCompletionObligations(session, env).map((item) => item.id),
+    ).toEqual([kept.id]);
+
+    observeSuccessfulCompletionTool(
+      session,
+      "record_preference",
+      preferenceArguments("before_code"),
+      { recorded: true },
+      env,
+    );
+    expect(existsSync(path)).toBe(false);
+    expect(ledgerRecordFiles(env, session)).toEqual([]);
+    expect(readCompletionObligations(session, env)).toEqual([]);
+  });
+
+  it("keeps a subagent's sealed record, with a pointer for its full parent, until the parent holds an equal copy", async () => {
+    const env = markerEnv();
+    const parent = "r2-full-parent";
+    const stop = {
+      hook_event_name: "SubagentStop",
+      session_id: parent,
+      agent_id: "a5555555555555555",
+    };
+    const child = agentLedgerIdFor(stop);
+    const kept = capturePreference(env, child, "before_code");
+    const childPath = recordFile(env, child, kept.id);
+    const childBytes = readFileSync(childPath);
+    fillLedger(env, parent);
+
+    // The parent's ledger is full: the child keeps its record, the parent
+    // gets a content-free pointer, and nothing counts as dropped.
+    // Review R1-1 (round 1): the child keeps its record, now naming the
+    // subagent it came from; its id, digest and sealed arguments stay byte
+    // for byte, and a repeated transfer rewrites nothing.
+    const tagged = `${JSON.stringify({
+      ...JSON.parse(childBytes.toString("utf8")),
+      transferred_from: { agent_id: stop.agent_id, transcript_path: null },
+    })}\n`;
+    expect(transferSubagentObligations(stop, env)).toBe(0);
+    expect(readFileSync(childPath, "utf8")).toBe(tagged);
+    const taggedInode = statSync(childPath).ino;
+    expect(transferSubagentObligations(stop, env)).toBe(0);
+    expect(readFileSync(childPath, "utf8")).toBe(tagged);
+    expect(statSync(childPath).ino).toBe(taggedInode);
+    expect(pointerFiles(env, parent)).toHaveLength(1);
+    const pointer = JSON.parse(
+      readFileSync(
+        join(
+          retainedRoot(env),
+          `${ledgerOf(parent)}.pointers`,
+          pointerFiles(env, parent)[0],
+        ),
+        "utf8",
+      ),
+    );
+    expect(pointer).toEqual({
+      version: "completion-obligation-pointer-v1",
+      ledger: ledgerOf(child),
+      id: kept.id,
+    });
+    expect(
+      existsSync(
+        join(env.REMEMBRANCE_USAGE_DIR, `${ledgerOf(parent)}.obligations-overflow.json`),
+      ),
+    ).toBe(false);
+    // The parent's debts now include it, by the child's ledger: past the
+    // demand's first lines, it is counted among those that remain.
+    expect(readCompletionObligations(parent, env)).toContainEqual(
+      expect.objectContaining({ id: kept.id, ledger: ledgerOf(child) }),
+    );
+    expect(pendingCompletionRecoveryInstruction(parent, env)).toContain(
+      "- 53 additional pending action(s) remain in this session.",
+    );
+    const retrieved = await readPendingActionPayload(
+      { action_id: kept.actionId, ledger: ledgerOf(child) },
+      env,
+      { readKey: readKey(env) },
+    );
+    expect(retrieved).toMatchObject({
+      status: "retrieved",
+      payload_digest: kept.digest,
+      provenance: "second_hand",
+      transferred_from: { agent_id: stop.agent_id, transcript_path: null },
+      guidance: SECOND_HAND_PREFERENCE,
+    });
+    expect(resupplyPayloadDigest(retrieved.arguments)).toBe(kept.digest);
+    // Shown in the parent's demand, it is second-hand there as well.
+    for (const file of ledgerRecordFiles(env, parent).slice(1)) rmSync(file);
+    expect(pendingCompletionRecoveryInstruction(parent, env)).toContain(
+      `- Durable preference (second-hand from subagent ${stop.agent_id}): arguments kept on this machine (`,
+    );
+
+    // Room in the parent: the record still stays where it is kept, and the
+    // parent's pointer with it. Round 0 R0-3 (D2(i)): once another ledger
+    // may point to a record, it never moves whole, so no pointer to it can
+    // be left behind.
+    const parentMarker = ledgerRecordFiles(env, parent).find(
+      (file) => !file.includes(retainedRoot(env)),
+    );
+    rmSync(parentMarker);
+    expect(transferSubagentObligations(stop, env)).toBe(0);
+    expect(readFileSync(childPath, "utf8")).toBe(tagged);
+    expect(existsSync(recordFile(env, parent, kept.id))).toBe(false);
+    expect(pointerFiles(env, parent)).toHaveLength(1);
+    expect(readCompletionObligations(parent, env)).toContainEqual(
+      expect.objectContaining({ id: kept.id, ledger: ledgerOf(child) }),
+    );
+  });
+
+  it("keeps a subagent's record beside a parent's record of the same action sealed differently, and one resolution removes both", async () => {
+    const env = markerEnv();
+    const parent = "r2-same-id-parent";
+    const stop = {
+      hook_event_name: "SubagentStop",
+      session_id: parent,
+      agent_id: "a6666666666666666",
+      agent_transcript_path: "/transcripts/a6666666666666666.jsonl",
+    };
+    const child = agentLedgerIdFor(stop);
+    const own = capturePreference(env, parent, "before_code");
+    const theirs = capturePreference(env, child, "before_code");
+    expect(theirs.id).toBe(own.id);
+    const parentPath = recordFile(env, parent, own.id);
+    const childPath = recordFile(env, child, theirs.id);
+    const parentBytes = readFileSync(parentPath);
+    const childBytes = readFileSync(childPath);
+    // Each seal has its own nonce: the same action, sealed differently.
+    expect(parentBytes.equals(childBytes)).toBe(false);
+
+    expect(transferSubagentObligations(stop, env)).toBe(0);
+    expect(readFileSync(parentPath)).toEqual(parentBytes);
+    // Review R1-1 (round 1): the child's copy stays, naming the subagent and
+    // its transcript; nothing else in it changes.
+    expect(readFileSync(childPath, "utf8")).toBe(
+      `${JSON.stringify({
+        ...JSON.parse(childBytes.toString("utf8")),
+        transferred_from: {
+          agent_id: stop.agent_id,
+          transcript_path: stop.agent_transcript_path,
+        },
+      })}\n`,
+    );
+    expect(pointerFiles(env, parent)).toHaveLength(1);
+    // The parent's demand names both kept copies by their own ledgers.
+    const demand = pendingCompletionRecoveryInstruction(parent, env);
+    expect(demand).toContain(
+      `call local get_pending_action_payload with action_id ${own.actionId} and ledger ${ledgerOf(parent)}`,
+    );
+    expect(demand).toContain(
+      `call local get_pending_action_payload with action_id ${theirs.actionId} and ledger ${ledgerOf(child)}`,
+    );
+    const lineFor = (ledger) =>
+      demand.split("\n").find((line) => line.includes(`and ledger ${ledger},`));
+    expect(lineFor(ledgerOf(parent))).toContain(
+      "- Durable preference: arguments kept on this machine (",
+    );
+    expect(lineFor(ledgerOf(child))).toContain(
+      `- Durable preference (second-hand from subagent ${stop.agent_id} (${stop.agent_transcript_path})): arguments kept on this machine (`,
+    );
+    const retrieve = (ledger) =>
+      readPendingActionPayload(
+        { action_id: own.actionId, ledger },
+        env,
+        { readKey: readKey(env) },
+      );
+    expect(await retrieve(ledgerOf(parent))).toMatchObject({
+      status: "retrieved",
+      provenance: "first_hand",
+      transferred_from: null,
+    });
+    expect(await retrieve(ledgerOf(child))).toMatchObject({
+      status: "retrieved",
+      payload_digest: theirs.digest,
+      provenance: "second_hand",
+      transferred_from: {
+        agent_id: stop.agent_id,
+        transcript_path: stop.agent_transcript_path,
+      },
+      guidance: SECOND_HAND_PREFERENCE,
+    });
+
+    observeSuccessfulCompletionTool(
+      parent,
+      "record_preference",
+      preferenceArguments("before_code"),
+      { recorded: true },
+      env,
+    );
+    expect(existsSync(parentPath)).toBe(false);
+    expect(existsSync(childPath)).toBe(false);
+    expect(pointerFiles(env, parent)).toEqual([]);
+    expect(readCompletionObligations(parent, env)).toEqual([]);
+  });
+
+  it("never evicts a record for room: a full ledger counts the preference it could not take and says how to recover it", () => {
+    const env = markerEnv();
+    const session = "r2-capacity";
+    fillLedger(env, session);
+    const before = ledgerRecordFiles(env, session)
+      .map((file) => readFileSync(file, "utf8"))
+      .sort();
+    capturePreference(env, session, "before_code");
+    expect(
+      ledgerRecordFiles(env, session)
+        .map((file) => readFileSync(file, "utf8"))
+        .sort(),
+    ).toEqual(before);
+    const overflow = JSON.parse(
+      readFileSync(
+        join(env.REMEMBRANCE_USAGE_DIR, `${ledgerOf(session)}.obligations-overflow.json`),
+        "utf8",
+      ),
+    );
+    expect(overflow).toMatchObject({ count: 1, kinds: ["capture_next_action"] });
+    expect(JSON.stringify(overflow)).not.toContain("before_code");
+    expect(pendingCompletionRecoveryInstruction(session, env)).toContain(
+      "the pending list was full. To complete a durable preference or follow-up among them, repeat the original request so the exact arguments can be supplied again.",
+    );
+  });
+
+  it("moves a sealed record an earlier build left in the temporary directory to the durable one, once and byte-equal", () => {
+    const env = markerEnv();
+    const session = "r2-promotion";
+    const first = capturePreference(env, session, "before_code");
+    const second = capturePreference(env, session, "before_review");
+    const third = capturePreference(env, session, "before_merge");
+    const legacyDirectory = join(env.REMEMBRANCE_USAGE_DIR, `${ledgerOf(session)}.obligations`);
+    mkdirSync(legacyDirectory, { recursive: true, mode: 0o700 });
+    const legacy = (item) => join(legacyDirectory, `${hash(item.id).slice(0, 32)}.json`);
+    const bytes = {};
+    for (const item of [first, second, third]) {
+      bytes[item.id] = readFileSync(recordFile(env, session, item.id));
+      writeFileSync(legacy(item), bytes[item.id], { mode: 0o600 });
+      rmSync(recordFile(env, session, item.id));
+    }
+    // A differing durable copy of the second is kept, and so is its legacy
+    // copy; an unreadable legacy copy of the third blocks nothing else.
+    const differing = Buffer.from(
+      `${JSON.stringify({ ...JSON.parse(bytes[second.id].toString("utf8")), prompted_at: "2026-10-01T00:00:00.000Z" })}\n`,
+    );
+    writeFileSync(recordFile(env, session, second.id), differing, { mode: 0o600 });
+    chmodSync(legacy(third), 0o000);
+    try {
+      const ids = readCompletionObligations(session, env).map((item) => item.id);
+      expect(ids).toEqual(expect.arrayContaining([first.id, second.id]));
+    } finally {
+      chmodSync(legacy(third), 0o600);
+    }
+    expect(readFileSync(recordFile(env, session, first.id))).toEqual(bytes[first.id]);
+    expect(existsSync(legacy(first))).toBe(false);
+    expect(readFileSync(recordFile(env, session, second.id))).toEqual(differing);
+    expect(readFileSync(legacy(second))).toEqual(bytes[second.id]);
+    expect(readFileSync(legacy(third))).toEqual(bytes[third.id]);
+
+    // Readable again, it moves on the next read; reading again changes nothing.
+    readCompletionObligations(session, env);
+    expect(readFileSync(recordFile(env, session, third.id))).toEqual(bytes[third.id]);
+    expect(existsSync(legacy(third))).toBe(false);
+    readCompletionObligations(session, env);
+    expect(readFileSync(recordFile(env, session, first.id))).toEqual(bytes[first.id]);
+    expect(readFileSync(recordFile(env, session, third.id))).toEqual(bytes[third.id]);
+  });
+
+  // Review R1-4 (round 1): a ledger full of sealed preferences gives none of
+  // them up for the next one.
+  it("never evicts a sealed record for room: a ledger of 64 sealed preferences counts the 65th and keeps every record byte for byte", () => {
+    const env = markerEnv();
+    const session = "r1-4-sealed-capacity";
+    for (let index = 0; index < 64; index += 1) {
+      expect(capturePreference(env, session, `value_${index}`).id).toEqual(
+        expect.any(String),
+      );
+    }
+    const files = ledgerRecordFiles(env, session);
+    expect(files).toHaveLength(64);
+    const before = new Map(files.map((file) => [file, readFileSync(file)]));
+    for (const bytes of before.values()) {
+      expect(
+        JSON.parse(bytes.toString("utf8")).local_resupply_envelope,
+      ).toMatchObject({ version: "completion-resupply-envelope-v1" });
+    }
+
+    expect(capturePreference(env, session, "value_64").id).toBeUndefined();
+    expect(ledgerRecordFiles(env, session).sort()).toEqual(
+      [...before.keys()].sort(),
+    );
+    for (const [file, bytes] of before) expect(readFileSync(file)).toEqual(bytes);
+    const overflow = JSON.parse(
+      readFileSync(
+        join(env.REMEMBRANCE_USAGE_DIR, `${ledgerOf(session)}.obligations-overflow.json`),
+        "utf8",
+      ),
+    );
+    expect(overflow).toMatchObject({ count: 1, kinds: ["capture_next_action"] });
+    expect(JSON.stringify(overflow)).not.toContain("value_64");
+    const demand = pendingCompletionRecoveryInstruction(session, env);
+    expect(demand).toContain("- 1 obligation could not be recorded since ");
+    expect(demand).toContain(
+      "(capture_next_action): the pending list was full. To complete a durable preference or follow-up among them, repeat the original request so the exact arguments can be supplied again.",
+    );
+  });
+
+  // Review R1-5 (round 1): a subagent's own count of what it could not record
+  // passes on once, claimed by rename, while a debt it keeps stays put.
+  it("passes a subagent's overflow count to its parent once, however often its stop repeats", () => {
+    const env = markerEnv();
+    const parent = "r1-5-overflow-parent";
+    const stop = {
+      hook_event_name: "SubagentStop",
+      session_id: parent,
+      agent_id: "a7777777777777777",
+    };
+    const child = agentLedgerIdFor(stop);
+    const overflowOf = (ledgerId) =>
+      join(env.REMEMBRANCE_USAGE_DIR, `${ledgerOf(ledgerId)}.obligations-overflow.json`);
+    const kept = capturePreference(env, child, "before_code");
+    fillLedger(env, child, 63);
+    recordQueryFeedbackObligation(
+      child,
+      { available: true, query_id: "rq_child_extra" },
+      env,
+    );
+    expect(JSON.parse(readFileSync(overflowOf(child), "utf8"))).toMatchObject({
+      count: 1,
+      kinds: ["query_feedback"],
+    });
+    fillLedger(env, parent);
+    const parentFiles = ledgerRecordFiles(env, parent).sort();
+    expect(parentFiles).toHaveLength(64);
+
+    const moved = [];
+    const counts = [];
+    for (let round = 0; round < 3; round += 1) {
+      moved.push(transferSubagentObligations(stop, env));
+      counts.push(JSON.parse(readFileSync(overflowOf(parent), "utf8")).count);
+    }
+    expect(moved).toEqual([63, 0, 0]);
+    expect(counts).toEqual([64, 64, 64]);
+    expect(existsSync(overflowOf(child))).toBe(false);
+    // Nothing was copied twice: the parent keeps its own 64, the child its
+    // sealed record, and one pointer names it.
+    expect(ledgerRecordFiles(env, parent).sort()).toEqual(parentFiles);
+    expect(ledgerRecordFiles(env, child)).toEqual([
+      recordFile(env, child, kept.id),
+    ]);
+    expect(pointerFiles(env, parent)).toHaveLength(1);
+  });
+
+  // Review R1-6 (round 1): each cleanup of a pointer, alone.
+  const pointedDebt = (env, parent, agentId) => {
+    const stop = {
+      hook_event_name: "SubagentStop",
+      session_id: parent,
+      agent_id: agentId,
+    };
+    const child = agentLedgerIdFor(stop);
+    const kept = capturePreference(env, child, "before_code");
+    fillLedger(env, parent);
+    expect(transferSubagentObligations(stop, env)).toBe(0);
+    const names = pointerFiles(env, parent);
+    expect(names).toHaveLength(1);
+    return {
+      child,
+      kept,
+      pointer: join(retainedRoot(env), `${ledgerOf(parent)}.pointers`, names[0]),
+    };
+  };
+  for (const [label, tool, input, response] of [
+    [
+      "records the preference",
+      "record_preference",
+      () => preferenceArguments("before_code"),
+      { recorded: true },
+    ],
+    [
+      "declines the action",
+      "decline_pending_action",
+      (kept) => ({ action_id: kept.actionId, reason: "not_observed_by_this_agent" }),
+      { declined: true },
+    ],
+  ]) {
+    it(`removes a pointed debt's kept record and its pointer when the parent ${label}`, () => {
+      const env = markerEnv();
+      const parent = `r1-6-${tool}`;
+      const { child, kept, pointer } = pointedDebt(
+        env,
+        parent,
+        tool === "record_preference" ? "a8888888888888888" : "a9999999999999999",
+      );
+      // Review R3-1(d) (round 3): the subagent's ledger, which keeps the debt,
+      // loses its directories with its last record, in both homes.
+      const homes = [
+        sealedLedgerDirectory(env, child),
+        join(env.REMEMBRANCE_USAGE_DIR, `${ledgerOf(child)}.obligations`),
+      ];
+      expect(existsSync(homes[0])).toBe(true);
+      observeSuccessfulCompletionTool(parent, tool, input(kept), response, env);
+      expect(existsSync(pointer)).toBe(false);
+      expect(existsSync(recordFile(env, child, kept.id))).toBe(false);
+      expect(
+        readCompletionObligations(parent, env).some((item) => item.id === kept.id),
+      ).toBe(false);
+      expect(homes.filter((home) => existsSync(home))).toEqual([]);
+    });
+  }
+
+  it("removes the pointer of a kept debt that moves on, in the ledger it leaves, with nothing reading that ledger again", () => {
+    const env = markerEnv();
+    const parent = "r1-6-move-on";
+    // A subagent's ledger holds its own subagent's record only by pointer
+    // while it is full; at its stop the parent, with room, takes that record.
+    const middleStop = {
+      hook_event_name: "SubagentStop",
+      session_id: parent,
+      agent_id: "b1111111111111111",
+    };
+    const middle = agentLedgerIdFor(middleStop);
+    const { child, kept, pointer } = pointedDebt(env, middle, "b2222222222222222");
+    for (const file of ledgerRecordFiles(env, middle)) rmSync(file);
+
+    // Round 0 R0-3 (D2(i)): a record another ledger points to never moves
+    // whole, even into a parent with room; the pointer moves on instead, and
+    // the ledger it leaves keeps no pointer home.
+    expect(transferSubagentObligations(middleStop, env)).toBe(0);
+    expect(existsSync(pointer)).toBe(false);
+    expect(existsSync(dirname(pointer))).toBe(false);
+    expect(existsSync(recordFile(env, child, kept.id))).toBe(true);
+    expect(readCompletionObligations(parent, env)).toContainEqual(
+      expect.objectContaining({
+        id: kept.id,
+        payload_digest: kept.digest,
+        ledger: ledgerOf(child),
+      }),
+    );
+  });
+
+  it("drops a pointer whose record is gone from both homes of the ledger that kept it on the parent's next read", () => {
+    const env = markerEnv();
+    const parent = "r1-6-dangling";
+    const { child, kept, pointer } = pointedDebt(env, parent, "b3333333333333333");
+    // Resolved where it was kept: neither home holds the record now.
+    rmSync(recordFile(env, child, kept.id));
+    rmSync(
+      join(
+        env.REMEMBRANCE_USAGE_DIR,
+        `${ledgerOf(child)}.obligations`,
+        `${hash(kept.id).slice(0, 32)}.json`,
+      ),
+      { force: true },
+    );
+    expect(existsSync(pointer)).toBe(true);
+
+    expect(
+      readCompletionObligations(parent, env).some((item) => item.id === kept.id),
+    ).toBe(false);
+    expect(existsSync(pointer)).toBe(false);
+  });
+
+  // Review R1-3 (round 1): a durable root that is a symlink is refused, never
+  // followed; the record goes to the temporary ledger, where it is read.
+  // Its link target holds its own files; none is read, written or removed.
+  const linkDurableRoot = (env, linked) => {
+    mkdirSync(join(env.XDG_CONFIG_HOME, "remembrance"), {
+      recursive: true,
+      mode: 0o700,
+    });
+    writeFileSync(keyFile(env), `${Buffer.alloc(32, 9).toString("base64url")}\n`, {
+      mode: 0o600,
+    });
+    const outside = `${env.XDG_STATE_HOME}-outside`;
+    mkdirSync(outside, { recursive: true, mode: 0o700 });
+    writeFileSync(join(outside, "keep.txt"), "outside\n", { mode: 0o600 });
+    const lifecycle = join(env.XDG_STATE_HOME, "remembrance", "private-learning-lifecycle");
+    const link = linked === "retained" ? join(lifecycle, "retained") : lifecycle;
+    mkdirSync(dirname(link), { recursive: true, mode: 0o700 });
+    symlinkSync(outside, link);
+    const retainedInside = linked === "retained" ? outside : join(outside, "retained");
+    const tree = () =>
+      readdirSync(outside, { recursive: true })
+        .sort()
+        .map((name) => {
+          const path = join(outside, name);
+          return [name, statSync(path).isFile() ? readFileSync(path, "utf8") : "directory"];
+        });
+    return { outside, retainedInside, tree };
+  };
+  for (const linked of ["retained", "private-learning-lifecycle"]) {
+    it(`never follows a symlinked ${linked} directory: a sealed record stays in the temporary ledger, where the hook and retrieval read it`, async () => {
+      const env = markerEnv();
+      const session = `r1-3-${linked}`;
+      const { retainedInside, tree } = linkDurableRoot(env, linked);
+      // Review R2-3 (round 2): a valid record of the same name, with another
+      // digest, already sits where the durable copy would be, behind the link.
+      const digest = resupplyPayloadDigest(preferenceArguments("before_code"));
+      const id = `capture_next_action:${digest}`;
+      const planted = join(retainedInside, `${ledgerOf(session)}.obligations`);
+      mkdirSync(planted, { recursive: true, mode: 0o700 });
+      writeFileSync(
+        join(planted, `${hash(id).slice(0, 32)}.json`),
+        `${JSON.stringify({
+          version: "completion-obligation-v1",
+          id,
+          kind: "capture_next_action",
+          action_tool: "record_preference",
+          payload_digest: `sha256:${"0".repeat(64)}`,
+          agent_keyed: true,
+          created_at: new Date().toISOString(),
+          local_resupply_envelope: null,
+        })}\n`,
+        { mode: 0o600 },
+      );
+      const before = tree();
+
+      const kept = capturePreference(env, session, "before_code");
+      expect(kept.id).toBe(id);
+      const temporary = join(
+        env.REMEMBRANCE_USAGE_DIR,
+        `${ledgerOf(session)}.obligations`,
+        `${hash(kept.id).slice(0, 32)}.json`,
+      );
+      expect(
+        JSON.parse(readFileSync(temporary, "utf8")).local_resupply_envelope,
+      ).toMatchObject({ version: "completion-resupply-envelope-v1" });
+      expect(readCompletionObligations(session, env)).toContainEqual(
+        expect.objectContaining({ id: kept.id, payload_digest: kept.digest }),
+      );
+      expect(pendingCompletionRecoveryInstruction(session, env)).toContain(
+        `call local get_pending_action_payload with action_id ${kept.actionId} and ledger ${ledgerOf(session)}`,
+      );
+      // Retrieval reads the temporary record, never the one behind the link.
+      expect(
+        await readPendingActionPayload(
+          { action_id: kept.actionId, ledger: ledgerOf(session) },
+          env,
+          { readKey: readKey(env) },
+        ),
+      ).toMatchObject({ status: "retrieved", payload_digest: kept.digest });
+      // Reading never moved it through the link either.
+      expect(existsSync(temporary)).toBe(true);
+      // A private-learning hint lives in the lifecycle directory: kept while
+      // only retained is linked, refused (the outbox stays authoritative)
+      // while the lifecycle directory itself is.
+      const hint = recordPrivateLessonObligation(
+        session,
+        { body: { draft_id: "pld_r13linkedroot", state: "ready" } },
+        env,
+      );
+      if (linked === "retained") {
+        expect(hint).toMatchObject({ kind: "private_lesson", draft_id: "pld_r13linkedroot" });
+      } else {
+        expect(hint).toBeNull();
+      }
+      // Resolving it removes the temporary record, and nothing behind the
+      // link, although a file of the same name is there.
+      observeSuccessfulCompletionTool(
+        session,
+        "record_preference",
+        preferenceArguments("before_code"),
+        { recorded: true },
+        env,
+      );
+      expect(existsSync(temporary)).toBe(false);
+      expect(tree()).toEqual(before);
+    });
+  }
+
+  // Review R2-1 (round 1 follow-up, round 2), replaced by F2 (Task 16): a
+  // kept subagent debt is never counted in its parent's overflow marker,
+  // whose text asks to repeat the original request and so cannot describe a
+  // kept debt. Its parent gets a content-free pointer instead: in the
+  // temporary home while the durable root is refused, and with no cap.
+  const overflowOf = (env, ledgerId) =>
+    join(env.REMEMBRANCE_USAGE_DIR, `${ledgerOf(ledgerId)}.obligations-overflow.json`);
+  const REPEAT_LINE =
+    "(capture_next_action): the pending list was full. To complete a durable preference or follow-up among them, repeat the original request so the exact arguments can be supplied again.";
+  const usageTree = (env) =>
+    readdirSync(env.REMEMBRANCE_USAGE_DIR, { recursive: true })
+      .sort()
+      .map((name) => {
+        const path = join(env.REMEMBRANCE_USAGE_DIR, name);
+        return [name, statSync(path).isFile() ? readFileSync(path, "utf8") : "directory"];
+      });
+  const drainOwn = (env, ledgerId, count = 64) => {
+    for (let index = 0; index < count; index += 1) {
+      observeSuccessfulCompletionTool(
+        ledgerId,
+        "submit_query_feedback",
+        { query_id: `rq_${ledgerId.length}_${index}` },
+        { accepted: true },
+        env,
+      );
+    }
+  };
+  const handleLine = (kept, keeper) =>
+    `call local get_pending_action_payload with action_id ${kept.actionId} and ledger ${ledgerOf(keeper)}`;
+  it("points a full parent at a kept subagent debt from the temporary home when a linked durable root is refused, never counts it, and writes nothing through the link", async () => {
+    const env = markerEnv();
+    const parent = "r2-1-linked-root";
+    const { tree } = linkDurableRoot(env, "retained");
+    const stop = {
+      hook_event_name: "SubagentStop",
+      session_id: parent,
+      agent_id: "d1111111111111111",
+    };
+    const child = agentLedgerIdFor(stop);
+    const kept = capturePreference(env, child, "before_code");
+    fillLedger(env, parent);
+    const before = tree();
+    const pointerDirectory = join(env.REMEMBRANCE_USAGE_DIR, `${ledgerOf(parent)}.pointers`);
+    const pointer = join(
+      pointerDirectory,
+      `${hash(`${ledgerOf(child)}:${kept.id}`).slice(0, 32)}.json`,
+    );
+
+    expect(transferSubagentObligations(stop, env)).toBe(0);
+    const first = usageTree(env);
+    expect(transferSubagentObligations(stop, env)).toBe(0);
+    expect(usageTree(env)).toEqual(first);
+    expect(existsSync(overflowOf(env, parent))).toBe(false);
+    expect(readFileSync(pointer, "utf8")).toBe(
+      `${JSON.stringify({ version: "completion-obligation-pointer-v1", ledger: ledgerOf(child), id: kept.id })}\n`,
+    );
+    expect(statSync(pointer).mode & 0o777).toBe(0o600);
+    expect(statSync(pointerDirectory).mode & 0o777).toBe(0o700);
+    // Review R2-3 (round 2): no pointer, nor anything else, behind the link.
+    expect(tree()).toEqual(before);
+    const childRecord = join(
+      env.REMEMBRANCE_USAGE_DIR,
+      `${ledgerOf(child)}.obligations`,
+      `${hash(kept.id).slice(0, 32)}.json`,
+    );
+    expect(JSON.parse(readFileSync(childRecord, "utf8")).transferred_from).toMatchObject({
+      agent_id: stop.agent_id,
+    });
+    expect(pendingCompletionRecoveryInstruction(parent, env)).not.toContain(REPEAT_LINE);
+
+    drainOwn(env, parent);
+    const demand = pendingCompletionRecoveryInstruction(parent, env);
+    expect(demand).toContain(handleLine(kept, child));
+    expect(demand).not.toContain("repeat the original request");
+    expect(
+      await readPendingActionPayload(
+        { action_id: kept.actionId, ledger: ledgerOf(child) },
+        env,
+        { readKey: readKey(env) },
+      ),
+    ).toMatchObject({
+      status: "retrieved",
+      provenance: "second_hand",
+      payload_digest: kept.digest,
+      arguments: preferenceArguments("before_code"),
+    });
+    expect(tree()).toEqual(before);
+  });
+
+  it("gives a full parent that already holds 64 pointers a 65th for the next subagent's kept debt, counts nothing, and names it once the named ones are resolved", async () => {
+    const env = markerEnv();
+    const parent = "r2-1-pointer-cap";
+    fillLedger(env, parent);
+    const stopFor = (index) => ({
+      hook_event_name: "SubagentStop",
+      session_id: parent,
+      agent_id: `c${index.toString(16).padStart(16, "0")}`,
+    });
+    for (let index = 0; index < 64; index += 1) {
+      capturePreference(env, agentLedgerIdFor(stopFor(index)), `value_${index}`);
+      expect(transferSubagentObligations(stopFor(index), env)).toBe(0);
+    }
+    expect(pointerFiles(env, parent)).toHaveLength(64);
+    expect(existsSync(overflowOf(env, parent))).toBe(false);
+    const last = stopFor(64);
+    const keeper = agentLedgerIdFor(last);
+    const kept = capturePreference(env, keeper, "value_64");
+
+    for (let round = 0; round < 2; round += 1) {
+      expect(transferSubagentObligations(last, env)).toBe(0);
+      expect(pointerFiles(env, parent)).toHaveLength(65);
+      expect(existsSync(overflowOf(env, parent))).toBe(false);
+    }
+    expect(pointerFiles(env, parent)).toContain(
+      `${hash(`${ledgerOf(keeper)}:${kept.id}`).slice(0, 32)}.json`,
+    );
+    expect(pendingCompletionRecoveryInstruction(parent, env)).not.toContain(REPEAT_LINE);
+    expect(
+      JSON.parse(readFileSync(recordFile(env, keeper, kept.id), "utf8")).transferred_from,
+    ).toMatchObject({ agent_id: last.agent_id });
+
+    // Paging delays, never loses: a read shows 64 pointed debts and a demand
+    // names at most 12 of them; declining the named ones brings the rest in,
+    // so the 65th is named within six demands.
+    drainOwn(env, parent);
+    let demand = pendingCompletionRecoveryInstruction(parent, env);
+    for (let page = 0; !demand.includes(handleLine(kept, keeper)); page += 1) {
+      expect(page).toBeLessThan(6);
+      for (const [, actionId] of demand.matchAll(
+        /get_pending_action_payload with action_id ([a-f0-9]{16}) and ledger/g,
+      )) {
+        observeSuccessfulCompletionTool(
+          parent,
+          "decline_pending_action",
+          { action_id: actionId, reason: "not_reusable" },
+          { declined: true },
+          env,
+        );
+      }
+      demand = pendingCompletionRecoveryInstruction(parent, env);
+    }
+    expect(demand).not.toContain("repeat the original request");
+    expect(
+      await readPendingActionPayload(
+        { action_id: kept.actionId, ledger: ledgerOf(keeper) },
+        env,
+        { readKey: readKey(env) },
+      ),
+    ).toMatchObject({ status: "retrieved", payload_digest: kept.digest });
+  });
+
+  // Review R2-1 (round 2, the round-1 "failed parent write" item): a parent
+  // whose ledger cannot be written still gets a pointer, and the debt is
+  // second-hand there; nothing is counted, and a repeated stop changes nothing.
+  it("points a parent whose ledger cannot be written to its subagent's kept debt, second-hand, and changes nothing on a repeated stop", async () => {
+    const env = markerEnv();
+    const parent = "r2-1-unwritable-parent";
+    const stop = {
+      hook_event_name: "SubagentStop",
+      session_id: parent,
+      agent_id: "d2222222222222222",
+      agent_transcript_path: "/transcripts/d2222222222222222.jsonl",
+    };
+    const child = agentLedgerIdFor(stop);
+    const kept = capturePreference(env, child, "before_code");
+    // Both homes of the parent's ledger are files: nothing can be written there.
+    mkdirSync(env.REMEMBRANCE_USAGE_DIR, { recursive: true, mode: 0o700 });
+    writeFileSync(join(env.REMEMBRANCE_USAGE_DIR, `${ledgerOf(parent)}.obligations`), "x", {
+      mode: 0o600,
+    });
+    writeFileSync(sealedLedgerDirectory(env, parent), "x", { mode: 0o600 });
+
+    expect(transferSubagentObligations(stop, env)).toBe(0);
+    const childPath = recordFile(env, child, kept.id);
+    const tagged = readFileSync(childPath, "utf8");
+    expect(JSON.parse(tagged).transferred_from).toEqual({
+      agent_id: stop.agent_id,
+      transcript_path: stop.agent_transcript_path,
+    });
+    const inode = statSync(childPath).ino;
+    expect(pointerFiles(env, parent)).toHaveLength(1);
+    expect(transferSubagentObligations(stop, env)).toBe(0);
+    expect(readFileSync(childPath, "utf8")).toBe(tagged);
+    expect(statSync(childPath).ino).toBe(inode);
+    expect(pointerFiles(env, parent)).toHaveLength(1);
+    expect(existsSync(overflowOf(env, parent))).toBe(false);
+    expect(pendingCompletionRecoveryInstruction(parent, env)).toContain(
+      `- Durable preference (second-hand from subagent ${stop.agent_id} (${stop.agent_transcript_path})): arguments kept on this machine (`,
+    );
+    expect(
+      await readPendingActionPayload(
+        { action_id: kept.actionId, ledger: ledgerOf(child) },
+        env,
+        { readKey: readKey(env) },
+      ),
+    ).toMatchObject({
+      status: "retrieved",
+      payload_digest: kept.digest,
+      provenance: "second_hand",
+      guidance: SECOND_HAND_PREFERENCE,
+    });
+  });
+
+  // Review R2-2 (round 2): a ledger whose last record is resolved, or that
+  // a subagent's stop drains, leaves no directory in either home.
+  it("removes a ledger's directories in both homes once nothing is left in it, so resolved sessions and exited subagents leave nothing to count", () => {
+    const env = markerEnv();
+    const sessions = Array.from({ length: 5 }, (_, index) => `r2-2-resolved-${index}`);
+    const temporaryOf = (ledgerId) =>
+      join(env.REMEMBRANCE_USAGE_DIR, `${ledgerOf(ledgerId)}.obligations`);
+    for (const session of sessions) {
+      capturePreference(env, session, "before_code");
+      recordQueryFeedbackObligation(session, { available: true, query_id: `rq_${session}` }, env);
+      expect(existsSync(sealedLedgerDirectory(env, session))).toBe(true);
+      expect(existsSync(temporaryOf(session))).toBe(true);
+    }
+    // A subagent hands its sealed debt to a parent with room.
+    const stop = {
+      hook_event_name: "SubagentStop",
+      session_id: sessions[0],
+      agent_id: "e1111111111111111",
+    };
+    const child = agentLedgerIdFor(stop);
+    capturePreference(env, child, "before_review");
+    expect(transferSubagentObligations(stop, env)).toBe(1);
+    expect(existsSync(sealedLedgerDirectory(env, child))).toBe(false);
+    expect(existsSync(temporaryOf(child))).toBe(false);
+
+    for (const session of sessions) {
+      for (const value of session === sessions[0] ? ["before_code", "before_review"] : ["before_code"]) {
+        observeSuccessfulCompletionTool(
+          session,
+          "record_preference",
+          preferenceArguments(value),
+          { recorded: true },
+          env,
+        );
+      }
+      observeSuccessfulCompletionTool(
+        session,
+        "submit_query_feedback",
+        { query_id: `rq_${session}` },
+        { accepted: true },
+        env,
+      );
+      expect(readCompletionObligations(session, env)).toEqual([]);
+      expect(existsSync(sealedLedgerDirectory(env, session))).toBe(false);
+      expect(existsSync(temporaryOf(session))).toBe(false);
+    }
+    expect(
+      inventoryRetainedKeyConsumers(env, {
+        limits: { ledgers: sessions.length - 1, files: 8192 },
+      }),
+    ).toMatchObject({ consumers: { total: 0 }, incomplete: false });
+  });
+
+  // Review R3-1(a) (round 3): a drained ledger's directories are removed in
+  // the durable home only while its root is usable; an empty directory of the
+  // same name behind a symlinked root is never removed.
+  for (const linked of ["retained", "private-learning-lifecycle"]) {
+    it(`never removes an empty same-named ledger directory behind a symlinked ${linked} directory when a resolution and a read drain the ledger`, () => {
+      const env = markerEnv();
+      const session = `r3-1a-${linked}`;
+      const { retainedInside, tree } = linkDurableRoot(env, linked);
+      mkdirSync(join(retainedInside, `${ledgerOf(session)}.obligations`), {
+        recursive: true,
+        mode: 0o700,
+      });
+      const before = tree();
+      recordQueryFeedbackObligation(session, { available: true, query_id: "rq_r3_1a" }, env);
+      observeSuccessfulCompletionTool(
+        session,
+        "submit_query_feedback",
+        { query_id: "rq_r3_1a" },
+        { accepted: true },
+        env,
+      );
+      expect(readCompletionObligations(session, env)).toEqual([]);
+      expect(
+        existsSync(join(env.REMEMBRANCE_USAGE_DIR, `${ledgerOf(session)}.obligations`)),
+      ).toBe(false);
+      expect(tree()).toEqual(before);
+    });
+  }
+
+  // Review R3-1(b) (round 3): a read that drains its ledger, here by aging out
+  // its only content-free marker, removes the ledger's directories in both
+  // homes (the durable one empty, as an earlier build left it).
+  it("removes both of a ledger's directories when a read ages out its only content-free marker", () => {
+    const env = markerEnv();
+    const session = "r3-1b-aged";
+    recordQueryFeedbackObligation(session, { available: true, query_id: "rq_r3_1b" }, env);
+    const temporary = join(env.REMEMBRANCE_USAGE_DIR, `${ledgerOf(session)}.obligations`);
+    const [name] = readdirSync(temporary);
+    const marker = JSON.parse(readFileSync(join(temporary, name), "utf8"));
+    writeFileSync(
+      join(temporary, name),
+      `${JSON.stringify({ ...marker, created_at: new Date(Date.now() - 8 * 86_400_000).toISOString() })}\n`,
+      { mode: 0o600 },
+    );
+    const durable = sealedLedgerDirectory(env, session);
+    mkdirSync(durable, { recursive: true, mode: 0o700 });
+    expect(readCompletionObligations(session, env)).toEqual([]);
+    expect([temporary, durable].filter((home) => existsSync(home))).toEqual([]);
+  });
+
+  // Review R3-1(c) (round 3): a concurrent drained read can remove a ledger's
+  // empty directory between its creation and the first write into it. Here
+  // the directory goes before each of the record's first two writes: the
+  // retry absorbs the first, the temporary ledger the second, and the sealed
+  // record is kept. (fs.writeFileSync is wrapped in-process, as the
+  // reviewer's probe does; no production seam.)
+  it("keeps a sealed record when its ledger directory vanishes before each of its first two writes", () => {
+    const env = markerEnv();
+    const session = "r3-1c-enoent";
+    const digest = resupplyPayloadDigest(preferenceArguments("before_code"));
+    const record = `/${hash(`capture_next_action:${digest}`).slice(0, 32)}.json.`;
+    const original = nodeFs.writeFileSync;
+    let armed = 2;
+    let removed = 0;
+    nodeFs.writeFileSync = (path, ...rest) => {
+      const directory = dirname(String(path));
+      if (
+        armed > 0 &&
+        String(path).includes(record) &&
+        String(path).endsWith(".tmp") &&
+        existsSync(directory) &&
+        readdirSync(directory).length === 0
+      ) {
+        armed -= 1;
+        nodeFs.rmdirSync(directory);
+        removed += 1;
+      }
+      return original(path, ...rest);
+    };
+    syncBuiltinESMExports();
+    let kept;
+    try {
+      kept = capturePreference(env, session, "before_code");
+    } finally {
+      nodeFs.writeFileSync = original;
+      syncBuiltinESMExports();
+    }
+    expect(removed).toBe(2);
+    expect(kept.id).toBe(`capture_next_action:${digest}`);
+    expect(readCompletionObligations(session, env)).toEqual([
+      expect.objectContaining({
+        id: kept.id,
+        local_resupply_envelope: expect.any(Object),
+      }),
+    ]);
+  });
+
+  // Review R2-4b (round 2): an outbox-lane envelope Remembrance wrote whose
+  // mode changed is not named like a record and stays unclassified, so the
+  // hold also says to make such a file a user-owned 0600 file again rather
+  // than move it aside; at 0600 again the hold asks for its key.
+  it("tells the user to make a lane envelope whose mode changed a 0600 file again rather than move it aside, and asks for the original key once it is", () => {
+    const env = markerEnv();
+    const session = "r2-4b-lane-envelope";
+    const lane = join(env.XDG_STATE_HOME, "remembrance", "private-lessons");
+    mkdirSync(lane, { recursive: true, mode: 0o700 });
+    const envelope = join(lane, "pl_r24b.lesson.json");
+    const bytes = `${JSON.stringify({
+      version: "private-lesson-outbox-envelope-v1",
+      encryption: { algorithm: "aes-256-gcm", key_source: "mode_0600_file" },
+    })}\n`;
+    writeFileSync(envelope, bytes, { mode: 0o600 });
+    chmodSync(envelope, 0o644);
+    const lineOf = () =>
+      pendingCompletionRecoveryInstruction(session, env)
+        .split("\n")
+        .find((line) => line.startsWith("- No local encryption key was made."));
+    capturePreference(env, session, "before_code");
+    expect(lineOf()).toBe(
+      "- No local encryption key was made. The retained-item inventory could not account for everything, and an item it missed may need an earlier key. Move aside files in ~/.local/state/remembrance/private-lessons that Remembrance did not write (for example .DS_Store), and make a file Remembrance wrote whose owner or mode changed a user-owned 0600 file again instead of moving it aside, then retry. (~/.local/state is $XDG_STATE_HOME when that is set.)",
+    );
+    expect(existsSync(keyFile(env))).toBe(false);
+    chmodSync(envelope, 0o600);
+    capturePreference(env, session, "before_review");
+    expect(lineOf()).toBe(
+      "- No local encryption key was made. Restore the original key: the login Keychain item or the 0600 key file private-lesson-outbox.key in the Remembrance config directory. A new key cannot read retained items, so none is made.",
+    );
+    expect(existsSync(keyFile(env))).toBe(false);
+    expect(readFileSync(envelope, "utf8")).toBe(bytes);
+  });
+
+  // Review R2-4 (round 2): a sealed record Remembrance wrote whose mode later
+  // changed is unreadable, with the step that restores it, never "a file
+  // Remembrance did not write"; at 0600 again the hold asks for its key.
+  it("holds as unreadable for a sealed record whose mode changed, and asks for the original key once it is 0600 again", () => {
+    const env = markerEnv();
+    const session = "r2-4-mode-changed";
+    const kept = capturePreference(env, session, "before_code");
+    const path = recordFile(env, session, kept.id);
+    rmSync(keyFile(env));
+    const lineOf = () =>
+      pendingCompletionRecoveryInstruction(session, env)
+        .split("\n")
+        .find((line) => line.startsWith("- No local encryption key was made."));
+    chmodSync(path, 0o644);
+    try {
+      capturePreference(env, session, "before_review");
+      expect(lineOf()).toBe(
+        "- No local encryption key was made. The retained-item inventory could not account for everything, and an item it missed may need an earlier key. Files in ~/.local/state/remembrance/private-learning-lifecycle/retained could not be read: make them user-owned 0600 files again, or move aside those Remembrance did not write, then retry. (~/.local/state is $XDG_STATE_HOME when that is set.)",
+      );
+    } finally {
+      chmodSync(path, 0o600);
+    }
+    capturePreference(env, session, "before_merge");
+    expect(lineOf()).toBe(
+      "- No local encryption key was made. Restore the original key: the login Keychain item or the 0600 key file private-lesson-outbox.key in the Remembrance config directory. A new key cannot read retained items, so none is made.",
+    );
+    expect(existsSync(keyFile(env))).toBe(false);
+  });
+
+  // Review R1-2 (round 1): the first key waits only for what may need an
+  // earlier one, and the hold says what clears it.
+  it("holds the first key for a file in a private-learning lane that Remembrance did not write, says to move it aside, and makes the key once it is", () => {
+    const env = markerEnv();
+    const session = "r1-2-stray";
+    const lane = join(env.XDG_STATE_HOME, "remembrance", "private-lessons");
+    mkdirSync(lane, { recursive: true, mode: 0o700 });
+    const stray = join(lane, ".DS_Store");
+    writeFileSync(stray, "\u0000\u0000\u0000\u0001Bud1", { mode: 0o644 });
+    chmodSync(stray, 0o644);
+
+    capturePreference(env, session, "before_code");
+    expect(readCompletionObligations(session, env)).toEqual([
+      expect.objectContaining({
+        local_resupply_envelope: null,
+        local_resupply_payload_omitted: "key_unavailable",
+        local_resupply_hold: ["unclassified:private_lesson_outbox"],
+      }),
+    ]);
+    expect(existsSync(keyFile(env))).toBe(false);
+    const demand = pendingCompletionRecoveryInstruction(session, env);
+    expect(demand.split("\n")).toContain(
+      "- No local encryption key was made. The retained-item inventory could not account for everything, and an item it missed may need an earlier key. Move aside files in ~/.local/state/remembrance/private-lessons that Remembrance did not write (for example .DS_Store), and make a file Remembrance wrote whose owner or mode changed a user-owned 0600 file again instead of moving it aside, then retry. (~/.local/state is $XDG_STATE_HOME when that is set.)",
+    );
+    expect(demand).not.toMatch(/restore the original key/iu);
+
+    rmSync(stray);
+    const sealed = capturePreference(env, session, "before_review");
+    expect(existsSync(keyFile(env))).toBe(true);
+    expect(
+      JSON.parse(readFileSync(recordFile(env, session, sealed.id), "utf8"))
+        .local_resupply_envelope,
+    ).toMatchObject({ version: "completion-resupply-envelope-v1" });
+  });
+
+  it("makes the first key beside 17 abandoned sessions of content-free markers (1,037 records), as before", () => {
+    const env = markerEnv();
+    for (let ledger = 0; ledger < 17; ledger += 1) {
+      const directory = join(
+        env.REMEMBRANCE_USAGE_DIR,
+        `${hash(`r1-2-abandoned-${ledger}`).slice(0, 16)}.obligations`,
+      );
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      for (let marker = 0; marker < 61; marker += 1) {
+        const queryId = `rq_${ledger}_${marker}`;
+        const id = `query_feedback:${queryId}`;
+        writeFileSync(
+          join(directory, `${hash(id).slice(0, 32)}.json`),
+          `${JSON.stringify({
+            version: "completion-obligation-v1",
+            kind: "query_feedback",
+            id,
+            query_id: queryId,
+            created_at: new Date().toISOString(),
+          })}\n`,
+          { mode: 0o600 },
+        );
+      }
+    }
+    const session = "r1-2-markers";
+    const sealed = capturePreference(env, session, "before_code");
+    expect(existsSync(keyFile(env))).toBe(true);
+    expect(
+      JSON.parse(readFileSync(recordFile(env, session, sealed.id), "utf8"))
+        .local_resupply_envelope,
+    ).toMatchObject({ version: "completion-resupply-envelope-v1" });
+  });
+
+  it("makes one key when two hook processes seal their first payloads at once, and loses no record", async () => {
+    const { spawn } = await import("node:child_process");
+    const hookCore = new URL("../scripts/hook-core.mjs", import.meta.url).href;
+    for (let round = 0; round < 3; round += 1) {
+      const env = markerEnv();
+      const session = `r3-concurrent-${round}`;
+      const startAt = Date.now() + 400;
+      const child = (value) =>
+        new Promise((resolve, reject) => {
+          const script = `
+            import { observeSuccessfulCompletionTool } from ${JSON.stringify(hookCore)};
+            const env = JSON.parse(process.env.R3_HOOK_ENV);
+            while (Date.now() < Number(process.env.R3_START_AT)) {}
+            observeSuccessfulCompletionTool(${JSON.stringify(session)}, "capture_learning", {}, {
+              capture_route: "preference",
+              persisted_locally: false,
+              next_action: { tool: "record_preference", arguments: JSON.parse(process.env.R3_ARGUMENTS) },
+            }, env);
+          `;
+          const processHandle = spawn(process.execPath, ["--input-type=module", "-e", script], {
+            env: {
+              ...process.env,
+              R3_HOOK_ENV: JSON.stringify(env),
+              R3_START_AT: String(startAt),
+              R3_ARGUMENTS: JSON.stringify(preferenceArguments(value)),
+            },
+            stdio: ["ignore", "ignore", "pipe"],
+          });
+          let stderr = "";
+          processHandle.stderr.on("data", (chunk) => {
+            stderr += chunk;
+          });
+          processHandle.on("error", reject);
+          processHandle.on("close", (code) =>
+            code === 0 ? resolve() : reject(new Error(`exit ${code}: ${stderr}`)),
+          );
+        });
+      await Promise.all([child("before_code"), child("before_review")]);
+
+      expect(readdirSync(join(env.XDG_CONFIG_HOME, "remembrance"))).toEqual([
+        "private-lesson-outbox.key",
+      ]);
+      if (process.platform !== "win32") {
+        expect(statSync(keyFile(env)).mode & 0o777).toBe(0o600);
+      }
+      const pending = readCompletionObligations(session, env);
+      expect(pending).toHaveLength(2);
+      for (const value of ["before_code", "before_review"]) {
+        const digest = resupplyPayloadDigest(preferenceArguments(value));
+        const retrieved = await readPendingActionPayload(
+          {
+            action_id: hash(`capture_next_action:${digest}`).slice(0, 16),
+            ledger: ledgerOf(session),
+          },
+          env,
+          { readKey: readKey(env) },
+        );
+        expect(retrieved).toMatchObject({ status: "retrieved", payload_digest: digest });
+      }
     }
   });
 });

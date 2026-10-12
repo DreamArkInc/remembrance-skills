@@ -118,6 +118,47 @@ built-in or complete bounded extensible setting. Submit an `evidence_hash`,
 `task_hash`, scope, and confidence. Never upload the raw prompt, feedback text,
 source path, or private task content.
 
+The call does not promise activation. Read `activated` and
+`normalized_activation_state` in the response instead of assuming the setting is
+live: a custom setting stays `pending_validation` until automatic normalization
+and validation approve it, and an inferred observation activates only after the
+consistency and confidence gates are met.
+
+Organizations using customer-held encryption are currently deferred. Their only
+lane kept settings, fingerprints and private-derived evidence hashes in clear
+text in general collections, so every substantive preference write and every
+preference-compatibility feedback call is refused **before persistence** with
+HTTP 422 and code `customer_held_preference_processing_deferred`. Existing
+records are unchanged, reads and the content-free withdrawal lane keep working,
+and responses withhold the `preference_compatibility_feedback` offer there. That
+refusal is permanent for now, so do not retry it and do not invite the feedback
+lane. Built-in settings are refused along with custom ones because they shared
+that same clear-text lane.
+
+An empty `effective_preferences` list is not by itself a claim that the profile
+is empty. Read the `personalization` block that accompanies it. `available: true`
+with `reason_code: "resolved"` means every scope that applies to this caller was
+read, and `resolved_scopes` names them. `available: false` names what was not:
+
+- `organization_scope_only` — an organization key with no principal session.
+  Organization-scope storage was read; `omitted_scopes` lists `installation`,
+  `member` and `member_runtime`, which were never queried. A stored personal
+  preference can exist and simply not be in this list, so do not report the
+  profile as empty and do not report the preference as lost. Organization-level
+  use, public retrieval, discovery and invocation all stay available; link a
+  principal session only if personal preferences should apply. Not retryable:
+  repeating the identical call changes nothing.
+- `not_applicable` — an anonymous call. Stored preferences are
+  organization-scoped, so none applies and none was read. Anything listed came
+  from the request's own `task_preferences`. This is not a request to
+  authenticate.
+- `preference_storage_unavailable` — storage could not be read (retryable).
+- `preferences_disabled` — the deployment has agent preferences off (not
+  retryable).
+
+Retrieval, discovery and invocation stay available in every one of these cases,
+and none of them adds a prompt or withholds a result.
+
 Relevance and preference influence remain separate. The normal ranker first
 establishes applicability and the stable `high`, `possible`, or `exploratory`
 tier. Organization-private compatibility records for the exact skill and

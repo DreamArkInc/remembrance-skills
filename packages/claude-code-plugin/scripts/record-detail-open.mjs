@@ -3,13 +3,15 @@
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
+  agentLedgerIdFor,
+  bindPrivateSkillNativeCapture,
   clearHighMatchSurfaceIfOpened,
   clearHighMatchSurfaceForExplicitSelection,
   directSelectionFromResponse,
   highMatchFromResponse,
   observeSuccessfulCompletionTool,
   recordDirectiveFollowThroughForTool,
-  recordDirectSelectionSurface,
+  recordDirectSelectionUse,
   recordHighMatchSurface,
   recordPluginLifecycleHealth,
   recordRegistryUse,
@@ -25,22 +27,30 @@ import {
 const CONTRIBUTION_TOOLS = [
   "submit_query_feedback",
   "submit_feedback",
+  "decline_pending_action",
+  "capture_learning",
   "submit_remembrance",
   "propose_skill_idea",
   "propose_private_skill",
   "submit_private_lesson_candidate",
   "retry_private_lesson_candidate",
+  "submit_private_skill_candidate",
+  "retry_private_skill_candidate",
+  "delete_private_lesson_candidate",
+  "delete_private_skill_candidate",
+  "record_preference",
   "submit_suggestion",
   "submit_resource",
   "submit_resource_review",
 ];
-const PREFERENCE_EVIDENCE_TOOLS = [
-  "submit_preference_compatibility_feedback",
-];
+const PREFERENCE_EVIDENCE_TOOLS = ["submit_preference_compatibility_feedback"];
 
 export async function handlePostToolUse(input, options = {}) {
   const env = options.env ?? process.env;
   const sessionId = sessionIdFor(input);
+  // Debts and usage belong to the agent that made the call; health, directive
+  // follow-through and task outcomes stay with the session.
+  const ledgerId = agentLedgerIdFor(input);
   const recordHealth = options.recordHealth ?? recordPluginLifecycleHealth;
   recordHealth(
     {
@@ -58,13 +68,13 @@ export async function handlePostToolUse(input, options = {}) {
     const response = toolResponse(input);
     if (queryResponseHasMatches(response)) {
       const recordUse = options.recordRegistryUse ?? recordRegistryUse;
-      recordUse(sessionId, env);
+      recordUse(ledgerId, env);
     }
     const observe =
       options.observeCompletionTool ?? observeSuccessfulCompletionTool;
-    observe(sessionId, name, toolArguments(input), response, env);
+    observe(ledgerId, name, toolArguments(input), response, env);
     const recordHighMatch = options.recordHighMatch ?? recordHighMatchSurface;
-    recordHighMatch(sessionId, highMatchFromResponse(response), env);
+    recordHighMatch(ledgerId, highMatchFromResponse(response), env);
     const recordFollowThrough =
       options.recordDirectiveFollowThrough ??
       recordDirectiveFollowThroughForTool;
@@ -87,11 +97,12 @@ export async function handlePostToolUse(input, options = {}) {
     if (!selection) {
       return { recorded: false, cleared: false, why: "invocation_not_loaded" };
     }
-    const recordUse = options.recordRegistryUse ?? recordRegistryUse;
-    const useCount = recordUse(sessionId, env);
-    const recordSelection =
-      options.recordDirectSelection ?? recordDirectSelectionSurface;
-    recordSelection(sessionId, { ...selection, use_count: useCount }, env);
+    const useCount = recordDirectSelectionUse(
+      ledgerId,
+      selection,
+      env,
+      options,
+    );
     const recordValueEpisode =
       options.recordValueEpisode ?? recordValueEpisodeSurface;
     recordValueEpisode(
@@ -101,11 +112,11 @@ export async function handlePostToolUse(input, options = {}) {
     );
     const observe =
       options.observeCompletionTool ?? observeSuccessfulCompletionTool;
-    observe(sessionId, name, toolArguments(input), toolResponse(input), env);
+    observe(ledgerId, name, toolArguments(input), toolResponse(input), env);
     const clearExplicit =
       options.clearHighMatchSurfaceForExplicitSelection ??
       clearHighMatchSurfaceForExplicitSelection;
-    const cleared = clearExplicit(sessionId, selection.slug, env);
+    const cleared = clearExplicit(ledgerId, selection.slug, env);
     return {
       recorded: true,
       cleared,
@@ -113,9 +124,7 @@ export async function handlePostToolUse(input, options = {}) {
       count: useCount,
     };
   }
-  if (
-    PREFERENCE_EVIDENCE_TOOLS.some((tool) => normalizedName.endsWith(tool))
-  ) {
+  if (PREFERENCE_EVIDENCE_TOOLS.some((tool) => normalizedName.endsWith(tool))) {
     return {
       recorded: true,
       cleared: false,
@@ -126,7 +135,7 @@ export async function handlePostToolUse(input, options = {}) {
     const observe =
       options.observeCompletionTool ?? observeSuccessfulCompletionTool;
     const observation = observe(
-      sessionId,
+      ledgerId,
       name,
       toolArguments(input),
       toolResponse(input),
@@ -139,10 +148,20 @@ export async function handlePostToolUse(input, options = {}) {
     };
   }
   if (CONTRIBUTION_TOOLS.some((tool) => normalizedName.endsWith(tool))) {
+    await bindPrivateSkillNativeCapture(
+      name,
+      toolArguments(input),
+      toolResponse(input),
+      {
+        env,
+        nativeContextBridge: options.nativeContextBridge,
+        nativeSessionId: input?.session_id,
+      },
+    );
     const observe =
       options.observeCompletionTool ?? observeSuccessfulCompletionTool;
     const observation = observe(
-      sessionId,
+      ledgerId,
       name,
       toolArguments(input),
       toolResponse(input),
@@ -167,20 +186,14 @@ export async function handlePostToolUse(input, options = {}) {
   }
   const clear =
     options.clearHighMatchSurfaceIfOpened ?? clearHighMatchSurfaceIfOpened;
-  const cleared = clear(sessionId, name, toolArguments(input), env);
+  const cleared = clear(ledgerId, name, toolArguments(input), env);
   if (
     normalizedName.endsWith("get_skill") ||
     normalizedName.endsWith("get_resource")
   ) {
     const observe =
       options.observeCompletionTool ?? observeSuccessfulCompletionTool;
-    observe(
-      sessionId,
-      name,
-      toolArguments(input),
-      toolResponse(input),
-      env,
-    );
+    observe(ledgerId, name, toolArguments(input), toolResponse(input), env);
   }
   return {
     cleared,

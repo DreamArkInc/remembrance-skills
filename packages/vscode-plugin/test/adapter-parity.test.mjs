@@ -14,10 +14,35 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const claudeRoot = resolve(root, "../claude-code-plugin");
 const read = (base, rel) => readFileSync(resolve(base, rel), "utf8");
 
+// VS Code 1.133 sends no agent_id with a subagent's tool hooks, so its debts
+// are recorded as possibly a subagent's; Claude Code sends one and keeps them
+// per agent.
+const SUBAGENT_IDENTITY_DECLARATION = [
+  "  declareSubagentIdentityUnavailable,\n",
+  "\n// VS Code 1.133 names a subagent only in SubagentStart and SubagentStop.\ndeclareSubagentIdentityUnavailable();\n",
+];
+
 // Every intentional host delta, as a normalization applied to the VS Code copy to
 // turn it back into the Claude original.
 function normalizeToClaude(source) {
-  return source
+  return SUBAGENT_IDENTITY_DECLARATION.reduce(
+    (text, line) => text.replaceAll(line, ""),
+    source,
+  )
+    .replaceAll(
+      "VS Code UserPromptSubmit adapter.",
+      "Claude Code UserPromptSubmit adapter.",
+    )
+    .replaceAll(
+      "VS Code invokes this before",
+      "Claude Code invokes this before",
+    )
+    .replaceAll('provider: "vscode"', 'provider: "claude"')
+    .replaceAll('model: "vs-code-agent"', 'model: "claude-code"')
+    .replaceAll(
+      "VS Code adapter reports itself as the VS Code runtime",
+      "Claude adapter reports itself as the Claude Code runtime",
+    )
     .replaceAll('surface: "vs_code"', 'surface: "claude_code"')
     .replaceAll('runtime: "vs_code"', 'runtime: "claude_code"')
     .replaceAll('hostSurface: "extension"', 'hostSurface: "cli"')
@@ -46,28 +71,10 @@ describe("VS Code adapter parity with the Claude Code originals", () => {
     });
   }
 
-  // query-on-prompt.mjs additionally overrides buildQueryPayload to stamp the VS
-  // Code agent identity, so it cannot round-trip. Pin the divergence instead: it
-  // must be confined to that override plus its explaining comment.
-  it("query-on-prompt.mjs diverges only in the documented payload override", () => {
-    const ours = read(root, "scripts/query-on-prompt.mjs");
-    const theirs = read(claudeRoot, "scripts/query-on-prompt.mjs");
-    const normalized = normalizeToClaude(ours);
-    const extraLines = normalized
-      .split("\n")
-      .filter(
-        (line) => !theirs.includes(line.trim()) && line.trim().length > 0,
-      );
-    // Every line unique to the VS Code copy must be part of the identity
-    // override or the comment that explains it.
-    for (const line of extraLines) {
-      expect(
-        /vscode|vs-code-agent|vs_code|VS Code|buildSharedQueryPayload|payload\.agent|triggerReason|Codex/.test(
-          line,
-        ),
-        `unexplained divergence from the Claude original: ${line.trim()}`,
-      ).toBe(true);
-    }
+  it("query-on-prompt.mjs differs only in normalized host identity", () => {
+    expect(normalizeToClaude(read(root, "scripts/query-on-prompt.mjs"))).toBe(
+      read(claudeRoot, "scripts/query-on-prompt.mjs"),
+    );
   });
 
   it("keeps the shared hook-core byte-identical to the synced source", () => {

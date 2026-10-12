@@ -8,9 +8,14 @@
 // asks the agent to recover a missed full-context query when needed, then
 // contribute a redacted remembrance / feedback / skill idea when warranted.
 //
-// Codex Stop payload: stdin JSON {turn_id, stop_hook_active, last_assistant_message}.
+// Codex Stop payload: stdin JSON {session_id, turn_id, stop_hook_active,
+// last_assistant_message}; the main thread's debts are keyed by session_id.
 // To continue instead of stopping, print JSON {"decision":"block","reason":"..."}
-// (reason becomes the next prompt).
+// (reason becomes the next prompt). SubagentStop runs this script too, with the
+// subagent's agent_id; debts are kept per agent (agentLedgerIdFor), and a
+// subagent is asked, once, for its own before it exits. Whatever it leaves
+// unpaid then passes to its parent, marked second-hand
+// (transferSubagentObligations).
 //
 // Safety:
 // - Env-flagged: disable with REMEMBRANCE_AUTO_CONTRIBUTE in {0,false,no}.
@@ -28,31 +33,38 @@
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
+  agentLedgerIdFor,
   completionContinuationReason,
   decideStop,
+  foldTurnLedgerIntoSession,
   recordPluginLifecycleHealth,
   reportTaskOutcomesOnStop,
   resolveApiCredential,
   sessionIdFor,
+  transferSubagentObligations,
   writePromptedCount,
 } from "./hook-core.mjs";
 
 // Given parsed Codex input, decide and (on a block) record the new prompted
 // count. Returns { allow, why, output? }. `env` and the count fns are injectable.
 export function handleStop(input, options = {}) {
+  const env = options.env ?? process.env;
+  foldTurnLedgerIntoSession(input, env);
   const decision = decideStop(input, options);
   if (decision.allow) {
+    transferSubagentObligations(input, env);
     return { allow: true, why: decision.why };
   }
-  const env = options.env ?? process.env;
   const writePrompted = options.writePromptedCount ?? writePromptedCount;
-  writePrompted(sessionIdFor(input), decision.useCount, env);
+  writePrompted(agentLedgerIdFor(input), decision.useCount, env);
   return {
     allow: false,
     why: decision.why,
     output: {
       decision: "block",
-      reason: completionContinuationReason(decision.reason, input),
+      reason: completionContinuationReason(decision.reason, input, env, {
+        subagent: input?.hook_event_name === "SubagentStop",
+      }),
     },
   };
 }
@@ -70,12 +82,15 @@ export async function handleStopHook(input, options = {}) {
     },
     env,
   );
-  const report = options.reportTaskOutcomes ?? reportTaskOutcomesOnStop;
-  await report(sessionId, input, {
-    env,
-    fetchImpl: options.fetchImpl ?? fetch,
-    userAgent: "@remembrance/codex-plugin",
-  });
+  // Task outcomes stay session-scoped; the parent's stop reports them.
+  if (input?.hook_event_name !== "SubagentStop") {
+    const report = options.reportTaskOutcomes ?? reportTaskOutcomesOnStop;
+    await report(sessionId, input, {
+      env,
+      fetchImpl: options.fetchImpl ?? fetch,
+      userAgent: "@remembrance/codex-plugin",
+    });
+  }
   return handleStop(input, options);
 }
 

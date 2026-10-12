@@ -24,13 +24,19 @@ import { dirname, join } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
+  agentLedgerIdFor,
   buildQueryPayload as buildSharedQueryPayload,
+  capturePrivateSkillNativeUserPrompt,
+  claimSubagentStart,
+  composeBoundedHookContext,
   createContinuationDirective,
   debugLog,
   disabled,
   emptyQueryContext,
+  emptyTaskShapeContext,
   formatContext,
   highMatchFromResponse,
+  isHostNotificationPrompt,
   isContextualContinuationPrompt,
   readRemembranceConfig,
   redactPrompt,
@@ -41,8 +47,11 @@ import {
   recordExplicitPreferenceObservations,
   recordHighMatchSurface,
   recordTaskEligibility,
+  recordUserPrompt,
   recordValueEpisodeSurface,
   queryResponseHasMatches,
+  pendingCompletionRecovery,
+  acknowledgePrivateAuthorizationReminders,
   queryFeedbackTrackingFromResponse,
   queryRemembrance as querySharedRemembrance,
   resolveApiKey,
@@ -50,6 +59,7 @@ import {
   sessionIdFor,
   sharedConfigCredentialNotice,
   shouldQueryPrompt,
+  stoppedSearchGovernance,
   continuationQueryContext,
   unavailableQueryContext,
   userCorrectionCaptureDirective,
@@ -129,20 +139,90 @@ export async function handleHookInput(input, options = {}) {
     },
     env,
   );
+  // A subagent's task can arrive here like a user's prompt; it is neither
+  // the user's nor its parent's, so nothing here applies to it.
+  if (claimSubagentStart(input, env)) {
+    debugLog(env, "skip", { reason: "subagent_prompt" }, options);
+    return null;
+  }
+  const prompt = String(input?.prompt ?? "");
+  if (isHostNotificationPrompt(prompt)) {
+    debugLog(env, "skip", { reason: "host_notification" }, options);
+    return null;
+  }
+  const recordPrompt = options.recordUserPrompt ?? recordUserPrompt;
+  recordPrompt(agentLedgerIdFor(input), env);
+  await capturePrivateSkillNativeUserPrompt(prompt, {
+    env,
+    nativeContextBridge: options.nativeContextBridge,
+    nativeSessionId: input?.session_id,
+  });
   if (disabled(env.REMEMBRANCE_AUTO_QUERY)) {
     debugLog(env, "disabled", {}, options);
     return null;
   }
-  const prompt = String(input?.prompt ?? "");
   const redacted = redactPrompt(prompt);
-  const correctionCapture = userCorrectionCaptureDirective(redacted);
+  if (isHostNotificationPrompt(redacted)) {
+    debugLog(env, "skip", { reason: "host_notification" }, options);
+    return null;
+  }
+  const correctionCapture = userCorrectionCaptureDirective(redacted, env);
+  const recovery = pendingCompletionRecovery(agentLedgerIdFor(input), env);
+  // Typed like the shared prompt hook's recovery, so the allocator keeps it as
+  // one completion section: a re-supplied payload line stays under its
+  // instruction whatever words the payload contains. withAllContext renders
+  // it for the prompt's context.
+  const recoveryInstruction = recovery
+    ? { id: "private_learning_recovery", kind: "completion", render: recovery }
+    : null;
   void recordExplicitPreferenceObservations(redacted, {
     env,
     fetchImpl: options.fetchImpl ?? fetch,
     runtime: "claude_code",
     userAgent: "@remembrance/claude-code-plugin",
   }).catch(() => 0);
-  const decision = shouldQueryPrompt(redacted);
+  let decision = shouldQueryPrompt(redacted, env);
+  if (decision.hygiene) {
+    // Only the skill search stops: the governance a search would have carried
+    // and this prompt's capture and recovery lines are still delivered.
+    debugLog(
+      env,
+      "search_hygiene",
+      { reason: decision.reason, trigger: decision.trigger },
+      options,
+    );
+    const stopped = await stoppedSearchGovernance(
+      buildQueryPayload(redacted, env, decision.reason),
+      {
+        env,
+        fetchImpl: options.fetchImpl ?? fetch,
+        stderr: options.stderr,
+        userAgent: "@remembrance/claude-code-plugin",
+      },
+    );
+    if (!stopped.search) {
+      if (correctionCapture || recoveryInstruction) {
+        recordEligibility(input, env, options);
+        recordDirective(input, null, env, options);
+      } else if (!stopped.governs) {
+        return null;
+      }
+      return withAllContext(
+        outputForContext(stopped.context),
+        env,
+        recoveryInstruction,
+        correctionCapture,
+      );
+    }
+    // The read failed: run the search the rule stopped, as without the rule.
+    debugLog(
+      env,
+      "search_hygiene_fallback",
+      { reason: decision.reason },
+      options,
+    );
+    decision = { likely_match: true, reason: decision.trigger };
+  }
   if (!decision.likely_match) {
     if (isContextualContinuationPrompt(redacted)) {
       const directive = await createContinuationDirective({
@@ -154,24 +234,49 @@ export async function handleHookInput(input, options = {}) {
       });
       recordEligibility(input, env, options);
       recordDirective(input, directive, env, options);
-      return withCredentialNotice(
-        withAdditionalContext(
-          outputForContext(continuationQueryContext(directive)),
-          correctionCapture,
-        ),
+      return withAllContext(
+        outputForContext(continuationQueryContext(directive, env)),
         env,
+        recoveryInstruction,
+        correctionCapture,
       );
     }
-    if (correctionCapture) {
+    if (correctionCapture || recoveryInstruction) {
       recordEligibility(input, env, options);
       recordDirective(input, null, env, options);
-      return withCredentialNotice(outputForContext(correctionCapture), env);
+      return withAllContext(
+        outputForContext("Remembrance capture routing:"),
+        env,
+        recoveryInstruction,
+        correctionCapture,
+      );
     }
     debugLog(env, "skip", { reason: decision.reason }, options);
     return null;
   }
-  recordEligibility(input, env, options);
+  // Owner decision 34C: an empty task-shape search makes the turn eligible
+  // for completion recovery only through its correction or recovery line, so
+  // a task-shape search records eligibility once its result is known.
+  const taskShape = decision.reason === "task_shape";
+  if (!taskShape) recordEligibility(input, env, options);
   recordDirective(input, null, env, options);
+  // An empty task-shape search shows no no-match block and records no
+  // query-feedback obligation; its governance (`output`, null for none) and
+  // this prompt's capture and recovery lines arrive as for any search.
+  const emptyTaskShapeOutput = (output) => {
+    if (correctionCapture || recoveryInstruction) {
+      recordEligibility(input, env, options);
+    } else if (!output) {
+      debugLog(env, "task_shape_no_result", {}, options);
+      return null;
+    }
+    return withAllContext(
+      output ?? outputForContext(emptyTaskShapeContext(null).context),
+      env,
+      recoveryInstruction,
+      correctionCapture,
+    );
+  };
 
   const cacheKey = cacheKeyForPrompt(redacted, env);
   const cached = await readCachedOutput(cacheKey, env, options);
@@ -185,42 +290,51 @@ export async function handleHookInput(input, options = {}) {
       },
       options,
     );
+    if (taskShape && !cached.matched) {
+      return emptyTaskShapeOutput(cached.output);
+    }
+    if (taskShape) recordEligibility(input, env, options);
     const output =
-      cached.output ?? outputForContext(emptyQueryContext(decision.reason));
+      cached.output ??
+      outputForContext(emptyQueryContext(decision.reason, env));
     if (cached.matched) {
       recordUse(input, env, options, cached.highMatch ?? null);
     }
     recordQueryFeedback(input, cached.queryFeedback, env, options);
-    return withCredentialNotice(
-      withAdditionalContext(output, correctionCapture),
-      env,
-    );
+    return withAllContext(output, env, recoveryInstruction, correctionCapture);
   }
   debugLog(env, "cache_miss", { key: shortCacheKey(cacheKey) }, options);
 
-  const response = await queryRemembrance(
-    buildQueryPayload(redacted, env, decision.reason),
-    {
-      env,
-      fetchImpl: options.fetchImpl ?? fetch,
-      stderr: options.stderr,
-    },
-  );
+  const payload = buildQueryPayload(redacted, env, decision.reason);
+  const response = await queryRemembrance(payload, {
+    env,
+    fetchImpl: options.fetchImpl ?? fetch,
+    stderr: options.stderr,
+  });
   if (!response) {
-    return withCredentialNotice(
-      withAdditionalContext(
-        outputForContext(unavailableQueryContext(env)),
-        correctionCapture,
-      ),
+    if (taskShape) recordEligibility(input, env, options);
+    return withAllContext(
+      outputForContext(unavailableQueryContext(env)),
       env,
+      recoveryInstruction,
+      correctionCapture,
     );
   }
+  const matched = queryResponseHasMatches(response);
+  if (taskShape && !matched) {
+    const empty = emptyTaskShapeContext(response);
+    const output = empty.governs ? outputForContext(empty.context) : null;
+    await writeCachedOutput(cacheKey, output, null, false, null, env, options);
+    return emptyTaskShapeOutput(output);
+  }
+  if (taskShape) recordEligibility(input, env, options);
   const context =
-    formatContext(response, decision.reason, limitFromEnv(env)) ??
-    emptyQueryContext(decision.reason);
+    formatContext(response, decision.reason, limitFromEnv(env), {
+      maxChars: 32_000,
+      querySummary: payload.task.summary,
+    }) ?? emptyQueryContext(decision.reason, env);
   const output = outputForContext(context);
   const highMatch = highMatchFromResponse(response);
-  const matched = queryResponseHasMatches(response);
   const queryFeedback = queryFeedbackTrackingFromResponse(response);
   await writeCachedOutput(
     cacheKey,
@@ -235,10 +349,7 @@ export async function handleHookInput(input, options = {}) {
     recordUse(input, env, options, highMatch, response);
   }
   recordQueryFeedback(input, queryFeedback, env, options);
-  return withCredentialNotice(
-    withAdditionalContext(output, correctionCapture),
-    env,
-  );
+  return withAllContext(output, env, recoveryInstruction, correctionCapture);
 }
 
 function outputForContext(context) {
@@ -250,30 +361,32 @@ function outputForContext(context) {
   };
 }
 
-function withAdditionalContext(output, context) {
-  if (!context) return output;
-  return {
-    hookSpecificOutput: {
-      ...output.hookSpecificOutput,
-      additionalContext: `${output.hookSpecificOutput.additionalContext}\n\n${context}`,
-    },
-  };
-}
-
-function withCredentialNotice(output, env) {
+function withAllContext(output, env, ...contexts) {
   const notice = sharedConfigCredentialNotice(env);
-  if (!notice) return output;
+  const compose = (text) =>
+    composeBoundedHookContext(output.hookSpecificOutput.additionalContext, [
+      ...contexts.map((context) =>
+        context?.render ? { ...context, text } : context,
+      ),
+      notice,
+    ]);
+  const additionalContext = compose(
+    contexts.find((context) => context?.render)?.render(compose),
+  );
+  acknowledgePrivateAuthorizationReminders(additionalContext, env);
   return {
     hookSpecificOutput: {
       ...output.hookSpecificOutput,
-      additionalContext: `${notice}\n\n${output.hookSpecificOutput.additionalContext}`,
+      additionalContext,
     },
   };
 }
 
+// Usage and debts belong to the agent that received the context (see
+// agentLedgerIdFor); directives and task outcomes stay with the session.
 function recordEligibility(input, env, options) {
   const record = options.recordEligibility ?? recordTaskEligibility;
-  record(sessionIdFor(input), env);
+  record(agentLedgerIdFor(input), env);
 }
 
 function recordDirective(input, directive, env, options) {
@@ -283,15 +396,15 @@ function recordDirective(input, directive, env, options) {
 
 function recordUse(input, env, options, highMatch = null, response = null) {
   const record = options.recordUse ?? recordRegistryUse;
-  const sessionId = sessionIdFor(input);
-  record(sessionId, env);
+  const ledgerId = agentLedgerIdFor(input);
+  record(ledgerId, env);
   const recordHighMatch = options.recordHighMatch ?? recordHighMatchSurface;
-  recordHighMatch(sessionId, highMatch, env);
+  recordHighMatch(ledgerId, highMatch, env);
   if (response) {
     const recordValueEpisode =
       options.recordValueEpisode ?? recordValueEpisodeSurface;
     const valueEpisode = valueEpisodeFromResponse(response);
-    recordValueEpisode(sessionId, valueEpisode, env);
+    recordValueEpisode(sessionIdFor(input), valueEpisode, env);
   }
 }
 
@@ -299,7 +412,7 @@ function recordQueryFeedback(input, tracking, env, options) {
   if (!tracking) return;
   const record =
     options.recordQueryFeedbackObligation ?? recordQueryFeedbackObligation;
-  record(sessionIdFor(input), tracking, env);
+  record(agentLedgerIdFor(input), tracking, env);
 }
 
 async function queryRemembrance(payload, options) {

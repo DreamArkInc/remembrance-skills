@@ -8,6 +8,7 @@ import {
   recordPluginLifecycleHealth,
   resolveApiCredential,
   sessionIdFor,
+  sessionSkillsDirective,
   warmPrincipalSession,
 } from "./hook-core.mjs";
 
@@ -48,6 +49,15 @@ export async function handleSessionStart(input, options = {}) {
     "the bundled local MCP server resolves the same environment/shared config credential. " +
     "Run run_connection_doctor if setup seems incomplete. It verifies the active connection and gives one exact next step. If that tool is absent, report partial activation, update or reinstall the plugin, and reload VS Code.";
   const hostVersion = String(input?.vscode_version ?? input?.version ?? "");
+  // Runs beside the requests below; on compaction it reads only its cache.
+  const sessionSkills = sessionSkillsDirective(
+    {
+      source: input?.source,
+      nativeSessionId: input?.session_id,
+      fetchImpl: options.fetchImpl ?? fetch,
+    },
+    env,
+  ).catch(() => null);
   const [, clientUpdate] = isCompaction
     ? [null, null]
     : await Promise.all([
@@ -73,9 +83,13 @@ export async function handleSessionStart(input, options = {}) {
   return {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
-      additionalContext: clientUpdate?.notice
-        ? `${baseContext}\n\n${clientUpdate.notice}`
-        : baseContext,
+      additionalContext: [
+        baseContext,
+        clientUpdate?.notice,
+        await sessionSkills,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
     },
   };
 }

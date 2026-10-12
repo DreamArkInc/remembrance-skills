@@ -1,8 +1,9 @@
 {
   "mcpServers": {
     "remembrance": {
-      "command": "node",
+      "command": "sh",
       "args": [
+        "${CLAUDE_PLUGIN_ROOT}/packages/vscode-plugin/scripts/node-launcher",
         "${CLAUDE_PLUGIN_ROOT}/packages/vscode-plugin/servers/remembrance-mcp.mjs"
       ],
       "env": {

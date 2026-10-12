@@ -1,0 +1,8 @@
+# Windows batch files keep their CRLF line endings byte for byte on every
+# platform (cmd.exe mis-reads labels in LF-only batch files). Whitespace checks
+# such as `git diff --check` read that CR as part of the line ending, so they
+# still catch real trailing whitespace in these files.
+*.cmd -text whitespace=cr-at-eol
+# The POSIX Node.js launcher keeps LF on every checkout, including Git for
+# Windows with core.autocrlf=true: Git Bash's sh runs it there and fails on CR.
+node-launcher text eol=lf

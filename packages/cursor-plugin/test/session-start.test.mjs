@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -10,8 +16,10 @@ import {
   resolveApiCredential,
   sharedConfigCredentialNotice,
 } from "../scripts/hook-core.mjs";
+import { useIsolatedHookEnvironment } from "../../codex-plugin/test/fixtures/isolated-hook-environment.mjs";
 
 const tempRoot = mkdtempSync(join(tmpdir(), "remembrance-cursor-status-"));
+const network = useIsolatedHookEnvironment();
 
 afterAll(() => {
   rmSync(tempRoot, { recursive: true, force: true });
@@ -44,6 +52,62 @@ describe("Cursor sessionStart hook", () => {
       }),
       env,
     );
+  });
+
+  it("loads organization session skills once when a conversation is created", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            contract_version: "session-skills-v1",
+            available: true,
+            reason_code: null,
+            session_skills: [
+              {
+                slug: "caveman",
+                version_id: "sv_eed332475dea44a3a3",
+                pinned: false,
+              },
+            ],
+            omitted_count: 0,
+          }),
+        ),
+    );
+    const env = {
+      REMEMBRANCE_API_KEY: "rk_never_print",
+      REMEMBRANCE_USAGE_DIR: join(tempRoot, "session-skills-usage"),
+      XDG_CONFIG_HOME: join(tempRoot, "session-skills-xdg"),
+    };
+    // Cursor's sessionStart carries the conversation id and no start source.
+    const output = await handleSessionStart(
+      {
+        hook_event_name: "sessionStart",
+        conversation_id: "cursor-conversation-1",
+        session_id: "cursor-conversation-1",
+        composer_mode: "agent",
+      },
+      {
+        env,
+        pluginVersion: "0.2.0",
+        recordHealth: vi.fn(),
+        warmSession: vi.fn(async () => null),
+        checkUpdate: vi.fn(async () => null),
+        fetchImpl,
+      },
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][0]).toBe(
+      "https://remembrance.dev/api/v1/agent/session-skills",
+    );
+    expect(
+      output.additional_context.startsWith(CURSOR_REMEMBRANCE_CONTEXT),
+    ).toBe(true);
+    expect(output.additional_context).toMatch(
+      /\n- \{"slug":"caveman","version_id":"sv_eed332475dea44a3a3","scope":"session","idempotency_key":"rss_[0-9a-f]{32}"\}\n/,
+    );
+    expect(JSON.stringify(output)).not.toContain("rk_never_print");
+    // Cursor never re-runs this hook in a conversation, so it keeps no cache.
+    expect(existsSync(env.REMEMBRANCE_USAGE_DIR)).toBe(false);
   });
 
   it("can be disabled without failing the session", async () => {
@@ -83,9 +147,7 @@ describe("Cursor sessionStart hook", () => {
         })),
       },
     );
-    expect(output.additional_context).toContain(
-      "fully quit and reopen Cursor",
-    );
+    expect(output.additional_context).toContain("fully quit and reopen Cursor");
   });
 
   it("resolves Cursor's shared config and explains how to verify its MCP scope", () => {
@@ -112,5 +174,22 @@ describe("Cursor sessionStart hook", () => {
     expect(CURSOR_REMEMBRANCE_CONTEXT).toContain(
       "anonymous REST/browser probe",
     );
+  });
+
+  it("sends its default requests only to the stubbed fetch", async () => {
+    network.fetch.mockClear();
+    await handleSessionStart(
+      {
+        hook_event_name: "sessionStart",
+        conversation_id: "cursor-offline-conversation",
+        session_id: "cursor-offline-conversation",
+      },
+      { env: { REMEMBRANCE_API_KEY: "rk_never_print" } },
+    );
+    expect(network.fetch).toHaveBeenCalledWith(
+      "https://remembrance.dev/api/v1/agent/session-skills",
+      expect.anything(),
+    );
+    expect(network.realRequests).toEqual([]);
   });
 });

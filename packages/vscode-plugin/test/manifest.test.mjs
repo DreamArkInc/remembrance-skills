@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -64,6 +64,69 @@ describe("VS Code agent plugin manifest", () => {
     );
   });
 
+  it("starts every hook and the bundled MCP server through the POSIX launcher", () => {
+    // The launcher finds Node.js when the host's PATH does not include it. On
+    // Windows, VS Code runs each hook's `windows` form instead (through
+    // PowerShell or cmd.exe): the plain node command, so no sh is needed.
+    const cases = [
+      {
+        base: root,
+        prefix: "${CLAUDE_PLUGIN_ROOT}/",
+        hooks: readJson("hooks/hooks.json"),
+        mcp: readJson(".mcp.json"),
+      },
+      {
+        base: repoRoot,
+        prefix: "${CLAUDE_PLUGIN_ROOT}/packages/vscode-plugin/",
+        hooks: JSON.parse(
+          readFileSync(
+            resolve(repoRoot, ".claude-plugin/vscode-hooks.json"),
+            "utf8",
+          ),
+        ),
+        mcp: JSON.parse(
+          readFileSync(
+            resolve(repoRoot, ".claude-plugin/vscode-mcp.json"),
+            "utf8",
+          ),
+        ),
+      },
+    ];
+    for (const { base, prefix, hooks, mcp } of cases) {
+      const launcher = `${prefix}scripts/node-launcher`;
+      const handlers = Object.values(hooks.hooks).flatMap((entries) =>
+        entries.flatMap((entry) => entry.hooks),
+      );
+      expect(handlers).toHaveLength(6);
+      // A subagent is asked for its own pending actions by the same script,
+      // which also marks its start so that its task prompt is not taken for
+      // the user's.
+      expect(hooks.hooks.SubagentStop).toEqual(hooks.hooks.Stop);
+      expect(hooks.hooks.SubagentStart).toEqual(hooks.hooks.Stop);
+      for (const { command, windows } of handlers) {
+        const quoted = command.match(/^sh "([^"]+)" "([^"]+\.mjs)"$/);
+        expect(quoted?.[1], command).toBe(launcher);
+        expect(quoted?.[2].startsWith(`${prefix}scripts/`), command).toBe(true);
+        expect(
+          existsSync(
+            resolve(base, quoted[2].replace("${CLAUDE_PLUGIN_ROOT}/", "")),
+          ),
+        ).toBe(true);
+        expect(windows, command).toBe(`node "${quoted[2]}"`);
+      }
+      expect(mcp.mcpServers.remembrance.command).toBe("sh");
+      expect(mcp.mcpServers.remembrance.args).toEqual([
+        launcher,
+        `${prefix}servers/remembrance-mcp.mjs`,
+      ]);
+      expect(
+        existsSync(
+          resolve(base, launcher.replace("${CLAUDE_PLUGIN_ROOT}/", "")),
+        ),
+      ).toBe(true);
+    }
+  });
+
   it("observes private-lesson submission and retry tools", () => {
     const hooks = readJson("hooks/hooks.json").hooks;
     const matcher = new RegExp(hooks.PostToolUse[0].matcher);
@@ -105,6 +168,12 @@ describe("VS Code agent plugin manifest", () => {
     expect(JSON.stringify(hooks)).toContain(
       "${CLAUDE_PLUGIN_ROOT}/packages/vscode-plugin/scripts/session-start.mjs",
     );
+    // A declined pending action closes only when the observer sees the call.
+    expect(
+      new RegExp(hooks.hooks.PostToolUse[0].matcher).test(
+        "mcp__remembrance__decline_pending_action",
+      ),
+    ).toBe(true);
     expect(JSON.stringify(mcp)).toContain(
       "${CLAUDE_PLUGIN_ROOT}/packages/vscode-plugin/servers/remembrance-mcp.mjs",
     );

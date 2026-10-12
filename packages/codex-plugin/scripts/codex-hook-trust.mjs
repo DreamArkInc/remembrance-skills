@@ -9,6 +9,7 @@ const REQUIRED_HOOKS = new Map([
   ["userPromptSubmit", "UserPromptSubmit"],
   ["postToolUse", "PostToolUse"],
   ["stop", "Stop"],
+  ["subagentStop", "SubagentStop"],
 ]);
 const TRUSTED_STATUSES = new Set(["managed", "trusted"]);
 const DEFAULT_TIMEOUT_MS = 1_500;

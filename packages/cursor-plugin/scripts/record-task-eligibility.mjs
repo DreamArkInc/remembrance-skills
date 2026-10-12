@@ -9,19 +9,22 @@
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
+  capturePrivateSkillNativeUserPrompt,
   createContinuationDirective,
   disabled,
   isContextualContinuationPrompt,
+  isHostNotificationPrompt,
   recordDirectiveSurface,
   recordExplicitPreferenceObservations,
   recordPluginLifecycleHealth,
   recordTaskEligibility,
+  recordUserPrompt,
   redactPrompt,
   resolveApiCredential,
   promptContainsUserCorrection,
   shouldQueryPrompt,
 } from "./hook-core.mjs";
-import { cursorSessionId } from "./record-mcp-use.mjs";
+import { cursorNativeSessionId, cursorSessionId } from "./record-mcp-use.mjs";
 
 export function promptFromCursorInput(input) {
   return String(
@@ -47,10 +50,20 @@ export async function handlePromptEligibility(input, options = {}) {
     },
     env,
   );
+  const prompt = promptFromCursorInput(input);
+  if (isHostNotificationPrompt(prompt)) {
+    return { eligible: false, reason: "host_notification" };
+  }
+  const recordPrompt = options.recordUserPrompt ?? recordUserPrompt;
+  recordPrompt(sessionId, env);
+  await capturePrivateSkillNativeUserPrompt(prompt, {
+    env,
+    nativeContextBridge: options.nativeContextBridge,
+    nativeSessionId: cursorNativeSessionId(input),
+  });
   if (disabled(env.REMEMBRANCE_AUTO_QUERY)) {
     return { eligible: false, reason: "disabled" };
   }
-  const prompt = promptFromCursorInput(input);
   const redacted = redactPrompt(prompt);
   const recordPreferences =
     options.recordPreferences ?? recordExplicitPreferenceObservations;
@@ -66,7 +79,13 @@ export async function handlePromptEligibility(input, options = {}) {
       input?.cwd ??
       null,
   }).catch(() => 0);
-  const decision = shouldQueryPrompt(redacted);
+  // This hook never searches, so it cannot tell an empty task-shape search
+  // from a useful one; the always-apply rule is Cursor's task-shaped path.
+  // Eligibility stays on the keyword triggers (owner decision 34C).
+  const decision = shouldQueryPrompt(redacted, {
+    ...env,
+    REMEMBRANCE_AUTO_QUERY_TASK_SHAPE: "0",
+  });
   const continuation = isContextualContinuationPrompt(redacted);
   const correction = promptContainsUserCorrection(redacted);
   if (!decision.likely_match && !continuation && !correction) {

@@ -8,6 +8,7 @@
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
+  bindPrivateSkillNativeCapture,
   clearHighMatchSurfaceIfOpened,
   clearHighMatchSurfaceForExplicitSelection,
   directSelectionFromResponse,
@@ -15,7 +16,7 @@ import {
   observeSuccessfulCompletionTool,
   readRegistryUseCount,
   recordDirectiveFollowThroughForTool,
-  recordDirectSelectionSurface,
+  recordDirectSelectionUse,
   recordHighMatchSurface,
   recordPluginLifecycleHealth,
   recordHostPolicyDenial,
@@ -36,11 +37,18 @@ const CONSUMPTION_TOOLS = new Set([
 const CONTRIBUTION_TOOLS = new Set([
   "submit_query_feedback",
   "submit_feedback",
+  "decline_pending_action",
+  "capture_learning",
   "submit_remembrance",
   "propose_skill_idea",
   "propose_private_skill",
   "submit_private_lesson_candidate",
   "retry_private_lesson_candidate",
+  "submit_private_skill_candidate",
+  "retry_private_skill_candidate",
+  "delete_private_lesson_candidate",
+  "delete_private_skill_candidate",
+  "record_preference",
   "submit_suggestion",
   "submit_resource",
   "submit_resource_review",
@@ -59,6 +67,16 @@ export function cursorSessionId(input, env = process.env) {
       env.CURSOR_TRANSCRIPT_PATH ??
       env.CURSOR_PROJECT_DIR ??
       "cursor",
+  );
+}
+
+export function cursorNativeSessionId(input) {
+  return (
+    input?.conversation_id ??
+    input?.session_id ??
+    input?.input?.conversation_id ??
+    input?.input?.session_id ??
+    null
   );
 }
 
@@ -121,11 +139,7 @@ export async function handleMcpUse(input, options = {}) {
     if (!selection) {
       return { recorded: false, kind: "failed", tool };
     }
-    const record = options.recordRegistryUse ?? recordRegistryUse;
-    const count = record(sessionId, env);
-    const recordSelection =
-      options.recordDirectSelection ?? recordDirectSelectionSurface;
-    recordSelection(sessionId, { ...selection, use_count: count }, env);
+    const count = recordDirectSelectionUse(sessionId, selection, env, options);
     const recordValueEpisode =
       options.recordValueEpisode ?? recordValueEpisodeSurface;
     recordValueEpisode(sessionId, valueEpisodeFromResponse(response), env);
@@ -135,13 +149,7 @@ export async function handleMcpUse(input, options = {}) {
     clearHighMatch(sessionId, selection.slug, env);
     const observe =
       options.observeCompletionTool ?? observeSuccessfulCompletionTool;
-    observe(
-      sessionId,
-      tool,
-      toolArguments(input),
-      response,
-      env,
-    );
+    observe(sessionId, tool, toolArguments(input), response, env);
     return { recorded: true, kind: "direct_selection", tool, count };
   }
   if (CONSUMPTION_TOOLS.has(tool)) {
@@ -203,7 +211,20 @@ export async function handleMcpUse(input, options = {}) {
       tool,
     };
   }
-  if (tool === "prepare_private_lesson_candidate") {
+  if (
+    tool === "prepare_private_lesson_candidate" ||
+    tool === "capture_learning"
+  ) {
+    await bindPrivateSkillNativeCapture(
+      tool,
+      toolArguments(input),
+      mcpResponseFromHook(input),
+      {
+        env,
+        nativeContextBridge: options.nativeContextBridge,
+        nativeSessionId: cursorNativeSessionId(input),
+      },
+    );
     const observe =
       options.observeCompletionTool ?? observeSuccessfulCompletionTool;
     const observation = observe(
@@ -215,7 +236,10 @@ export async function handleMcpUse(input, options = {}) {
     );
     return {
       recorded: observation.opened.length > 0,
-      kind: "private_lesson_prepared",
+      kind:
+        tool === "capture_learning"
+          ? "private_learning_captured"
+          : "private_lesson_prepared",
       tool,
     };
   }

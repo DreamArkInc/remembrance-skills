@@ -3,25 +3,25 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "node ./scripts/session-start.mjs",
+        "command": "sh ./scripts/node-launcher ./scripts/session-start.mjs",
         "timeout": 5
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "node ./scripts/record-task-eligibility.mjs",
+        "command": "sh ./scripts/node-launcher ./scripts/record-task-eligibility.mjs",
         "timeout": 5
       }
     ],
     "afterMCPExecution": [
       {
-        "command": "node ./scripts/record-mcp-use.mjs",
+        "command": "sh ./scripts/node-launcher ./scripts/record-mcp-use.mjs",
         "timeout": 5
       }
     ],
     "stop": [
       {
-        "command": "node ./scripts/contribute-on-stop.mjs",
+        "command": "sh ./scripts/node-launcher ./scripts/contribute-on-stop.mjs",
         "timeout": 5,
         "loop_limit": 1
       }

@@ -24,6 +24,18 @@ ln -s /abs/path/to/remembrance/packages/cursor-plugin ~/.cursor/plugins/local/re
 
 Restart Cursor, then open **Customize > Plugins** and enable Remembrance.
 
+**Node.js runtime.** The hooks need Node.js 18.17.0 or newer that Cursor can
+find, and the plugin's MCP entry runs `npx -y @remembrance-ai/mcp-server`, which
+also needs npm. A host started from the Dock, Finder or an IDE may not have your
+shell's PATH, so a Node.js installed by nvm, fnm, volta, asdf, nodenv or mise
+can be missing from it; the symptom is `spawn node ENOENT` or "No such file or
+directory". The hooks start through `scripts/node-launcher`, which uses
+`REMEMBRANCE_NODE` when it is set, else `node` on PATH, else Node.js 18.17.0+
+from nvm, volta, fnm, n, asdf, nodenv, mise, Homebrew, `/usr/local` or
+`/usr/bin`. `npx` starts `node` through PATH, so if the MCP server does not
+start, start Cursor from a terminal where `npx` works. On Windows, Cursor runs
+hooks in PowerShell, where they need `sh` (Git for Windows `usr\bin`) on PATH.
+
 At session start, Remembrance checks a credential-free public release manifest.
 If a newer verified plugin exists, the agent tells the user to refresh the
 Remembrance marketplace entry and choose **Update**, then fully quit and reopen
@@ -35,6 +47,17 @@ public-mirror release and does not wait for unrelated npm or ClawHub surfaces. S
 Cursor installations from before this startup check existed still receive a
 command-free update notice on their next successful Remembrance query. The
 notice points to the normal marketplace flow and never invents a remote command.
+
+With an organization key, a new conversation also reads the organization's
+session skills (at most five slugs and version ids, never skill text) and asks
+the agent to load each one with `invoke_skill` before its first reply, using an
+idempotency key derived from the conversation id. Cursor runs `sessionStart`
+only when a conversation is created and its `preCompact` hook cannot add
+context, so the request is not repeated after a compaction and no cache file
+is kept. A pinned version that is no longer available is reported and skipped,
+never replaced. Set `REMEMBRANCE_SESSION_SKILLS=0` to turn this off; like the
+rest of the session context, it is also skipped when
+`REMEMBRANCE_CURSOR_SESSION_CONTEXT=0`.
 
 ## Installation identity and preferences
 
@@ -53,10 +76,14 @@ working preferences follow each engineer across approved agents and steer
 relevant public and team skills without changing shared instructions or
 weakening organization policy. Profiles, observations, compatibility records,
 and feedback remain private to the organization. An explicit instruction
-governs the current task immediately. Known built-ins activate durably at once.
+governs the current task immediately. Known built-ins activate durably at once for a
+managed-encryption organization.
 Custom preferences remain pending until automatic normalization and validation
 approves them; unsafe, malformed, or uncertain custom behavior stays inactive
-and is never replayed to an agent. Classification runs
+and is never replayed to an agent.
+An organization using customer-held encryption is currently deferred: every substantive preference write and every compatibility-feedback call is refused before persistence with HTTP 422 and code `customer_held_preference_processing_deferred`. Existing records are unchanged, reads and the content-free withdrawal lane keep working, and responses withhold the compatibility-feedback offer there. Read `activated` and
+`normalized_activation_state` in the response instead of assuming a setting is
+live. Classification runs
 asynchronously against exact skill versions; query and invocation add no
 generative preference call or second embedding request. Material compatibility
 may reorder only already-relevant skills inside one match tier or apply a
@@ -112,10 +139,13 @@ be confirmed.
 
 ### Private repository contributions
 
-When the organization has approved Remembrance as a destination, Cursor should
-use `propose_private_skill` for repository-derived instructions. That tool
-requires organization authentication and can only create a private review
-candidate. Cursor or enterprise network policy may still deny the export before
+When the organization has approved Remembrance as a destination, a current
+local Cursor client uses `capture_learning.private_skill` followed by the exact
+`submit_private_skill_candidate` action for repository-derived instructions.
+It requires organization authentication and can only create a private review
+candidate. Broad `propose_private_skill` and `submit_remembrance` routes are
+legacy/hosted/raw compatibility tools and are unavailable by default locally.
+Cursor or enterprise network policy may still deny the export before
 Remembrance receives it; that denial is not an API failure and must not be
 worked around with another network transport.
 
@@ -136,9 +166,78 @@ With an organization key, generic `propose_skill_idea` also stays private.
 Never remove or bypass the key to force a public candidate; submit privately,
 then use the reviewed public-propagation flow.
 
+### Routing metadata on complete skill proposals
+
+In 0.2.0 a complete skill sent with `propose_skill_idea` or
+`propose_private_skill` (or their REST routes) carries routing metadata
+(contract v1, published at `/schemas/skill-routing-metadata.v1.json`): when
+an agent should pick the skill (`applicability`) and what it does and needs
+(`routing`). Ask for a platform draft first, show it to the author, and send
+the confirmed or edited fields back with the draft's token. The draft call
+stores nothing:
+
+```json
+{
+  "title": "Deploy a prepared app to Azure",
+  "description": "Deploy an already-prepared app to Azure with azd.",
+  "proposed_skill_md": "# Deploy a prepared app to Azure\n\nRun azd up ...",
+  "prefill_routing_metadata": true
+}
+```
+
+Its answer holds `example.proposed_metadata` and `routing_draft.token`. The
+submission then sends the confirmed fields:
+
+```json
+{
+  "title": "Deploy a prepared app to Azure",
+  "description": "Deploy an already-prepared app to Azure with azd.",
+  "proposed_skill_md": "# Deploy a prepared app to Azure\n\nRun azd up ...",
+  "proposed_metadata": {
+    "applicability": {
+      "scope": "specialized",
+      "use_when": [
+        "The user wants to deploy an already-prepared app to Azure",
+        "A deployment plan and infrastructure files already exist",
+        "The user asks to run azd up or azd deploy"
+      ],
+      "avoid_when": [
+        "The app has no Azure deployment files yet (prepare it first)",
+        "The user only wants a readiness check without deploying"
+      ],
+      "task_examples": [
+        "Deploy this prepared app to Azure Container Apps",
+        "Run azd up for my project",
+        "Push the validated Bicep deployment to production"
+      ],
+      "not_for": []
+    },
+    "routing": {
+      "capabilities": ["deploy-to-cloud"],
+      "domains": ["deployments-cicd", "cloud-platforms"],
+      "runtime_requirements": ["repo-checkout", "shell", "cloud-account", "provider-azure"],
+      "risk": "cloud-changes"
+    }
+  },
+  "routing_draft_token": "rd1.<token from the draft>"
+}
+```
+
+A complete skill without these fields is refused with 422
+`skill_routing_metadata_incomplete` (`delivery: not_delivered`; nothing is
+stored). The refusal lists every issue and carries the same draft, so fix
+the listed fields and send the request again. Fields taken unchanged are
+recorded as author-confirmed draft values; edits that widen the draft (a
+broader scope, added `use_when` items or capabilities, a lower risk) are
+flagged for review. An organization's text is drafted only through its
+approved semantic-enrichment processing grant; without one the draft is held
+and nothing is sent. A private capture (`capture_learning` with
+`private_skill`) may ask for automatic completion: the skill becomes
+available after acceptance once its routing metadata is complete.
+
 If export remains blocked, the plugin reports one local, content-free alert:
-**Remembrance was blocked by host policy before reaching Remembrance. Nothing
-was sent. Querying remains available.** It does not retry or automatically
+**The host blocked this Remembrance action. Do not treat it as submitted.
+Earlier successful actions are unaffected; querying remains available.** It does not retry or automatically
 create a handoff. Only when an organization admin explicitly requests one, use
 local MCP `queue_private_skill_import`. It writes a mode-0600 JSON handoff under
 the user's fixed Remembrance state directory and contacts no network. The admin
@@ -148,14 +247,25 @@ local tool can run the bundled
 `skills/remembrancer/scripts/queue-private-skill-import.mjs` script. A local
 queue receipt is not a server submission receipt.
 
-### Private lesson autopilot
+### Private learning autopilot
 
-Routine organization lessons are prepared locally with
-`prepare_private_lesson_candidate`, which canonicalizes and redacts in memory
-and stores only an encrypted post-redaction draft. The separate
-`submit_private_lesson_candidate` action sends those exact bytes to the private
-organization verifier queue. This action always submits privately and never
-falls back to anonymous or public submission. After the private outcome is
+Current organization-capable local clients expose `capture_learning` as the
+only routine reusable-learning entry point. Supply exactly one compact
+`lesson`, complete `private_skill`, or structured durable `preference`. It
+accepts no organization, destination, visibility, credential, or public
+fallback. Lessons are canonicalized and redacted in memory; complete skills
+retain bounded markdown, public citations, snippets, metadata, and actionable
+instructions. Lesson and skill drafts are encrypted in separate outboxes; a
+preference returns the exact existing `record_preference` action.
+`capture_learning` is local and makes no network request.
+
+Invoke only the returned `submit_private_lesson_candidate`,
+`submit_private_skill_candidate`, or `record_preference` action.
+These actions always submit privately. Lesson and skill actions carry only a local draft ID
+through Cursor to the private organization pipeline and never fall back to
+anonymous or public submission. Accepted content reuses the existing verifier, topology, review,
+versioning, audit, and admin-controlled propagation pipeline; the submitting
+agent never chooses visibility. After the private outcome is
 accepted, a separate server-owned process may create a freshly redacted public
 candidate only when the organization admin enabled the
 **Contribution propagation** setting; the submitting agent neither chooses nor
@@ -165,19 +275,27 @@ drafts never expire or auto-delete. Verified submissions discard encrypted
 lesson content immediately; their content-free completion markers are
 automatically deleted after 14 days.
 
-The signed policy pins the corrected `private-lesson-redaction-v2` profile and
-its exact digest. Unsupported-profile drafts become terminal
-`superseded_redactor`, stay encrypted, and are never retried, re-redacted, or
+The lesson client offers a bounded `private-lesson-redaction-v2` supported
+redactor-profile set and the
+server signs policy for the newest mutual profile. Retained drafts require
+their exact bound profile. Temporary incompatibility remains encrypted as
+`awaiting_compatible_profile` with precise update, full-restart, or
+server-rollout guidance; it is not mislabeled as safety or host denial. A
+profile becomes terminal only when the installed client no longer supports it;
+that state is `superseded_redactor`. Terminal drafts stay encrypted and are never retried, re-redacted, or
 automatically deleted. When health reporting is enabled, a held draft may send
 only content-free category/version counts and signed protocol digests through
 the same approved action; that telemetry cannot enter verification, review,
 topology, or skill materialization. Disable it with
 `REMEMBRANCE_HEALTH_REPORTING=0`.
 
-Cursor asks before MCP writes by default. Approve only
-`submit_private_lesson_candidate` for all future invocations when that exact
-tool is shown; do not enable broad Auto-run solely for Remembrance. Local
-preparation, inspection, retry, and confirmed deletion remain local-only.
+Cursor asks before MCP writes by default. Approve the submit and retry actions
+for the `private_lesson` and `private_skill` lanes when those exact tools are
+shown; do not enable broad Auto-run solely for Remembrance. Remembrance lazily
+maps an existing submit approval to its lane. Local capture, inspection, and
+confirmed deletion remain zero-network, and a fresh-draft retry stops before
+network access. `submit_query_feedback` remains an independent bounded
+query-fit action.
 Hosted/cloud Cursor without the local plugin reports
 `auto_capture_supported: false` and cannot guarantee durable draft retention.
 
@@ -196,14 +314,24 @@ Hosted/cloud Cursor without the local plugin reports
 - `beforeSubmitPrompt` observes relevant/contextual prompts without modifying
   them and records an eligibility marker so the stop hook can recover a missed
   query.
+  Host-generated text a trigger word matches (a Codex commit or pull-request
+  generation prompt, a subagent hand-back, pasted `git status` output, an
+  explicit local skill invocation) is not marked eligible; preferences still
+  arrive through the MCP tools. Set `REMEMBRANCE_AUTO_QUERY_HYGIENE=0` to mark
+  it anyway. Unlike the prompt hooks of the other plugins, it does not treat a
+  task-shaped prompt without a trigger word as relevant: this hook cannot
+  search, so the always-apply rule is Cursor's path for such prompts and
+  `REMEMBRANCE_AUTO_QUERY_TASK_SHAPE` does not apply here.
 - `afterMCPExecution` records when the agent used `query_skills`, `get_skill`,
   `get_resource`, or successfully loaded an explicit selection through
   `invoke_skill`. `list_skills` and MCP resource-handle reads do not count as
   use. If the agent later calls a contribution tool, the hook marks that use as
   already handled.
-- `propose_private_skill` is the explicit organization-only submission path.
-  Local MCP also provides the zero-network `queue_private_skill_import` tool
-  for an explicitly requested administrator handoff.
+- `capture_learning` is the sole routine local reusable-learning router. It
+  returns an exact private lesson/private skill action or the existing
+  preference action. Local MCP also provides the zero-network
+  `queue_private_skill_import` tool for an explicitly requested administrator
+  handoff.
 - When a person explicitly names a skill or supplies a
   `remembrance://skills/{slug}` URI, Cursor resolves ambiguity with
   the indexed, normalized slug-prefix filter in `list_skills`, then calls
@@ -212,14 +340,14 @@ Hosted/cloud Cursor without the local plugin reports
   selection. Direct selections use post-use feedback, not query-fit feedback.
 - Returned result IDs let Cursor call `submit_query_feedback` for explicit
   good/partial/poor query matches before using a skill; post-use quality stays
-  on `submit_feedback`. Cursor should send one complete verdict set per query
+  categorical on `submit_feedback`, while reusable learning goes separately to
+  `capture_learning`. Cursor should send one complete verdict set per query
   from the same organization scope or anonymous scope; any active key for that
   organization is valid. Identical retries are safe, while changed later
   judgments conflict.
-  Anonymous verdicts remain low weight and never train the shared reranker.
-  Shared training uses only public-result comparisons from multiple
-  authenticated organization keys across multiple organizations; changing
-  `agent_id` does not create another feedback actor.
+  Anonymous verdicts remain low weight and never train a shared model. No
+  learned reranker is trained or served; changing `agent_id` does not create
+  another feedback actor.
 - Results also carry a high/possible/exploratory tier, concise reason, bounded
   `why_matched` terms/capabilities/constraint evidence, conservative
   `applicability` scope and use/exclusion conditions, metadata digests,
@@ -230,6 +358,26 @@ Hosted/cloud Cursor without the local plugin reports
   `submit_feedback` after use and to delegated agents when applicable. The
   `afterMCPExecution` hook clears the reminder only for that exact successful
   detail open.
+- Without an organization key, the server's relevance judge chooses what a
+  search is shown from the top 20 public candidates: Jev (TypeSafe, through
+  Vercel AI Gateway) rates each candidate first, and a language model decides
+  the ones Jev leaves undecided while there is time. It receives the search's
+  task text and public skill cards only. Every request asks for zero retention
+  and no prompt training; for Jev, zero retention rests on Remembrance's
+  account-specific agreement with TypeSafe through Vercel, which the Gateway
+  does not confirm. With an organization key, a search is judged only under the
+  organization's managed processing grant for semantic search, and Jev rates it
+  first only when that grant also approves TypeSafe, under the owner-attested
+  zero-retention agreement with TypeSafe (owner decisions 36 and 64), which
+  covers this judge stage and no other purpose: its task text and skill cards,
+  the organization's own included, go only to the hosts that grant approves,
+  each asked for zero retention and no prompt training. Without that grant
+  nothing is sent and the search keeps the rule's list.
+  A card shows a skill's use and exclusion conditions only where the
+  platform generated them or a person reviewed them. A use condition only
+  promotes a result, and only an exclusion its author stated or a person
+  reviewed makes it `unlikely`; `applicability.provenance` says who stated
+  them.
 - Exact, current, non-high-risk matches may also carry a compact token-only
   `potential_savings` estimate when fresh grade A/B proof exists for the
   observed model revision, reasoning effort, and bounded task cohort.
@@ -255,13 +403,13 @@ Hosted/cloud Cursor without the local plugin reports
   telemetry contains no prompt text and never affects ranking.
   `REMEMBRANCE_DIRECTIVE_EVENT_TIMEOUT_MS` controls the fail-open request
   timeout (default `750`, bounded to `100`-`2000` milliseconds).
-- `stop` sends one `followup_message` asking for a full-context query and
-  redacted contribution when Remembrance was used or an eligible task missed
-  its query. It also asks once about an unopened high match so Cursor can fetch
-  it or report explicit poor-fit feedback, unless an explicit contribution
-  already handled the task. The compact follow-up keeps routine hook narration,
-  tool receipts, and correlation IDs out of the agent's final answer; only a
-  failure, host-policy block, or required user action is surfaced.
+- `stop` records bounded pending obligations when Remembrance was used or an
+  eligible task missed its query, then allows the current final answer. The next
+  real user prompt receives only the exact query, unopened-match,
+  `submit_query_feedback`, categorical `submit_feedback`, or
+  `capture_learning` recovery actions. Routine hook narration, tool receipts,
+  and correlation IDs never obscure the final answer; only a failure,
+  host-policy block, or required user action is surfaced.
 
 ## Cursor docs alignment
 

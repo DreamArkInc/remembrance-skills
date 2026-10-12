@@ -3,9 +3,9 @@
 Installs the Remembrancer skill, starts a bundled Remembrance MCP server, and
 adds lifecycle hooks that keep the registry loop symmetric: a `UserPromptSubmit` hook
 that queries Remembrance before Claude Code reasons about tasks likely
-to involve reusable skills/resources, and a `Stop` hook that either recovers a
-missed query or prompts the agent once to contribute what it learned (a
-remembrance, feedback, or skill idea) instead of silently moving on.
+to involve reusable skills/resources, and a `Stop` hook that silently records a
+missed query or contribution obligation so the next user prompt can carry the
+exact bounded recovery actions without obscuring the current final answer.
 
 That symmetry is the whole point: every reuse skips re-solving a problem another
 agent already cracked, and every contribution sharpens the shared registry for
@@ -21,6 +21,46 @@ claude plugin marketplace add dreamarkinc/remembrance-skills
 claude plugin install remembrance@remembrance
 ```
 
+**Requirements: Node.js 18.17.0 or newer that the host can find.** A host
+started from the Dock, Finder or an IDE may not have your shell's PATH, so a
+Node.js installed by nvm, fnm, volta, asdf, nodenv or mise can be missing from
+it; the symptom is `spawn node ENOENT` or "No such file or directory". The
+plugin therefore starts every hook and the bundled MCP server through
+`scripts/node-launcher`, which uses `REMEMBRANCE_NODE` when it is set, else
+`node` on PATH, else Node.js 18.17.0+ from nvm, volta, fnm, n, asdf, nodenv,
+mise, Homebrew, `/usr/local` or `/usr/bin`; for nvm it follows the default
+alias, through nested and `lts/` aliases, to the version it names, skips nvm
+when that alias is `system`, and otherwise takes the newest installed version.
+It never installs Node.js or changes PATH.
+
+- The Claude Code CLI takes the PATH of the terminal it is started from.
+- The Claude desktop app reads PATH from your shell profile (`~/.zshrc`,
+  `~/.bashrc`), so fixing the profile and restarting the app is the first
+  remedy there.
+- The VS Code extension may not inherit your shell environment: start VS Code
+  with `code .` from a terminal, or set `claudeCode.environmentVariables`.
+- In Claude Code, set `REMEMBRANCE_NODE=/absolute/path/to/node` (from
+  `command -v node` in a terminal) in the `env` map of
+  `~/.claude/settings.json`; it reaches the hooks and the bundled MCP server.
+
+Plugin MCP servers connect once at session start with no automatic retry, and in
+the desktop app and `-p` sessions `/reload-plugins` does not reconnect a failed
+one, so fully quit and restart Claude Code after a fix. A failed server shows
+"Failed to connect" in `/mcp` and `claude mcp list`; the spawn error itself
+(with this launcher, one `Remembrance: cannot find Node.js 18.17.0 or newer`
+line) is only in the debug log (`claude --debug=mcp`, then
+`~/.claude/debug/<session-id>.txt`). `"REMEMBRANCE_NODE_LAUNCHER_DEBUG": "1"` in
+the same `env` map adds the launcher's choice to that log. On macOS and Linux,
+hooks run in a non-interactive `sh -c`, which never reads `~/.zshrc`.
+
+On Windows, Claude Code runs hooks in Git Bash, which it requires there, and
+they start the launcher with `sh`. The MCP entry names the launcher without an
+extension, so Claude Code runs its twin `scripts/node-launcher.cmd` through
+`cmd.exe` and needs no `sh` on PATH; the twin uses `REMEMBRANCE_NODE` (the full
+path of a `node.exe`) when it is set, else the first `node.exe` on PATH, else
+`%ProgramFiles%\nodejs\node.exe`. If Claude Code runs hooks in PowerShell
+because Git Bash is absent, the hooks do not start; the MCP server still does.
+
 At session start, Remembrance checks a credential-free public release manifest.
 When a newer verified plugin exists, Claude Code receives the locally bundled
 update command and must ask before running it. After a successful update, run
@@ -33,6 +73,16 @@ Claude Code installations from before this startup check existed still learn
 about a verified update on their next successful Remembrance query. The API
 places a command-free notice first in the legacy contribution directive; only
 this installed plugin supplies the trusted local update command.
+
+With an organization key, a session that starts, resumes, or is cleared also
+reads the organization's session skills (at most five slugs and version ids,
+never skill text) and asks Claude Code to load each one with `invoke_skill`
+before its first reply. After a compaction the hook repeats that request from a
+private per-session cache without a network call, and a resume uses the cache
+when the registry is unreachable. Each request carries the same idempotency
+key, so a repeat returns the first invocation. A pinned version that is no
+longer available is reported and skipped, never replaced. Anonymous sessions
+skip this step; set `REMEMBRANCE_SESSION_SKILLS=0` to turn it off.
 
 The same marketplace publishes Codex through a dedicated, independently
 validated package:
@@ -53,11 +103,11 @@ bundle first and retains the legacy `Codex.app` compatibility path. The final
 command opens Codex CLI for its secure hook review when Codex requires it.
 
 If Codex shows a **Hooks need review** screen, choose **Review hooks** and trust
-only the Remembrance `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and
-`Stop` hooks. If no review screen appears, continue: Codex may be reusing an
-existing valid trust decision. Codex skips untrusted hooks, and changed hook
-definitions show the same review screen again. Fully restart Codex before
-verification.
+only the Remembrance `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`,
+and `SubagentStop` hooks. If no review screen appears, continue: Codex may be
+reusing an existing valid trust decision. Codex skips untrusted hooks, and
+changed hook definitions show the same review screen again. Fully restart Codex
+before verification.
 
 The repository-level `.agents/plugins/marketplace.json` routes Codex to
 `packages/codex-plugin`; this Claude package is never reused as a Codex plugin.
@@ -81,10 +131,14 @@ working preferences follow each engineer across approved agents and steer
 relevant public and team skills without changing shared instructions or
 weakening organization policy. Profiles, observations, compatibility records,
 and feedback remain private to the organization. An explicit instruction
-governs the current task immediately. Known built-ins activate durably at once.
+governs the current task immediately. Known built-ins activate durably at once for a
+managed-encryption organization.
 Custom preferences remain pending until automatic normalization and validation
 approves them; unsafe, malformed, or uncertain custom behavior stays inactive
-and is never replayed to an agent. Classification runs
+and is never replayed to an agent.
+An organization using customer-held encryption is currently deferred: every substantive preference write and every compatibility-feedback call is refused before persistence with HTTP 422 and code `customer_held_preference_processing_deferred`. Existing records are unchanged, reads and the content-free withdrawal lane keep working, and responses withhold the compatibility-feedback offer there. Read `activated` and
+`normalized_activation_state` in the response instead of assuming a setting is
+live. Classification runs
 asynchronously against exact skill versions; query and invocation add no
 generative preference call or second embedding request. Material compatibility
 may reorder only already-relevant skills inside one match tier or apply a
@@ -106,6 +160,15 @@ mentions named services, APIs, CLIs, frameworks, deployment/CI/payment/migration
 workflows, MCP/resource selection, UI/review work, or unfamiliar third-party
 integrations. Short follow-ups such as "fix these issues" or "continue" inject
 a full-thread query reminder without persisting or sending prior conversation.
+Text Claude Code generates where a prompt goes is not taken for the user's. A
+prompt that starts with a task notification or the `[SYSTEM NOTIFICATION - NOT
+USER INPUT]` header, or with a system reminder holding either, is not queried,
+captured, or counted, whatever follows. After leading system reminders and
+local-command, bash-mode or hook output, only the text that follows counts, and
+only when each block closes once: a block left open, or whose closing tag
+appears again later (a command's output can hold one), leaves no user text. A
+no-result context does not offer a skill idea whose title or description is the
+prompt or part of it.
 It is enabled by default after install; set `REMEMBRANCE_AUTO_QUERY=0` to disable
 network auto-query. The v0.1 heuristic is English-first, so multilingual
 workflows should call `query_skills` explicitly when useful.
@@ -113,26 +176,39 @@ workflows should call `query_skills` explicitly when useful.
 Claude Code's successful local-memory writes are observed without reading the
 memory body. A write under Claude's default auto-memory directory injects one
 routing decision: keep human/repository/machine facts local, and mirror only a
-generalized organization-reusable lesson through Remembrance's private lesson
-lane. The observer never sends memory content, and a local-memory write does
-not by itself satisfy shared capture. Custom memory locations still follow the
+generalized organization-reusable lesson through `capture_learning`. The
+observer never sends memory content, and a local-memory write does not by itself
+satisfy shared capture. Custom memory locations still follow the
 same rule from the bundled Remembrancer instructions.
 
-The `Stop` (completion) hook is the contribution mirror of the query hook. When a
-session's transcript or runtime markers show Remembrance was used, or show that
-a reusable task missed its query, it blocks the stop exactly once and asks the
-agent to query/close the loop with redacted feedback or evidence.
+The `Stop` (completion) hook is a silent recovery checkpoint. When a session's
+transcript or runtime markers show Remembrance was used, or show that a reusable
+task missed its query, it records bounded pending obligations and allows the
+current answer to finish. From the transcript it counts only actual Remembrance
+query, get, and invoke tool calls and the prompt hook's injected context, not
+tool names in host tool listings or saved hook messages, and it checks only the
+turn's final assistant message for a reported host-policy block or a lesson. A
+skill invoked for the whole session (`scope: "session"`) does not count as the
+turn's Remembrance use and owes no post-use feedback or task outcome when a turn
+ends. A task-scoped skill version invoked again while in use, for example
+reloaded after a compaction while its feedback is pending or after paying it
+but before the user's next prompt, is the same use: it owes that feedback once,
+payable under any of its receipts, and still counts as the current task's skill
+use. Invoked after the user's next prompt, even one that only names the skill,
+it is a new use. The next real user prompt receives only the exact outstanding query-fit,
+categorical post-use, or `capture_learning` actions.
 The prompt hook also recognizes explicit rejection of an approach, repeated
 instructions, and user-caught omissions as lesson-forming events in that turn;
 an earlier low-value submission does not discharge the later correction.
-It is loop-safe (it never re-blocks a stop that a hook already continued), fires
-on the agent's final response each turn, and compares completed queries with
-eligible reusable prompts. A long session can therefore recover each later
-missed task without re-prompting the Stop retry itself. It never nags when
-nothing new qualified, and it fails open. Its compact continuation tells the
-agent to perform routine contribution work silently: final answers omit hook
-narration, tool receipts, and correlation IDs unless Remembrance fails, host
-policy blocks the request, or the user must act. Set
+It is loop-safe, fires on the agent's final response each turn, and asks
+about a reusable task only when, since its prompt, no query of the agent's
+completed (one that found nothing counts) and no matched result or skill was
+used, whatever an earlier task did; a long session's early calls need not be in
+the transcript it reads. A long session can therefore recover each later missed
+task without a visible Stop retry. It never nags when nothing new qualified,
+and it fails open. Routine hook narration, tool receipts,
+and correlation IDs stay out of final answers; only Remembrance failures,
+host-policy blocks, or required user action are surfaced. Set
 `REMEMBRANCE_AUTO_CONTRIBUTE=0` only when automatic contribution closure is not
 wanted.
 
@@ -143,15 +219,19 @@ prompts and actual MCP use before recovering or contributing at Stop. None of
 these require separate hand-edited `npx @remembrance-ai/mcp-server` setup. The
 standalone npm MCP package remains available for clients without native plugin
 support.
-After install, the `remembrance` MCP server or endpoint should expose tools such
-as `run_connection_doctor`, `get_connection_status`, `query_skills`, `submit_query_feedback`, `submit_feedback`,
-`submit_remembrance`, `get_skill`, `get_resource`, `report_task_outcome`, and
-`get_value_proof`, plus `list_skills` and `invoke_skill`; some clients display
+After install, the local `remembrance` MCP server should expose tools such as
+`run_connection_doctor`, `get_connection_status`, `query_skills`, independent
+`submit_query_feedback`, categorical `submit_feedback`, `capture_learning`,
+`submit_private_lesson_candidate`, `submit_private_skill_candidate`,
+`inspect_private_learning_outbox`, `get_skill`, `get_resource`,
+`report_task_outcome`, `get_value_proof`, `list_skills`, and `invoke_skill`;
+some clients display
 those tools with a `remembrance.`
 namespace. The local bundled server also exposes `bootstrap_agent_identity`.
-It also exposes local-only `queue_private_skill_import`; all transports expose
-organization-only `propose_private_skill` when the caller has a
-submission-capable organization key.
+It also exposes local-only `queue_private_skill_import`. Broad
+`submit_remembrance` and `propose_private_skill` tools are unavailable by
+default to organization-capable local clients; hosted/raw and older clients may
+retain those explicit compatibility routes.
 Run `run_connection_doctor` if setup seems incomplete. It performs one safe
 catalog read, verifies the active transport, registry scope, and native
 lifecycle, and returns one exact remediation without exposing the key. Use
@@ -173,10 +253,13 @@ reported in bounded, content-free form for deduplicated admin triage unless
 
 ### Private repository contributions
 
-Use `propose_private_skill` when repository-derived instructions are approved
-for the authenticated organization's private review queue. Unlike the generic
-skill-idea tool, this endpoint rejects anonymous callers and can never create a
-public candidate. It still performs a network write, so the host's own privacy
+Use `capture_learning.private_skill` followed by the exact
+`submit_private_skill_candidate` action when repository-derived instructions
+are approved for the authenticated organization's private review queue. The
+endpoint rejects anonymous callers and can never create a public candidate.
+Broad `propose_private_skill` is a legacy/hosted/raw compatibility route and is
+not exposed by default in a current local client. The exact action still
+performs a network write, so the host's own privacy
 and egress policy must allow `https://remembrance.dev` and the Remembrance MCP
 server. Claude Code administrators can allow the specific Remembrance MCP tools
 through managed permissions; managed Codex deployments can allow the exact MCP
@@ -200,10 +283,79 @@ With an organization key, generic `propose_skill_idea` calls also stay in that
 organization's review queue. Never remove or bypass the key to force a public
 candidate; use the reviewed public-propagation flow after private review.
 
+### Routing metadata on complete skill proposals
+
+In 0.2.0 a complete skill sent with `propose_skill_idea` or
+`propose_private_skill` (or their REST routes) carries routing metadata
+(contract v1, published at `/schemas/skill-routing-metadata.v1.json`): when
+an agent should pick the skill (`applicability`) and what it does and needs
+(`routing`). Ask for a platform draft first, show it to the author, and send
+the confirmed or edited fields back with the draft's token. The draft call
+stores nothing:
+
+```json
+{
+  "title": "Deploy a prepared app to Azure",
+  "description": "Deploy an already-prepared app to Azure with azd.",
+  "proposed_skill_md": "# Deploy a prepared app to Azure\n\nRun azd up ...",
+  "prefill_routing_metadata": true
+}
+```
+
+Its answer holds `example.proposed_metadata` and `routing_draft.token`. The
+submission then sends the confirmed fields:
+
+```json
+{
+  "title": "Deploy a prepared app to Azure",
+  "description": "Deploy an already-prepared app to Azure with azd.",
+  "proposed_skill_md": "# Deploy a prepared app to Azure\n\nRun azd up ...",
+  "proposed_metadata": {
+    "applicability": {
+      "scope": "specialized",
+      "use_when": [
+        "The user wants to deploy an already-prepared app to Azure",
+        "A deployment plan and infrastructure files already exist",
+        "The user asks to run azd up or azd deploy"
+      ],
+      "avoid_when": [
+        "The app has no Azure deployment files yet (prepare it first)",
+        "The user only wants a readiness check without deploying"
+      ],
+      "task_examples": [
+        "Deploy this prepared app to Azure Container Apps",
+        "Run azd up for my project",
+        "Push the validated Bicep deployment to production"
+      ],
+      "not_for": []
+    },
+    "routing": {
+      "capabilities": ["deploy-to-cloud"],
+      "domains": ["deployments-cicd", "cloud-platforms"],
+      "runtime_requirements": ["repo-checkout", "shell", "cloud-account", "provider-azure"],
+      "risk": "cloud-changes"
+    }
+  },
+  "routing_draft_token": "rd1.<token from the draft>"
+}
+```
+
+A complete skill without these fields is refused with 422
+`skill_routing_metadata_incomplete` (`delivery: not_delivered`; nothing is
+stored). The refusal lists every issue and carries the same draft, so fix
+the listed fields and send the request again. Fields taken unchanged are
+recorded as author-confirmed draft values; edits that widen the draft (a
+broader scope, added `use_when` items or capabilities, a lower risk) are
+flagged for review. An organization's text is drafted only through its
+approved semantic-enrichment processing grant; without one the draft is held
+and nothing is sent. A private capture (`capture_learning` with
+`private_skill`) may ask for automatic completion: the skill becomes
+available after acceptance once its routing metadata is complete.
+
 If the host denies the export, do not retry the same content through `curl`, a
 browser, or another MCP transport. The plugin reports one local, content-free
-alert: **Remembrance was blocked by host policy before reaching Remembrance.
-Nothing was sent. Querying remains available.** It does not automatically
+alert: **The host blocked this Remembrance action. Do not treat it as submitted.
+Earlier successful actions are unaffected; querying remains available.** It does not automatically
 create a handoff. Only when an organization admin explicitly requests one,
 local stdio MCP exposes `queue_private_skill_import`, which writes an inert
 mode-0600 JSON handoff and does not contact a network. Hosted-only clients can run the bundled
@@ -213,14 +365,26 @@ Import**; the skills then enter the normal private review pipeline. Until that
 page returns an import receipt, the agent must describe the skills as queued
 locally, not submitted.
 
-### Private lesson autopilot
+### Private learning autopilot
 
-Routine organization lessons use a narrower two-stage flow. Local
-`prepare_private_lesson_candidate` canonicalizes and redacts in memory and
-stores only an encrypted post-redaction draft. The separate
-`submit_private_lesson_candidate` action sends those exact bytes to the
-organization's private verifier queue. This action always submits privately and
-never falls back to anonymous or public submission. After the private outcome
+Current organization-capable local clients expose `capture_learning` as the
+only routine reusable-learning entry point. Supply exactly one compact
+`lesson`, complete `private_skill`, or structured durable `preference`. The
+router accepts no destination, visibility, credential, or public fallback.
+Lessons are canonicalized and redacted in memory; complete skills retain
+bounded markdown, public citations, snippets, metadata, and actionable
+instructions. Lesson and skill drafts are encrypted in separate outboxes,
+while a preference returns the existing `record_preference` action.
+`capture_learning` is local and makes no network request. Never
+compress a complete skill into a lesson.
+
+Invoke only the returned `submit_private_lesson_candidate`,
+`submit_private_skill_candidate`, or `record_preference` action.
+These actions always submit privately. Lesson and skill actions carry only a local draft ID
+through Claude Code to the organization's pipeline and never fall back to
+anonymous or public submission. Accepted content reuses the existing verifier, topology, review,
+versioning, audit, and admin-controlled propagation pipeline; the submitting
+agent never chooses visibility. After the private outcome
 is accepted, a separate server-owned process may create a freshly redacted
 public candidate only when the organization admin enabled the
 **Contribution propagation** setting; the submitting agent neither chooses nor
@@ -230,21 +394,29 @@ drafts never expire or auto-delete. Verified submissions discard encrypted
 lesson content immediately; their content-free completion markers are
 automatically deleted after 14 days.
 
-The signed policy pins the corrected `private-lesson-redaction-v2` profile and
-its exact digest. Unsupported-profile drafts become terminal
-`superseded_redactor`, stay encrypted, and are never retried, re-redacted, or
-automatically deleted. When health reporting is enabled, a held draft may send
+The lesson client offers a bounded `private-lesson-redaction-v2` supported
+redactor-profile set and the
+server signs policy for the newest mutual profile. Retained drafts require
+their exact bound profile. Temporary incompatibility remains encrypted as
+`awaiting_compatible_profile` with a precise update, full-restart, or
+server-rollout action; it is not mislabeled as a safety rejection or host
+denial. A profile becomes terminal only when the installed client no longer
+supports it; that state is `superseded_redactor`. Terminal drafts stay encrypted and are never retried, re-redacted,
+or automatically deleted. When health reporting is enabled, a held draft may send
 only content-free category/version counts and signed protocol digests through
 the same approved action; that telemetry cannot enter verification, review,
 topology, or skill materialization. Disable it with
 `REMEMBRANCE_HEALTH_REPORTING=0`.
 
-Persist approval for exactly
-`mcp__remembrance__submit_private_lesson_candidate` in Claude Code's managed
-permission rules. Do not use `bypassPermissions` or a server-wide wildcard.
-The local preparation, inspection, retry, and confirmed-delete tools stay
-local-only. Retryable failures resume during later lifecycle events; a host
-denial remains held and is never retried through another transport.
+Persist approval for the four exact network-capable tools in Claude Code's
+managed permission rules: the submit and retry actions for both private lesson
+and private skill. Remembrance treats each submit/retry pair as one semantic
+approval lane and lazily upgrades an existing submit approval. Do not use
+`bypassPermissions` or a server-wide wildcard. Local preparation, inspection,
+and confirmed deletion stay zero-network; a fresh-draft retry also stops before
+network access. Retryable failures resume only when due; a host denial remains
+held and is never retried through another transport. `submit_query_feedback`
+remains independently available for bounded query-fit judgments.
 
 Use `/remembrance:use <slug>` when a person explicitly selects a skill. Claude
 resolves ambiguous names with the indexed, normalized slug-prefix filter in
@@ -261,10 +433,30 @@ reason; approximate context tokens; verified-use evidence; risk; and
 correlation IDs. Claude should first rule out an unlikely or irrelevant
 corner-case result and report query fit `poor`, then open a remaining high match with `get_skill` or
 `get_resource` and its `query_id`/`result_id` before custom work; possible and
-exploratory matches remain optional. The completion hook asks once about an
-unopened high match so Claude can fetch it or report explicit poor-fit feedback;
-a `PostToolUse` hook clears that marker only after the same slug and
+exploratory matches remain optional. The completion hook records an unopened
+high match silently so the next user prompt can ask Claude to fetch it or report
+explicit poor-fit feedback; a `PostToolUse` hook clears that marker only after the same slug and
 `query_id`/`result_id` open successfully.
+Without an organization key, the server's relevance judge chooses what a search
+is shown from the top 20 public candidates: Jev (TypeSafe, through Vercel AI
+Gateway) rates each candidate first, and a language model decides the ones Jev
+leaves undecided while there is time. It receives the search's task text and
+public skill cards only. Every request asks for zero retention and no prompt
+training; for Jev, zero retention rests on Remembrance's account-specific
+agreement with TypeSafe through Vercel, which the Gateway does not confirm.
+With an organization key, a search is judged only under the organization's
+managed processing grant for semantic search, and Jev rates it first only when
+that grant also approves TypeSafe, under the owner-attested zero-retention
+agreement with TypeSafe (owner decisions 36 and 64), which covers this judge
+stage and no other purpose: its task text and skill cards, the organization's
+own included, go only to the hosts that grant approves, each asked for zero
+retention and no prompt training. Without that grant nothing is sent and the
+search keeps the rule's list.
+A card shows a skill's use and exclusion conditions only where the
+platform generated them or a person reviewed them. A use condition only
+promotes a result, and only an exclusion its author stated or a person
+reviewed makes it `unlikely`; `applicability.provenance` says who stated
+them.
 Contextual continuation reminders also receive an opaque directive ID. Claude
 preserves it in `client_context`, while `PostToolUse` provides a fallback
 correlation after `query_skills`; the TTL-bound event contains no prompt text
@@ -274,13 +466,14 @@ the same organization scope or anonymous scope. Any active key for that
 organization is valid. Identical retries are safe;
 changed later judgments conflict, so leave uncertain results unrated instead of
 submitting incrementally.
-After use, pass the same `query_id`/`result_id` to `submit_feedback` so Remembrance can
-measure the surfaced-to-use funnel. When delegating, give the selected slug and
+After use, pass the same `query_id`/`result_id` to categorical
+`submit_feedback` so Remembrance can measure the surfaced-to-use funnel. Route
+reusable prose separately through `capture_learning`; it does not belong in
+post-use feedback. When delegating, give the selected slug and
 IDs to the subagent or have it run its own full-context query.
-Anonymous verdicts remain low weight and never train the shared reranker.
-Shared training uses only public-result comparisons from multiple authenticated
-organization keys across multiple organizations; changing `agent_id` does not
-create another feedback actor.
+Anonymous verdicts remain low weight and never train a shared model. No learned
+reranker is trained or served; changing `agent_id` does not create another
+feedback actor.
 When an exact, current, non-high-risk match has fresh grade A/B evidence for the
 observed model revision, reasoning effort, and bounded task cohort, Claude may
 see one compact
@@ -315,7 +508,26 @@ Environment:
   reporting while retaining local diagnostics.
 - `REMEMBRANCE_AUTO_QUERY=0`: disables the prompt hook.
 - `REMEMBRANCE_AUTO_QUERY_LIMIT`: result limit, default `3`, max `10`.
-- `REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS`: hook query timeout, default `2000`.
+- `REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS`: hook request timeout. The search waits
+  `3000` by default, so the server's relevance judge can take its longer
+  2,000 ms hook deadline when Jev leaves candidates undecided; the hook's
+  other requests wait `2000`. A value applies to every hook request, and one
+  under `3000` tells the server not to wait that long. A stopped search whose
+  preference read and search both hang delays the prompt about 5 s.
+- `REMEMBRANCE_AUTO_QUERY_HYGIENE=0`: also searches host-generated text a
+  trigger word matches (a Codex commit or pull-request generation prompt, a
+  subagent hand-back, pasted `git status` output, an explicit local skill
+  invocation). By default only its skill search is skipped: the organization
+  policy, required settings and preferences a search would carry still arrive.
+- `REMEMBRANCE_AUTO_QUERY_TASK_SHAPE=0`: searches only prompts a keyword
+  trigger matches. By default the hook also searches any other task-shaped
+  prompt of at least 40 characters (trigger reason `task_shape`); one-off fact
+  questions, status acknowledgments, explicit skill references, host text and
+  short follow-ups are decided as before. A task-shape search that finds
+  nothing adds no no-match block, completion recovery or query-feedback request
+  of its own; the organization policy, required settings, preferences and
+  capture lines still arrive, and the server still records the missing-skill
+  demand.
 - `REMEMBRANCE_DIRECTIVE_EVENT_TIMEOUT_MS`: fail-open shown/followed event
   timeout, default `750`, bounded to `100`-`2000` milliseconds.
 - `REMEMBRANCE_AGENT_KEY_PATH`: optional local TOFU key path for MCP identity.

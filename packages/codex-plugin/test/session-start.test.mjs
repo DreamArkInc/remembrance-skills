@@ -1,5 +1,12 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { handleSessionStart } from "../scripts/session-start.mjs";
+import { useIsolatedHookEnvironment } from "./fixtures/isolated-hook-environment.mjs";
+
+const SESSION_SKILLS_HEADER = "Remembrance organization session skills:";
+const network = useIsolatedHookEnvironment();
 
 describe("Codex SessionStart health hook", () => {
   const trustedHookTrust = vi.fn(async () => ({
@@ -74,6 +81,91 @@ describe("Codex SessionStart health hook", () => {
     expect(output.hookSpecificOutput.additionalContext).toContain(
       "public anonymous registry access",
     );
+  });
+
+  it("loads organization session skills per Codex start source", async () => {
+    const root = mkdtempSync(join(tmpdir(), "remembrance-codex-session-"));
+    try {
+      let online = true;
+      const fetchImpl = vi.fn(async () => {
+        if (!online) throw new TypeError("fetch failed");
+        return new Response(
+          JSON.stringify({
+            contract_version: "session-skills-v1",
+            available: true,
+            reason_code: null,
+            session_skills: [
+              {
+                slug: "ponytail",
+                version_id: "sv_7f7777fba96c441f86",
+                pinned: true,
+              },
+            ],
+            omitted_count: 0,
+          }),
+        );
+      });
+      const options = {
+        env: {
+          REMEMBRANCE_API_KEY: "rk_never_print",
+          REMEMBRANCE_USAGE_DIR: join(root, "usage"),
+          XDG_CONFIG_HOME: join(root, "config"),
+        },
+        pluginVersion: "0.2.0",
+        recordHealth: vi.fn(),
+        warmSession: vi.fn(async () => null),
+        checkUpdate: vi.fn(async () => null),
+        inspectHookTrust: trustedHookTrust,
+        fetchImpl,
+      };
+      const directive = (output) => {
+        const context = output.hookSpecificOutput.additionalContext;
+        return context.includes(SESSION_SKILLS_HEADER)
+          ? context.slice(context.indexOf(SESSION_SKILLS_HEADER))
+          : null;
+      };
+
+      const started = await handleSessionStart(
+        { source: "startup", session_id: "codex-thread-1" },
+        options,
+      );
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(fetchImpl.mock.calls[0][0]).toBe(
+        "https://remembrance.dev/api/v1/agent/session-skills",
+      );
+      expect(directive(started)).toMatch(
+        /\n- \{"slug":"ponytail","version_id":"sv_7f7777fba96c441f86","scope":"session","idempotency_key":"rss_[0-9a-f]{32}"\} \(pinned\)\n/,
+      );
+
+      // Resume falls back to the cache when the registry is unreachable;
+      // compaction reads only the cache.
+      online = false;
+      const resumed = await handleSessionStart(
+        { source: "resume", session_id: "codex-thread-1" },
+        options,
+      );
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(directive(resumed)).toBe(directive(started));
+      const compacted = await handleSessionStart(
+        { source: "compact", session_id: "codex-thread-1" },
+        options,
+      );
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(directive(compacted)).toBe(directive(started));
+
+      // A turn id is not a stable session id.
+      const turnOnly = await handleSessionStart(
+        { source: "startup", turn_id: "codex-turn-1" },
+        options,
+      );
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(directive(turnOnly)).toBeNull();
+      expect(
+        JSON.stringify([started, resumed, compacted, turnOnly]),
+      ).not.toContain("rk_never_print");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("does not reset lifecycle health when Codex compacts an active turn", async () => {
@@ -158,8 +250,26 @@ describe("Codex SessionStart health hook", () => {
     expect(output.hookSpecificOutput.additionalContext).toContain(
       "run_connection_doctor",
     );
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "Querying, opening skills, bounded feedback, and private submissions remain available",
+    );
     expect(JSON.stringify(output)).not.toMatch(
       /do_not_expose|private\/plugin|sha256/i,
     );
+  });
+
+  it("sends its default requests only to the stubbed fetch", async () => {
+    network.fetch.mockClear();
+    for (const source of ["startup", "resume", "clear", "compact"]) {
+      await handleSessionStart(
+        { source, session_id: "codex-offline-thread" },
+        { env: { REMEMBRANCE_API_KEY: "rk_never_print" } },
+      );
+    }
+    expect(network.fetch).toHaveBeenCalledWith(
+      "https://remembrance.dev/api/v1/agent/session-skills",
+      expect.anything(),
+    );
+    expect(network.realRequests).toEqual([]);
   });
 });

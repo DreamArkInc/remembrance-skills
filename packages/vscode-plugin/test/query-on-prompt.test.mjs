@@ -9,6 +9,17 @@ import {
   redactPrompt,
   shouldQueryPrompt,
 } from "../scripts/query-on-prompt.mjs";
+import { readCompletionObligations } from "../scripts/hook-core.mjs";
+import {
+  HOST_NOTIFICATION_SHAPES,
+  ORDINARY_HUMAN_PROMPTS,
+} from "../../codex-plugin/test/fixtures/host-notification-corpus.mjs";
+import {
+  noResultResponse,
+  summaryEchoProposal,
+  templateProposal,
+} from "../../codex-plugin/test/fixtures/skill-idea-proposals.mjs";
+import { KEYWORDS_ONLY } from "../../codex-plugin/test/fixtures/task-shape.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const tempRoot = mkdtempSync(join(tmpdir(), "remembrance-vscode-prompt-"));
@@ -187,6 +198,86 @@ describe("VS Code prompt hook", () => {
     expect(output).toBeNull();
   });
 
+  // VS Code passes request.prompt, the text the user sent (Copilot Chat 0.61,
+  // extension.js:2815); its only generated prompt is a subagent's task,
+  // which the SubagentStart claim covers.
+  it.each(ORDINARY_HUMAN_PROMPTS)(
+    "queries an ordinary VS Code prompt as written: %s",
+    async (prompt) => {
+      const summaries = [];
+      const fetchImpl = vi.fn(async (url, init) => {
+        if (String(url).endsWith("/api/v1/agent/query")) {
+          summaries.push(JSON.parse(String(init.body)).task.summary);
+        }
+        return Response.json({ skills: [], resources: [] });
+      });
+      await handleHookInput(
+        { hook_event_name: "UserPromptSubmit", prompt, session_id: "vs-human" },
+        { env: testEnv(), fetchImpl, recordHealth: vi.fn() },
+      );
+
+      expect(summaries).toEqual([prompt]);
+    },
+  );
+
+  it.each([
+    [
+      "an older server's proposal made from the prompt",
+      summaryEchoProposal,
+      false,
+    ],
+    [
+      "the server's template proposal",
+      () => templateProposal("rq_proposal"),
+      true,
+    ],
+  ])(
+    "offers a skill idea only when it is not the prompt: %s",
+    async (_label, proposalFor, offered) => {
+      const prompt = ORDINARY_HUMAN_PROMPTS[0];
+      const fetchImpl = vi.fn(async (url, init) => {
+        if (!String(url).endsWith("/api/v1/agent/query")) {
+          return Response.json({});
+        }
+        const { summary } = JSON.parse(String(init.body)).task;
+        return Response.json(
+          noResultResponse("rq_proposal", proposalFor(summary)),
+        );
+      });
+      const output = await handleHookInput(
+        {
+          hook_event_name: "UserPromptSubmit",
+          prompt,
+          session_id: "vs-proposal",
+        },
+        { env: testEnv(), fetchImpl, recordHealth: vi.fn() },
+      );
+      const context = output.hookSpecificOutput.additionalContext;
+      expect(context).toContain("No matching skill/resource.");
+      expect(context.includes("Proposed skill idea payload")).toBe(offered);
+      expect(context.includes(prompt)).toBe(false);
+    },
+  );
+
+  it("keeps a task notification's trailing text out of the query", async () => {
+    const [notification] = HOST_NOTIFICATION_SHAPES.filter(
+      (item) =>
+        item.label ===
+        "stalled command with its last output after the envelope",
+    );
+    const fetchImpl = vi.fn();
+    const output = await handleHookInput(
+      {
+        hook_event_name: "UserPromptSubmit",
+        prompt: notification.prompt,
+        session_id: "vs-host-text",
+      },
+      { env: testEnv(), fetchImpl, recordHealth: vi.fn() },
+    );
+    expect(output).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("captures a user correction in the same turn without querying", async () => {
     const fetchImpl = vi.fn();
     const recordEligibility = vi.fn();
@@ -197,7 +288,7 @@ describe("VS Code prompt hook", () => {
         session_id: "vscode-correction",
       },
       {
-        env: testEnv(),
+        env: testEnv(KEYWORDS_ONLY),
         fetchImpl,
         recordEligibility,
         recordHealth: vi.fn(),
@@ -328,6 +419,46 @@ describe("VS Code prompt hook", () => {
       { available: true, query_id: "rq_vscode_feedback" },
       env,
     );
+  });
+
+  // VS Code's prompt hook names no agent either, and a subagent's task
+  // arrives through it too (Copilot extension.js:2815), so a query-fit debt
+  // recorded there may be a subagent's.
+  it("records a query-fit debt as possibly a subagent's", async () => {
+    const fetchImpl = vi.fn(async () =>
+      Response.json({
+        query_id: "rq_vscode_identity",
+        skills: [
+          {
+            slug: "vscode-feedback-debug",
+            description: "Debug VS Code feedback failures.",
+            result_id: "qres_vscode_identity",
+          },
+        ],
+        resources: [],
+        query_feedback: {
+          available: true,
+          query_id: "rq_vscode_identity",
+          result_ids: ["qres_vscode_identity"],
+        },
+      }),
+    );
+    const env = testEnv({ REMEMBRANCE_API_URL: "https://remembrance.dev" });
+    await handleHookInput(
+      {
+        prompt: "Review this VS Code deployment workflow.",
+        session_id: "vscode-identity",
+      },
+      { env, fetchImpl, recordHealth: vi.fn() },
+    );
+    expect(readCompletionObligations("vscode-identity", env)).toMatchObject([
+      {
+        kind: "query_feedback",
+        query_id: "rq_vscode_identity",
+        agent_keyed: true,
+        subagent_identity: "unavailable",
+      },
+    ]);
   });
 
   it("caches empty responses without counting them as registry consumption", async () => {

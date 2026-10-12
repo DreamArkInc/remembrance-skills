@@ -1,4 +1,12 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import {
+  pendingCompletionRecoveryInstruction,
+  readCompletionObligations,
+  recordQueryFeedbackObligation,
+} from "../scripts/hook-core.mjs";
 import { cursorSessionId, handleMcpUse } from "../scripts/record-mcp-use.mjs";
 
 describe("Cursor afterMCPExecution hook", () => {
@@ -517,6 +525,56 @@ describe("Cursor afterMCPExecution hook", () => {
       tool: "submit_feedback",
     });
     expect(writePromptedCount).not.toHaveBeenCalled();
+  });
+
+  it("closes a declined pending action in this conversation's ledger", async () => {
+    const root = mkdtempSync(join(tmpdir(), "remembrance-cursor-decline-"));
+    const env = {
+      REMEMBRANCE_USAGE_DIR: join(root, "usage"),
+      XDG_STATE_HOME: join(root, "state"),
+      XDG_CONFIG_HOME: join(root, "config"),
+    };
+    try {
+      recordQueryFeedbackObligation(
+        "conv_decline",
+        { available: true, query_id: "rq_cursor_decline" },
+        env,
+      );
+      const actionId = /\n {2}action_id ([a-f0-9]{16})\n/u.exec(
+        pendingCompletionRecoveryInstruction("conv_decline", env),
+      )?.[1];
+      expect(actionId).toMatch(/^[a-f0-9]{16}$/u);
+      const args = { action_id: actionId, reason: "duplicate" };
+      const result = await handleMcpUse(
+        {
+          tool_name: "decline_pending_action",
+          conversation_id: "conv_decline",
+          tool_input: JSON.stringify(args),
+          result: {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "declined",
+                  ...args,
+                  submitted: false,
+                  local_only: true,
+                }),
+              },
+            ],
+          },
+        },
+        { env, recordHealth: vi.fn() },
+      );
+      expect(result).toMatchObject({
+        recorded: true,
+        kind: "contribution",
+        tool: "decline_pending_action",
+      });
+      expect(readCompletionObligations("conv_decline", env)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("treats explicit query-fit feedback as a completed contribution", async () => {

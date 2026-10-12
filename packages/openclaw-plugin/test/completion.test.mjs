@@ -1,9 +1,44 @@
-import { describe, expect, it, vi } from "vitest";
-import { handleCompletion, handleFinalize } from "../src/index.mjs";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  handleAfterToolCall,
+  handleCompletion,
+  handleFinalize,
+} from "../src/index.mjs";
 import {
   contributionReason,
   HOST_POLICY_ALERT_TEXT,
+  pendingCompletionRecoveryInstruction,
+  readCompletionObligations,
+  readDirectSelectionSurfaces,
+  readRegistryUseCount,
+  recordQueryFeedbackObligation,
 } from "../src/hook-core.mjs";
+
+// Default hook paths must never reach the real profile. This package reads
+// shared config only under HOME, and TMPDIR covers the usage markers.
+const tempRoot = mkdtempSync(join(tmpdir(), "remembrance-openclaw-stop-"));
+let envCounter = 0;
+
+beforeAll(() => {
+  for (const [key, name] of [
+    ["HOME", "home"],
+    ["XDG_CONFIG_HOME", "config"],
+    ["XDG_STATE_HOME", "state"],
+    ["XDG_CACHE_HOME", "cache"],
+    ["TMPDIR", "tmp"],
+  ]) {
+    mkdirSync(join(tempRoot, name), { recursive: true });
+    vi.stubEnv(key, join(tempRoot, name));
+  }
+});
+
+afterAll(() => {
+  vi.unstubAllEnvs();
+  rmSync(tempRoot, { recursive: true, force: true });
+});
 
 // A fake OpenClaw before_agent_finalize event.
 function event(ctx = {}) {
@@ -12,17 +47,48 @@ function event(ctx = {}) {
 
 // Injectable base: no FS, no network. useCount/promptedCount are stubbed.
 function base(overrides = {}) {
+  const { env: envOverrides = {}, ...rest } = overrides;
   return {
-    env: {},
+    env: {
+      REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY: "1",
+      XDG_CONFIG_HOME: join(tmpdir(), "remembrance-openclaw-test-config"),
+      XDG_STATE_HOME: join(tmpdir(), "remembrance-openclaw-test-state"),
+      ...envOverrides,
+    },
     readUseCount: () => 1,
     readEligibilityCount: () => 0,
     readPromptedCount: () => 0,
     writePromptedCount: () => {},
-    ...overrides,
+    ...rest,
   };
 }
 
 describe("OpenClaw completion hook (before_agent_finalize)", () => {
+  it("does not revise an answer that already reported the host denial", () => {
+    const mark = vi.fn(() => true);
+    expect(
+      handleCompletion(
+        {
+          ...event(),
+          last_assistant_message: `Task done. ${HOST_POLICY_ALERT_TEXT}`,
+        },
+        base({
+          readPendingHostPolicyAlert: () => ({ id: "reported" }),
+          markHostPolicyAlertDelivered: mark,
+        }),
+      ),
+    ).toEqual({ action: "finalize", why: "host_policy_alert_reported" });
+    expect(mark).toHaveBeenCalledOnce();
+  });
+  it("finalizes without a revision prompt in the default recovery mode", () => {
+    expect(
+      handleCompletion(
+        event(),
+        base({ env: { REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY: "0" } }),
+      ),
+    ).toEqual({ action: "finalize", why: "silent_prompt_recovery" });
+  });
+
   it("reports a pending local host-policy denial once", () => {
     const markDelivered = vi.fn(() => true);
     expect(
@@ -43,7 +109,9 @@ describe("OpenClaw completion hook (before_agent_finalize)", () => {
       "openclaw",
       "r1",
       "policy-1",
-      {},
+      expect.objectContaining({
+        REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY: "1",
+      }),
     );
   });
   it("reports the native task outcome before applying the finalize decision", async () => {
@@ -59,7 +127,9 @@ describe("OpenClaw completion hook (before_agent_finalize)", () => {
     );
     expect(calls[0]?.[0]).toBe("r1");
     expect(calls[0]?.[2]).toMatchObject({
-      env: {},
+      env: expect.objectContaining({
+        REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY: "1",
+      }),
       userAgent: "@remembrance/openclaw-plugin",
     });
     expect(result).toMatchObject({
@@ -71,11 +141,13 @@ describe("OpenClaw completion hook (before_agent_finalize)", () => {
         surface: "openclaw",
         component: "completion_hook",
       }),
-      {},
+      expect.objectContaining({
+        REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY: "1",
+      }),
     );
   });
 
-  it("routes organization use through the private lesson contribution lane", () => {
+  it("routes organization use through the exact private-learning lane", () => {
     const written = [];
     const result = handleCompletion(
       event(),
@@ -90,21 +162,24 @@ describe("OpenClaw completion hook (before_agent_finalize)", () => {
       "silently close the pending Remembrance loop",
     );
     expect(result.retry.instruction).toContain(
-      "Do not mention routine Remembrance calls",
+      "Do not mention routine calls, hooks, or receipts",
     );
     expect(result.retry.instruction).toContain(
-      "prepare_private_lesson_candidate",
+      "capture_learning once per new item",
     );
     expect(result.retry.instruction).toContain(
-      "submit_private_lesson_candidate",
+      "exact next_action or bounded agent_recovery",
     );
+    expect(result.retry.instruction).toContain("submit_query_feedback");
+    expect(result.retry.instruction).toContain("submit_feedback");
     expect(result.retry.instruction).toContain("Never auto-delete a draft");
     expect(result.retry.instruction).toContain(
       "provide the task's normal user-facing final answer",
     );
     expect(result.reason).not.toBe(contributionReason());
-    // It records the new prompted count so it won't re-revise the same use.
-    expect(written).toEqual([["r1", 1]]);
+    // It records the new prompted count in the session's ledger so it won't
+    // re-revise the same use in a later run of that session.
+    expect(written).toEqual([["s1", 1]]);
   });
 
   it("revises with a conditional high-match fetch instruction", () => {
@@ -178,7 +253,9 @@ describe("OpenClaw completion hook (before_agent_finalize)", () => {
       action: "revise",
       why: "prompt_task_closure",
     });
-    expect(result.reason).toContain("no completed Remembrance query");
+    expect(result.reason).toContain(
+      "no Remembrance query with the task's full context and no skill use was recorded for it",
+    );
   });
 
   it("revises a later eligible task after an earlier query was handled", () => {
@@ -232,5 +309,167 @@ describe("OpenClaw completion hook (before_agent_finalize)", () => {
         }),
       ),
     ).toMatchObject({ action: "finalize", why: "error" });
+  });
+});
+
+describe("session-scoped explicit selections through the OpenClaw hooks", () => {
+  // The Remembrance MCP result for invoke_skill: the server puts scope next to
+  // selection_mode, skill, and query_id in the envelope's body.
+  function invokeResult({ slug, queryId, resultId, scope }) {
+    const body = {
+      scope,
+      selection_mode: "explicit",
+      invocation_id: queryId,
+      query_id: queryId,
+      result_id: resultId,
+      skill: {
+        slug,
+        version: 1,
+        version_id: `skv_${slug}`,
+        skill_md: "# Instructions",
+        task_outcome_eligible: true,
+      },
+      feedback: { available: true },
+      task_outcome: { available: true, eligible_result_ids: [resultId] },
+    };
+    return {
+      content: [
+        { type: "text", text: JSON.stringify({ ok: true, status: 200, body }) },
+      ],
+    };
+  }
+  const SESSION_SKILL = invokeResult({
+    slug: "pairing-mode",
+    queryId: "rinv_session",
+    resultId: "qres_session",
+    scope: "session",
+  });
+  const TASK_SKILL = invokeResult({
+    slug: "release-checklist",
+    queryId: "rinv_task",
+    resultId: "qres_task",
+    scope: "task",
+  });
+
+  function testEnv() {
+    envCounter += 1;
+    const root = join(tempRoot, `env-${envCounter}`);
+    return {
+      XDG_STATE_HOME: join(root, "state"),
+      REMEMBRANCE_USAGE_DIR: join(root, "usage"),
+      REMEMBRANCE_API_URL: "https://registry.example",
+      REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY: "1",
+    };
+  }
+
+  const observe = (runId, env, result) =>
+    handleAfterToolCall(
+      {
+        toolName: "mcp__remembrance__invoke_skill",
+        params: {},
+        result,
+        context: { runId },
+      },
+      { env, recordHealth: vi.fn() },
+    );
+
+  it("finalizes when the only engagement is a session-scoped skill", async () => {
+    const env = testEnv();
+    const runId = "openclaw-session-only";
+    expect(await observe(runId, env, SESSION_SKILL)).toMatchObject({
+      recorded: true,
+      why: "direct_skill_invoked",
+      count: 0,
+    });
+    expect(readRegistryUseCount(runId, env)).toBe(0);
+    expect(readDirectSelectionSurfaces(runId, env)).toMatchObject([
+      { slug: "pairing-mode", scope: "session", use_count: 0 },
+    ]);
+
+    const fetchImpl = vi.fn();
+    const result = await handleFinalize(
+      { context: { runId } },
+      { env, fetchImpl, recordHealth: vi.fn() },
+    );
+    expect(result).toEqual({ action: "finalize", why: "registry_not_used" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(readCompletionObligations(runId, env)).toEqual([]);
+  });
+
+  it("revises for only the task-scoped selection when both kinds were used", async () => {
+    const env = testEnv();
+    const runId = "openclaw-session-and-task";
+    await observe(runId, env, SESSION_SKILL);
+    await observe(runId, env, TASK_SKILL);
+    expect(readRegistryUseCount(runId, env)).toBe(1);
+
+    const requests = [];
+    const result = await handleFinalize(
+      { context: { runId } },
+      {
+        env,
+        recordHealth: vi.fn(),
+        fetchImpl: async (url, init) => {
+          requests.push({ url: String(url), body: JSON.parse(init.body) });
+          return { ok: true };
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      action: "revise",
+      why: "prompt_pending_obligations",
+    });
+    expect(result.reason).toContain("rinv_task");
+    expect(result.reason).not.toContain("rinv_session");
+    expect(result.reason).not.toContain("pairing-mode");
+    expect(
+      requests.map((request) => [request.url, request.body.query_id]),
+    ).toEqual([
+      ["https://registry.example/api/v1/agent/task-outcomes", "rinv_task"],
+    ]);
+  });
+});
+
+describe("declining a pending action through the OpenClaw tool observer", () => {
+  it("closes it in this run's ledger", async () => {
+    envCounter += 1;
+    const root = join(tempRoot, `env-${envCounter}`);
+    const env = {
+      XDG_STATE_HOME: join(root, "state"),
+      REMEMBRANCE_USAGE_DIR: join(root, "usage"),
+    };
+    const runId = "run-decline";
+    recordQueryFeedbackObligation(
+      runId,
+      { available: true, query_id: "rq_openclaw_decline" },
+      env,
+    );
+    const actionId = /\n {2}action_id ([a-f0-9]{16})\n/u.exec(
+      pendingCompletionRecoveryInstruction(runId, env),
+    )?.[1];
+    expect(actionId).toMatch(/^[a-f0-9]{16}$/u);
+    const args = { action_id: actionId, reason: "duplicate" };
+    await handleAfterToolCall(
+      {
+        toolName: "mcp__remembrance__decline_pending_action",
+        params: args,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "declined",
+                ...args,
+                submitted: false,
+                local_only: true,
+              }),
+            },
+          ],
+        },
+        context: { runId },
+      },
+      { env, recordHealth: vi.fn() },
+    );
+    expect(readCompletionObligations(runId, env)).toEqual([]);
   });
 });

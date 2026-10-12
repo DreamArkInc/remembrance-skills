@@ -183,6 +183,7 @@ describe("opencode plugin hooks", () => {
         notice:
           "Remembrance update available. Ask permission, run the bundled opencode setup command, then restart opencode.",
       }),
+      runPromptHook: async () => ({ context: "" }),
     });
     const sessionID = "s-update";
     await hooks.event({
@@ -194,12 +195,225 @@ describe("opencode plugin hooks", () => {
     expect(messages[0].message).toContain("0.1.55 is available");
     const first = { system: [] };
     await hooks["experimental.chat.system.transform"]({ sessionID }, first);
-    expect(first.system).toEqual([
-      expect.stringContaining("restart opencode"),
-    ]);
+    expect(first.system).toEqual([expect.stringContaining("restart opencode")]);
+    // A later request of the same turn carries the same single instruction.
     const second = { system: [] };
     await hooks["experimental.chat.system.transform"]({ sessionID }, second);
-    expect(second.system).toEqual([]);
+    expect(second.system).toEqual(first.system);
+    // The next user message starts a turn that does not repeat it.
+    await hooks["chat.message"](
+      { sessionID, messageID: "m-next" },
+      { role: "user", text: "Next eligible integration task" },
+    );
+    const next = { system: [] };
+    await hooks["experimental.chat.system.transform"]({ sessionID }, next);
+    expect(next.system).toEqual([]);
+  });
+
+  it("keeps an update pending until the bounded hook actually delivers it", async () => {
+    const { client } = loggingClient();
+    const offered = [];
+    let attempt = 0;
+    const hooks = await Remembrance({
+      client,
+      warmSession: async () => null,
+      clientUpdateCheck: async () => ({
+        current_version: "0.1.77",
+        latest_version: "0.1.78",
+        notice:
+          "Remembrance update 0.1.78 is ready; update and restart opencode.",
+      }),
+      runPromptHook: async (_prompt, options) => {
+        attempt += 1;
+        offered.push(options.contextAdditions.length);
+        const addition = options.contextAdditions[0];
+        // The first turn's bound is saturated: the hook withholds the notice.
+        if (attempt === 1) {
+          return {
+            context: "Saturated guidance without update",
+            deliveredContextAdditionIds: [],
+            eligible: true,
+            matched: true,
+            consumed: false,
+          };
+        }
+        return {
+          context: addition?.text ?? "No update remained pending.",
+          deliveredContextAdditionIds: addition ? [addition.id] : [],
+          eligible: true,
+          matched: true,
+          consumed: false,
+        };
+      },
+    });
+    const sessionID = "s-withheld-update";
+    // OpenCode publishes session.idle at the end of every turn, so each later
+    // turn follows one.
+    const idle = () =>
+      hooks.event({
+        event: { type: "session.idle", properties: { sessionID } },
+      });
+    await hooks.event({
+      event: {
+        type: "session.created",
+        properties: { info: { id: sessionID } },
+      },
+    });
+    await hooks["chat.message"](
+      { sessionID, messageID: "m1" },
+      { role: "user", text: "First eligible integration task" },
+    );
+    // OpenCode builds the system prompt for every model request of a turn
+    // (title, agent, agent): each carries the bounded guidance alone, never
+    // the notice the hook withheld.
+    const first = [];
+    for (let request = 0; request < 3; request += 1) {
+      const output = { system: [] };
+      await hooks["experimental.chat.system.transform"]({ sessionID }, output);
+      first.push(output.system);
+    }
+    expect(first).toEqual([
+      ["Saturated guidance without update"],
+      ["Saturated guidance without update"],
+      ["Saturated guidance without update"],
+    ]);
+    await idle();
+    // A manual compaction runs a model request before the next prompt: no
+    // agent turn, so it gets no notice.
+    const compaction = { system: [] };
+    await hooks["experimental.chat.system.transform"](
+      { sessionID },
+      compaction,
+    );
+    expect(compaction.system).toEqual([]);
+
+    await hooks["chat.message"](
+      { sessionID, messageID: "m2" },
+      { role: "user", text: "Second eligible integration task" },
+    );
+    const second = { system: [] };
+    await hooks["experimental.chat.system.transform"]({ sessionID }, second);
+    expect(second.system).toEqual([
+      "Remembrance update 0.1.78 is ready; update and restart opencode.",
+    ]);
+    await idle();
+
+    await hooks["chat.message"](
+      { sessionID, messageID: "m3" },
+      { role: "user", text: "Third eligible integration task" },
+    );
+    const third = { system: [] };
+    await hooks["experimental.chat.system.transform"]({ sessionID }, third);
+    expect(third.system).toEqual(["No update remained pending."]);
+    // Offered to the first turn's hook (withheld), again to the second turn's
+    // (delivered), and never after.
+    expect(offered).toEqual([1, 1, 0]);
+  });
+
+  it("drops a withheld update with its session", async () => {
+    const offered = [];
+    const updates = [
+      { current_version: "0.1.77", latest_version: "0.1.78", notice: "N" },
+      null,
+    ];
+    const hooks = await Remembrance({
+      client: loggingClient().client,
+      warmSession: async () => null,
+      clientUpdateCheck: async () => updates.shift(),
+      runPromptHook: async (_prompt, options) => {
+        offered.push(options.contextAdditions.length);
+        return {
+          context: "Saturated guidance without update",
+          deliveredContextAdditionIds: [],
+          eligible: true,
+          matched: true,
+          consumed: false,
+        };
+      },
+    });
+    // A host without session ids folds every session into one fallback id,
+    // so a deleted session's notice must not reach the next one.
+    const turn = async (type, messageID) => {
+      await hooks.event({ event: { type, properties: {} } });
+      await hooks["chat.message"](
+        { messageID },
+        { role: "user", text: "Eligible integration task" },
+      );
+      const output = { system: [] };
+      await hooks["experimental.chat.system.transform"]({}, output);
+      return output.system;
+    };
+    expect(await turn("session.created", "m1")).toEqual([
+      "Saturated guidance without update",
+    ]);
+    await hooks.event({ event: { type: "session.deleted", properties: {} } });
+    expect(await turn("session.created", "m2")).toEqual([
+      "Saturated guidance without update",
+    ]);
+    expect(offered).toEqual([1, 0]);
+  });
+
+  it("acknowledges an update only after the host delivers its composed context", async () => {
+    const { client } = loggingClient();
+    const additionCounts = [];
+    const hooks = await Remembrance({
+      client,
+      warmSession: async () => null,
+      clientUpdateCheck: async () => ({
+        current_version: "0.1.77",
+        latest_version: "0.1.78",
+        notice:
+          "Remembrance update 0.1.78 is ready; update and restart opencode.",
+      }),
+      runPromptHook: async (_prompt, options) => {
+        additionCounts.push(options.contextAdditions.length);
+        const addition = options.contextAdditions[0];
+        return {
+          context: addition?.text ?? "No update remained pending.",
+          deliveredContextAdditionIds: addition ? [addition.id] : [],
+          eligible: true,
+          matched: true,
+          consumed: false,
+        };
+      },
+    });
+    const sessionID = "s-update-delivery-ack";
+    await hooks.event({
+      event: {
+        type: "session.created",
+        properties: { info: { id: sessionID } },
+      },
+    });
+
+    await hooks["chat.message"](
+      { sessionID, messageID: "m-undelivered" },
+      { role: "user", text: "First eligible integration task" },
+    );
+    // Simulate a host that never calls the experimental transform callback for
+    // the first turn. The next prompt must still receive the pending notice.
+    await hooks["chat.message"](
+      { sessionID, messageID: "m-delivered" },
+      { role: "user", text: "Second eligible integration task" },
+    );
+    const delivered = { system: [] };
+    await hooks["experimental.chat.system.transform"]({ sessionID }, delivered);
+
+    expect(additionCounts).toEqual([1, 1]);
+    expect(delivered.system).toEqual([
+      "Remembrance update 0.1.78 is ready; update and restart opencode.",
+    ]);
+    const repeated = { system: [] };
+    await hooks["experimental.chat.system.transform"]({ sessionID }, repeated);
+    expect(repeated.system).toEqual(delivered.system);
+
+    await hooks["chat.message"](
+      { sessionID, messageID: "m-after-update" },
+      { role: "user", text: "Third eligible integration task" },
+    );
+    const after = { system: [] };
+    await hooks["experimental.chat.system.transform"]({ sessionID }, after);
+    expect(additionCounts).toEqual([1, 1, 0]);
+    expect(after.system).toEqual(["No update remained pending."]);
   });
 
   it("skips the prompt hook for non-user messages and unreadable payloads", async () => {

@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { useIsolatedHookEnvironment } from "../../codex-plugin/test/fixtures/isolated-hook-environment.mjs";
 import { handlePostToolUse } from "../scripts/record-detail-open.mjs";
+
+useIsolatedHookEnvironment();
 
 describe("Claude Code direct skill invocation hook", () => {
   it("ships one argument-driven use command that resolves before invoking", () => {

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Codex UserPromptSubmit adapter.
 //
-// Codex triggers this before the prompt is sent, with stdin JSON {prompt, turn_id}.
+// Codex triggers this before the prompt is sent, with stdin JSON that includes
+// the stable session_id and the turn-scoped turn_id.
 // We inject context by printing the wrapped hook output on stdout:
 // {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "..."}}
 // (the same shape Claude Code requires). All decision/query/format logic lives in
@@ -13,7 +14,9 @@
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
+  agentLedgerIdFor,
   debugLog,
+  foldTurnLedgerIntoSession,
   hostedMcpSplitNotice,
   recordHighMatchSurface,
   recordDirectiveSurface,
@@ -73,13 +76,10 @@ export function codexHostedMcpCredentialSplitNotice(env = process.env) {
 
   return [
     "Remembrance connection health warning:",
-    "The local Codex hooks authenticated from the shared Remembrance config (normally ~/.config/remembrance/config.json),",
-    `but the hosted MCP registration at ${hostedMcp.mcpUrl} (${registrationSource}) ${diagnosis}.`,
+    `Hooks use the shared Remembrance config, but hosted MCP at ${hostedMcp.mcpUrl} (${registrationSource}) ${diagnosis}.`,
     "Result: hook queries can use organization skills while native hosted MCP tools are unavailable, anonymous, or scoped differently.",
-    `Fix for Codex Desktop on macOS: launchctl setenv ${remediationEnv} \"<same organization key>\", then fully quit and reopen Codex.`,
-    `For a terminal launch: export ${remediationEnv}=\"<same organization key>\" before starting Codex.`,
-    "Once the native tools are visible, run run_connection_doctor and follow its single remediation if attention is required.",
-    "A Codex tenant/privacy-policy denial happens before any Remembrance request; it is not a Remembrance rejection.",
+    `Desktop fix: launchctl setenv ${remediationEnv} \"<same organization key>\". Terminal fix: export ${remediationEnv}=\"<same organization key>\" before launch.`,
+    "Fully quit and reopen Codex, then run run_connection_doctor. A host-policy denial occurs before Remembrance and is not a Remembrance rejection.",
   ].join("\n");
 }
 
@@ -94,6 +94,10 @@ export async function handleQuery(input, options = {}) {
   const env = options.env ?? process.env;
   const credential = resolveApiCredential(env);
   const sessionId = sessionIdFor(input);
+  // Usage and debts belong to the agent that received the context; health,
+  // directives and task outcomes stay with the session.
+  const ledgerId = agentLedgerIdFor(input);
+  foldTurnLedgerIntoSession(input, env);
   const recordHealth = options.recordHealth ?? recordPluginLifecycleHealth;
   recordHealth(
     {
@@ -105,11 +109,45 @@ export async function handleQuery(input, options = {}) {
     env,
   );
   const prompt = String(input?.prompt ?? "");
+  // Include all adapter notices before the shared one-pass allocator runs.
+  // No adapter may recompose its already-bounded output.
+  const credentialSplitNotice = codexHostedMcpCredentialSplitNotice(env);
+  const registrySplitNotice = hostedMcpSplitNotice(env);
+  const sharedCredentialNotice = credentialSplitNotice
+    ? null
+    : sharedConfigCredentialNotice(env);
+  const notices = [
+    credentialSplitNotice
+      ? {
+          id: "codex_hosted_mcp_credential_split",
+          kind: "credential",
+          text: credentialSplitNotice,
+        }
+      : null,
+    registrySplitNotice
+      ? {
+          id: "codex_hosted_mcp_split",
+          kind: "credential",
+          text: registrySplitNotice,
+        }
+      : null,
+    sharedCredentialNotice
+      ? {
+          id: "codex_shared_config_credential",
+          kind: "credential",
+          text: sharedCredentialNotice,
+        }
+      : null,
+  ].filter(Boolean);
   const result = await runPromptHook(prompt, {
     env,
     fetchImpl: options.fetchImpl ?? fetch,
     includeSharedConfigCredentialNotice: false,
+    contextAdditions: notices,
     projectPath: input?.cwd ?? null,
+    sessionId: ledgerId,
+    nativeSessionId: input?.session_id,
+    nativeContextBridge: options.nativeContextBridge,
     stderr: options.stderr,
   });
   if (!result) {
@@ -118,7 +156,7 @@ export async function handleQuery(input, options = {}) {
   if (result.eligible) {
     const recordEligibility =
       options.recordEligibility ?? recordTaskEligibility;
-    recordEligibility(sessionId, env);
+    recordEligibility(ledgerId, env);
   }
   const recordDirective = options.recordDirective ?? recordDirectiveSurface;
   recordDirective(sessionId, result.directive ?? null, env);
@@ -127,9 +165,9 @@ export async function handleQuery(input, options = {}) {
     // Empty, continuation, and unavailable results remain eligible for Stop
     // recovery without inflating use counts.
     const record = options.recordUse ?? recordRegistryUse;
-    record(sessionId, env);
+    record(ledgerId, env);
     const recordHighMatch = options.recordHighMatch ?? recordHighMatchSurface;
-    recordHighMatch(sessionId, result.highMatch ?? null, env);
+    recordHighMatch(ledgerId, result.highMatch ?? null, env);
     const recordValueEpisode =
       options.recordValueEpisode ?? recordValueEpisodeSurface;
     recordValueEpisode(sessionId, result.valueEpisode ?? null, env);
@@ -137,24 +175,14 @@ export async function handleQuery(input, options = {}) {
   if (result.queryFeedback) {
     const recordQueryFeedback =
       options.recordQueryFeedbackObligation ?? recordQueryFeedbackObligation;
-    recordQueryFeedback(sessionId, result.queryFeedback, env);
+    recordQueryFeedback(ledgerId, result.queryFeedback, env);
   }
-  // An intentional hosted-MCP override is configured separately from this
-  // hook. When its URL differs from the hook API URL, tell the agent so it
-  // doesn't mix results from one registry with tool calls against another.
-  const credentialSplitNotice = codexHostedMcpCredentialSplitNotice(env);
-  const notices = [
-    credentialSplitNotice,
-    hostedMcpSplitNotice(env),
-    credentialSplitNotice ? null : sharedConfigCredentialNotice(env),
-  ].filter(Boolean);
+  // An empty task-shape search with nothing to deliver (owner decision 34C).
+  if (!result.context) return null;
   return {
     hookSpecificOutput: {
       hookEventName: "UserPromptSubmit",
-      additionalContext:
-        notices.length > 0
-          ? `${notices.join("\n\n")}\n\n${result.context}`
-          : result.context,
+      additionalContext: result.context,
     },
   };
 }

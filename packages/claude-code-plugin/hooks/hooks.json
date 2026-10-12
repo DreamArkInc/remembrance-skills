@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.mjs\""
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.mjs\""
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/query-on-prompt.mjs\""
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher\" \"${CLAUDE_PLUGIN_ROOT}/scripts/query-on-prompt.mjs\""
           }
         ]
       }
@@ -28,38 +28,38 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/route-local-memory.mjs\""
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher\" \"${CLAUDE_PLUGIN_ROOT}/scripts/route-local-memory.mjs\""
           }
         ]
       },
       {
-        "matcher": "^(?:(?:mcp__(?:remembrance|plugin_remembrance_remembrance)(?:__)?)?(?:run_connection_doctor|get_connection_status|query_skills|list_skills|get_skill|get_resource|invoke_skill|get_value_proof|get_effective_preferences|record_preference|submit_preference_compatibility_feedback|link_current_installation|report_task_outcome|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|propose_private_skill|queue_private_skill_import|get_private_lesson_policy|prepare_private_lesson_candidate|submit_private_lesson_candidate|inspect_private_lesson_outbox|retry_private_lesson_candidate|delete_private_lesson_candidate|submit_suggestion|submit_resource|submit_resource_review|bootstrap_agent_identity|register_agent_key|request_attestation_challenge)|remembrance[._].*)$",
+        "matcher": "^(?:(?:mcp__(?:remembrance|plugin_remembrance_remembrance)(?:__)?)?(?:run_connection_doctor|get_connection_status|query_skills|list_skills|get_skill|get_resource|invoke_skill|get_value_proof|get_effective_preferences|record_preference|submit_preference_compatibility_feedback|link_current_installation|report_task_outcome|submit_query_feedback|submit_feedback|acknowledge_feedback_denial|decline_pending_action|submit_remembrance|propose_skill_idea|propose_private_skill|queue_private_skill_import|get_private_lesson_policy|capture_learning|inspect_private_learning_outbox|prepare_private_lesson_candidate|submit_private_lesson_candidate|inspect_private_lesson_outbox|retry_private_lesson_candidate|delete_private_lesson_candidate|submit_private_skill_candidate|retry_private_skill_candidate|delete_private_skill_candidate|submit_suggestion|submit_resource|submit_resource_review|bootstrap_agent_identity|register_agent_key|request_attestation_challenge)|remembrance[._].*)$",
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/record-detail-open.mjs\""
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher\" \"${CLAUDE_PLUGIN_ROOT}/scripts/record-detail-open.mjs\""
           }
         ]
       }
     ],
     "PostToolUseFailure": [
       {
-        "matcher": "^(?:(?:mcp__(?:remembrance|plugin_remembrance_remembrance)(?:__)?)?(?:run_connection_doctor|get_connection_status|query_skills|list_skills|get_skill|get_resource|invoke_skill|get_value_proof|get_effective_preferences|record_preference|submit_preference_compatibility_feedback|link_current_installation|report_task_outcome|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|propose_private_skill|queue_private_skill_import|get_private_lesson_policy|prepare_private_lesson_candidate|submit_private_lesson_candidate|inspect_private_lesson_outbox|retry_private_lesson_candidate|delete_private_lesson_candidate|submit_suggestion|submit_resource|submit_resource_review|bootstrap_agent_identity|register_agent_key|request_attestation_challenge)|remembrance[._].*)$",
+        "matcher": "^(?:(?:mcp__(?:remembrance|plugin_remembrance_remembrance)(?:__)?)?(?:run_connection_doctor|get_connection_status|query_skills|list_skills|get_skill|get_resource|invoke_skill|get_value_proof|get_effective_preferences|record_preference|submit_preference_compatibility_feedback|link_current_installation|report_task_outcome|submit_query_feedback|submit_feedback|acknowledge_feedback_denial|decline_pending_action|submit_remembrance|propose_skill_idea|propose_private_skill|queue_private_skill_import|get_private_lesson_policy|capture_learning|inspect_private_learning_outbox|prepare_private_lesson_candidate|submit_private_lesson_candidate|inspect_private_lesson_outbox|retry_private_lesson_candidate|delete_private_lesson_candidate|submit_private_skill_candidate|retry_private_skill_candidate|delete_private_skill_candidate|submit_suggestion|submit_resource|submit_resource_review|bootstrap_agent_identity|register_agent_key|request_attestation_challenge)|remembrance[._].*)$",
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/report-host-policy-denial.mjs\""
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher\" \"${CLAUDE_PLUGIN_ROOT}/scripts/report-host-policy-denial.mjs\""
           }
         ]
       }
     ],
     "PermissionDenied": [
       {
-        "matcher": "^(?:(?:mcp__(?:remembrance|plugin_remembrance_remembrance)(?:__)?)?(?:run_connection_doctor|get_connection_status|query_skills|list_skills|get_skill|get_resource|invoke_skill|get_value_proof|get_effective_preferences|record_preference|submit_preference_compatibility_feedback|link_current_installation|report_task_outcome|submit_query_feedback|submit_feedback|submit_remembrance|propose_skill_idea|propose_private_skill|queue_private_skill_import|get_private_lesson_policy|prepare_private_lesson_candidate|submit_private_lesson_candidate|inspect_private_lesson_outbox|retry_private_lesson_candidate|delete_private_lesson_candidate|submit_suggestion|submit_resource|submit_resource_review|bootstrap_agent_identity|register_agent_key|request_attestation_challenge)|remembrance[._].*)$",
+        "matcher": "^(?:(?:mcp__(?:remembrance|plugin_remembrance_remembrance)(?:__)?)?(?:run_connection_doctor|get_connection_status|query_skills|list_skills|get_skill|get_resource|invoke_skill|get_value_proof|get_effective_preferences|record_preference|submit_preference_compatibility_feedback|link_current_installation|report_task_outcome|submit_query_feedback|submit_feedback|acknowledge_feedback_denial|decline_pending_action|submit_remembrance|propose_skill_idea|propose_private_skill|queue_private_skill_import|get_private_lesson_policy|capture_learning|inspect_private_learning_outbox|prepare_private_lesson_candidate|submit_private_lesson_candidate|inspect_private_lesson_outbox|retry_private_lesson_candidate|delete_private_lesson_candidate|submit_private_skill_candidate|retry_private_skill_candidate|delete_private_skill_candidate|submit_suggestion|submit_resource|submit_resource_review|bootstrap_agent_identity|register_agent_key|request_attestation_challenge)|remembrance[._].*)$",
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/report-host-policy-denial.mjs\""
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher\" \"${CLAUDE_PLUGIN_ROOT}/scripts/report-host-policy-denial.mjs\""
           }
         ]
       }
@@ -70,7 +70,29 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\""
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher\" \"${CLAUDE_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\""
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher\" \"${CLAUDE_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\""
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher\" \"${CLAUDE_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\""
           }
         ]
       }

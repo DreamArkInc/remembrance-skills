@@ -9,7 +9,8 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
   completionContinuationReason,
-  HOST_POLICY_ALERT_TEXT,
+  hostPolicyAlertTextForOperation,
+  hostPolicyAlertWasReported,
   decideStop,
   markHostPolicyAlertDelivered,
   readPendingHostPolicyAlert,
@@ -31,10 +32,17 @@ export function handleStop(input, options = {}) {
     const markDelivered =
       options.markHostPolicyAlertDelivered ?? markHostPolicyAlertDelivered;
     markDelivered("cursor", sessionId, policyAlert.id, env);
+    if (hostPolicyAlertWasReported(input)) {
+      return { allow: true, why: "host_policy_alert_reported" };
+    }
     return {
       allow: false,
       why: "host_policy_denial",
-      output: { followup_message: HOST_POLICY_ALERT_TEXT },
+      output: {
+        followup_message: hostPolicyAlertTextForOperation(
+          policyAlert.operation_class,
+        ),
+      },
     };
   }
   const loopCount = Number(input?.loop_count ?? 0);
@@ -59,7 +67,11 @@ export function handleStop(input, options = {}) {
     allow: false,
     why: decision.why,
     output: {
-      followup_message: completionContinuationReason(decision.reason, input),
+      followup_message: completionContinuationReason(
+        decision.reason,
+        input,
+        env,
+      ),
     },
   };
 }

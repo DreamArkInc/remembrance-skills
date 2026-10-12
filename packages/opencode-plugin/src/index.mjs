@@ -16,9 +16,11 @@
 //     plugin loaded and knows to call run_connection_doctor.
 //
 //   PROMPT (chat.message -> experimental.chat.system.transform): queries from
-//     the current user turn, then injects the bounded result into the model's
-//     system context before dispatch. Legacy message events remain a fallback
-//     for older builds and are deduplicated by message id.
+//     the current user turn, then injects the bounded result into the system
+//     context of every model request of that turn (the host rebuilds the
+//     system prompt per request and asks its title model first). Legacy
+//     message events remain a fallback for older builds and are deduplicated
+//     by message id.
 //
 //   TOOL OBSERVER (tool.execute.after): correlates Remembrance tool calls with
 //     the active directive exactly like the other hosts.
@@ -37,18 +39,20 @@
 import { readFileSync } from "node:fs";
 import process from "node:process";
 import {
+  bindPrivateSkillNativeCapture,
   HOST_POLICY_ALERT_TEXT,
   checkForClientUpdate,
   clearHighMatchSurfaceForExplicitSelection,
   clearHighMatchSurfaceIfOpened,
   debugLog,
   decideStop,
+  acknowledgePrivateAuthorizationReminders,
   directSelectionFromResponse,
   highMatchFromResponse,
   markHostPolicyAlertDelivered,
   observeSuccessfulCompletionTool,
   recordDirectiveFollowThroughForTool,
-  recordDirectSelectionSurface,
+  recordDirectSelectionUse,
   recordDirectiveSurface,
   recordHighMatchSurface,
   recordPluginLifecycleHealth,
@@ -73,18 +77,22 @@ const SERVICE = "remembrance";
 const CONTRIBUTION_TOOLS = [
   "submit_query_feedback",
   "submit_feedback",
+  "capture_learning",
   "submit_remembrance",
   "propose_skill_idea",
   "propose_private_skill",
   "submit_private_lesson_candidate",
   "retry_private_lesson_candidate",
+  "submit_private_skill_candidate",
+  "retry_private_skill_candidate",
+  "delete_private_lesson_candidate",
+  "delete_private_skill_candidate",
+  "record_preference",
   "submit_suggestion",
   "submit_resource",
   "submit_resource_review",
 ];
-const PREFERENCE_EVIDENCE_TOOLS = [
-  "submit_preference_compatibility_feedback",
-];
+const PREFERENCE_EVIDENCE_TOOLS = ["submit_preference_compatibility_feedback"];
 
 export function pluginVersion(readFile = readFileSync) {
   try {
@@ -96,14 +104,22 @@ export function pluginVersion(readFile = readFileSync) {
   }
 }
 
+// OpenCode marks the text it adds to a user message itself (a file it read in,
+// an assistant-audience prompt) synthetic, and text shown only to the user
+// ignored; its own prompt assembly keeps neither as what the user typed.
+function hostAddedPart(part) {
+  return part?.synthetic === true || part?.ignored === true;
+}
+
 // OpenCode's published SDK uses the properties.* fields first. Legacy probes
 // keep older host builds compatible, and "not found" always means "skip".
 export function promptFromMessageEvent(input, output) {
+  const eventPartText = (part) => (hostAddedPart(part) ? null : part?.text);
   for (const candidate of [
     output?.parts,
     input?.parts,
-    output?.properties?.part?.text,
-    input?.properties?.part?.text,
+    eventPartText(output?.properties?.part),
+    eventPartText(input?.properties?.part),
     output?.message?.content,
     output?.message?.text,
     output?.content,
@@ -118,6 +134,7 @@ export function promptFromMessageEvent(input, output) {
     }
     if (Array.isArray(candidate)) {
       const joined = candidate
+        .filter((part) => !hostAddedPart(part))
         .map((part) =>
           typeof part === "string" ? part : (part?.text ?? part?.content ?? ""),
         )
@@ -168,6 +185,28 @@ export function sessionIdFromEvent(input, output) {
   return "opencode-session";
 }
 
+export function nativeSessionIdFromEvent(input, output) {
+  for (const candidate of [
+    output?.properties?.sessionID,
+    output?.properties?.info?.sessionID,
+    output?.properties?.part?.sessionID,
+    input?.properties?.sessionID,
+    input?.properties?.info?.sessionID,
+    input?.properties?.part?.sessionID,
+    output?.sessionID,
+    output?.sessionId,
+    output?.session?.id,
+    output?.message?.sessionID,
+    output?.message?.sessionId,
+    input?.sessionID,
+    input?.sessionId,
+    input?.session?.id,
+  ]) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate;
+  }
+  return null;
+}
+
 export function messageIdFromEvent(input, output) {
   for (const candidate of [
     output?.properties?.info?.id,
@@ -207,10 +246,13 @@ export function toolNameFromEvent(input, output) {
 }
 
 async function log(client, level, message) {
+  if (!client?.app?.log) return false;
   try {
-    await client?.app?.log?.({ body: { service: SERVICE, level, message } });
+    await client.app.log({ body: { service: SERVICE, level, message } });
+    return true;
   } catch {
     // Logging is best effort; never let it break the host.
+    return false;
   }
 }
 
@@ -220,12 +262,12 @@ async function notify(client, message, variant = "info") {
       await client.tui.showToast({
         body: { title: "Remembrance", message, variant },
       });
-      return;
+      return true;
     }
   } catch {
     // Fall through to structured logging when this host has no active TUI.
   }
-  await log(client, variant === "error" ? "error" : "info", message);
+  return log(client, variant === "error" ? "error" : "info", message);
 }
 
 export const Remembrance = async (context = {}) => {
@@ -237,7 +279,13 @@ export const Remembrance = async (context = {}) => {
   const queriedMessages = new Set();
   const messageSessions = new Map();
   const pendingGuidance = new Map();
+  // An update notice belongs to the session, not to one turn: it waits
+  // through session.idle (OpenCode publishes one after every turn) for a
+  // later turn's hook, and is dropped only once delivered or when the session
+  // is deleted.
   const pendingClientUpdates = new Map();
+  // What the current turn delivered, repeated on each of its later requests.
+  const turnContext = new Map();
   const userMessages = new Map();
   const pendingTextParts = new Map();
 
@@ -266,7 +314,7 @@ export const Remembrance = async (context = {}) => {
 
   function clearSessionState(sessionId) {
     pendingGuidance.delete(sessionId);
-    pendingClientUpdates.delete(sessionId);
+    turnContext.delete(sessionId);
     for (const [messageId, trackedSessionId] of messageSessions) {
       if (trackedSessionId !== sessionId) continue;
       messageSessions.delete(messageId);
@@ -341,16 +389,30 @@ export const Remembrance = async (context = {}) => {
     }
   }
 
-  async function handlePrompt(prompt, sessionId, messageId) {
+  async function handlePrompt(prompt, sessionId, messageId, nativeSessionId) {
     const messageKey = messageId ?? `${sessionId}:${prompt}`;
     if (queriedMessages.has(messageKey)) return;
     queriedMessages.add(messageKey);
     messageSessions.set(messageKey, sessionId);
+    turnContext.delete(sessionId);
     recordLifecycle("prompt_hook", sessionId);
-    const result = await runPromptHook(prompt, {
+    const result = await (context.runPromptHook ?? runPromptHook)(prompt, {
       env,
+      contextAdditions: pendingClientUpdates.has(sessionId)
+        ? [
+            {
+              id: "client_update",
+              kind: "notice",
+              text: pendingClientUpdates.get(sessionId),
+            },
+          ]
+        : [],
       identity: { provider: SURFACE, model: "opencode" },
       reportDirectiveShown: false,
+      deferReminderAcknowledgement: true,
+      sessionId,
+      nativeSessionId,
+      nativeContextBridge: context.nativeContextBridge,
       userAgent: "@remembrance-ai/opencode-plugin",
     });
     if (result?.eligible) {
@@ -372,21 +434,28 @@ export const Remembrance = async (context = {}) => {
         directive: result?.directive ?? null,
         highMatch: result?.highMatch ?? null,
         text: guidance.trim(),
+        deliveredContextAdditionIds: result?.deliveredContextAdditionIds ?? [],
         countsAsUse: Boolean(result?.consumed && result?.matched),
         queryFeedback: result?.queryFeedback ?? null,
         valueEpisode: result?.valueEpisode ?? null,
       });
+    } else if (result?.consumed) {
+      // An empty task-shape search delivers nothing (owner decision 34C);
+      // like any completed search it still ends an earlier directive.
+      recordDirectiveSurface(sessionId, null, env);
     }
   }
 
   async function handleChatMessage(input, output) {
     try {
+      if (!isUserMessageEvent(input, output)) return;
       const prompt = promptFromMessageEvent(input, output);
       if (!prompt) return;
       await handlePrompt(
         prompt,
         sessionIdFromEvent(input, output),
         messageIdFromEvent(input, output),
+        nativeSessionIdFromEvent(input, output),
       );
     } catch (error) {
       debugLog(env, "opencode_chat_message_failed", {
@@ -401,13 +470,26 @@ export const Remembrance = async (context = {}) => {
       const guidance = pendingGuidance.get(sessionId);
       const updateNotice = pendingClientUpdates.get(sessionId);
       if (!Array.isArray(output?.system)) return;
-      if (updateNotice) {
-        output.system.push(updateNotice);
+      // OpenCode builds the system prompt again for every model request of a
+      // turn, and on a session's first turn its title request comes first:
+      // what this turn delivered goes into each of them, recorded once.
+      const delivered = turnContext.get(sessionId) ?? [];
+      // The raw update notice is only for a turn that carries nothing else;
+      // a notice the bounded hook withheld waits for a later turn's hook, as
+      // does one still pending when the session went idle (handleSessionIdle).
+      if (updateNotice && !guidance && !turnContext.has(sessionId)) {
+        delivered.push(updateNotice);
         pendingClientUpdates.delete(sessionId);
       }
+      if (guidance) delivered.push(guidance.text);
+      if (delivered.length > 0) turnContext.set(sessionId, delivered);
+      output.system.push(...delivered);
       if (!guidance) return;
-      output.system.push(guidance.text);
+      acknowledgePrivateAuthorizationReminders(guidance.text, env);
       pendingGuidance.delete(sessionId);
+      if (guidance.deliveredContextAdditionIds.includes("client_update")) {
+        pendingClientUpdates.delete(sessionId);
+      }
       // Delivery happened: only now is the guidance actually in the model's
       // context, so only now does it count as registry use.
       if (guidance.countsAsUse) {
@@ -415,11 +497,7 @@ export const Remembrance = async (context = {}) => {
         recordHighMatchSurface(sessionId, guidance.highMatch, env);
         recordValueEpisodeSurface(sessionId, guidance.valueEpisode, env);
       }
-      recordQueryFeedbackObligation(
-        sessionId,
-        guidance.queryFeedback,
-        env,
-      );
+      recordQueryFeedbackObligation(sessionId, guidance.queryFeedback, env);
       recordDirectiveSurface(sessionId, guidance.directive, env);
       if (guidance.directive) {
         await reportDirectiveEvent(
@@ -458,7 +536,12 @@ export const Remembrance = async (context = {}) => {
       const pending = pendingTextParts.get(messageId);
       if (pending) {
         pendingTextParts.delete(messageId);
-        await handlePrompt(pending.prompt, pending.sessionId, messageId);
+        await handlePrompt(
+          pending.prompt,
+          pending.sessionId,
+          messageId,
+          pending.nativeSessionId,
+        );
       }
     } catch (error) {
       debugLog(env, "opencode_message_updated_failed", {
@@ -474,11 +557,16 @@ export const Remembrance = async (context = {}) => {
       if (!prompt || !messageId) return;
       const sessionId =
         userMessages.get(messageId) ?? sessionIdFromEvent(event, event);
+      const nativeSessionId = nativeSessionIdFromEvent(event, event);
       if (!userMessages.has(messageId)) {
-        pendingTextParts.set(messageId, { prompt, sessionId });
+        pendingTextParts.set(messageId, {
+          prompt,
+          sessionId,
+          nativeSessionId,
+        });
         return;
       }
-      await handlePrompt(prompt, sessionId, messageId);
+      await handlePrompt(prompt, sessionId, messageId, nativeSessionId);
     } catch (error) {
       debugLog(env, "opencode_prompt_hook_failed", { error: String(error) });
     }
@@ -495,14 +583,19 @@ export const Remembrance = async (context = {}) => {
       });
       const decision = decideStop({ session_id: sessionId }, { env });
       if (decision?.allow !== false || !decision?.reason) return;
+      const delivered = await notify(client, decision.reason);
+      if (!delivered) return;
       writePromptedCount(sessionId, decision.useCount ?? 1, env);
-      await notify(client, decision.reason);
+      acknowledgePrivateAuthorizationReminders(decision.reason, env);
     } catch (error) {
       debugLog(env, "opencode_completion_hook_failed", {
         error: String(error),
       });
     } finally {
       clearSessionState(sessionId);
+      // Until the next user prompt a model request is no agent turn (OpenCode
+      // runs one for a manual compaction), so it gets no pending notice.
+      if (pendingClientUpdates.has(sessionId)) turnContext.set(sessionId, []);
     }
   }
 
@@ -545,7 +638,9 @@ export const Remembrance = async (context = {}) => {
           return;
         }
         if (event.type === "session.deleted") {
-          clearSessionState(sessionIdFromEvent(event, event));
+          const sessionId = sessionIdFromEvent(event, event);
+          pendingClientUpdates.delete(sessionId);
+          clearSessionState(sessionId);
         }
       } catch (error) {
         debugLog(env, "opencode_event_dispatch_failed", {
@@ -598,12 +693,7 @@ export const Remembrance = async (context = {}) => {
         if (normalizedTool.endsWith("invoke_skill")) {
           const selection = directSelectionFromResponse(output);
           if (!selection) return;
-          const useCount = recordRegistryUse(sessionId, env);
-          recordDirectSelectionSurface(
-            sessionId,
-            { ...selection, use_count: useCount },
-            env,
-          );
+          recordDirectSelectionUse(sessionId, selection, env);
           recordValueEpisodeSurface(
             sessionId,
             valueEpisodeFromResponse(output),
@@ -645,6 +735,12 @@ export const Remembrance = async (context = {}) => {
             normalizedTool.endsWith(candidate),
           )
         ) {
+          await bindPrivateSkillNativeCapture(tool, toolArguments, output, {
+            env,
+            nativeContextBridge: context.nativeContextBridge,
+            // Tool output is untrusted payload, not native provenance.
+            nativeSessionId: nativeSessionIdFromEvent(input, null),
+          });
           observeSuccessfulCompletionTool(
             sessionId,
             tool,
@@ -654,12 +750,7 @@ export const Remembrance = async (context = {}) => {
           );
           return;
         }
-        clearHighMatchSurfaceIfOpened(
-          sessionId,
-          tool,
-          toolArguments,
-          env,
-        );
+        clearHighMatchSurfaceIfOpened(sessionId, tool, toolArguments, env);
         observeSuccessfulCompletionTool(
           sessionId,
           tool,

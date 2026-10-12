@@ -1,0 +1,896 @@
+{
+  "source": "packages/evals/src/fixtures/feedback-metadata-benchmark-v2.json (branch t13-feedback-metadata): synthetic benchmark text, no production text",
+  "source_sha256": "d27f5f9f9bb57bf234fe77b8ac03c207fc38d1dd3d1a1ca3260076d5af91db44",
+  "master_reason_from": "packages/codex-plugin/scripts/hook-core.mjs at 7ce72d8d, sha256 f214a5c7f4ac1ecd4097e097cf538a59af489db68e6c6250c88056120306fb14",
+  "queries": [
+    {
+      "id": "para-find-skills-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Search skills.sh for an existing package that extracts tables from PDFs before building our own",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-find-skills-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Discover a community add-on I can install with npx to generate release notes",
+      "master_reason": "workflow_shape"
+    },
+    {
+      "id": "para-find-skills-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Is there a ready-made capability pack I could pull in for writing Terraform, rather than prompting from scratch?",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-find-skills-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Look up whether someone already published instructions for converting Figma exports into code",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-remotion-best-practices-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Build a React composition that animates captions over a product demo clip and render it to MP4",
+      "master_reason": "tool_or_framework"
+    },
+    {
+      "id": "para-remotion-best-practices-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Programmatically generate personalized video intros from JSON data with React components",
+      "master_reason": "tool_or_framework"
+    },
+    {
+      "id": "para-remotion-best-practices-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Render an animated explainer clip from code, with timed subtitles and a soundtrack",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-remotion-best-practices-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Make a looping motion-graphics intro in TypeScript and export frames at 60 fps",
+      "master_reason": "tool_or_framework"
+    },
+    {
+      "id": "para-frontend-design-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Create a distinctive landing page with bold typography instead of a generic template look",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-frontend-design-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Polish the visual style of a dashboard: color palette, spacing scale and component hierarchy",
+      "master_reason": "ui_or_dashboard_work"
+    },
+    {
+      "id": "para-frontend-design-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Our app looks bland; propose an aesthetic direction with memorable fonts and layout",
+      "master_reason": "ui_or_dashboard_work"
+    },
+    {
+      "id": "para-frontend-design-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Mock up a hero section and pricing cards that feel crafted rather than boilerplate",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-vercel-react-best-practices-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Speed up a Next.js app by fixing waterfalls in data fetching and reducing client bundle size",
+      "master_reason": "tool_or_framework"
+    },
+    {
+      "id": "para-vercel-react-best-practices-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Audit React components for unnecessary re-renders and move work to server components",
+      "master_reason": "tool_or_framework"
+    },
+    {
+      "id": "para-vercel-react-best-practices-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Page loads feel slow on Vercel: lazy-load heavy widgets and cut hydration cost",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-vercel-react-best-practices-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Refactor hooks and memoization in a large React codebase following recommended patterns",
+      "master_reason": "tool_or_framework"
+    },
+    {
+      "id": "para-web-design-guidelines-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Check a signup form against interface guidelines for labels, focus states and error messages",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-web-design-guidelines-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Audit our marketing site for UX guideline violations like missing alt attributes and poor contrast",
+      "master_reason": "ui_or_dashboard_work"
+    },
+    {
+      "id": "para-web-design-guidelines-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Go through the settings screen and flag keyboard navigation and touch target problems",
+      "master_reason": "ui_or_dashboard_work"
+    },
+    {
+      "id": "para-web-design-guidelines-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Lint our HTML pages for usability rules: heading order, button labels, form hints",
+      "master_reason": "ui_or_dashboard_work"
+    },
+    {
+      "id": "para-microsoft-foundry-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Create a Foundry project, deploy a GPT model and wire up an assistant with tools",
+      "master_reason": "workflow_shape"
+    },
+    {
+      "id": "para-microsoft-foundry-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Evaluate and fine-tune a model in Azure AI Foundry and publish it as an endpoint",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-microsoft-foundry-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Stand up a hosted assistant with a model catalog deployment and tracing on Microsoft's AI platform",
+      "master_reason": "workflow_shape"
+    },
+    {
+      "id": "para-microsoft-foundry-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Compare model benchmarks and provision a serverless deployment in the Foundry portal",
+      "master_reason": "workflow_shape"
+    },
+    {
+      "id": "para-azure-ai-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Add Azure OpenAI chat completions and Azure AI Search to our support bot",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-ai-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Use Azure Cognitive Services for speech-to-text and document intelligence in an app",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-ai-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Wire a retrieval chatbot to an Azure OpenAI deployment with vector search over our docs",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-ai-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Call the Azure vision and translator APIs from a TypeScript backend",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-storage-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Configure blob lifecycle rules to move old files to the archive tier in a storage account",
+      "master_reason": "third_party_integration"
+    },
+    {
+      "id": "para-azure-storage-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Generate a SAS token so a partner can upload files to a blob container",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-storage-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Our uploads bucket on Azure needs immutable retention and cheaper cold storage",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-storage-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Share files from a blob store with time-limited links and lock down anonymous access",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-diagnostics-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Find out why an Azure App Service keeps returning 503 errors using logs and metrics",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-diagnostics-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Troubleshoot a failing Azure Function by checking resource health and diagnostic settings",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-diagnostics-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "A container app crashes at startup; dig through log analytics to find the root cause",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-diagnostics-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Investigate high latency and failed requests on a production Azure web app",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-deploy-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Ship our containerized API to Azure with azd up and verify the deployment succeeded",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-deploy-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Roll out Bicep templates to a production subscription and confirm the resources came up",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-deploy-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Push the infrastructure and code to Azure, then confirm the endpoints respond",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-deploy-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Execute the azd provisioning and publish step for our app to the cloud",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-resource-visualizer-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Draw an architecture diagram of everything in our resource group and how the pieces connect",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-resource-visualizer-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Generate a Mermaid graph showing dependencies between our Azure services",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-resource-visualizer-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Produce a picture of our subscription topology: networks, databases and apps with their links",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-resource-visualizer-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Map the relationships between resources so new engineers understand the setup",
+      "master_reason": "third_party_integration"
+    },
+    {
+      "id": "para-entra-app-registration-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Register an app in Entra ID so our web app can sign users in with OAuth",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-entra-app-registration-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Set up a client secret and API permissions for a daemon that calls Microsoft Graph",
+      "master_reason": "third_party_integration"
+    },
+    {
+      "id": "para-entra-app-registration-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Create a service principal and grant admin consent for a Graph API scope",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-entra-app-registration-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Our single sign-on redirect URI fails; fix the app registration settings",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-appinsights-instrumentation-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Add Application Insights telemetry to a Node.js service to track requests and exceptions",
+      "master_reason": "tool_or_framework"
+    },
+    {
+      "id": "para-appinsights-instrumentation-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Instrument a Python API with OpenTelemetry and send traces to Azure Monitor",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-appinsights-instrumentation-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Wire up request tracking and custom events for a .NET web API in Azure Monitor",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-appinsights-instrumentation-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Enable auto-instrumentation so we can see dependency calls and exceptions in the portal",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-validate-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Run preflight checks on our Bicep files and parameters before deploying",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-validate-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Verify that an Azure environment is ready: quotas, provider registrations and permissions",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-validate-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Before go-live, confirm our infra-as-code compiles and the subscription has enough quota",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-validate-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Dry-run a what-if deployment and catch configuration mistakes early",
+      "master_reason": "workflow_shape"
+    },
+    {
+      "id": "para-azure-aigateway-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Put API Management in front of Azure OpenAI to load balance models and enforce token limits",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-aigateway-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Configure semantic caching and rate limiting for LLM calls through an Azure gateway",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-aigateway-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Front several model endpoints with a gateway that meters tokens per team",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-aigateway-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Add a policy that retries and fails over between OpenAI deployments behind API Management",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-prepare-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Get an existing web app ready for Azure: generate infrastructure files and azure.yaml",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-prepare-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Plan which Azure services to use for a new Python app and scaffold the configuration",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-prepare-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Scaffold the files needed to host an existing Node project on Azure for the first time",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-prepare-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Decide the hosting services and generate the initial infra templates for a new repo",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-compliance-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Scan our Azure subscription for policy violations and security best practice gaps",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-compliance-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Produce an audit report of noncompliant resources against Azure Policy initiatives",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-compliance-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Check our tenant against the CIS benchmark and list resources that break policy",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-compliance-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Find storage accounts without encryption and key vaults without purge protection",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-resource-lookup-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "List all storage accounts across our subscriptions with their regions and SKUs",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-resource-lookup-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Find which virtual machines are tagged with a given cost center",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-resource-lookup-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Query Resource Graph to list every app service and its SKU across subscriptions",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-resource-lookup-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Which resources in our tenant are in West Europe and who owns them?",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-remembrancer-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Before writing custom code, check a shared registry for a proven workflow and report whether it fit",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-remembrancer-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Record what worked after using a registry workflow so other assistants benefit next time",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-remembrancer-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Ask the shared operational memory whether a proven approach exists before starting custom work",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-remembrancer-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "After finishing, submit evidence about whether the suggested workflow actually helped",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-remembrance-setup-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "The Remembrance MCP tools do not show up in Claude Code after installing the plugin",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-remembrance-setup-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Configure an organization API key for the Remembrance plugin in Codex",
+      "master_reason": "third_party_integration"
+    },
+    {
+      "id": "para-remembrance-setup-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Install the Remembrance plugin for Cursor and verify the assistant identity works",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-remembrance-setup-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "The hooks for Remembrance fail with an invalid key error in OpenClaw",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-resource-scout-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Compare two MCP servers for web search and rate their reliability and auth friction",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-resource-scout-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Evaluate a third-party API for documentation quality and prompt-injection risk before relying on it",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-resource-scout-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Vet a new MCP server before trusting it: uptime, docs and injection risks",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-resource-scout-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Find and compare paid HTTP APIs for geocoding and rate them after use",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-hosted-copilot-sdk-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Build a custom Copilot extension with the Copilot SDK and host it on Azure",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-hosted-copilot-sdk-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Deploy a GitHub Copilot assistant backend to Azure Container Apps",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-hosted-copilot-sdk-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Host a Copilot-powered assistant built on the SDK in our Azure tenant",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-hosted-copilot-sdk-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Scaffold an Azure-hosted GitHub Copilot extension with authentication",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-agent-browser-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Open our web app in a headless browser, click through checkout and take screenshots",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-agent-browser-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Automate filling a web form and scraping the confirmation page with a browser CLI",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-agent-browser-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Drive Chrome from the terminal to log in, navigate pages and capture console errors",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-agent-browser-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Script an end-to-end smoke check of our web UI with snapshots of each page",
+      "master_reason": "ui_or_dashboard_work"
+    },
+    {
+      "id": "para-azure-compute-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Pick the right VM series and size for a memory-heavy database workload",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "para-azure-compute-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Set up a virtual machine scale set with autoscaling for a batch job",
+      "master_reason": "third_party_integration"
+    },
+    {
+      "id": "para-azure-compute-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Choose between burstable and compute-optimized machines for a CI runner",
+      "master_reason": "workflow_shape"
+    },
+    {
+      "id": "para-azure-compute-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Resize our VMs and configure availability zones for a high-traffic service",
+      "master_reason": "third_party_integration"
+    },
+    {
+      "id": "para-azure-cloud-migrate-1",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Move our on-premises SQL Server and web servers to Azure with minimal downtime",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-cloud-migrate-2",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Assess an AWS Lambda application and plan its migration to Azure Functions",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-cloud-migrate-3",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Lift and shift a datacenter's workloads into Azure and plan the cutover weekend",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "para-azure-cloud-migrate-4",
+      "kind": "paraphrase",
+      "gold": true,
+      "summary": "Translate our AWS infrastructure into Azure equivalents and move the data",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "distractor-azure-kusto-1",
+      "kind": "distractor",
+      "gold": true,
+      "summary": "Write a KQL query to chart error counts per hour from our telemetry tables",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "distractor-azure-kusto-2",
+      "kind": "distractor",
+      "gold": true,
+      "summary": "Explore Azure Data Explorer logs to find the slowest API endpoints last week",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "distractor-azure-rbac-1",
+      "kind": "distractor",
+      "gold": true,
+      "summary": "Grant a developer read access to one resource group without making them owner",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "distractor-azure-rbac-2",
+      "kind": "distractor",
+      "gold": true,
+      "summary": "Audit which users hold Contributor role assignments on our subscription",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "distractor-azure-messaging-1",
+      "kind": "distractor",
+      "gold": true,
+      "summary": "Set up a Service Bus queue with dead-lettering for order processing",
+      "master_reason": "third_party_integration"
+    },
+    {
+      "id": "distractor-azure-messaging-2",
+      "kind": "distractor",
+      "gold": true,
+      "summary": "Publish events from our app to Event Grid topics and subscribe a function",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "distractor-mpp-1",
+      "kind": "distractor",
+      "gold": true,
+      "summary": "Pay for an API call that answers with HTTP 402 using the machine payments protocol",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "distractor-mpp-2",
+      "kind": "distractor",
+      "gold": true,
+      "summary": "Verify a payment challenge from a paid endpoint and report the endpoint",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "distractor-web-ui-ux-qa-1",
+      "kind": "distractor",
+      "gold": true,
+      "summary": "Inspect our web UI on mobile widths for layout breaks and confusing navigation",
+      "master_reason": "ui_or_dashboard_work"
+    },
+    {
+      "id": "distractor-web-ui-ux-qa-2",
+      "kind": "distractor",
+      "gold": true,
+      "summary": "Check the checkout flow for accessibility and copy problems and file the issues",
+      "master_reason": "ui_or_dashboard_work"
+    },
+    {
+      "id": "no-answer-1",
+      "kind": "no_answer",
+      "gold": false,
+      "summary": "Adjust the hydration of a sourdough starter for a colder kitchen",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "no-answer-2",
+      "kind": "no_answer",
+      "gold": false,
+      "summary": "Tune the rebound of a mountain bike rear shock",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "no-answer-3",
+      "kind": "no_answer",
+      "gold": false,
+      "summary": "Translate a notarized birth certificate from Portuguese for a visa application",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "no-answer-4",
+      "kind": "no_answer",
+      "gold": false,
+      "summary": "Arrange wedding seating so feuding relatives sit far apart",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "no-answer-5",
+      "kind": "no_answer",
+      "gold": false,
+      "summary": "Choose bowings for a string quartet passage in a Haydn movement",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "legacy-skills-discovery",
+      "kind": "legacy",
+      "gold": true,
+      "summary": "Find installable agent skills from a public skill registry or skills.sh.",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "legacy-frontend-design-review",
+      "kind": "legacy",
+      "gold": true,
+      "summary": "Review a marketing page for visual hierarchy, spacing, typography, and design polish.",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "legacy-azure-deploy",
+      "kind": "legacy",
+      "gold": true,
+      "summary": "Plan and execute an Azure deployment for a multi-region web application.",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "legacy-appinsights-diagnostics",
+      "kind": "legacy",
+      "gold": true,
+      "summary": "Diagnose an alert from Azure Application Insights and instrument missing telemetry.",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "legacy-vercel-react-best-practices",
+      "kind": "legacy",
+      "gold": true,
+      "summary": "Review a React app on Vercel for current best practices, Server Components, and Fluid Compute usage.",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "legacy-browser-validation",
+      "kind": "legacy",
+      "gold": true,
+      "summary": "Drive a real browser to validate a web UI, capture screenshots, and check console errors.",
+      "master_reason": "ui_or_dashboard_work"
+    },
+    {
+      "id": "legacy-remotion-video",
+      "kind": "legacy",
+      "gold": true,
+      "summary": "Edit, render, or compose programmatic video with Remotion components.",
+      "master_reason": "no_trigger_match"
+    },
+    {
+      "id": "legacy-entra-app-registration",
+      "kind": "legacy",
+      "gold": true,
+      "summary": "Register an application with Microsoft Entra ID, configure permissions and consent.",
+      "master_reason": "third_party_integration"
+    },
+    {
+      "id": "legacy-azure-cloud-migrate",
+      "kind": "legacy",
+      "gold": true,
+      "summary": "Migrate workloads between Azure subscriptions or from another cloud to Azure.",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "legacy-azure-resource-lookup",
+      "kind": "legacy",
+      "gold": true,
+      "summary": "Look up details of an Azure resource (resource group, owner, configuration) for incident triage.",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "legacy-azure-compliance",
+      "kind": "legacy",
+      "gold": true,
+      "summary": "Review compliance posture against Azure security baselines and remediate gaps.",
+      "master_reason": "external_service"
+    },
+    {
+      "id": "legacy-azure-compute-capacity",
+      "kind": "legacy",
+      "gold": true,
+      "summary": "Plan VM size, capacity, and SKU choices on Azure compute.",
+      "master_reason": "external_service"
+    }
+  ]
+}

@@ -28,6 +28,7 @@ function allHooks(overrides = {}) {
     hook("userPromptSubmit", overrides.userPromptSubmit),
     hook("postToolUse", overrides.postToolUse),
     hook("stop", overrides.stop),
+    hook("subagentStop", overrides.subagentStop),
   ];
 }
 
@@ -93,7 +94,20 @@ describe("Codex hook trust inspection", () => {
         },
         { event: "PostToolUse", enabled: true, trust_status: "trusted" },
         { event: "Stop", enabled: true, trust_status: "trusted" },
+        { event: "SubagentStop", enabled: true, trust_status: "trusted" },
       ],
+    });
+  });
+
+  it("requires review when only the SubagentStop hook is not trusted", () => {
+    expect(
+      summarizeCodexHookTrust(
+        allHooks({ subagentStop: { trustStatus: "untrusted" } }),
+        NOW,
+      ),
+    ).toMatchObject({
+      status: "review_required",
+      review_events: ["SubagentStop"],
     });
   });
 
@@ -116,6 +130,7 @@ describe("Codex hook trust inspection", () => {
         { event: "UserPromptSubmit", trust_status: "unknown" },
         { event: "PostToolUse", trust_status: "modified" },
         { event: "Stop", enabled: false, trust_status: "missing" },
+        { event: "SubagentStop", enabled: true, trust_status: "trusted" },
       ],
     });
   });

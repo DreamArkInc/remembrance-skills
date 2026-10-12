@@ -1,0 +1,198 @@
+#!/bin/sh
+# Remembrance Node.js launcher: sh node-launcher <script.mjs> [args...]
+#
+# Hosts started from the Dock, Finder or an IDE do not read shell rc files, so
+# a Node.js installed by a version manager is often missing from their PATH and
+# a bare `node` command fails with ENOENT. This script finds a Node.js that meets
+# the bundled MCP server's engines floor ($_min below, kept equal to
+# packages/mcp-server/package.json by the launcher tests) and replaces itself
+# with it (exec). It never reads stdin and never writes to stdout, which is the
+# MCP transport.
+#
+# The file has no extension on purpose. Claude Code's MCP entry names it
+# directly (this copy is executable); on native Windows, Claude Code resolves
+# that name through PATHEXT to the twin node-launcher.cmd, so the MCP server
+# needs no sh there. Hooks and the other hosts' MCP entries run it with `sh`;
+# without a `.sh` suffix, Claude Code on Windows does not rewrite those hook
+# commands to `bash sh ...`, which cannot run.
+#
+# Search order; the first acceptable candidate wins, newest first within a
+# version manager:
+#   1. $REMEMBRANCE_NODE (explicit; an unusable value is an error, no fallback;
+#      an empty value counts as unset)
+#   2. node on PATH
+#   3. nvm ($NVM_DIR or ~/.nvm): the default alias, followed through nested
+#      and lts/ aliases (at most 8 steps), when it is a version number (20,
+#      v20.1.0: digits and dots after the v); `system` skips nvm; any other
+#      alias (`node`, `stable`, a version that is not installed, other text,
+#      which the debug line reports) takes the newest installed version
+#   4. volta, fnm (aliases/default first), n, asdf, nodenv, mise
+#   5. Homebrew, /usr/local, Linuxbrew, MacPorts, /usr/bin, snap, keg-only
+#      Homebrew node@NN, ~/.local/bin
+# A candidate must be an executable file whose `-v` prints vMAJOR.MINOR.PATCH
+# at or above $_min; a prerelease of that exact version (-rc.1, -pre) is below
+# it, and any other output is refused.
+# REMEMBRANCE_NODE_LAUNCHER_DEBUG=1 prints the chosen node and version to stderr.
+
+_min=18.17.0
+_skipped=
+_note=
+_nl='
+'
+
+# Split $1 into the numbers _maj, _mnr, _pat of MAJOR.MINOR.PATCH (at most nine
+# digits each) and the suffix _suf: empty, -prerelease, +build or one trailing
+# whitespace character (the carriage return of a Windows node under Git Bash).
+_semver() {
+  case $1 in *.*.*) ;; *) return 1 ;; esac
+  _maj=${1%%.*}
+  _suf=${1#*.}
+  _mnr=${_suf%%.*}
+  _suf=${_suf#*.}
+  _pat=${_suf%%[!0-9]*}
+  _suf=${_suf#"$_pat"}
+  for _num in "$_maj" "$_mnr" "$_pat"; do
+    case $_num in '' | *[!0-9]* | ??????????*) return 1 ;; esac
+  done
+  case $_suf in '' | [-+]* | [[:space:]]) ;; *) return 1 ;; esac
+}
+
+_semver "$_min"
+_min_maj=$_maj _min_mnr=$_mnr _min_pat=$_pat
+
+# Set _out to the first line of $1, at most 200 bytes: what the launcher echoes
+# into the host's log (an override, a rejected node's -v output) stays one line.
+_line() {
+  _out=$(printf '%.200s' "${1%%"$_nl"*}")
+}
+
+# Accept $1 when it is an executable file that reports Node.js >= $_min.
+_try() {
+  _ver=
+  [ -f "$1" ] && [ -x "$1" ] || return 1
+  _ver=$("$1" -v </dev/null 2>/dev/null) || return 1
+  _semver "${_ver#v}" || return 1
+  if [ "$_maj" -ne "$_min_maj" ]; then
+    [ "$_maj" -gt "$_min_maj" ] || return 1
+  elif [ "$_mnr" -ne "$_min_mnr" ]; then
+    [ "$_mnr" -gt "$_min_mnr" ] || return 1
+  elif [ "$_pat" -ne "$_min_pat" ]; then
+    [ "$_pat" -gt "$_min_pat" ] || return 1
+  else
+    case $_suf in -*) return 1 ;; esac
+  fi
+  _node=$1
+}
+
+# Try $1/<directory matching glob $2>/$3, newest version first: numeric
+# major.minor.patch read after the last non-version character of the directory
+# name (v20.1.0, 20.1.0, node@22). `command -p` finds sort without PATH.
+_try_newest() {
+  [ -d "$1" ] || return 1
+  _list=$({ for _d in "$1"/$2; do
+    [ -d "$_d" ] || continue
+    _k=${_d##*/}
+    _k=${_k##*[!0-9.]}
+    printf '%s %s\n' "${_k:-0}" "$_d/$3"
+  done | command -p sort -t. -k1,1nr -k2,2nr -k3,3nr; } 2>/dev/null)
+  while read -r _k _c; do
+    [ -n "$_c" ] && _try "$_c" && return 0
+  done <<EOF_LIST
+$_list
+EOF_LIST
+  return 1
+}
+
+_search() {
+  if _p=$(command -v node 2>/dev/null); then
+    _try "$_p" && return 0
+    _line "${_ver:-not runnable}"
+    _said=$_out
+    _line "$_p"
+    _skipped="; node on PATH ($_out) is $_said"
+  fi
+
+  # nvm: follow the default alias through nested and lts/ aliases (default ->
+  # lts/* -> lts/jod -> v22.12.0); the step limit ends an alias cycle.
+  _dir=${NVM_DIR:-$HOME/.nvm}
+  _alias=default
+  _n=0
+  while [ "$_n" -lt 8 ] && [ -f "$_dir/alias/$_alias" ]; do
+    _n=$((_n + 1))
+    _next=
+    { read -r _next || :; } <"$_dir/alias/$_alias"
+    _alias=$_next
+  done
+  [ "$_n" -gt 0 ] || _alias=
+  _alias=${_alias#v}
+  # Only a version number becomes part of a path: other alias text could
+  # climb out of the nvm directory (../) or split into a second glob word
+  # that expands in the current directory (the user's project).
+  case $_alias in
+    '' | *[!0-9.]*)
+      case $_alias in
+        '' | node | stable | system) ;;
+        *)
+          _line "$_alias"
+          _note="; nvm default alias is not a version number: $_out"
+          ;;
+      esac
+      ;;
+    *)
+      _try "$_dir/versions/node/v$_alias/bin/node" && return 0
+      _try_newest "$_dir/versions/node" "v$_alias.*" bin/node && return 0
+      ;;
+  esac
+  if [ "$_alias" != system ]; then
+    _try_newest "$_dir/versions/node" 'v*' bin/node && return 0
+  fi
+
+  _try "${VOLTA_HOME:-$HOME/.volta}/bin/node" && return 0
+
+  for _dir in "${FNM_DIR:-}" "${XDG_DATA_HOME:-}/fnm" "$HOME/.local/share/fnm" \
+    "$HOME/Library/Application Support/fnm" "$HOME/.fnm"; do
+    [ -d "$_dir" ] || continue
+    _try "$_dir/aliases/default/bin/node" && return 0
+    _try_newest "$_dir/node-versions" '*' installation/bin/node && return 0
+  done
+
+  [ -n "${N_PREFIX:-}" ] && _try "$N_PREFIX/bin/node" && return 0
+  _try "$HOME/.n/bin/node" && return 0
+  _try_newest "${ASDF_DATA_DIR:-$HOME/.asdf}/installs/nodejs" '*' bin/node && return 0
+  _try_newest "${NODENV_ROOT:-$HOME/.nodenv}/versions" '*' bin/node && return 0
+  _try_newest "${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/installs/node" \
+    '*' bin/node && return 0
+
+  # Test-only: REMEMBRANCE_NODE_LAUNCHER_SYSTEM_ROOT prefixes the fixed system
+  # paths below so tests can hide this machine's own Node.js. Never set it.
+  _root=${REMEMBRANCE_NODE_LAUNCHER_SYSTEM_ROOT:-}
+  for _c in /opt/homebrew/bin/node /usr/local/bin/node \
+    /home/linuxbrew/.linuxbrew/bin/node /opt/local/bin/node /usr/bin/node \
+    /snap/bin/node; do
+    _try "$_root$_c" && return 0
+  done
+  _try_newest "$_root/opt/homebrew/opt" 'node@*' bin/node && return 0
+  _try_newest "$_root/usr/local/opt" 'node@*' bin/node && return 0
+  _try "$HOME/.local/bin/node"
+}
+
+if [ -n "${REMEMBRANCE_NODE:-}" ]; then
+  if ! _try "$REMEMBRANCE_NODE"; then
+    _line "$_ver"
+    _said=${_out:+ (it reports $_out)}
+    _line "$REMEMBRANCE_NODE"
+    printf 'Remembrance: REMEMBRANCE_NODE=%s is not an executable Node.js %s or newer%s; point it at a working node or unset it, then fully restart the host.\n' "$_out" "$_min" "$_said" >&2
+    exit 127
+  fi
+elif ! _search; then
+  printf 'Remembrance: cannot find Node.js %s or newer (searched PATH, nvm, volta, fnm, n, asdf, nodenv, mise, Homebrew, /usr/local, /usr/bin%s). Install Node.js %s+ where this host can see it, or set REMEMBRANCE_NODE=/absolute/path/to/node in the environment the host starts with, then fully restart the host.\n' "$_min" "$_skipped" "$_min" >&2
+  exit 127
+fi
+
+if [ "${REMEMBRANCE_NODE_LAUNCHER_DEBUG:-}" = 1 ]; then
+  _line "$_ver"
+  _said=$_out
+  _line "$_node"
+  printf 'Remembrance node launcher: %s %s%s\n' "$_out" "$_said" "$_note" >&2
+fi
+exec "$_node" "$@"

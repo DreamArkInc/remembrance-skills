@@ -3,14 +3,17 @@ import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import pluginModule, {
-  Remembrance,
-  pluginVersion,
-} from "../src/index.mjs";
+import {
+  OFFLINE_FETCH_IMPORT,
+  useIsolatedHookEnvironment,
+} from "../../codex-plugin/test/fixtures/isolated-hook-environment.mjs";
+import pluginModule, { Remembrance, pluginVersion } from "../src/index.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const read = (rel) => readFileSync(resolve(root, rel), "utf8");
 const readJson = (rel) => JSON.parse(read(rel));
+
+useIsolatedHookEnvironment();
 
 const expectedMcpTools = [
   "run_connection_doctor",
@@ -45,7 +48,9 @@ describe("opencode plugin registration", () => {
     ).toBeTruthy();
     const version = readJson("package.json").version;
     expect(server.command).toContain(`@remembrance-ai/mcp-server@${version}`);
-    expect(config.plugin).toContain(`@remembrance-ai/opencode-plugin@${version}`);
+    expect(config.plugin).toContain(
+      `@remembrance-ai/opencode-plugin@${version}`,
+    );
   });
 
   it("reports its own plugin host so client-health does not merge surfaces", () => {
@@ -78,9 +83,7 @@ describe("opencode plugin registration", () => {
     ]);
     expect(typeof hooks.event).toBe("function");
     expect(typeof hooks["chat.message"]).toBe("function");
-    expect(typeof hooks["experimental.chat.system.transform"]).toBe(
-      "function",
-    );
+    expect(typeof hooks["experimental.chat.system.transform"]).toBe("function");
   });
 
   it("documents automatic pre-model context injection in the README", () => {
@@ -128,10 +131,14 @@ function readFrames(buffer) {
 
 function listMcpTools(serverPath) {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(process.execPath, [serverPath], {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, REMEMBRANCE_API_KEY: "" },
-    });
+    const child = spawn(
+      process.execPath,
+      ["--import", OFFLINE_FETCH_IMPORT, serverPath],
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, REMEMBRANCE_API_KEY: "" },
+      },
+    );
     const chunks = [];
     let settled = false;
     const finish = (fn, value) => {

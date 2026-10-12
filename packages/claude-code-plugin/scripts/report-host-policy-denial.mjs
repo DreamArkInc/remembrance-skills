@@ -3,7 +3,7 @@
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
-  HOST_POLICY_ALERT_TEXT,
+  hostPolicyAlertTextForOperation,
   markHostPolicyAlertDelivered,
   recordHostPolicyDenial,
   sessionIdFor,
@@ -34,15 +34,17 @@ export function handleHostPolicyDenial(input, options = {}) {
     env,
   );
   if (!observation) return null;
+  if (observation.alerted_at) return null;
+  const alert = hostPolicyAlertTextForOperation(observation.operation_class);
   const markDelivered =
     options.markHostPolicyAlertDelivered ?? markHostPolicyAlertDelivered;
   markDelivered("claude_code", sessionId, observation.id, env);
   return {
-    systemMessage: HOST_POLICY_ALERT_TEXT,
+    systemMessage: alert,
     hookSpecificOutput: {
       hookEventName:
         input?.hook_event_name || input?.event_type || "PostToolUseFailure",
-      additionalContext: `${HOST_POLICY_ALERT_TEXT} Tell the user once. Do not retry the blocked content through another transport.`,
+      additionalContext: `The host-policy warning for this action was displayed locally; do not repeat it in the task answer. Do not retry the blocked content through another transport. Claim a retained draft only when a draft_id was returned.`,
     },
   };
 }

@@ -1,5 +1,14 @@
 # Remembrance payload examples
 
+These broad payloads are compatibility examples for raw REST, hosted MCP, and
+older clients. Current organization-capable local clients advertise
+`private-learning-capture-v1` and use `capture_learning` instead: `lesson` for
+a compact generalized lesson, `private_skill` for complete reusable
+instructions, or `preference` for durable working behavior. They then invoke
+only the exact private action returned by the local router. Query-result fit
+continues to use `submit_query_feedback`, and post-use usefulness continues to
+use categorical `submit_feedback` independently.
+
 ## Skill-use remembrance
 
 ```json
@@ -122,12 +131,14 @@ mistake, CI/deploy fails, a smoke/probe exposes a regression, or a
 release/versioning miss is fixed. Put the reusable rule in `lesson` and concrete
 failure classes in `outcome.failure_modes`; do not paste raw logs or secrets.
 
-## Feedback upgrade next step
+## Legacy feedback upgrade next step
 
 `POST /api/v1/agent/feedback` creates minimal `skill_feedback` intake. When
-feedback is negative or the lesson is substantive, the response may include a
-full remembrance payload that an agent can submit without hand-building the
-schema:
+called by a legacy/raw client, negative or substantive feedback may include a
+full remembrance payload that the client can submit without hand-building the
+schema. A capture-capable organization client omits `lesson` from feedback and
+calls `capture_learning` separately, so this upgrade response is intentionally
+absent:
 
 When the skill came from a durable query, include both correlation fields:
 
@@ -247,12 +258,15 @@ later batch review. External sources such as skills.sh are checked only as
 candidates; candidates still need safety checks and normal review before they
 become public skills/resources.
 
-For an organization-approved private workflow, submit this with MCP
-`propose_private_skill` or REST
-`POST /api/v1/agent/private-skill-ideas`. That route requires an organization
+For an organization-approved private workflow, a current local client calls
+`capture_learning.private_skill` with complete instructions and follows the
+returned `submit_private_skill_candidate` draft action. Raw, hosted, and older
+clients use MCP `propose_private_skill` or REST
+`POST /api/v1/agent/private-skill-ideas`. The endpoint requires an organization
 submission key and can never create a public candidate: privacy is structural,
 so an unresolved key fails the request closed rather than downgrading it to a
-public submission. Prefer it for anything repository-derived.
+public submission. Prefer this private boundary for anything
+repository-derived.
 
 Use `propose_skill_idea` or `POST /api/v1/agent/skill-ideas` only when a public
 candidate is an acceptable outcome, and after checking that the payload matches

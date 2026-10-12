@@ -4,10 +4,24 @@ import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   handlePrePrompt,
+  ledgerIdFromEvent,
   promptFromEvent,
   sessionIdFromEvent,
 } from "../src/index.mjs";
-import { remembranceConfigPath } from "../src/hook-core.mjs";
+import {
+  readUserPromptCount,
+  remembranceConfigPath,
+} from "../src/hook-core.mjs";
+import {
+  HOST_NOTIFICATION_SHAPES,
+  ORDINARY_HUMAN_PROMPTS,
+} from "../../codex-plugin/test/fixtures/host-notification-corpus.mjs";
+import {
+  noResultResponse,
+  summaryEchoProposal,
+  templateProposal,
+} from "../../codex-plugin/test/fixtures/skill-idea-proposals.mjs";
+import { KEYWORDS_ONLY } from "../../codex-plugin/test/fixtures/task-shape.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const tempRoot = mkdtempSync(join(tmpdir(), "remembrance-openclaw-pre-"));
@@ -123,12 +137,13 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
       "Remembrance auto-query context",
     );
     expect(result.appendSystemContext).toContain("vercel-build-debug");
-    // A real injection must record the per-session use marker (from ctx.runId).
-    expect(recorded).toEqual(["r1"]);
-    expect(eligible).toEqual(["r1"]);
+    // A real injection records the use in the OpenClaw session's ledger
+    // (ctx.sessionId), which outlives the run (ctx.runId).
+    expect(recorded).toEqual(["s1"]);
+    expect(eligible).toEqual(["s1"]);
     expect(highMatches).toEqual([
       {
-        id: "r1",
+        id: "s1",
         match: expect.objectContaining({
           query_id: "rq_openclaw",
           slug: "vercel-build-debug",
@@ -137,7 +152,7 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
     ]);
     expect(queryFeedback).toEqual([
       {
-        id: "r1",
+        id: "s1",
         tracking: { available: true, query_id: "rq_openclaw" },
       },
     ]);
@@ -161,7 +176,7 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
 
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(recorded).toEqual([]);
-    expect(eligible).toEqual(["r1"]);
+    expect(eligible).toEqual(["s1"]);
     expect(result.appendSystemContext).toContain("task-continuation reminder");
     expect(result.appendSystemContext).toContain("full thread");
     expect(result.appendSystemContext).toContain("query_skills");
@@ -185,17 +200,61 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
         runId: "r-correction",
       }),
       {
-        env: testEnv(),
+        env: testEnv(KEYWORDS_ONLY),
         fetchImpl,
         recordEligibility: (id) => eligible.push(id),
       },
     );
 
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(eligible).toEqual(["r-correction"]);
+    expect(eligible).toEqual(["s1"]);
     expect(result?.appendSystemContext).toContain(
       "Remembrance user-correction capture",
     );
+  });
+
+  it("keeps a withheld once-only update pending until it is really delivered", async () => {
+    const notice = `Remembrance update available: ${"restart guidance ".repeat(110)}`;
+    const delivered = new Set();
+    const common = {
+      env: testEnv(),
+      clientUpdatePromise: Promise.resolve({ notice }),
+      updateDeliveredSessions: delivered,
+      recordUse: () => {},
+      fetchImpl: vi.fn(async () =>
+        Response.json({
+          query_id: "rq_notice_pressure",
+          skills: Array.from({ length: 10 }, (_, index) => ({
+            slug: `pressure-skill-${index}`,
+            description: "detail ".repeat(160),
+            result_id: `qres_pressure_${index}`,
+            match_tier: index === 0 ? "high" : "possible",
+            match_reason: "Strong task coverage",
+            estimated_tokens: 500,
+            verified_uses: 5,
+            risk_level: "low",
+          })),
+          resources: [],
+          contribution_directive: {
+            message: "Close every independent feedback loop. ".repeat(30),
+          },
+        }),
+      ),
+    };
+    const pressured = await handlePrePrompt(
+      event("Fix this Vercel deployment failure."),
+      common,
+    );
+    expect(pressured?.appendSystemContext).not.toContain(notice.trim());
+    expect(delivered.size).toBe(0);
+
+    const later = await handlePrePrompt(
+      event("What is the capital of France?"),
+      common,
+    );
+    expect(later?.appendSystemContext).toBe(notice);
+    // Delivered once per OpenClaw session (sessionId), not per run (runId).
+    expect(delivered).toEqual(new Set(["s1"]));
   });
 
   it("really increments the on-disk use marker on a hit", async () => {
@@ -214,7 +273,8 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
       },
     );
     const { readRegistryUseCount } = await import("../src/hook-core.mjs");
-    expect(readRegistryUseCount("r-marker", env)).toBe(1);
+    expect(readRegistryUseCount("s1", env)).toBe(1);
+    expect(readRegistryUseCount("r-marker", env)).toBe(0);
   });
 
   it("no-ops (undefined) for one-off fact prompts and never queries or records", async () => {
@@ -232,6 +292,97 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(recorded).toEqual([]);
   });
+
+  // No OpenClaw runtime is available to read its own envelopes from; the
+  // shared detector refuses every host shape the corpus holds.
+  it.each(
+    HOST_NOTIFICATION_SHAPES.map((item) => [
+      `${item.host} ${item.label}`,
+      item,
+    ]),
+  )("never queries host-generated text: %s", async (_label, item) => {
+    const fetchImpl = vi.fn();
+    const recorded = [];
+    const result = await handlePrePrompt(event(item.prompt), {
+      env: testEnv(),
+      fetchImpl,
+      recordUse: (id) => recorded.push(id),
+    });
+    expect(result).toBeUndefined();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(recorded).toEqual([]);
+  });
+
+  // A paid skill use lasts until the user's next prompt (hook-core's
+  // repeatedResultUse); host text in its place is not one.
+  it("counts each user prompt, whatever it asks, and not host text", async () => {
+    const env = testEnv();
+    const fetchImpl = vi.fn(async () =>
+      Response.json({ skills: [], resources: [] }),
+    );
+    const sessionId = ledgerIdFromEvent(event(""));
+    await handlePrePrompt(event(HOST_NOTIFICATION_SHAPES[0].prompt), {
+      env,
+      fetchImpl,
+    });
+    expect(readUserPromptCount(sessionId, env)).toBe(0);
+    await handlePrePrompt(event("Use the remembrance skill named caveman."), {
+      env,
+      fetchImpl,
+    });
+    await handlePrePrompt(event(ORDINARY_HUMAN_PROMPTS[0]), { env, fetchImpl });
+    expect(readUserPromptCount(sessionId, env)).toBe(2);
+  });
+
+  it.each(ORDINARY_HUMAN_PROMPTS)(
+    "queries an ordinary prompt as written: %s",
+    async (prompt) => {
+      const summaries = [];
+      const fetchImpl = vi.fn(async (url, init) => {
+        if (String(url).endsWith("/api/v1/agent/query")) {
+          summaries.push(JSON.parse(String(init.body)).task.summary);
+        }
+        return Response.json({ skills: [], resources: [] });
+      });
+      await handlePrePrompt(event(prompt), { env: testEnv(), fetchImpl });
+      expect(summaries).toEqual([prompt]);
+    },
+  );
+
+  it.each([
+    [
+      "an older server's proposal made from the prompt",
+      summaryEchoProposal,
+      false,
+    ],
+    [
+      "the server's template proposal",
+      () => templateProposal("rq_proposal"),
+      true,
+    ],
+  ])(
+    "offers a skill idea only when it is not the prompt: %s",
+    async (_label, proposalFor, offered) => {
+      const prompt = ORDINARY_HUMAN_PROMPTS[0];
+      const fetchImpl = vi.fn(async (url, init) => {
+        if (!String(url).endsWith("/api/v1/agent/query")) {
+          return Response.json({});
+        }
+        const { summary } = JSON.parse(String(init.body)).task;
+        return Response.json(
+          noResultResponse("rq_proposal", proposalFor(summary)),
+        );
+      });
+      const result = await handlePrePrompt(event(prompt), {
+        env: testEnv(),
+        fetchImpl,
+      });
+      const context = result.appendSystemContext;
+      expect(context).toContain("No matching skill/resource.");
+      expect(context.includes("Proposed skill idea payload")).toBe(offered);
+      expect(context.includes(prompt)).toBe(false);
+    },
+  );
 
   it("sends the x-remembrance-api-key header from REMEMBRANCE_API_KEY when set", async () => {
     const headers = [];
@@ -364,6 +515,19 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
     expect(sessionIdFromEvent({})).toBe("unknown");
   });
 
+  it("ledgerIdFromEvent prefers sessionId, then sessionKey, then runId, and normalizes missing to unknown", () => {
+    expect(
+      ledgerIdFromEvent({
+        context: { runId: "R", sessionId: "S", sessionKey: "K" },
+      }),
+    ).toBe("S");
+    expect(
+      ledgerIdFromEvent({ context: { runId: "R", sessionKey: "K" } }),
+    ).toBe("K");
+    expect(ledgerIdFromEvent({ context: { runId: "R" } })).toBe("R");
+    expect(ledgerIdFromEvent({})).toBe("unknown");
+  });
+
   it("ships the expected manifests and bundled artifacts", () => {
     const manifest = JSON.parse(
       readFileSync(resolve(root, "openclaw.plugin.json"), "utf8"),
@@ -390,8 +554,11 @@ describe("OpenClaw pre-prompt hook (before_prompt_build)", () => {
     // fragment ships an illustrative absolute path (to be replaced by the user)
     // rather than a non-expanding var, and carries a _comment marker saying so.
     expect(mcp._comment).toMatch(/absolute path/i);
+    // A bare `node` resolves only on the gateway's PATH, which may lack a
+    // version-manager Node.js; the fragment asks for `command -v node`.
+    expect(mcp._comment).toContain("`command -v node`");
     expect(mcp.mcp.servers.remembrance).toMatchObject({
-      command: "node",
+      command: "/abs/path/to/node",
       args: ["/abs/path/to/openclaw-plugin/servers/remembrance-mcp.mjs"],
     });
     expect(mcp.mcp.servers.remembrance.args[0]).not.toContain(

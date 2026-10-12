@@ -18,6 +18,16 @@ import {
   redactPrompt,
   shouldQueryPrompt,
 } from "../scripts/query-on-prompt.mjs";
+import { KEYWORDS_ONLY } from "../../codex-plugin/test/fixtures/task-shape.mjs";
+import {
+  HOST_NOTIFICATION_SHAPES,
+  ORDINARY_HUMAN_PROMPTS,
+} from "../../codex-plugin/test/fixtures/host-notification-corpus.mjs";
+import {
+  noResultResponse,
+  summaryEchoProposal,
+  templateProposal,
+} from "../../codex-plugin/test/fixtures/skill-idea-proposals.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const repoRoot = resolve(root, "../..");
@@ -27,11 +37,13 @@ const expectedMcpTools = [
   "get_skill",
   "get_resource",
   "bootstrap_agent_identity",
+  "capture_learning",
+  "inspect_private_learning_outbox",
   "queue_private_skill_import",
   "submit_feedback",
-  "submit_remembrance",
-  "propose_skill_idea",
-  "propose_private_skill",
+  "submit_query_feedback",
+  "submit_private_lesson_candidate",
+  "submit_private_skill_candidate",
   "submit_suggestion",
   "submit_resource",
   "submit_resource_review",
@@ -48,6 +60,9 @@ function testEnv(env = {}) {
   cacheCounter += 1;
   const testRoot = resolve(tempRoot, `state-${cacheCounter}`);
   return {
+    XDG_CONFIG_HOME: resolve(testRoot, "config"),
+    XDG_STATE_HOME: resolve(testRoot, "state"),
+    REMEMBRANCE_PLUGIN_ALERT_DIR: resolve(testRoot, "alerts"),
     REMEMBRANCE_HOOK_CACHE_PATH: resolve(
       tempRoot,
       `cache-${cacheCounter}.json`,
@@ -100,6 +115,16 @@ function readFrames(buffer) {
 }
 
 describe("Remembrance Claude Code prompt hook", () => {
+  it("collects hook sections and invokes the final allocator exactly once", () => {
+    const source = readFileSync(
+      resolve(root, "scripts/query-on-prompt.mjs"),
+      "utf8",
+    );
+    expect(source.match(/composeBoundedHookContext\(/gu)).toHaveLength(1);
+    expect(source).not.toContain("withAdditionalContext(");
+    expect(source).not.toContain("withCredentialContext(");
+  });
+
   it("queries Remembrance for external service and workflow prompts", async () => {
     const calls = [];
     const recordHealth = vi.fn();
@@ -199,6 +224,122 @@ describe("Remembrance Claude Code prompt hook", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("ignores host notification envelopes before correction capture or network work", async () => {
+    const fetchImpl = vi.fn();
+    const recordEligibility = vi.fn();
+    const output = await handleHookInput(
+      {
+        prompt:
+          '<task_notification task_id="task_123" path="/private/project">You missed the requirement.</task_notification>',
+        session_id: "claude-notification",
+      },
+      { env: testEnv(), fetchImpl, recordEligibility },
+    );
+
+    expect(output).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(recordEligibility).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    HOST_NOTIFICATION_SHAPES.filter((item) => item.host === "claude_code").map(
+      (item) => [item.label, item],
+    ),
+  )("keeps Claude Code's %s out of the prompt hook", async (_label, item) => {
+    const fetchImpl = vi.fn();
+    const recordEligibility = vi.fn();
+    const output = await handleHookInput(
+      {
+        hook_event_name: "UserPromptSubmit",
+        prompt: item.prompt,
+        session_id: "claude-host-text",
+      },
+      {
+        env: { ...testEnv(), REMEMBRANCE_API_URL: "https://remembrance.dev" },
+        fetchImpl,
+        recordEligibility,
+      },
+    );
+
+    expect(output).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(recordEligibility).not.toHaveBeenCalled();
+  });
+
+  it.each(ORDINARY_HUMAN_PROMPTS)(
+    "queries an ordinary Claude Code prompt as written: %s",
+    async (prompt) => {
+      const summaries = [];
+      const fetchImpl = vi.fn(async (url, init) => {
+        if (String(url).endsWith("/api/v1/agent/query")) {
+          summaries.push(JSON.parse(String(init.body)).task.summary);
+        }
+        return Response.json({ skills: [], resources: [] });
+      });
+      await handleHookInput(
+        {
+          hook_event_name: "UserPromptSubmit",
+          prompt,
+          session_id: "claude-human",
+        },
+        {
+          env: {
+            ...testEnv(),
+            REMEMBRANCE_API_URL: "https://remembrance.dev",
+          },
+          fetchImpl,
+        },
+      );
+
+      expect(summaries).toEqual([prompt]);
+    },
+  );
+
+  it.each([
+    [
+      "an older server's proposal made from the prompt",
+      summaryEchoProposal,
+      false,
+    ],
+    [
+      "the server's template proposal",
+      () => templateProposal("rq_proposal"),
+      true,
+    ],
+  ])(
+    "offers a skill idea only when it is not the prompt: %s",
+    async (_label, proposalFor, offered) => {
+      const prompt = ORDINARY_HUMAN_PROMPTS[0];
+      const fetchImpl = vi.fn(async (url, init) => {
+        if (!String(url).endsWith("/api/v1/agent/query")) {
+          return Response.json({});
+        }
+        const { summary } = JSON.parse(String(init.body)).task;
+        return Response.json(
+          noResultResponse("rq_proposal", proposalFor(summary)),
+        );
+      });
+      const output = await handleHookInput(
+        {
+          hook_event_name: "UserPromptSubmit",
+          prompt,
+          session_id: "claude-proposal",
+        },
+        {
+          env: {
+            ...testEnv(),
+            REMEMBRANCE_API_URL: "https://remembrance.dev",
+          },
+          fetchImpl,
+        },
+      );
+      const context = output.hookSpecificOutput.additionalContext;
+      expect(context).toContain("No matching skill/resource.");
+      expect(context.includes("Proposed skill idea payload")).toBe(offered);
+      expect(context.includes(prompt)).toBe(false);
+    },
+  );
+
   it("captures a user correction in the same turn without requiring a query", async () => {
     const fetchImpl = vi.fn();
     const recordEligibility = vi.fn();
@@ -207,7 +348,7 @@ describe("Remembrance Claude Code prompt hook", () => {
         prompt: "That approach is overkill; keep the existing abstraction.",
         session_id: "claude-correction",
       },
-      { env: testEnv(), fetchImpl, recordEligibility },
+      { env: testEnv(KEYWORDS_ONLY), fetchImpl, recordEligibility },
     );
 
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -632,6 +773,10 @@ describe("Remembrance Claude Code prompt hook", () => {
     expect(hooks.hooks.Stop[0].hooks[0].command).toContain(
       "contribute-on-stop.mjs",
     );
+    // A subagent is asked for its own pending actions by the same script,
+    // which also moves the debts of one an API error ended.
+    expect(hooks.hooks.SubagentStop).toEqual(hooks.hooks.Stop);
+    expect(hooks.hooks.StopFailure).toEqual(hooks.hooks.Stop);
     const localMemoryHook = hooks.hooks.PostToolUse.find((entry) =>
       entry.hooks[0].command.includes("route-local-memory.mjs"),
     );
@@ -649,18 +794,40 @@ describe("Remembrance Claude Code prompt hook", () => {
     expect(remembranceToolHook?.matcher).toContain(
       "retry_private_lesson_candidate",
     );
+    expect(
+      new RegExp(remembranceToolHook?.matcher).test(
+        "mcp__plugin_remembrance_remembrance__decline_pending_action",
+      ),
+    ).toBe(true);
     for (const event of ["PostToolUseFailure", "PermissionDenied"]) {
       expect(hooks.hooks[event][0].hooks[0].command).toContain(
         "report-host-policy-denial.mjs",
       );
       expect(hooks.hooks[event][0].matcher).toContain("propose_private_skill");
+      expect(hooks.hooks[event][0].matcher).toContain("decline_pending_action");
       expect(hooks.hooks[event][0].matcher).toContain(
         "submit_private_lesson_candidate",
       );
     }
+    // Every hook and the bundled MCP server start through the launcher, which
+    // finds Node.js when the host's PATH does not include it. The MCP entry
+    // names it directly so native Windows resolves node-launcher.cmd.
+    const hookCommands = Object.values(hooks.hooks).flatMap((entries) =>
+      entries.flatMap((entry) => entry.hooks.map((hook) => hook.command)),
+    );
+    expect(hookCommands).toHaveLength(9);
+    for (const command of hookCommands) {
+      const script = command.match(
+        /^sh "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/node-launcher" "\$\{CLAUDE_PLUGIN_ROOT\}\/(scripts\/[a-z-]+\.mjs)"$/,
+      )?.[1];
+      expect(script, command).toBeTruthy();
+      expect(existsSync(resolve(root, script)), script).toBe(true);
+    }
+    expect(existsSync(resolve(root, "scripts/node-launcher"))).toBe(true);
+    expect(existsSync(resolve(root, "scripts/node-launcher.cmd"))).toBe(true);
     expect(plugin.mcpServers).toBe("./.mcp.json");
     expect(mcp.mcpServers.remembrance).toMatchObject({
-      command: "node",
+      command: "${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher",
       args: ["${CLAUDE_PLUGIN_ROOT}/servers/remembrance-mcp.mjs"],
     });
     expect(mcp.mcpServers.remembrance.env).toMatchObject({
@@ -727,9 +894,39 @@ describe("Remembrance Claude Code prompt hook", () => {
   });
 
   it("exposes expected tools through the bundled plugin MCP server", async () => {
-    const child = spawn(process.execPath, [
-      resolve(root, "servers/remembrance-mcp.mjs"),
-    ]);
+    const profileRoot = resolve(tempRoot, "bundled-mcp-profile");
+    const child = spawn(
+      process.execPath,
+      [resolve(root, "servers/remembrance-mcp.mjs")],
+      {
+        env: {
+          HOME: resolve(profileRoot, "home"),
+          XDG_CONFIG_HOME: resolve(profileRoot, "config"),
+          XDG_STATE_HOME: resolve(profileRoot, "state"),
+          XDG_CACHE_HOME: resolve(profileRoot, "cache"),
+          XDG_DATA_HOME: resolve(profileRoot, "data"),
+          PATH: process.env.PATH ?? "",
+          NODE_ENV: "test",
+          REMEMBRANCE_API_URL: "https://remembrance.dev",
+          REMEMBRANCE_API_KEY: "rk_test_synthetic_bundled_mcp",
+          REMEMBRANCE_API_KEY_ORIGIN: "https://remembrance.dev",
+          REMEMBRANCE_PLUGIN_HOST: "claude_code",
+          REMEMBRANCE_HOST_SURFACE: "cli",
+          REMEMBRANCE_ENABLE_LEGACY_BROAD_WRITES: "0",
+          REMEMBRANCE_PRIVATE_LESSON_KEYCHAIN: "0",
+          REMEMBRANCE_AGENT_KEY_PATH: resolve(
+            profileRoot,
+            "config",
+            "agent-key.json",
+          ),
+          REMEMBRANCE_PRINCIPAL_SESSION_DIR: resolve(
+            profileRoot,
+            "state",
+            "principal-sessions",
+          ),
+        },
+      },
+    );
     let stdout = Buffer.alloc(0);
     let stderr = "";
     child.stdout.on("data", (chunk) => {
@@ -756,17 +953,31 @@ describe("Remembrance Claude Code prompt hook", () => {
           );
           const names = list.result.tools.map((tool) => tool.name);
           expect(names).toEqual(expect.arrayContaining(expectedMcpTools));
-          const privateProposal = list.result.tools.find(
-            (tool) => tool.name === "propose_private_skill",
+          // Claude Code keeps only this tool's schema out of tool search.
+          expect(
+            list.result.tools
+              .filter((tool) => tool._meta?.["anthropic/alwaysLoad"] === true)
+              .map((tool) => tool.name),
+          ).toEqual(["query_skills"]);
+          const privateSkillAction = list.result.tools.find(
+            (tool) => tool.name === "submit_private_skill_candidate",
           );
           const localHandoff = list.result.tools.find(
             (tool) => tool.name === "queue_private_skill_import",
           );
-          expect(privateProposal.annotations).toMatchObject({
+          expect(privateSkillAction.annotations).toMatchObject({
             readOnlyHint: false,
             openWorldHint: false,
             destructiveHint: false,
+            idempotentHint: true,
           });
+          expect(names).not.toEqual(
+            expect.arrayContaining([
+              "submit_remembrance",
+              "propose_skill_idea",
+              "propose_private_skill",
+            ]),
+          );
           expect(localHandoff.annotations).toMatchObject({
             readOnlyHint: false,
             openWorldHint: false,
@@ -799,8 +1010,12 @@ describe("Remembrance Claude Code prompt hook", () => {
       likely_match: false,
     });
     expect(
-      shouldQueryPrompt("Review the latest notes from Claude and Codex"),
+      shouldQueryPrompt("Review the latest notes from Claude and Codex", KEYWORDS_ONLY),
     ).toEqual({ likely_match: false, reason: "no_trigger_match" });
+    // The task-shape default (owner decision 34C) searches it as a task.
+    expect(
+      shouldQueryPrompt("Review the latest notes from Claude and Codex", {}),
+    ).toEqual({ likely_match: true, reason: "task_shape" });
     expect(
       shouldQueryPrompt("Integrate the Anthropic API with its SDK"),
     ).toEqual({ likely_match: true, reason: "external_service" });

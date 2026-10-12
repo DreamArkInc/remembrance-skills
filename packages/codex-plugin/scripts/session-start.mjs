@@ -9,6 +9,7 @@ import {
   recordPluginLifecycleHealth,
   resolveApiCredential,
   sessionIdFor,
+  sessionSkillsDirective,
   warmPrincipalSession,
 } from "./hook-core.mjs";
 
@@ -42,6 +43,15 @@ export async function handleSessionStart(input, options = {}) {
     `Remembrance plugin health: Codex SessionStart hook is active for plugin ${version}; ` +
     `the bundled local MCP server uses the same ${auth}. ` +
     "Run run_connection_doctor if setup seems incomplete. It verifies the active connection and gives one exact next step. If that tool is absent, report partial activation, update or reinstall the plugin, and fully restart Codex.";
+  // Runs beside the requests below; on compaction it reads only its cache.
+  const sessionSkills = sessionSkillsDirective(
+    {
+      source: input?.source,
+      nativeSessionId: input?.session_id,
+      fetchImpl: options.fetchImpl ?? fetch,
+    },
+    env,
+  ).catch(() => null);
   const [hookTrust, , clientUpdate] = isCompaction
     ? [null, null, null]
     : await Promise.all([
@@ -89,9 +99,13 @@ export async function handleSessionStart(input, options = {}) {
   }
   const trustNotice =
     hookTrust?.status === "review_required"
-      ? `Remembrance hook trust review is required for ${hookTrust.review_events.join(", ")}. Automatic skill-use or completion tracking is paused for those hooks. Run run_connection_doctor and follow its exact Codex review steps before claiming full activation.`
+      ? `Remembrance hook trust review is required for ${hookTrust.review_events.join(", ")}. Querying, opening skills, bounded feedback, and private submissions remain available; only automatic skill-use or completion tracking for those hooks is paused. Run run_connection_doctor and follow its exact Codex review steps before claiming full activation.`
       : null;
-  const notices = [trustNotice, clientUpdate?.notice].filter(Boolean);
+  const notices = [
+    trustNotice,
+    clientUpdate?.notice,
+    await sessionSkills,
+  ].filter(Boolean);
   return {
     hookSpecificOutput: {
       hookEventName: "SessionStart",

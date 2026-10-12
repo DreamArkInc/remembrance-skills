@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -13,7 +13,9 @@ import {
 import { Remembrance } from "../src/index.mjs";
 import {
   HOST_POLICY_ALERT_TEXT,
+  pendingCompletionRecoveryInstruction,
   readCompletionObligations,
+  readDirectSelectionSurfaces,
   readPluginLifecycleHealth,
   readValueEpisodeSurfaces,
   readRegistryUseCount,
@@ -21,6 +23,7 @@ import {
   recordTaskEligibility,
   recordValueEpisodeSurface,
 } from "../scripts/hook-core.mjs";
+import { useIsolatedHookEnvironment } from "../../codex-plugin/test/fixtures/isolated-hook-environment.mjs";
 
 const tempRoot = mkdtempSync(join(tmpdir(), "remembrance-opencode-idle-"));
 const saved = {};
@@ -34,10 +37,16 @@ const MANAGED = [
   "REMEMBRANCE_PLUGIN_HEALTH_DIR",
   "REMEMBRANCE_CLIENT_UPDATE_CHECK",
   "REMEMBRANCE_PRIVATE_LESSON_KEYCHAIN",
+  "REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY",
   "XDG_CONFIG_HOME",
   "XDG_STATE_HOME",
+  "HOME",
+  "TMPDIR",
 ];
 let counter = 0;
+
+// Registered first, so this file's own per-test settings below still apply.
+useIsolatedHookEnvironment();
 
 beforeEach(() => {
   counter += 1;
@@ -60,8 +69,13 @@ beforeEach(() => {
   delete process.env.REMEMBRANCE_AUTO_CONTRIBUTE;
   process.env.REMEMBRANCE_CLIENT_UPDATE_CHECK = "0";
   process.env.REMEMBRANCE_PRIVATE_LESSON_KEYCHAIN = "0";
+  process.env.REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY = "1";
   process.env.XDG_CONFIG_HOME = join(tempRoot, `config-${counter}`);
   process.env.XDG_STATE_HOME = join(tempRoot, `state-${counter}`);
+  // Keep home-relative and temp-directory fallbacks out of the real profile.
+  process.env.HOME = join(tempRoot, `home-${counter}`);
+  process.env.TMPDIR = join(tempRoot, `tmp-${counter}`);
+  mkdirSync(process.env.TMPDIR, { recursive: true });
 });
 
 afterEach(() => {
@@ -104,6 +118,27 @@ function toastClient() {
   };
 }
 
+function writeAuthorizationEnvelope(draftId) {
+  const directory = join(
+    process.env.XDG_STATE_HOME,
+    "remembrance",
+    "private-lessons",
+  );
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  writeFileSync(
+    join(directory, `${draftId}.lesson.json`),
+    JSON.stringify({
+      version: "private-lesson-outbox-envelope-v1",
+      draft_id: draftId,
+      state: "awaiting_authorization",
+      next_retry_at: null,
+      hold_telemetry_status: "not_required",
+      updated_at: "2020-01-01T00:00:00.000Z",
+    }),
+    { mode: 0o600 },
+  );
+}
+
 async function emitSessionIdle(hooks, sessionID) {
   await hooks.event({
     event: {
@@ -114,6 +149,16 @@ async function emitSessionIdle(hooks, sessionID) {
 }
 
 describe("opencode completion nudge (session.idle)", () => {
+  it("does not emit a user-visible idle message in the default recovery mode", async () => {
+    process.env.REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY = "0";
+    const sessionId = "s-silent-default";
+    recordRegistryUse(sessionId, process.env);
+    const { client, messages } = loggingClient();
+    const hooks = await Remembrance({ client });
+    await emitSessionIdle(hooks, sessionId);
+    expect(messages).toEqual([]);
+  });
+
   it("nudges once per engagement after Remembrance was used", async () => {
     const sessionId = "s-used";
     recordRegistryUse(sessionId, process.env);
@@ -135,7 +180,7 @@ describe("opencode completion nudge (session.idle)", () => {
     expect(messages).toHaveLength(1);
   });
 
-  it("routes organization lessons through local prepare and the exact visible submit action", async () => {
+  it("routes organization learning through the exact private router", async () => {
     process.env.REMEMBRANCE_API_KEY = "rk_opencode_private_lesson";
     const sessionId = "s-private-lesson";
     recordRegistryUse(sessionId, process.env);
@@ -146,11 +191,11 @@ describe("opencode completion nudge (session.idle)", () => {
 
     expect(messages).toHaveLength(1);
     const message = String(messages[0].message);
-    expect(message).toContain("prepare_private_lesson_candidate");
-    expect(message).toContain("submit_private_lesson_candidate");
-    expect(message).toContain(
-      "do not substitute submit_remembrance, REST, or another transport",
-    );
+    expect(message).toContain("capture_learning once per new item");
+    expect(message).toContain("exact next_action or bounded agent_recovery");
+    expect(message).toContain("submit_query_feedback");
+    expect(message).toContain("submit_feedback");
+    expect(message).not.toContain("propose_private_skill");
   });
 
   it("reports a pending value episode before completing the engagement", async () => {
@@ -304,6 +349,88 @@ describe("opencode completion nudge (session.idle)", () => {
         message: expect.stringMatching(/feedback|remembrance/i),
       }),
     ]);
+  });
+
+  it("does not consume visible recovery when both notification sinks fail", async () => {
+    process.env.REMEMBRANCE_API_KEY = "rk_opencode_delivery_failure";
+    const draftId = "pld_delivery_failure";
+    writeAuthorizationEnvelope(draftId);
+    recordRegistryUse("s-delivery-failure", process.env);
+    let toastAttempts = 0;
+    let logAttempts = 0;
+    const hooks = await Remembrance({
+      client: {
+        tui: {
+          showToast: async () => {
+            toastAttempts += 1;
+            throw new Error("no TUI receiver");
+          },
+        },
+        app: {
+          log: async () => {
+            logAttempts += 1;
+            throw new Error("no log receiver");
+          },
+        },
+      },
+    });
+
+    await expect(
+      emitSessionIdle(hooks, "s-delivery-failure"),
+    ).resolves.toBeUndefined();
+
+    expect({ toastAttempts, logAttempts }).toEqual({
+      toastAttempts: 1,
+      logAttempts: 1,
+    });
+    const pending = pendingCompletionRecoveryInstruction(
+      "s-delivery-failure",
+      process.env,
+    );
+    expect(pending).toContain(draftId);
+    rmSync(
+      join(
+        process.env.XDG_STATE_HOME,
+        "remembrance",
+        "private-lessons",
+        `${draftId}.lesson.json`,
+      ),
+    );
+    await emitSessionIdle(hooks, "s-delivery-failure");
+    expect({ toastAttempts, logAttempts }).toEqual({
+      toastAttempts: 2,
+      logAttempts: 2,
+    });
+  });
+
+  it("acknowledges visible recovery after the logging fallback succeeds", async () => {
+    process.env.REMEMBRANCE_API_KEY = "rk_opencode_delivery_fallback";
+    const draftId = "pld_delivery_fallback";
+    writeAuthorizationEnvelope(draftId);
+    recordRegistryUse("s-delivery-fallback", process.env);
+    const messages = [];
+    const hooks = await Remembrance({
+      client: {
+        tui: {
+          showToast: async () => {
+            throw new Error("no TUI receiver");
+          },
+        },
+        app: {
+          log: async ({ body }) => {
+            messages.push(body);
+          },
+        },
+      },
+    });
+
+    await emitSessionIdle(hooks, "s-delivery-fallback");
+
+    expect(messages).toHaveLength(1);
+    expect(String(messages[0].message)).toContain(draftId);
+    expect(
+      pendingCompletionRecoveryInstruction("s-delivery-fallback", process.env),
+    ).toBeNull();
   });
 
   it("fails open when the host log throws", async () => {
@@ -525,6 +652,37 @@ describe("opencode tool observer (tool.execute.after)", () => {
     expect(messages).toHaveLength(0);
   });
 
+  it("closes a declined pending action in this session's ledger", async () => {
+    const { client } = loggingClient();
+    const hooks = await Remembrance({ client });
+    const sessionId = "s-decline";
+    await hooks["tool.execute.after"](
+      { tool: "query_skills", sessionID: sessionId },
+      {
+        body: {
+          query_id: "rq_opencode_decline",
+          skills: [],
+          resources: [],
+          query_feedback: { available: true, query_id: "rq_opencode_decline" },
+        },
+      },
+    );
+    const actionId = /\n {2}action_id ([a-f0-9]{16})\n/u.exec(
+      pendingCompletionRecoveryInstruction(sessionId, process.env),
+    )?.[1];
+    expect(actionId).toMatch(/^[a-f0-9]{16}$/u);
+    const args = { action_id: actionId, reason: "not_reusable" };
+    await hooks["tool.execute.after"](
+      {
+        tool: "remembrance_decline_pending_action",
+        sessionID: sessionId,
+        args,
+      },
+      { status: "declined", ...args, submitted: false, local_only: true },
+    );
+    expect(readCompletionObligations(sessionId, process.env)).toEqual([]);
+  });
+
   it("keeps the contribution reminder open when feedback requests a remembrance", async () => {
     const { client, messages } = loggingClient();
     const hooks = await Remembrance({ client });
@@ -598,5 +756,103 @@ describe("opencode tool observer (tool.execute.after)", () => {
         { body: { skill: { slug: "release-review" } } },
       ),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("session-scoped explicit selections through the OpenCode hooks", () => {
+  // OpenCode hands tool.execute.after the MCP text content as output.output.
+  // The Remembrance server puts scope next to selection_mode, skill, and
+  // query_id in the envelope's body.
+  function invokeOutput({ slug, queryId, resultId, scope }) {
+    const body = {
+      scope,
+      selection_mode: "explicit",
+      invocation_id: queryId,
+      query_id: queryId,
+      result_id: resultId,
+      skill: {
+        slug,
+        version: 1,
+        version_id: `skv_${slug}`,
+        skill_md: "# Instructions",
+        task_outcome_eligible: true,
+      },
+      feedback: { available: true },
+      task_outcome: { available: true, eligible_result_ids: [resultId] },
+    };
+    return {
+      title: "remembrance_invoke_skill",
+      output: JSON.stringify({ ok: true, status: 200, body }),
+      metadata: {},
+    };
+  }
+  const SESSION_SKILL = invokeOutput({
+    slug: "pairing-mode",
+    queryId: "rinv_session",
+    resultId: "qres_session",
+    scope: "session",
+  });
+  const TASK_SKILL = invokeOutput({
+    slug: "release-checklist",
+    queryId: "rinv_task",
+    resultId: "qres_task",
+    scope: "task",
+  });
+
+  const invoke = (hooks, sessionID, callID, output) =>
+    hooks["tool.execute.after"](
+      { tool: "remembrance_invoke_skill", sessionID, callID, args: {} },
+      output,
+    );
+
+  function recordFetches() {
+    const requests = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      requests.push({
+        url: String(url),
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return Response.json({ recorded: true }, { status: 201 });
+    });
+    return requests;
+  }
+
+  it("stays silent at idle when the only engagement is a session-scoped skill", async () => {
+    const sessionId = "s-session-scope-only";
+    const requests = recordFetches();
+    const { client, messages } = loggingClient();
+    const hooks = await Remembrance({ client });
+    await invoke(hooks, sessionId, "call_session", SESSION_SKILL);
+    expect(readRegistryUseCount(sessionId, process.env)).toBe(0);
+    expect(readDirectSelectionSurfaces(sessionId, process.env)).toMatchObject([
+      { slug: "pairing-mode", scope: "session", use_count: 0 },
+    ]);
+
+    await emitSessionIdle(hooks, sessionId);
+    expect(messages).toEqual([]);
+    expect(requests).toEqual([]);
+    expect(readCompletionObligations(sessionId, process.env)).toEqual([]);
+  });
+
+  it("names only the task-scoped selection at idle when both kinds were used", async () => {
+    const sessionId = "s-session-and-task";
+    const requests = recordFetches();
+    const { client, messages } = loggingClient();
+    const hooks = await Remembrance({ client });
+    await invoke(hooks, sessionId, "call_session", SESSION_SKILL);
+    await invoke(hooks, sessionId, "call_task", TASK_SKILL);
+    expect(readRegistryUseCount(sessionId, process.env)).toBe(1);
+
+    await emitSessionIdle(hooks, sessionId);
+    expect(messages).toHaveLength(1);
+    const message = String(messages[0].message);
+    expect(message).toContain("rinv_task");
+    expect(message).not.toContain("rinv_session");
+    expect(message).not.toContain("pairing-mode");
+    expect(
+      requests.map((request) => [request.url, request.body?.query_id]),
+    ).toEqual([
+      ["https://remembrance.dev/api/v1/agent/task-outcomes", "rinv_task"],
+    ]);
   });
 });

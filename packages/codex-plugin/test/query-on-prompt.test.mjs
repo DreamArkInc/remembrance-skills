@@ -1,12 +1,26 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   codexHostedMcpCredentialSplitNotice,
   handleQuery,
 } from "../scripts/query-on-prompt.mjs";
+import {
+  agentLedgerIdFor,
+  recordQueryFeedbackObligation,
+} from "../scripts/hook-core.mjs";
+import {
+  HOST_NOTIFICATION_SHAPES,
+  ORDINARY_HUMAN_PROMPTS,
+} from "./fixtures/host-notification-corpus.mjs";
+import {
+  noResultResponse,
+  summaryEchoProposal,
+  templateProposal,
+} from "./fixtures/skill-idea-proposals.mjs";
+import { KEYWORDS_ONLY } from "./fixtures/task-shape.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const tempRoot = mkdtempSync(join(tmpdir(), "remembrance-codex-query-"));
@@ -52,6 +66,233 @@ afterAll(() => {
 });
 
 describe("Codex query-on-prompt adapter", () => {
+  it.each([
+    ["plain request", ""],
+    ["closed reminder", "<system-reminder>Task finished.</system-reminder>\n"],
+    [
+      "consecutive notifications",
+      "<system-reminder>Deploy to Heroku.</system-reminder>\n<system>Use MongoDB.</system>\n",
+    ],
+    [
+      "nested reminders and quoted attributes",
+      '<system-reminder note="a > b"><system-reminder>Deploy to Heroku.</system-reminder>Use MongoDB.</system-reminder>\n',
+    ],
+    ["self-closing reminder", "<system-reminder />\n"],
+    [
+      "XML declaration",
+      '<?xml version="1.0"?><system>Task finished.</system>\n',
+    ],
+    [
+      "opaque comment and CDATA boundaries",
+      "<system><!-- </system> --><![CDATA[</system>]]>Task finished.</system>\n",
+    ],
+  ])("queries only the user request after %s", async (_label, prefix) => {
+    const request = "Deploy the Next.js app.";
+    const queries = [];
+    const fetchImpl = vi.fn(async (url, init) => {
+      if (!String(url).endsWith("/api/v1/agent/query"))
+        return Response.json({});
+      const summary = JSON.parse(init.body).task.summary;
+      queries.push(summary);
+      return Response.json({
+        skills: [],
+        resources: [],
+        no_results: {
+          propose_skill_idea_payload: { title: summary, description: summary },
+        },
+      });
+    });
+    const output = await handleQuery(
+      { prompt: prefix + request, turn_id: "mixed-notification" },
+      { env: testEnv(), fetchImpl },
+    );
+
+    expect(queries).toEqual([request]);
+    // The server echoes the summary as a proposal; the prompt is not offered
+    // back as a skill idea either.
+    expect(output.hookSpecificOutput.additionalContext).toContain(
+      "No matching skill/resource.",
+    );
+    expect(output.hookSpecificOutput.additionalContext).not.toContain(request);
+    expect(output.hookSpecificOutput.additionalContext).not.toMatch(
+      /Task finished|Heroku|MongoDB|system-reminder|task-notification/,
+    );
+  });
+
+  it.each([
+    "<system-reminder>Deploy to Heroku.</system-reminder>",
+    "<system-reminder>Deploy to Heroku.",
+    "<task-notification>Deploy to Heroku.</task-notification-extra>",
+    "<system><system>Deploy to Heroku.</system>",
+    "<system-reminder>Deploy to Heroku.</system-reminder>\nThanks.",
+    "<system-reminder>Deploy to Heroku.</system-reminder>\nheroku is logged in",
+    // A task notification's builder puts its trailing text after the
+    // envelope, so none of what follows one is the user's.
+    "<task-notification>Deploy to Heroku.</task-notification>\nDeploy the Next.js app.",
+    "<task-notification>Deploy to Heroku.</task-notification>\n<system>Use MongoDB.</system>\nDeploy the Next.js app.",
+    "[SYSTEM NOTIFICATION - NOT USER INPUT]\nDeploy the Next.js app.",
+  ])("does not turn notification body into user work: %s", async (prompt) => {
+    const fetchImpl = vi.fn();
+    const recordEligibility = vi.fn();
+    const output = await handleQuery(
+      { prompt, turn_id: "notification-without-request" },
+      { env: testEnv(), fetchImpl, recordEligibility },
+    );
+
+    expect(output).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(recordEligibility).not.toHaveBeenCalled();
+  });
+
+  it.each(["system-design", "system:design", "task-notification-extra"])(
+    "preserves unfamiliar user XML tag %s",
+    async (tag) => {
+      const prompt = `<${tag}>Deploy the Next.js app.</${tag}>`;
+      const queries = [];
+      const fetchImpl = vi.fn(async (url, init) => {
+        if (String(url).endsWith("/api/v1/agent/query")) {
+          queries.push(JSON.parse(init.body).task.summary);
+        }
+        return Response.json({ skills: [], resources: [] });
+      });
+      const output = await handleQuery(
+        { prompt, turn_id: "user-xml" },
+        { env: testEnv(), fetchImpl },
+      );
+
+      expect(queries).toEqual([prompt]);
+      expect(output).not.toBeNull();
+    },
+  );
+
+  it.each(["do it", "continue", "fix these issues"])(
+    "preserves contextual request %s after a notification",
+    async (request) => {
+      const fetchImpl = vi.fn(async () => Response.json({ recorded: true }));
+      const recordEligibility = vi.fn();
+      const output = await handleQuery(
+        {
+          prompt: `<system-reminder>Deploy to Heroku.</system-reminder>\n${request}`,
+          turn_id: "mixed-continuation",
+        },
+        { env: testEnv(), fetchImpl, recordEligibility },
+      );
+
+      expect(output.hookSpecificOutput.additionalContext).toContain(
+        "task-continuation reminder",
+      );
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(String(fetchImpl.mock.calls[0][0])).toMatch(/\/directive-events$/);
+      expect(recordEligibility).toHaveBeenCalledOnce();
+      expect(output.hookSpecificOutput.additionalContext).not.toContain(
+        "Heroku",
+      );
+    },
+  );
+
+  it.each(["task_notification", "task-notification"])(
+    "ignores %s envelopes before capture or query work",
+    async (tag) => {
+      const fetchImpl = vi.fn();
+      const recordEligibility = vi.fn();
+      const output = await handleQuery(
+        {
+          prompt: `<${tag} task_id="task_123" path="/private/project">You missed the requirement.</${tag}>`,
+          turn_id: "codex-notification",
+        },
+        { env: testEnv(), fetchImpl, recordEligibility },
+      );
+
+      expect(output).toBeNull();
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(recordEligibility).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(
+    HOST_NOTIFICATION_SHAPES.filter((item) => item.host === "codex").map(
+      (item) => [item.label, item],
+    ),
+  )("keeps Codex's %s out of the prompt hook", async (_label, item) => {
+    const fetchImpl = vi.fn();
+    const recordEligibility = vi.fn();
+    const recordQueryFeedbackObligation = vi.fn();
+    const output = await handleQuery(
+      {
+        prompt: item.prompt,
+        session_id: "codex-host-text",
+        turn_id: "codex-host-text-turn",
+      },
+      {
+        env: testEnv(),
+        fetchImpl,
+        recordEligibility,
+        recordQueryFeedbackObligation,
+      },
+    );
+
+    expect(output).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(recordEligibility).not.toHaveBeenCalled();
+    expect(recordQueryFeedbackObligation).not.toHaveBeenCalled();
+  });
+
+  it.each(ORDINARY_HUMAN_PROMPTS)(
+    "queries an ordinary Codex prompt as written: %s",
+    async (prompt) => {
+      const summaries = [];
+      const fetchImpl = vi.fn(async (url, init) => {
+        if (String(url).endsWith("/api/v1/agent/query")) {
+          summaries.push(JSON.parse(init.body).task.summary);
+        }
+        return Response.json({ skills: [], resources: [] });
+      });
+      const recordEligibility = vi.fn();
+      await handleQuery(
+        { prompt, session_id: "codex-human", turn_id: "codex-human-turn" },
+        { env: testEnv(), fetchImpl, recordEligibility },
+      );
+
+      expect(summaries).toEqual([prompt]);
+      expect(recordEligibility).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    [
+      "an older server's proposal made from the prompt",
+      summaryEchoProposal,
+      false,
+    ],
+    [
+      "the server's template proposal",
+      () => templateProposal("rq_proposal"),
+      true,
+    ],
+  ])(
+    "offers a skill idea only when it is not the prompt: %s",
+    async (_label, proposalFor, offered) => {
+      const prompt = ORDINARY_HUMAN_PROMPTS[0];
+      const fetchImpl = vi.fn(async (url, init) => {
+        if (!String(url).endsWith("/api/v1/agent/query")) {
+          return Response.json({});
+        }
+        const { summary } = JSON.parse(String(init.body)).task;
+        return Response.json(
+          noResultResponse("rq_proposal", proposalFor(summary)),
+        );
+      });
+      const output = await handleQuery(
+        { prompt, session_id: "codex-proposal", turn_id: "codex-proposal" },
+        { env: testEnv(), fetchImpl },
+      );
+      const context = output.hookSpecificOutput.additionalContext;
+      expect(context).toContain("No matching skill/resource.");
+      expect(context.includes("Proposed skill idea payload")).toBe(offered);
+      expect(context.includes(prompt)).toBe(false);
+    },
+  );
+
   it("injects additionalContext for a relevant prompt and records a use marker", async () => {
     const calls = [];
     const recorded = [];
@@ -159,6 +400,76 @@ describe("Codex query-on-prompt adapter", () => {
     ]);
   });
 
+  it("keeps a subagent prompt's usage and debts under its agent id", async () => {
+    // Codex sends a subagent's prompt hook the session and active turn ids
+    // plus the subagent's agent_id.
+    const input = {
+      prompt: "Fix this Vercel Next.js build error in GitHub Actions.",
+      session_id: "codex-session-parent",
+      turn_id: "codex-turn-parent",
+      agent_id: "codex-agent-7f3a",
+    };
+    const env = testEnv();
+    const agentLedger = agentLedgerIdFor(input);
+    recordQueryFeedbackObligation(
+      input.turn_id,
+      { available: true, query_id: "rq_parent_pending" },
+      env,
+    );
+    recordQueryFeedbackObligation(
+      agentLedger,
+      { available: true, query_id: "rq_agent_pending" },
+      env,
+    );
+    const ids = {
+      use: [],
+      eligible: [],
+      feedback: [],
+      directive: [],
+      episode: [],
+    };
+    const output = await handleQuery(input, {
+      env,
+      recordHealth: vi.fn(),
+      recordUse: (id) => ids.use.push(id),
+      recordEligibility: (id) => ids.eligible.push(id),
+      recordHighMatch: () => {},
+      recordQueryFeedbackObligation: (id) => ids.feedback.push(id),
+      recordDirective: (id) => ids.directive.push(id),
+      recordValueEpisode: (id) => ids.episode.push(id),
+      fetchImpl: vi.fn(async () =>
+        Response.json({
+          query_id: "rq_agent_query",
+          skills: [
+            {
+              slug: "vercel-build-debug",
+              description: "Debug Vercel build failures.",
+              trust_tier: "tofu_verified",
+              result_id: "qres_agent_query",
+              match_tier: "high",
+              match_reason: "Strong task and constraint coverage",
+            },
+          ],
+          resources: [],
+          query_feedback: { available: true, query_id: "rq_agent_query" },
+        }),
+      ),
+    });
+
+    // Usage and debts go to the agent; directives and task outcomes stay
+    // with the turn.
+    expect(ids).toEqual({
+      use: [agentLedger],
+      eligible: [agentLedger],
+      feedback: [agentLedger],
+      directive: [input.turn_id],
+      episode: [input.turn_id],
+    });
+    const context = output.hookSpecificOutput.additionalContext;
+    expect(context).toContain("rq_agent_pending");
+    expect(context).not.toContain("rq_parent_pending");
+  });
+
   it("turns a context-dependent follow-up into a full-thread query instruction", async () => {
     const fetchImpl = vi.fn(async (url) => {
       expect(String(url)).toContain("/api/v1/agent/directive-events");
@@ -216,7 +527,7 @@ describe("Codex query-on-prompt adapter", () => {
         turn_id: "t-correction",
       },
       {
-        env: testEnv(),
+        env: testEnv(KEYWORDS_ONLY),
         fetchImpl,
         recordEligibility: (id) => eligible.push(id),
       },
@@ -342,8 +653,11 @@ describe("Codex query-on-prompt adapter", () => {
         recordUse: () => {},
       },
     );
+    expect(overridden.hookSpecificOutput.additionalContext).toContain(
+      "Note: Remembrance prompt hooks are querying https://dev.remembrance.example",
+    );
     expect(overridden.hookSpecificOutput.additionalContext).toMatch(
-      /^Note: Remembrance prompt hooks are querying https:\/\/dev\.remembrance\.example/,
+      /^Remembrance auto-query context:/,
     );
     expect(overridden.hookSpecificOutput.additionalContext).toContain(
       "hosted MCP tools are configured for https://remembrance.dev",
@@ -392,16 +706,69 @@ describe("Codex query-on-prompt adapter", () => {
     );
 
     const context = output.hookSpecificOutput.additionalContext;
-    expect(context).toMatch(/^Remembrance connection health warning:/);
+    expect(context).toContain("Remembrance connection health warning:");
+    expect(context).toMatch(/^Remembrance auto-query context:/);
     expect(context).toContain(
       "requires REMEMBRANCE_API_KEY, but that variable is missing",
     );
     expect(context).toContain("native hosted MCP tools are unavailable");
-    expect(context).toContain("fully quit and reopen Codex");
+    expect(context).toMatch(/fully quit and reopen Codex/iu);
     expect(context).toContain("not a Remembrance rejection");
     expect(context).not.toContain("Remembrance credential source:");
     expect(context).not.toContain("rmb_shared_query_key");
     expect(context).not.toContain(tempRoot);
+  });
+
+  it("preserves actionable connection remediation across the saturated pressure curve", async () => {
+    const skills = Array.from({ length: 10 }, (_, index) => ({
+      slug: `pressure-skill-${index}`,
+      result_id: `qres_${String(index).padStart(3, "0")}`,
+      match_tier: index === 0 ? "high" : "possible",
+      description: `Detailed candidate ${index} ${"context ".repeat(90)}`,
+      match_reason: "Strong workflow fit",
+      estimated_tokens: 600,
+      verified_uses: 10,
+      risk_level: "low",
+    }));
+    for (const preferenceCount of [0, 8, 32]) {
+      const output = await handleQuery(
+        {
+          prompt: "Set up Vercel deployment and debug the production release.",
+          turn_id: `t-credential-pressure-${preferenceCount}`,
+        },
+        {
+          env: sharedConfigCodexEnv(),
+          fetchImpl: vi.fn(async () =>
+            Response.json({
+              query_id: `rq_pressure_${preferenceCount}`,
+              skills,
+              resources: [],
+              effective_preferences: Array.from(
+                { length: preferenceCount },
+                (_, index) => ({
+                  key: `workflow.preference_${index}`,
+                  value: `choice_${index}`,
+                  behavior: `Apply this behavior ${"detail ".repeat(30)}`,
+                  source: index < 8 ? "mandatory_org" : "explicit_member",
+                }),
+              ),
+              contribution_directive: {
+                message: `Close the loop ${"carefully ".repeat(100)}`,
+              },
+            }),
+          ),
+          recordUse: () => {},
+        },
+      );
+      const context = output.hookSpecificOutput.additionalContext;
+      expect(context.length).toBeLessThanOrEqual(4_000);
+      expect(context).toContain("Remembrance connection health warning:");
+      expect(context).toContain("requires REMEMBRANCE_API_KEY");
+      expect(context).toContain("native hosted MCP tools are unavailable");
+      expect(context).toContain("launchctl setenv REMEMBRANCE_API_KEY");
+      expect(context).toMatch(/fully quit and reopen Codex/iu);
+      expect(context).toContain("not a Remembrance rejection");
+    }
   });
 
   it("uses shared config without a hosted credential warning for bundled local MCP", () => {
@@ -616,7 +983,8 @@ describe("Codex query-on-prompt adapter", () => {
     const fetchImpl = vi.fn();
     const output = await handleQuery(
       {
-        prompt: "My default should always use the least disruptive valid rollout.",
+        prompt:
+          "My default should always use the least disruptive valid rollout.",
         turn_id: "preference-only",
       },
       { env: testEnv({ REMEMBRANCE_AUTO_QUERY: "0" }), fetchImpl },
@@ -706,6 +1074,55 @@ describe("Codex query-on-prompt adapter", () => {
     );
   });
 
+  it("keeps adapter notices inside the shared 4000-character context budget", async () => {
+    const env = sharedConfigCodexEnv();
+    const skills = Array.from({ length: 10 }, (_, index) => ({
+      slug: `bounded-release-runbook-${index}`,
+      description: `Release workflow ${index} ${"detail ".repeat(80)}`,
+      match_tier: index === 0 ? "high" : "possible",
+      match_reason: index === 0 ? "Exact deployment workflow" : undefined,
+      result_id: `qres_bounded_${index}`,
+      estimated_tokens: 4200,
+      verified_uses: 12,
+      risk_level: "medium",
+      why_matched: {
+        matched_terms: ["release", "deployment", "verification"],
+        matched_capabilities: ["artifact verification", "rollback"],
+        domain_match: true,
+        satisfied_constraints: ["preserve production safety"],
+        missed_constraints: [],
+        lexical_signal: "strong",
+        semantic_signal: "strong",
+      },
+    }));
+    const output = await handleQuery(
+      {
+        prompt: "Fix and verify this Vercel release deployment.",
+        turn_id: "t-context-budget",
+      },
+      {
+        env,
+        fetchImpl: vi.fn(async () =>
+          Response.json({
+            query_id: "rq_adapter_budget",
+            skills,
+            resources: [],
+            contribution_directive: {
+              message: `Close every evidence loop. ${"guidance ".repeat(120)}`,
+            },
+          }),
+        ),
+      },
+    );
+
+    const context = output.hookSpecificOutput.additionalContext;
+    expect(context.length).toBeLessThanOrEqual(4000);
+    expect(context).toContain("Query receipt: rq_adapter_budget");
+    expect(context).toContain("HIGH MATCH");
+    expect(context).toContain("bounded-release-runbook-0");
+    expect(context).toContain("Delegating this task?");
+  });
+
   it("ships the expected manifests and bundled artifacts", () => {
     const plugin = JSON.parse(
       readFileSync(resolve(root, ".codex-plugin/plugin.json"), "utf8"),
@@ -742,6 +1159,8 @@ describe("Codex query-on-prompt adapter", () => {
     expect(hooks.hooks.Stop[0].hooks[0].command).toContain(
       "contribute-on-stop.mjs",
     );
+    // A subagent is asked for its own pending actions by the same script.
+    expect(hooks.hooks.SubagentStop).toEqual(hooks.hooks.Stop);
     expect(hooks.hooks.PostToolUse[0].matcher).toContain("get_skill");
     expect(hooks.hooks.PostToolUse[0].matcher).toContain("get_resource");
     expect(hooks.hooks.PostToolUse[0].matcher).toContain("query_skills");
@@ -770,11 +1189,25 @@ describe("Codex query-on-prompt adapter", () => {
       "${PLUGIN_ROOT}",
     );
     expect(JSON.stringify(hooks)).not.toContain("CODEX_PLUGIN_ROOT");
+    // Every hook and the bundled MCP server start through the POSIX launcher,
+    // which finds Node.js when the host's PATH does not include it.
+    const hookCommands = Object.values(hooks.hooks).flatMap((groups) =>
+      groups.flatMap((group) => group.hooks.map((hook) => hook.command)),
+    );
+    expect(hookCommands).toHaveLength(5);
+    for (const command of hookCommands) {
+      const script = command.match(
+        /^sh "\$\{PLUGIN_ROOT\}\/scripts\/node-launcher" "\$\{PLUGIN_ROOT\}\/(scripts\/[a-z-]+\.mjs)"$/,
+      )?.[1];
+      expect(script, command).toBeTruthy();
+      expect(existsSync(resolve(root, script)), script).toBe(true);
+    }
+    expect(existsSync(resolve(root, "scripts/node-launcher"))).toBe(true);
     // Hooks and bundled MCP both run from the installed plugin package. The MCP
     // process resolves the same shared config as the native lifecycle hooks.
     expect(mcp.mcpServers.remembrance).toMatchObject({
-      command: "node",
-      args: ["./servers/remembrance-mcp.mjs"],
+      command: "sh",
+      args: ["./scripts/node-launcher", "./servers/remembrance-mcp.mjs"],
       cwd: ".",
       env: { REMEMBRANCE_PLUGIN_HOST: "codex" },
     });

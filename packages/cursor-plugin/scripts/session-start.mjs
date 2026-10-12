@@ -14,9 +14,10 @@ import {
   disabled,
   recordPluginLifecycleHealth,
   resolveApiCredential,
+  sessionSkillsDirective,
   warmPrincipalSession,
 } from "./hook-core.mjs";
-import { cursorSessionId } from "./record-mcp-use.mjs";
+import { cursorNativeSessionId, cursorSessionId } from "./record-mcp-use.mjs";
 
 export const CURSOR_REMEMBRANCE_CONTEXT = [
   "Remembrance is installed in Cursor; this SessionStart hook is active.",
@@ -71,6 +72,18 @@ export async function handleSessionStart(input, options = {}) {
   const hostVersion = String(
     input?.cursor_version ?? input?.app_version ?? input?.version ?? "",
   ).trim();
+  // Cursor sends no start source and runs sessionStart only when a
+  // conversation is created, so this fetches once; it never re-runs after a
+  // compaction, so no cache is kept.
+  const sessionSkills = sessionSkillsDirective(
+    {
+      source: input?.source,
+      nativeSessionId: cursorNativeSessionId(input),
+      fetchImpl: options.fetchImpl ?? fetch,
+      cache: false,
+    },
+    env,
+  ).catch(() => null);
   const [, clientUpdate] = isCompaction
     ? [null, null]
     : await Promise.all([
@@ -94,9 +107,13 @@ export async function handleSessionStart(input, options = {}) {
         ).catch(() => null),
       ]);
   return {
-    additional_context: clientUpdate?.notice
-      ? `${CURSOR_REMEMBRANCE_CONTEXT}\n\n${clientUpdate.notice}`
-      : CURSOR_REMEMBRANCE_CONTEXT,
+    additional_context: [
+      CURSOR_REMEMBRANCE_CONTEXT,
+      clientUpdate?.notice,
+      await sessionSkills,
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
   };
 }
 

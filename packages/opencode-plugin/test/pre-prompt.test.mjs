@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -16,8 +16,15 @@ import {
   readDirectiveSurface,
   readHighMatchSurface,
   readRegistryUseCount,
+  readUserPromptCount,
   readValueEpisodeSurfaces,
+  pendingCompletionRecoveryInstruction,
 } from "../scripts/hook-core.mjs";
+import {
+  noResultResponse,
+  summaryEchoProposal,
+  templateProposal,
+} from "../../codex-plugin/test/fixtures/skill-idea-proposals.mjs";
 
 // The opencode adapter reads process.env directly (that is how the host passes
 // configuration to an in-process plugin), so these tests swap real env keys and
@@ -32,7 +39,10 @@ const MANAGED = [
   "REMEMBRANCE_AGENT_KEY_PATH",
   "REMEMBRANCE_PRINCIPAL_SESSION_DIR",
   "REMEMBRANCE_AUTO_QUERY",
+  "REMEMBRANCE_AUTO_QUERY_TASK_SHAPE",
   "REMEMBRANCE_AUTO_CONTRIBUTE",
+  "XDG_STATE_HOME",
+  "XDG_CONFIG_HOME",
 ];
 let counter = 0;
 
@@ -40,6 +50,8 @@ beforeEach(() => {
   counter += 1;
   for (const key of MANAGED) saved[key] = process.env[key];
   process.env.REMEMBRANCE_API_URL = "https://remembrance.dev";
+  process.env.XDG_STATE_HOME = join(tempRoot, `state-${counter}`);
+  process.env.XDG_CONFIG_HOME = join(tempRoot, `config-${counter}`);
   process.env.REMEMBRANCE_USAGE_DIR = join(tempRoot, `usage-${counter}`);
   process.env.REMEMBRANCE_HOOK_CACHE_PATH = join(
     tempRoot,
@@ -54,6 +66,7 @@ beforeEach(() => {
     `principal-sessions-${counter}`,
   );
   delete process.env.REMEMBRANCE_AUTO_QUERY;
+  delete process.env.REMEMBRANCE_AUTO_QUERY_TASK_SHAPE;
   delete process.env.REMEMBRANCE_AUTO_CONTRIBUTE;
 });
 
@@ -159,6 +172,68 @@ async function emitUserMessage(
 }
 
 describe("opencode prompt context injection", () => {
+  // A paid skill use lasts until the user's next prompt (hook-core's
+  // repeatedResultUse): each user message counts once, whatever it asks.
+  it("counts each user message once, whatever it asks", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({ skills: [], resources: [] }),
+    );
+    const { client } = loggingClient();
+    const hooks = await Remembrance({ client });
+    const sessionID = "s-user-prompts";
+    await emitUserMessage(
+      hooks,
+      "Use the remembrance skill named caveman.",
+      sessionID,
+      "m-named",
+    );
+    await emitUserMessage(hooks, TRIGGER_PROMPT, sessionID, "m-task");
+    await emitUserMessage(hooks, TRIGGER_PROMPT, sessionID, "m-task");
+    expect(readUserPromptCount(sessionID)).toBe(2);
+  });
+
+  it("does not consume authorization recovery before queued guidance reaches the model", async () => {
+    process.env.REMEMBRANCE_API_KEY = "rk_synthetic_opencode";
+    process.env.REMEMBRANCE_AUTO_CONTRIBUTE = "1";
+    const draftId = "pld_queued_delivery";
+    const directory = join(
+      process.env.XDG_STATE_HOME,
+      "remembrance",
+      "private-lessons",
+    );
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(directory, `${draftId}.lesson.json`),
+      JSON.stringify({
+        version: "private-lesson-outbox-envelope-v1",
+        draft_id: draftId,
+        state: "awaiting_authorization",
+        updated_at: "2020-01-01T00:00:00Z",
+        hold_telemetry_status: "not_required",
+      }),
+      { mode: 0o600 },
+    );
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("offline"));
+    const { client } = loggingClient();
+    const hooks = await Remembrance({ client });
+    const sessionID = "s-authorization";
+    await hooks["chat.message"](
+      { sessionID, messageID: "m-authorization" },
+      {
+        message: { id: "m-authorization", role: "user", sessionID },
+        parts: [{ type: "text", text: "Thanks", sessionID }],
+      },
+    );
+    expect(pendingCompletionRecoveryInstruction(sessionID)).toContain(draftId);
+    const output = { system: [] };
+    await hooks["experimental.chat.system.transform"]({ sessionID }, output);
+    expect(output.system.join("\n")).toContain(draftId);
+    expect(pendingCompletionRecoveryInstruction(sessionID)).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("queries Remembrance and injects matched guidance before model dispatch", async () => {
     const calls = [];
     stubQuery(calls);
@@ -196,6 +271,9 @@ describe("opencode prompt context injection", () => {
   });
 
   it("captures a user correction in the same turn without querying", async () => {
+    // Keyword triggers only: the task-shape default (owner decision 34C)
+    // would search this prompt too.
+    process.env.REMEMBRANCE_AUTO_QUERY_TASK_SHAPE = "0";
     const fetchImpl = vi.spyOn(globalThis, "fetch");
     const { client } = loggingClient();
     const hooks = await Remembrance({ client });
@@ -402,6 +480,111 @@ describe("opencode prompt context injection", () => {
     ]);
   });
 
+  // OpenCode 2.0.11 (opencode-cli) marks text it adds to a user message
+  // synthetic (an assistant-audience prompt, a file it read in) and text for
+  // the user only ignored, and keeps neither as the user's own text.
+  it("queries only the user's own text, not parts the host added", async () => {
+    const calls = [];
+    stubQuery(calls);
+    const { client } = loggingClient();
+    const hooks = await Remembrance({ client });
+    const messageID = "msg-synthetic-parts";
+    const sessionID = "s-synthetic-parts";
+    await hooks["chat.message"](
+      { messageID, sessionID },
+      {
+        message: { id: messageID, role: "user", sessionID },
+        parts: [
+          {
+            type: "text",
+            synthetic: true,
+            text: 'Called the Read tool with the following input: {"filePath":"/work/migrate.md"}',
+          },
+          {
+            type: "text",
+            synthetic: true,
+            text: "Plan the MongoDB migration and the Heroku deploy.",
+          },
+          { type: "text", ignored: true, text: "Shown to the user only." },
+          { type: "text", messageID, sessionID, text: TRIGGER_PROMPT },
+        ],
+      },
+    );
+
+    expect(calls.map((call) => call.body.task.summary)).toEqual([
+      TRIGGER_PROMPT,
+    ]);
+  });
+
+  it("does not query a user message made only of host-added parts", async () => {
+    const calls = [];
+    stubQuery(calls);
+    const { client } = loggingClient();
+    const hooks = await Remembrance({ client });
+    await hooks["chat.message"](
+      { messageID: "msg-only-synthetic", sessionID: "s-only-synthetic" },
+      {
+        message: {
+          id: "msg-only-synthetic",
+          role: "user",
+          sessionID: "s-only-synthetic",
+        },
+        parts: [
+          {
+            type: "text",
+            synthetic: true,
+            text: "Plan the MongoDB migration and the Heroku deploy.",
+          },
+        ],
+      },
+    );
+    await hooks.event({
+      event: {
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg-only-synthetic-part",
+            sessionID: "s-only-synthetic",
+            role: "user",
+          },
+        },
+      },
+    });
+    await hooks.event({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          part: {
+            type: "text",
+            synthetic: true,
+            messageID: "msg-only-synthetic-part",
+            sessionID: "s-only-synthetic",
+            text: "Plan the MongoDB migration and the Heroku deploy.",
+          },
+        },
+      },
+    });
+    expect(calls).toHaveLength(0);
+
+    // The user's own part of that message still queries.
+    await hooks.event({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          part: {
+            type: "text",
+            messageID: "msg-only-synthetic-part",
+            sessionID: "s-only-synthetic",
+            text: TRIGGER_PROMPT,
+          },
+        },
+      },
+    });
+    expect(calls.map((call) => call.body.task.summary)).toEqual([
+      TRIGGER_PROMPT,
+    ]);
+  });
+
   it("keeps legacy out-of-order events as a deduplicated fallback", async () => {
     const calls = [];
     stubQuery(calls);
@@ -441,6 +624,33 @@ describe("opencode prompt context injection", () => {
     );
     expect(output.system.join("\n")).toContain("vercel-build-debug");
   });
+
+  it.each([
+    [
+      "an older server's proposal made from the prompt",
+      summaryEchoProposal(TRIGGER_PROMPT),
+      false,
+    ],
+    ["the server's template proposal", templateProposal("rq_proposal"), true],
+  ])(
+    "offers a skill idea only when it is not the prompt: %s",
+    async (_label, proposal, offered) => {
+      const calls = [];
+      stubQuery(calls, [], noResultResponse("rq_proposal", proposal));
+      const { client } = loggingClient();
+      const hooks = await Remembrance({ client });
+      const system = (
+        await emitUserMessage(hooks, TRIGGER_PROMPT, "s-proposal")
+      ).join("\n");
+
+      expect(calls.map((call) => call.body.task.summary)).toEqual([
+        TRIGGER_PROMPT,
+      ]);
+      expect(system).toContain("No matching skill/resource.");
+      expect(system.includes("Proposed skill idea payload")).toBe(offered);
+      expect(system.includes(TRIGGER_PROMPT)).toBe(false);
+    },
+  );
 
   it("does not count an empty query as a selected registry result", async () => {
     const calls = [];
@@ -543,13 +753,14 @@ describe("opencode prompt context injection", () => {
     const hooks = await Remembrance({ client });
     const sessionID = "s-double-transform";
 
-    await emitUserMessage(hooks, TRIGGER_PROMPT, sessionID);
+    const first = await emitUserMessage(hooks, TRIGGER_PROMPT, sessionID);
     const second = { system: [] };
     await hooks["experimental.chat.system.transform"]({ sessionID }, second);
 
-    // The pending entry is consumed on first delivery, so a repeated transform
-    // injects nothing more and cannot inflate the counter.
-    expect(second.system).toHaveLength(0);
+    // A repeated transform is another model request of the same turn: it
+    // carries the same guidance, and the delivery is still recorded once.
+    expect(first.join("\n")).toContain("vercel-build-debug");
+    expect(second.system).toEqual(first);
     expect(readRegistryUseCount(sessionID, process.env)).toBe(1);
     expect(readHighMatchSurface(sessionID, process.env)).toMatchObject({
       query_id: "rq_double_transform",
@@ -557,6 +768,60 @@ describe("opencode prompt context injection", () => {
     });
     expect(readValueEpisodeSurfaces(sessionID, process.env)).toHaveLength(1);
     expect(readCompletionObligations(sessionID, process.env)).toHaveLength(1);
+  });
+
+  // OpenCode builds the system prompt for every model request: on a session's
+  // first turn it asks its title model first, then the agent, and the agent
+  // again after each tool result (OpenCode 1.18.10, the native host check).
+  it("puts a turn's guidance into each of its model requests and records it once", async () => {
+    const calls = [];
+    stubCorrelatedQuery(calls, "turn_requests");
+    const { client } = loggingClient();
+    const hooks = await Remembrance({ client });
+    const sessionID = "s-turn-requests";
+    const agentRequest = async () => {
+      const output = { system: ["agent prompt"] };
+      await hooks["experimental.chat.system.transform"]({ sessionID }, output);
+      return output.system;
+    };
+
+    const title = await emitUserMessage(hooks, TRIGGER_PROMPT, sessionID, "m1");
+    expect(title.join("\n")).toContain("vercel-build-debug");
+    expect(await agentRequest()).toEqual(["agent prompt", ...title]);
+    expect(await agentRequest()).toEqual(["agent prompt", ...title]);
+    expect(calls).toHaveLength(1);
+    expect(readRegistryUseCount(sessionID, process.env)).toBe(1);
+    expect(readValueEpisodeSurfaces(sessionID, process.env)).toHaveLength(1);
+    expect(readCompletionObligations(sessionID, process.env)).toHaveLength(1);
+
+    // The next user message starts a turn without the last one's guidance
+    // (its own context reminds the agent of the open query feedback).
+    const next = await emitUserMessage(
+      hooks,
+      "What time is it?",
+      sessionID,
+      "m2",
+    );
+    expect(next.filter((text) => title.includes(text))).toEqual([]);
+    expect(next.join("\n")).not.toContain("vercel-build-debug");
+    expect(next.join("\n")).toContain("submit_query_feedback");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("drops a turn's guidance when the session goes idle", async () => {
+    stubCorrelatedQuery([], "idle_turn");
+    const { client } = loggingClient();
+    const hooks = await Remembrance({ client });
+    const sessionID = "s-idle-turn";
+    const delivered = await emitUserMessage(hooks, TRIGGER_PROMPT, sessionID);
+    expect(delivered.join("\n")).toContain("vercel-build-debug");
+
+    await hooks.event({
+      event: { type: "session.idle", properties: { sessionID } },
+    });
+    const output = { system: [] };
+    await hooks["experimental.chat.system.transform"]({ sessionID }, output);
+    expect(output.system).toEqual([]);
   });
 
   it("records a continuation directive only after its guidance is delivered", async () => {
@@ -614,7 +879,7 @@ describe("opencode prompt context injection", () => {
 
     const repeated = { system: [] };
     await hooks["experimental.chat.system.transform"]({ sessionID }, repeated);
-    expect(repeated.system).toEqual([]);
+    expect(repeated.system).toEqual(output.system);
     expect(calls).toHaveLength(1);
 
     await hooks["tool.execute.after"](

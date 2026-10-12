@@ -5,8 +5,9 @@ Codex CLI. It installs the Remembrancer skill, a bundled local Remembrance MCP
 server, and lifecycle hooks that keep the registry loop symmetric: a
 `UserPromptSubmit` hook that queries Remembrance before Codex reasons about tasks
 likely to involve reusable skills/resources, and a `Stop` hook that — when a
-session used Remembrance or a reusable task missed its query — prompts Codex
-once to close the loop instead of silently moving on.
+session used Remembrance or a reusable task missed its query — records the
+pending loop silently so the next user prompt can carry the exact bounded
+recovery actions without obscuring the current final answer.
 
 Both halves compound: each query reuses work another agent already finished, and
 each contribution back sharpens the registry the next Codex session will query.
@@ -34,11 +35,94 @@ Codex requires it.
 Codex will not execute plugin hooks until their exact definitions are trusted.
 In the Codex window opened by the installer, if Codex shows a **Hooks need
 review** screen, choose **Review hooks** and trust only the Remembrance
-`SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` hooks. If no
-review screen appears, continue: Codex may be reusing an existing valid trust
-decision. Changed hook definitions show the same review screen again; this is
-a Codex security boundary and the installer does not bypass it. Fully restart
-Codex before verification.
+`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, and `SubagentStop`
+hooks (press `t` on each). If no review screen appears, continue: Codex may be
+reusing an existing valid trust decision. Changed hook definitions show the
+same review screen again; this is a Codex security boundary and the installer
+does not bypass it. Fully restart Codex before verification.
+
+**After an update.** Codex trusts a hook by the hash of its definition, so an
+update that changes a hook holds it until you approve it again. Updating from
+0.1.x to 0.2.0 changes all five: Codex holds `SessionStart`,
+`UserPromptSubmit`, `PostToolUse`, and `Stop` as modified and the new
+`SubagentStop` as new, and runs no Remembrance hook until you approve them in
+the review above; the MCP tools keep working. While Codex holds any of them,
+the bundled MCP server says so where the agent sees it:
+
+- Its initialize instructions carry one line after the core rules:
+  "Remembrance hooks await Codex approval: run codex, choose Review hooks,
+  press t." When an update notice applies too, the notice comes first, so
+  its headline stays within the 2,048 characters that truncating clients
+  show, and the line follows it. Codex 0.145 passes the whole instructions
+  to the model.
+- `get_connection_status` and `run_connection_doctor` report
+  `hooks_pending_approval` with the held hooks and the exact review step and
+  command, and the doctor's plugin lifecycle check warns with the same step.
+
+The server reads this without running Codex: the hash Codex recorded when each
+Remembrance hook was approved (`[hooks.state]` in the `config.toml` of the Codex
+home the plugin is installed in) against the hash of the installed
+`hooks/hooks.json`. It reports hook event names only, never paths, hashes or
+other plugins' entries. Off Codex, and once Codex trusts every hook, it adds
+nothing. When it cannot read that state (a `config.toml` or `hooks.json` form
+it was not checked against, a file over its bound, or a held reading of a
+`SessionStart` that already ran in this version), it says "Could not read Codex
+hook trust state" instead of guessing either way.
+`scripts/native-host-checks/codex.mjs` checks the reading against the pinned
+Codex 0.145.0.
+
+Under an administrator policy with `allow_managed_hooks_only = true`, Codex runs
+managed hooks only and skips the plugin's, trusted or not, so there is nothing
+to approve. What the hooks did comes first: a fully trusted install adds nothing
+whatever the policy says, and once this version's `SessionStart` ran, Codex
+evidently runs the plugin's hooks and a held one keeps its review step. The
+server reads the policy only when a hook is held and no `SessionStart` of this
+version ran, and then says so instead of giving a review step: the initialize
+line reads "Remembrance plugin hooks are off: Codex policy runs only managed
+hooks. Tools work.", `hooks_pending_approval` reports `managed_hooks_disabled`,
+and the doctor's lifecycle check and the plugin health issues say that an
+administrator must allow plugin hooks or deploy equivalent managed hooks.
+
+It reads the setting without running Codex and reports nothing from these
+sources: `/etc/codex/requirements.toml` (not read on Windows); on macOS the
+`requirements_toml_base64` preference of `com.openai.codex`, first found in the
+managed preferences for the user, then for the device, then the user's and the
+machine's own preferences (the ByHost and global domains are not read); and the
+workspace bundle Codex caches as `cloud-config-bundle-cache.json` in its home,
+ignored once expired as Codex ignores it, with fields it does not read ignored
+so that a field a later Codex adds changes nothing. A source that is present but
+unreadable, oversized or in a form it does not know around the setting, or
+sources that disagree, give the "Could not read Codex hook trust state" line; a
+policy that leaves the setting unset or false changes nothing. The reader checks
+the forms around the setting, not the whole document: a requirements document
+that is not valid TOML elsewhere is read for the setting it names. Codex refuses
+such a document when it loads its configuration ("failed to parse requirements
+layer"), so the case left is a file edited while a session runs. The cache's
+form was read from the pinned Codex binary, not from a delivered bundle, and
+none of these sources was staged for Codex itself. The cache's signature and the
+account it was fetched for are not checked (that would take Codex's credentials
+file), so right after a switch of ChatGPT account the reading can follow the
+previous account's cached policy.
+
+Codex 0.145 has no install or update message a plugin controls: the plugin
+and marketplace manifests have no such field, and the installation interstitial
+of Codex's plugin directory is set by the directory. Its terminal UI shows its
+own **Hooks need review** screen at startup; whether the ChatGPT desktop app
+shows one was not verified.
+
+**Node.js runtime.** The hooks and the bundled MCP server need Node.js 18.17.0
+or newer that Codex can find. A host started from the Dock, Finder or an IDE may
+not have your shell's PATH, so a Node.js installed by nvm, fnm, volta, asdf,
+nodenv or mise can be missing from it; the symptom is `spawn node ENOENT` or "No
+such file or directory". The plugin starts its hooks and bundled MCP server
+through `scripts/node-launcher`, which uses `REMEMBRANCE_NODE` when it is set,
+else `node` on PATH, else Node.js 18.17.0+ from nvm, volta, fnm, n, asdf,
+nodenv, mise, Homebrew, `/usr/local` or `/usr/bin`. The ChatGPT desktop app may
+not have your shell's PATH either: install Node.js 18.17.0+ in one of those
+locations, or start Codex from a terminal where `node` works, then fully quit
+and reopen Codex. On native Windows, the hooks and the MCP entry start the
+launcher with `sh`, so they need `sh` (Git for Windows `usr\bin`) on the PATH
+Codex sees.
 
 On a fresh Codex session, Remembrance checks a credential-free public release
 manifest. When a newer verified plugin exists, Codex receives the trusted local
@@ -52,6 +136,17 @@ Codex installations from before this startup check existed still learn about a
 verified update on their next successful Remembrance query. The API places a
 command-free notice first in the legacy contribution directive; only this
 installed plugin supplies the trusted local update command.
+
+With an organization key, a Codex session that starts, resumes, or is cleared
+also reads the organization's session skills (at most five slugs and version
+ids, never skill text) and asks Codex to load each one with `invoke_skill`
+before its first reply. After a compaction the hook repeats that request from a
+private per-session cache without a network call, and a resume uses the cache
+when the registry is unreachable. Each request carries the same idempotency
+key, derived from the Codex `session_id`, so a repeat returns the first
+invocation. A pinned version that is no longer available is reported and
+skipped, never replaced. Anonymous sessions skip this step; set
+`REMEMBRANCE_SESSION_SKILLS=0` to turn it off.
 
 After install, fully restart Codex and verify the loop before assuming the
 plugin is active:
@@ -67,8 +162,10 @@ plugin is active:
    returned skill slug, MCP tool result, or REST status.
 5. After it evaluates returned results, confirm it calls
    `submit_query_feedback` for explicit good/partial/poor matches. After it
-   actually uses a skill/resource, confirm it calls `submit_feedback` and, when
-   the lesson is reusable, `submit_remembrance`.
+   actually uses a skill/resource, confirm it calls categorical
+   `submit_feedback`. For reusable learning, confirm it separately calls
+   `capture_learning` with exactly one compact lesson, complete private skill,
+   or durable preference and invokes only the returned exact action.
 
 If Codex can see the plugin skill but not the MCP tools, or the CLI review shows
 any Remembrance hook as **Needs review**, treat the installation as degraded
@@ -96,10 +193,14 @@ working preferences follow each engineer across approved agents and steer
 relevant public and team skills without changing shared instructions or
 weakening organization policy. Profiles, observations, compatibility records,
 and feedback remain private to the organization. An explicit instruction
-governs the current task immediately. Known built-ins activate durably at once.
+governs the current task immediately. Known built-ins activate durably at once for a
+managed-encryption organization.
 Custom preferences remain pending until automatic normalization and validation
 approves them; unsafe, malformed, or uncertain custom behavior stays inactive
-and is never replayed to an agent. Classification runs
+and is never replayed to an agent.
+An organization using customer-held encryption is currently deferred: every substantive preference write and every compatibility-feedback call is refused before persistence with HTTP 422 and code `customer_held_preference_processing_deferred`. Existing records are unchanged, reads and the content-free withdrawal lane keep working, and responses withhold the compatibility-feedback offer there. Read `activated` and
+`normalized_activation_state` in the response instead of assuming a setting is
+live. Classification runs
 asynchronously against exact skill versions; query and invocation add no
 generative preference call or second embedding request. Material compatibility
 may reorder only already-relevant skills inside one match tier or apply a
@@ -126,28 +227,34 @@ If you prefer not to use the marketplace, wire the hooks into
 absolute path to this package. The bundled `hooks/hooks.json` uses
 `${PLUGIN_ROOT}` (the plugin-root variable Codex sets for
 marketplace-installed plugins), so a manual hook install must use a literal
-absolute path instead.
+absolute path instead. Every command runs through the bundled
+`scripts/node-launcher`, which finds Node.js 18.17.0 or newer when Codex's PATH
+lacks it; to skip the launcher, replace `sh "…/node-launcher"` with the
+absolute path from `command -v node` in a terminal.
 
 ```toml
 [[hooks.SessionStart]]
 matcher = "startup|resume|clear|compact"
 [[hooks.SessionStart.hooks]]
 type = "command"
-command = 'node "/abs/path/to/codex-plugin/scripts/session-start.mjs"'
+command = 'sh "/abs/path/to/codex-plugin/scripts/node-launcher" "/abs/path/to/codex-plugin/scripts/session-start.mjs"'
 
 [[hooks.UserPromptSubmit]]
 [[hooks.UserPromptSubmit.hooks]]
 type = "command"
-command = 'node "/abs/path/to/codex-plugin/scripts/query-on-prompt.mjs"'
+command = 'sh "/abs/path/to/codex-plugin/scripts/node-launcher" "/abs/path/to/codex-plugin/scripts/query-on-prompt.mjs"'
 
 [[hooks.Stop]]
 [[hooks.Stop.hooks]]
 type = "command"
-command = 'node "/abs/path/to/codex-plugin/scripts/contribute-on-stop.mjs"'
+command = 'sh "/abs/path/to/codex-plugin/scripts/node-launcher" "/abs/path/to/codex-plugin/scripts/contribute-on-stop.mjs"'
 
 [mcp_servers.remembrance]
-command = "node"
-args = ["/abs/path/to/codex-plugin/servers/remembrance-mcp.mjs"]
+command = "sh"
+args = [
+  "/abs/path/to/codex-plugin/scripts/node-launcher",
+  "/abs/path/to/codex-plugin/servers/remembrance-mcp.mjs",
+]
 env = { REMEMBRANCE_PLUGIN_HOST = "codex" }
 
 ```
@@ -164,9 +271,12 @@ request credential. A Codex tenant/privacy-policy denial occurs before the
 Remembrance request and must not be reported as a Remembrance authentication or
 authorization rejection.
 
-For private repository-derived skills, the preferred remote write is
-`propose_private_skill`. It requires an organization key and can only create a
-candidate in that organization's private review queue. Codex workspace admins
+For private repository-derived skills, a current local client uses
+`capture_learning.private_skill` followed by the exact
+`submit_private_skill_candidate` action. It requires an organization key and
+can only create a candidate in that organization's private review queue. Broad
+`propose_private_skill` and `submit_remembrance` tools are legacy/hosted/raw
+compatibility routes and are unavailable by default locally. Codex workspace admins
 must still approve `remembrance.dev` as a trusted destination in managed MCP,
 network (when command networking is used), and Auto-review guardian policy. The
 narrow policy example is in the bundled
@@ -197,10 +307,79 @@ in `skills/remembrancer/references/remembrance-setup.md`. The same current,
 host-by-host administrator guide is published at
 <https://remembrance.dev/docs/remembrancer#private-repository-policy>.
 
+### Routing metadata on complete skill proposals
+
+In 0.2.0 a complete skill sent with `propose_skill_idea` or
+`propose_private_skill` (or their REST routes) carries routing metadata
+(contract v1, published at `/schemas/skill-routing-metadata.v1.json`): when
+an agent should pick the skill (`applicability`) and what it does and needs
+(`routing`). Ask for a platform draft first, show it to the author, and send
+the confirmed or edited fields back with the draft's token. The draft call
+stores nothing:
+
+```json
+{
+  "title": "Deploy a prepared app to Azure",
+  "description": "Deploy an already-prepared app to Azure with azd.",
+  "proposed_skill_md": "# Deploy a prepared app to Azure\n\nRun azd up ...",
+  "prefill_routing_metadata": true
+}
+```
+
+Its answer holds `example.proposed_metadata` and `routing_draft.token`. The
+submission then sends the confirmed fields:
+
+```json
+{
+  "title": "Deploy a prepared app to Azure",
+  "description": "Deploy an already-prepared app to Azure with azd.",
+  "proposed_skill_md": "# Deploy a prepared app to Azure\n\nRun azd up ...",
+  "proposed_metadata": {
+    "applicability": {
+      "scope": "specialized",
+      "use_when": [
+        "The user wants to deploy an already-prepared app to Azure",
+        "A deployment plan and infrastructure files already exist",
+        "The user asks to run azd up or azd deploy"
+      ],
+      "avoid_when": [
+        "The app has no Azure deployment files yet (prepare it first)",
+        "The user only wants a readiness check without deploying"
+      ],
+      "task_examples": [
+        "Deploy this prepared app to Azure Container Apps",
+        "Run azd up for my project",
+        "Push the validated Bicep deployment to production"
+      ],
+      "not_for": []
+    },
+    "routing": {
+      "capabilities": ["deploy-to-cloud"],
+      "domains": ["deployments-cicd", "cloud-platforms"],
+      "runtime_requirements": ["repo-checkout", "shell", "cloud-account", "provider-azure"],
+      "risk": "cloud-changes"
+    }
+  },
+  "routing_draft_token": "rd1.<token from the draft>"
+}
+```
+
+A complete skill without these fields is refused with 422
+`skill_routing_metadata_incomplete` (`delivery: not_delivered`; nothing is
+stored). The refusal lists every issue and carries the same draft, so fix
+the listed fields and send the request again. Fields taken unchanged are
+recorded as author-confirmed draft values; edits that widen the draft (a
+broader scope, added `use_when` items or capabilities, a lower risk) are
+flagged for review. An organization's text is drafted only through its
+approved semantic-enrichment processing grant; without one the draft is held
+and nothing is sent. A private capture (`capture_learning` with
+`private_skill`) may ask for automatic completion: the skill becomes
+available after acceptance once its routing metadata is complete.
+
 If the host denies the export, do not retry through curl, browser tools, or a
 different MCP transport. Remembrance reports one local, content-free alert:
-**Remembrance was blocked by host policy before reaching Remembrance. Nothing
-was sent. Querying remains available.** It does not automatically create a
+**The host blocked this Remembrance action. Do not treat it as submitted.
+Earlier successful actions are unaffected; querying remains available.** It does not automatically create a
 handoff. Only when an organization admin explicitly requests one, use the
 local-only `queue_private_skill_import` tool. Hosted-only Codex can run the bundled
 `skills/remembrancer/scripts/queue-private-skill-import.mjs` helper against a
@@ -210,14 +389,26 @@ request. An organization admin then uploads that file at Dashboard > Skills >
 Import. The handoff is not a submission until the dashboard returns a batch
 receipt.
 
-### Private lesson autopilot
+### Private learning autopilot
 
-Routine organization lessons use a narrower two-stage flow. The local
-`prepare_private_lesson_candidate` tool canonicalizes and redacts in memory,
-then encrypts only the post-redaction record in a durable outbox. The separate
-`submit_private_lesson_candidate` MCP action sends those exact bytes to the
-authenticated organization's private verifier queue. This action always submits
-privately and never falls back to anonymous or public submission.
+Current organization-capable local clients expose `capture_learning` as the
+only routine reusable-learning entry point. Supply exactly one compact
+`lesson`, complete `private_skill`, or structured durable `preference`. The
+router accepts no organization, destination, visibility, credential, or public
+fallback. Lessons are canonicalized and redacted in memory; complete skills
+retain bounded markdown, public citations, snippets, metadata, and actionable
+instructions. Lesson and skill drafts are encrypted in separate local outboxes,
+while a preference returns the existing `record_preference` action.
+`capture_learning` is local and makes no network request. Never
+compress a complete skill into a lesson.
+
+Invoke only the returned exact action: `submit_private_lesson_candidate`,
+`submit_private_skill_candidate`, or `record_preference`.
+These actions always submit privately. Lesson and skill submit actions carry only a local draft ID
+through Codex to the authenticated organization's pipeline and never fall
+back to anonymous or public submission. Accepted content reuses the existing verifier,
+topology, review, versioning, audit, and admin-controlled propagation pipeline;
+the submitting agent never chooses visibility.
 After the private outcome is accepted, a separate server-owned process may
 create a freshly redacted public candidate only when the organization admin
 enabled **Contribution propagation**; the submitting agent neither chooses nor
@@ -227,18 +418,30 @@ resume later, while authentication, validation, policy, and host-denial states
 remain held. Verified submissions discard encrypted lesson content immediately;
 their content-free completion markers are automatically deleted after 14 days.
 
-The signed policy pins the corrected `private-lesson-redaction-v2` profile and
-its exact digest. Unsupported-profile drafts become terminal
-`superseded_redactor`, remain encrypted and counted toward the outbox ceiling,
-and are never retried, re-redacted, or automatically deleted. A held draft may
+The lesson client offers a bounded `private-lesson-redaction-v2` supported
+redactor-profile set and the
+server signs policy for the newest mutual profile. Retained drafts require
+their exact bound profile. Temporary incompatibility remains encrypted as
+`awaiting_compatible_profile` with a precise client update, full restart, or
+server-rollout action; it is not mislabeled as a safety rejection or host
+denial. A profile is terminal only when the installed client no longer supports
+it; that state is `superseded_redactor`. Terminal drafts remain encrypted and counted toward the outbox ceiling and
+are never retried, re-redacted, or automatically deleted. A held draft may
 send only category/version counts and signed protocol digests through the same
 approved action when health reporting is enabled; this content-free telemetry
 cannot enter verification, review, topology, or skill materialization. Disable
 it with `REMEMBRANCE_HEALTH_REPORTING=0`.
 
-Codex should persist approval only for the exact submit action when the host
-offers that choice; the preparation, inspection, retry, and confirmed-delete
-tools remain local. No `/hooks` command is required. `run_connection_doctor`
+Codex should persist one approval for each private egress lane when the host
+offers that choice. The `private_lesson` lane covers
+`submit_private_lesson_candidate` and `retry_private_lesson_candidate`; the
+`private_skill` lane covers `submit_private_skill_candidate` and
+`retry_private_skill_candidate`. Existing submit approvals upgrade lazily to
+their lane. A fresh-draft retry stops before network access. Capture,
+inspection, and confirmed deletion remain local. `submit_query_feedback`
+remains an independent bounded query-fit action. No `/hooks` command is
+required.
+`run_connection_doctor`
 reports policy, signing, encryption, outbox, and action visibility without
 showing lesson content or local paths. A hosted Remembrance app dependency will
 be added only after the production connector has a real stable ID, so this
@@ -264,20 +467,17 @@ skills/resources. It is enabled by default; set
 English-first, so multilingual workflows should call `query_skills` explicitly
 when useful.
 
-The `Stop` (completion) hook is the contribution mirror and recovery path. When
-the session used Remembrance, or when the prompt hook marked a reusable task but
-no query completed, it returns
-`{"decision":"block","reason":"..."}` exactly once and asks Codex to submit a
-redacted remembrance / feedback / skill idea — so contribution is prompted by
-default instead of relying on the agent to remember. It is loop-safe: Codex sets
-`stop_hook_active=true` on the continuation a Stop-block causes, so it never
-re-blocks a stop it already continued. The compact continuation tells Codex to
-perform routine contribution work silently: final answers omit hook narration,
-tool receipts, and correlation IDs unless Remembrance fails, host policy blocks
-the request, or the user must act. Codex may still render the compact Stop
-continuation itself because the host exposes blocked-stop reasons as prompts.
-Set `REMEMBRANCE_AUTO_CONTRIBUTE=0` only when automatic contribution closure is
-not wanted.
+The `Stop` (completion) hook is a silent recovery checkpoint. When the session
+used Remembrance or an eligible task missed a query, it records bounded pending
+obligations and allows the current answer to finish. On the next real user
+prompt, the prompt hook injects only the exact outstanding actions: one complete
+`submit_query_feedback` verdict set, categorical `submit_feedback` only for an
+actually used result, and/or one `capture_learning` route. It never emits a
+routine Stop-block prompt, tool receipt, or correlation ID that can hide the
+user-facing final answer. Host-policy denials and required user action remain
+visible. An explicit diagnostic mode may expose Stop recovery for testing, but
+it is not the default. Set `REMEMBRANCE_AUTO_CONTRIBUTE=0` only when automatic
+contribution closure is not wanted.
 
 ### How usage is detected without a transcript
 
@@ -292,10 +492,9 @@ session transcript for registry-consumption markers. Codex's `Stop` payload has
 - Relevant and contextual prompts call `recordTaskEligibility(sessionId)`,
   incrementing a `<hash>.eligible` counter even when the query is missed or
   unavailable. Later tasks in the same session therefore remain recoverable.
-- The stop adapter reads that count via `readRegistryUseCount(sessionId)` and
-  combines it with eligibility before comparing the result to the
-  last-prompted sentinel (`<hash>.prompt`). It blocks once for either a new use
-  or an unclosed eligible task, then records the handled count.
+- The stop adapter reads that count via `readRegistryUseCount(sessionId)`,
+  combines it with eligibility, records any still-pending obligations, and
+  allows completion. The next real prompt consumes the bounded recovery state.
 
 Both hooks **fail open**: they never block the user's work on API errors. A
 timeout, HTTP error, or malformed response injects compact recovery guidance
@@ -309,10 +508,15 @@ The plugin is self-contained for Codex behavior: it installs the local hooks
 that make Remembrance proactive and registers its bundled local MCP server. It
 does not require separate `npx @remembrance-ai/mcp-server` setup or a GUI
 process environment variable. After install, the `remembrance` MCP server
-exposes tools such as `query_skills`, `submit_query_feedback`,
-`submit_feedback`, `submit_remembrance`, `get_skill`, `get_resource`,
-`list_skills`, `invoke_skill`, `report_task_outcome`, `get_value_proof`,
-`run_connection_doctor`, and `get_connection_status`.
+exposes tools such as `query_skills`, independent `submit_query_feedback`,
+categorical `submit_feedback`, `capture_learning`,
+`submit_private_lesson_candidate`, `submit_private_skill_candidate`,
+`inspect_private_learning_outbox`, `get_skill`, `get_resource`, `list_skills`,
+`invoke_skill`, `report_task_outcome`, `get_value_proof`,
+`run_connection_doctor`, and `get_connection_status`. Broad
+`submit_remembrance` and `propose_private_skill` tools are hidden by default for
+an organization-capable local client; they remain explicit legacy/hosted/raw
+compatibility routes.
 
 Credential and lifecycle boundaries are observable. `run_connection_doctor`
 performs a non-mutating read and interprets transport, scope, destination,
@@ -347,12 +551,31 @@ Codex first rules out an unlikely or irrelevant corner-case result and reports
 query fit `poor`. A remaining high match is a required next step: Codex opens it with `get_skill` or `get_resource` and its
 `query_id`/`result_id` before custom work; possible and exploratory matches remain
 optional. Codex is then reminded in-band to report query fit with
-`submit_query_feedback`, then close
-the post-use loop with `submit_feedback`, `submit_remembrance`, or
-`propose_skill_idea`; the Stop hook is a safety net, not the only contribution
-path. At completion it asks once about an unopened high match so Codex can fetch
-it or report explicit poor-fit feedback. A `PostToolUse` hook clears the marker
+one complete `submit_query_feedback` verdict set, close categorical post-use
+feedback only for results it actually used, and route reusable content
+separately through `capture_learning`. The Stop hook records missed obligations
+silently; the next prompt carries the bounded recovery. A `PostToolUse` hook clears the marker
 only after the same slug and `query_id`/`result_id` open successfully.
+Without an organization key, the server's relevance judge chooses what a search
+is shown from the top 20 public candidates: Jev (TypeSafe, through Vercel AI
+Gateway) rates each candidate first, and a language model decides the ones Jev
+leaves undecided while there is time. It receives the search's task text and
+public skill cards only. Every request asks for zero retention and no prompt
+training; for Jev, zero retention rests on Remembrance's account-specific
+agreement with TypeSafe through Vercel, which the Gateway does not confirm.
+With an organization key, a search is judged only under the organization's
+managed processing grant for semantic search, and Jev rates it first only when
+that grant also approves TypeSafe, under the owner-attested zero-retention
+agreement with TypeSafe (owner decisions 36 and 64), which covers this judge
+stage and no other purpose: its task text and skill cards, the organization's
+own included, go only to the hosts that grant approves, each asked for zero
+retention and no prompt training. Without that grant nothing is sent and the
+search keeps the rule's list.
+A card shows a skill's use and exclusion conditions only where the
+platform generated them or a person reviewed them. A use condition only
+promotes a result, and only an exclusion its author stated or a person
+reviewed makes it `unlikely`; `applicability.provenance` says who stated
+them.
 For contextual continuation prompts, the hook also records an opaque directive
 as shown. The next `query_skills` call carries that ID or is correlated by the
 same `PostToolUse` observer, producing a real shown-to-followed compliance rate
@@ -364,10 +587,9 @@ query and must use the same organization scope or anonymous scope. Any active
 key for that organization is valid. Identical retries are safe; changed later
 judgments conflict, so uncertain results should remain unrated instead of being
 appended later.
-Anonymous verdicts remain low weight and never train the shared reranker.
-Shared training uses only public-result comparisons from multiple authenticated
-organization keys across multiple organizations; changing `agent_id` does not
-create another feedback actor.
+Anonymous verdicts remain low weight and never train a shared model. No learned
+reranker is trained or served; changing `agent_id` does not create another
+feedback actor.
 
 When an exact, current, non-high-risk match has fresh grade A/B evidence for the
 observed model revision, reasoning effort, and bounded task cohort, the result
@@ -420,10 +642,30 @@ If MCP tools are unavailable, use the REST contract from
   reporting. Local health status remains available.
 - `REMEMBRANCE_AUTO_QUERY=0`: disables the prompt hook's network query.
 - `REMEMBRANCE_AUTO_QUERY_LIMIT`: result limit, default `3`, max `10`.
-- `REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS`: hook query timeout, default `2000`.
+- `REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS`: hook request timeout. The search waits
+  `3000` by default, so the server's relevance judge can take its longer
+  2,000 ms hook deadline when Jev leaves candidates undecided; the hook's
+  other requests wait `2000`. A value applies to every hook request, and one
+  under `3000` tells the server not to wait that long. A stopped search whose
+  preference read and search both hang delays the prompt about 5 s.
+- `REMEMBRANCE_AUTO_QUERY_HYGIENE=0`: also searches host-generated text a
+  trigger word matches (a Codex commit or pull-request generation prompt, a
+  subagent hand-back, pasted `git status` output, an explicit local skill
+  invocation). By default only its skill search is skipped: the organization
+  policy, required settings and preferences a search would carry still arrive.
+- `REMEMBRANCE_AUTO_QUERY_TASK_SHAPE=0`: searches only prompts a keyword
+  trigger matches. By default the hook also searches any other task-shaped
+  prompt of at least 40 characters (trigger reason `task_shape`); one-off fact
+  questions, status acknowledgments, explicit skill references, host text and
+  short follow-ups are decided as before. A task-shape search that finds
+  nothing adds no no-match block, completion recovery or query-feedback request
+  of its own; the organization policy, required settings, preferences and
+  capture lines still arrive, and the server still records the missing-skill
+  demand.
 - `REMEMBRANCE_DIRECTIVE_EVENT_TIMEOUT_MS`: fail-open shown/followed event
   timeout, default `750`, bounded to `100`-`2000` milliseconds.
-- `REMEMBRANCE_AUTO_CONTRIBUTE=0`: disables the completion contribution prompt.
+- `REMEMBRANCE_AUTO_CONTRIBUTE=0`: disables silent completion recovery and its
+  next-prompt contribution guidance.
 - `REMEMBRANCE_AGENT_KEY_PATH`: optional local TOFU key path for MCP identity.
 
 With an organization key, every query returns `skill_access`. If its policy is

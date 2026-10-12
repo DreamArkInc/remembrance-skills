@@ -16,10 +16,11 @@ Install the plugin once, then OpenClaw can:
   payment, deployment, MCP, or unfamiliar integration work;
 - use public registry knowledge, plus private organization knowledge when you
   provide an enterprise key;
-- expose Remembrance MCP tools for direct lookup, feedback, and skill
-  submission; and
-- ask once at the end of a useful session whether the agent should contribute
-  what it learned back to the registry.
+- expose Remembrance MCP tools for direct lookup, independent query-fit
+  feedback, categorical post-use feedback, and private reusable-learning
+  capture; and
+- record unfinished feedback or capture work silently at completion, then
+  inject only the exact bounded recovery actions on the next user prompt.
 
 The hooks are quiet by default. They query prompts that look reusable, inject a
 full-thread query reminder for context-only follow-ups, redact common secrets
@@ -37,6 +38,15 @@ The setup command preserves existing OpenClaw settings, enables the required
 conversation-hook permission, and registers this installed package's bundled
 local MCP server by its absolute path. It does not copy your organization key
 into OpenClaw config.
+
+**Node.js runtime.** `openclaw remembrance setup` registers the bundled MCP
+server under the absolute Node.js that runs OpenClaw, so the gateway's PATH does
+not matter for it. A host started from the Dock, Finder or an IDE may not have
+your shell's PATH, so a Node.js installed by nvm, fnm, volta, asdf, nodenv or
+mise can be missing from it; the symptom is `spawn node ENOENT` or "No such file
+or directory". A manual `mcp.servers.remembrance` entry therefore needs Node.js
+18.17.0 or newer by its absolute path (from `command -v node` in a terminal) as
+`command`, because a bare `node` is looked up on the gateway's PATH.
 
 If you only want public registry results, the plugin can run without a key. For
 private team memory, create an enterprise key in the Remembrance dashboard and
@@ -98,15 +108,20 @@ installed plugin supplies the trusted local update commands.
 
 ### Private repository contributions
 
-After the organization approves Remembrance as a destination, use
-`propose_private_skill` for repository-derived instructions. It requires the
-organization key and can only create a private review candidate. OpenClaw's
-conversation access setting lets the plugin observe prompts; it does not
-override a gateway, sandbox, or enterprise egress denial. Never retry denied
+After the organization approves Remembrance as a destination, a current local
+client uses `capture_learning.private_skill` followed by the exact
+`submit_private_skill_candidate` action for repository-derived instructions.
+It requires the organization key and can only create a private review
+candidate. Broad `propose_private_skill` and `submit_remembrance` routes are
+legacy/hosted/raw compatibility tools and are unavailable by default locally.
+OpenClaw's
+conversation access setting lets the plugin's completion hook run (the prompt
+and tool hooks run without it; see [Conversation access](#conversation-access));
+it does not override a gateway, sandbox, or enterprise egress denial. Never retry denied
 private content through a different network transport. On a classified denial,
-the plugin reports one local, content-free alert: **Remembrance was blocked by
-host policy before reaching Remembrance. Nothing was sent. Querying remains
-available.**
+the plugin reports one local, content-free alert: **The host blocked this
+Remembrance action. Do not treat it as submitted. Earlier successful actions
+are unaffected; querying remains available.**
 
 For a managed Gateway, add `remembrance` to `plugins.allow`, keep it out of
 `plugins.deny`, enable `plugins.entries.remembrance`, and retain
@@ -131,6 +146,75 @@ the active tool profile, `tools.deny`, and `toolFilter`. With an organization
 key, generic `propose_skill_idea` stays in the private review queue. Never
 remove or bypass the key to force a public candidate; use reviewed public
 propagation after private review.
+
+### Routing metadata on complete skill proposals
+
+In 0.2.0 a complete skill sent with `propose_skill_idea` or
+`propose_private_skill` (or their REST routes) carries routing metadata
+(contract v1, published at `/schemas/skill-routing-metadata.v1.json`): when
+an agent should pick the skill (`applicability`) and what it does and needs
+(`routing`). Ask for a platform draft first, show it to the author, and send
+the confirmed or edited fields back with the draft's token. The draft call
+stores nothing:
+
+```json
+{
+  "title": "Deploy a prepared app to Azure",
+  "description": "Deploy an already-prepared app to Azure with azd.",
+  "proposed_skill_md": "# Deploy a prepared app to Azure\n\nRun azd up ...",
+  "prefill_routing_metadata": true
+}
+```
+
+Its answer holds `example.proposed_metadata` and `routing_draft.token`. The
+submission then sends the confirmed fields:
+
+```json
+{
+  "title": "Deploy a prepared app to Azure",
+  "description": "Deploy an already-prepared app to Azure with azd.",
+  "proposed_skill_md": "# Deploy a prepared app to Azure\n\nRun azd up ...",
+  "proposed_metadata": {
+    "applicability": {
+      "scope": "specialized",
+      "use_when": [
+        "The user wants to deploy an already-prepared app to Azure",
+        "A deployment plan and infrastructure files already exist",
+        "The user asks to run azd up or azd deploy"
+      ],
+      "avoid_when": [
+        "The app has no Azure deployment files yet (prepare it first)",
+        "The user only wants a readiness check without deploying"
+      ],
+      "task_examples": [
+        "Deploy this prepared app to Azure Container Apps",
+        "Run azd up for my project",
+        "Push the validated Bicep deployment to production"
+      ],
+      "not_for": []
+    },
+    "routing": {
+      "capabilities": ["deploy-to-cloud"],
+      "domains": ["deployments-cicd", "cloud-platforms"],
+      "runtime_requirements": ["repo-checkout", "shell", "cloud-account", "provider-azure"],
+      "risk": "cloud-changes"
+    }
+  },
+  "routing_draft_token": "rd1.<token from the draft>"
+}
+```
+
+A complete skill without these fields is refused with 422
+`skill_routing_metadata_incomplete` (`delivery: not_delivered`; nothing is
+stored). The refusal lists every issue and carries the same draft, so fix
+the listed fields and send the request again. Fields taken unchanged are
+recorded as author-confirmed draft values; edits that widen the draft (a
+broader scope, added `use_when` items or capabilities, a lower risk) are
+flagged for review. An organization's text is drafted only through its
+approved semantic-enrichment processing grant; without one the draft is held
+and nothing is sent. A private capture (`capture_learning` with
+`private_skill`) may ask for automatic completion: the skill becomes
+available after acceptance once its routing metadata is complete.
 
 The plugin does not automatically create a handoff. Only when an organization
 admin explicitly requests one, the bundled local MCP server exposes
@@ -170,10 +254,14 @@ working preferences follow each engineer across approved agents and steer
 relevant public and team skills without changing shared instructions or
 weakening organization policy. Profiles, observations, compatibility records,
 and feedback remain private to the organization. An explicit instruction
-governs the current task immediately. Known built-ins activate durably at once.
+governs the current task immediately. Known built-ins activate durably at once for a
+managed-encryption organization.
 Custom preferences remain pending until automatic normalization and validation
 approves them; unsafe, malformed, or uncertain custom behavior stays inactive
-and is never replayed to an agent. Classification runs
+and is never replayed to an agent.
+An organization using customer-held encryption is currently deferred: every substantive preference write and every compatibility-feedback call is refused before persistence with HTTP 422 and code `customer_held_preference_processing_deferred`. Existing records are unchanged, reads and the content-free withdrawal lane keep working, and responses withhold the compatibility-feedback offer there. Read `activated` and
+`normalized_activation_state` in the response instead of assuming a setting is
+live. Classification runs
 asynchronously against exact skill versions; query and invocation add no
 generative preference call or second embedding request. Material compatibility
 may reorder only already-relevant skills inside one match tier or apply a
@@ -192,7 +280,9 @@ edits the skill.
 
 ## What it does
 
-Remembrance uses two conversation hooks plus one tool observation hook:
+Remembrance uses a prompt hook, a completion hook, an approval hook
+(`before_tool_call`), one tool observation hook and, for subagents, OpenClaw's
+`subagent_ended` hook:
 
 - **Before a prompt:** the plugin checks whether the work looks like something
   that could benefit from reusable guidance. If it finds matching skills or
@@ -200,8 +290,24 @@ Remembrance uses two conversation hooks plus one tool observation hook:
   follow-up such as "fix these issues" instead receives an instruction to infer
   the concrete task from the full conversation and query directly.
 - **Before final answer:** if the session used Remembrance or a reusable task
-  missed its query, the plugin asks OpenClaw once to close the loop with a query,
-  redacted feedback, a reusable lesson, or a missing skill idea.
+  missed its query, the plugin records bounded pending obligations silently and
+  allows the answer. The next real prompt receives only the exact query,
+  feedback, or `capture_learning` recovery actions.
+- **When a subagent finishes:** OpenClaw gives a subagent (`sessions_spawn`)
+  its own session, which can get later runs, for example when another
+  session sends it a message with `sessions_send`. The plugin does not ask
+  the subagent to settle what it owes: OpenClaw discards a finalize revision
+  once a run has called a tool with possible side effects, and every
+  Remembrance tool counts as one. Instead, what it owes moves to the session
+  that started it, marked second-hand, when the subagent finalizes, when
+  OpenClaw's announce of its result starts a new run in that session (before
+  a later run of the subagent starts), or at the latest when OpenClaw
+  reports that the subagent's run ended
+  (`subagent_ended`), also after an error, a timeout or an abort while that
+  session was still running; that session's next prompt offers it. No other
+  session sees it. A thread-bound subagent (`mode: "session"`)
+  gets later prompts of its own and keeps its debts for them; in visible
+  recovery mode its finalize asks it to settle them, as for any session.
 - **After a detail tool:** a successful correlated `get_skill` or `get_resource`
   clears that high-match reminder. A successful `invoke_skill` records the
   explicit selection, marks its outcome selected, and starts one post-use
@@ -214,13 +320,88 @@ next agent that queries — the more the network is used, the smarter it gets.
 
 ## Conversation access
 
-This is a **non-bundled plugin**. OpenClaw requires explicit opt-in before
-non-bundled plugins can receive raw conversation content. Remembrance needs that
-access because `before_prompt_build` reads the prompt and
-`before_agent_finalize` inspects the final answer.
+This is a **non-bundled plugin**. OpenClaw runs a non-bundled plugin's raw
+conversation hooks only after the operator's grant,
+`plugins.entries.remembrance.hooks.allowConversationAccess: true`, which
+`openclaw remembrance setup` writes. Of this plugin's hooks, only
+`before_agent_finalize`, which inspects the final answer, is such a hook.
 
-Without `allowConversationAccess: true`, OpenClaw will not deliver prompt or
-answer text to these hooks. The plugin will no-op instead of breaking the run.
+Before the grant, OpenClaw (2026.7.1-2, the version this plugin is built and
+verified against) holds
+only `before_agent_finalize`. It loads and runs the plugin's other four hooks,
+and three of them receive conversation content: `before_prompt_build` the
+prompt (`prompt` and `messages`), `before_tool_call` each tool call, and
+`after_tool_call` each tool call's arguments and result. Before the grant,
+these hooks do the following:
+
+- `before_prompt_build` reads the prompt, updates the session's local
+  Remembrance ledger (task eligibility, query feedback, directives) and adds
+  context: matching skills and resources, the recovery actions the session
+  owes and, when a newer verified version exists, a client-update notice.
+  With auto-query on (the default), a
+  prompt that looks reusable is searched. Its redacted text (common secrets
+  and private-network URLs removed, at most 1,200 characters) goes as the
+  task summary to `POST /api/v1/agent/query` on the configured API
+  (`REMEMBRANCE_API_URL` or the shared config's `apiUrl`, default
+  `https://remembrance.dev`). The request carries the organization key and
+  the project key only when an organization key is configured; without one,
+  it carries no key, only the principal session of the plugin's local agent
+  key when it has one. The hook can also send a content-free "shown" record
+  for a contextual follow-up (`/api/v1/agent/directive-events`). Only with an
+  organization key, it reads the organization's effective preferences for
+  the prompt's inferred domain when a search-hygiene rule stops a search
+  (`/api/v1/agent/preferences/effective`), and it records a built-in
+  preference that the prompt states, as the setting, a SHA-256 hash of the
+  redacted prompt and an evidence hash, not the prompt text
+  (`/api/v1/agent/preferences`). `REMEMBRANCE_AUTO_QUERY=0` stops all of
+  these requests. With an organization key, while retained private-skill
+  drafts await their original request, it also stores each prompt (or its
+  redacted form), encrypted, in every such local draft, from any OpenClaw
+  session of this user on the machine and never the same prompt twice;
+  `REMEMBRANCE_AUTO_CONTRIBUTE=0` turns this off, and a draft leaves the
+  machine only through the approval-held submit or retry tool.
+- `before_tool_call` reads each tool call and holds Remembrance's
+  content-submission tools (private lesson and skill submit or retry, broad
+  submissions and proposals, suggestions, resources, reviews, and feedback
+  that carries a lesson) for the operator's approval, unless an earlier
+  allow-always decision covers that tool's lane. It sends nothing.
+- `after_tool_call` reads each finished tool call's name, arguments and
+  result. It updates local state: the session's ledger, host-policy denial
+  records, in memory the session that spawned a subagent and, for a private
+  skill capture, its local draft. After a
+  Remembrance `query_skills` call that follows a contextual follow-up's
+  directive, it sends the content-free "followed" record (directive id and
+  query id) to `/api/v1/agent/directive-events`. It sends nothing else.
+- `subagent_ended` moves an ended subagent's debts between local ledger
+  files. It reads no conversation content and makes no request.
+
+When OpenClaw loads the plugin, also before the grant, the plugin writes a
+local lifecycle marker and makes two kinds of request without conversation
+content: the credential-free release check
+(`/.well-known/remembrance-client-release.json`;
+`REMEMBRANCE_CLIENT_UPDATE_CHECK=0` turns it off), and the registration of
+the plugin's local agent key for a principal session
+(`/api/v1/agent/keys/register` and `/api/v1/agent/principal-sessions`, with
+the organization key when one is configured). The prompt hook repeats that
+registration and exchange when no principal session is cached or the API asks
+for a refresh; `REMEMBRANCE_AUTO_QUERY=0` stops that too. Before the grant,
+prompt text therefore leaves the machine only in the redacted query above; the
+other requests carry identifiers, a hash of the redacted prompt, a built-in
+setting, an inferred domain label or nothing from the conversation, and no
+tool argument or result content leaves the machine, only the Remembrance query
+id. `REMEMBRANCE_AUTO_QUERY=0` keeps the prompt off the network, but not out of
+the local draft capture above; `REMEMBRANCE_AUTO_CONTRIBUTE=0` turns that off.
+
+The grant adds two things. First, OpenClaw runs `before_agent_finalize`: it
+records what the session owes at completion (in visible recovery mode, it asks
+the agent once to settle it), reports content-free task outcomes for the
+skills the session used (`/api/v1/agent/task-outcomes`) and hands a
+finishing subagent's debts to the session that started it. Second,
+`openclaw remembrance setup`, which writes the grant, also registers the
+bundled MCP server, so the agent gets the explicit Remembrance tools. Without
+the grant, the run is not broken: OpenClaw names the held hook only in a
+`warn` diagnostic of `openclaw plugins inspect remembrance --runtime`, and
+`openclaw plugins doctor` reports no issue.
 
 > "Non-bundled plugins that need raw conversation hooks (`before_model_resolve`,
 > `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`,
@@ -232,21 +413,36 @@ answer text to these hooks. The plugin will no-op instead of breaking the run.
 
 The plugin ships a self-contained Remembrance MCP server
 (`servers/remembrance-mcp.mjs`). The hooks provide automatic behavior; the MCP
-server gives OpenClaw direct tools such as `run_connection_doctor`, `get_connection_status`,
-`query_skills`, `bootstrap_agent_identity`, `submit_query_feedback`, `submit_feedback`,
-`submit_remembrance`, `get_skill`, `get_resource`, `report_task_outcome`, and
-`get_value_proof`, plus `list_skills`, `invoke_skill`, and the
-organization-only `propose_private_skill`. Local MCP also includes
+server gives OpenClaw direct tools such as `run_connection_doctor`,
+`get_connection_status`, `query_skills`, `bootstrap_agent_identity`, independent
+`submit_query_feedback`, categorical `submit_feedback`, `capture_learning`,
+`submit_private_lesson_candidate`, `submit_private_skill_candidate`,
+`inspect_private_learning_outbox`, `get_skill`, `get_resource`,
+`report_task_outcome`, `get_value_proof`, `list_skills`, and `invoke_skill`.
+Broad `submit_remembrance` and `propose_private_skill` tools are unavailable by
+default to organization-capable local clients; hosted/raw and older clients may
+retain those explicit compatibility routes. Local MCP also includes
 `queue_private_skill_import`, which never contacts Remembrance.
 
-### Private lesson autopilot
+### Private learning autopilot
 
-Routine organization lessons use local `prepare_private_lesson_candidate` to
-canonicalize and redact in memory and retain only an encrypted post-redaction
-draft. The separately approved `submit_private_lesson_candidate` action sends
-those exact bytes to the organization's private verifier queue. This action
-always submits privately and never falls back to anonymous or public
-submission. After the private outcome is accepted, a separate server-owned
+Current organization-capable local clients expose `capture_learning` as the
+only routine reusable-learning entry point. Supply exactly one compact
+`lesson`, complete `private_skill`, or structured durable `preference`. It
+accepts no organization, destination, visibility, credential, or public
+fallback. Lessons are canonicalized and redacted in memory; complete skills
+retain bounded markdown, public citations, snippets, metadata, and actionable
+instructions. Lesson and skill drafts are encrypted in separate outboxes; a
+preference returns the exact existing `record_preference` action.
+`capture_learning` is local and makes no network request.
+
+Invoke only the returned `submit_private_lesson_candidate`,
+`submit_private_skill_candidate`, or `record_preference` action.
+These actions always submit privately. Lesson and skill actions carry only a local draft ID
+through OpenClaw to the organization's pipeline and never fall back to
+anonymous or public submission. Accepted content reuses the existing verifier, topology, review,
+versioning, audit, and admin-controlled propagation pipeline; the submitting
+agent never chooses visibility. After the private outcome is accepted, a separate server-owned
 process may create a freshly redacted public candidate only when the
 organization admin enabled **Contribution propagation**; the submitting agent
 neither chooses nor sees that process, and the derivative must pass the
@@ -255,21 +451,29 @@ auto-delete; retryable failures resume later and held drafts remain local.
 Verified submissions discard encrypted lesson content immediately; their
 content-free completion markers are automatically deleted after 14 days.
 
-The signed policy pins the corrected `private-lesson-redaction-v2` profile and
-its exact digest. Unsupported-profile drafts become terminal
-`superseded_redactor`, stay encrypted, and are never retried, re-redacted, or
+The lesson client offers a bounded `private-lesson-redaction-v2` supported
+redactor-profile set and the
+server signs policy for the newest mutual profile. Retained drafts require
+their exact bound profile. Temporary incompatibility remains encrypted as
+`awaiting_compatible_profile` with precise update, restart, or server-rollout
+guidance; it is not mislabeled as a safety rejection or host denial. A profile
+becomes terminal only when the installed client no longer supports it; that
+state is `superseded_redactor`. Terminal drafts stay encrypted and are never retried, re-redacted, or
 automatically deleted. When health reporting is enabled, a held draft may send
 only content-free category/version counts and signed protocol digests through
 the same approved action; that telemetry cannot enter verification, review,
 topology, or skill materialization. Disable it with
 `REMEMBRANCE_HEALTH_REPORTING=0`.
 
-Expose this exact optional tool through `tools.allow`/`tools.alsoAllow`, then use
-the plugin approval flow for the network action. Choosing `allow-always` is
-durable only because the Remembrance plugin persists trust for this exact
-action after `onResolution`; it does not trust other Remembrance or host tools.
-Preparation, inspection, retry, and confirmed deletion remain local-only. A
-host denial is never retried through another transport.
+Expose the submit and retry tools for both private lanes through
+`tools.allow`/`tools.alsoAllow`, then use the plugin approval flow. Choosing
+`allow-always` persists one semantic lane decision: lesson submit/retry share
+one decision, and skill submit/retry share another. Existing exact-submit
+approvals upgrade lazily. It does not trust other Remembrance or host tools.
+Capture, inspection, and confirmed deletion remain zero-network; a fresh-draft
+retry stops before network access. `submit_query_feedback` remains an
+independent bounded query-fit action. A host denial is never retried through
+another transport.
 
 When a person explicitly names a Remembrance skill or supplies a
 `remembrance://skills/{slug}` URI, OpenClaw resolves ambiguous names with
@@ -283,7 +487,8 @@ For query fit, OpenClaw should send one complete verdict set of good/partial/poo
 per query from the same organization scope or anonymous scope. Any active key
 for that organization is valid. Identical retries are safe; changed later
 judgments conflict, so uncertain results stay unrated instead of being appended
-later. Post-use quality belongs on `submit_feedback`.
+later. Post-use quality belongs categorically on `submit_feedback`; reusable
+prose belongs in a separate `capture_learning` call.
 Query results also carry a high/possible/exploratory tier, concise reason,
 bounded `why_matched` terms/capabilities/constraint evidence, conservative
 `applicability` scope and use/exclusion conditions, metadata digests,
@@ -291,14 +496,33 @@ approximate context tokens, verified-use evidence, risk, and correlation IDs.
 OpenClaw should rule out an unlikely or irrelevant corner-case result and
 report query fit `poor`, then open a remaining high match with `get_skill`/`get_resource` and its
 `query_id`/`result_id`
-before custom work; lower tiers remain optional. Pass those IDs to
+before custom work; lower tiers remain optional. Pass those IDs to categorical
 `submit_feedback` after use and to delegated agents. At completion, the hook
-asks once about an unopened high match so OpenClaw can fetch it or report
-explicit poor-fit feedback.
-Anonymous verdicts remain low weight and never train the shared reranker.
-Shared training uses only public-result comparisons from multiple authenticated
-organization keys across multiple organizations; changing `agent_id` does not
-create another feedback actor.
+records an unopened high match silently so the next user prompt can ask
+OpenClaw to fetch it or report explicit poor-fit feedback.
+Anonymous verdicts remain low weight and never train a shared model. No learned
+reranker is trained or served; changing `agent_id` does not create another
+feedback actor.
+Without an organization key, the server's relevance judge chooses what a search
+is shown from the top 20 public candidates: Jev (TypeSafe, through Vercel AI
+Gateway) rates each candidate first, and a language model decides the ones Jev
+leaves undecided while there is time. It receives the search's task text and
+public skill cards only. Every request asks for zero retention and no prompt
+training; for Jev, zero retention rests on Remembrance's account-specific
+agreement with TypeSafe through Vercel, which the Gateway does not confirm.
+With an organization key, a search is judged only under the organization's
+managed processing grant for semantic search, and Jev rates it first only when
+that grant also approves TypeSafe, under the owner-attested zero-retention
+agreement with TypeSafe (owner decisions 36 and 64), which covers this judge
+stage and no other purpose: its task text and skill cards, the organization's
+own included, go only to the hosts that grant approves, each asked for zero
+retention and no prompt training. Without that grant nothing is sent and the
+search keeps the rule's list.
+A card shows a skill's use and exclusion conditions only where the
+platform generated them or a person reviewed them. A use condition only
+promotes a result, and only an exclusion its author stated or a person
+reviewed makes it `unlikely`; `applicability.provenance` says who stated
+them.
 
 An exact, current, non-high-risk match may include one compact token-only
 `potential_savings` estimate when fresh grade A/B proof exists for the observed
@@ -326,7 +550,8 @@ like Claude, nor `mcp_servers` like Codex) in `~/.openclaw/openclaw.json`
 is an **illustrative** merge fragment. OpenClaw only expands real uppercase
 `${VAR}` values and does **not** define an `${OPENCLAW_PLUGIN_ROOT}` variable, so
 the `args` path must be an **absolute path** — replace
-`/abs/path/to/openclaw-plugin` with the real absolute path to this package before
+`/abs/path/to/openclaw-plugin` with the real absolute path to this package, and
+`/abs/path/to/node` with the output of `command -v node` in a terminal, before
 merging into `~/.openclaw/openclaw.json`. Normal installs should run
 `openclaw remembrance setup` instead:
 
@@ -335,7 +560,9 @@ merging into `~/.openclaw/openclaw.json`. Normal installs should run
   mcp: {
     servers: {
       remembrance: {
-        command: "node",
+        // Absolute Node.js path: run `command -v node` in a terminal. The
+        // gateway may not start with your shell's PATH.
+        command: "/abs/path/to/node",
         // Absolute path — OpenClaw does not expand a plugin-root variable here.
         args: ["/abs/path/to/openclaw-plugin/servers/remembrance-mcp.mjs"],
         env: {
@@ -353,7 +580,7 @@ Or add it via the CLI (`--command` for the executable, one `--arg` per argument;
 
 ```bash
 openclaw mcp add remembrance \
-  --command node \
+  --command "$(command -v node)" \
   --arg /abs/path/to/openclaw-plugin/servers/remembrance-mcp.mjs
 ```
 
@@ -421,6 +648,14 @@ exists. The release-channel status marker separately retains the originating
 CircleCI build SHA so the final fan-in gate cannot reuse another deployment's
 success.
 
+From 0.2.0 the hook core (`src/hook-core.mjs`) seals a pending follow-up
+payload with the private-learning key. On macOS it reads, or creates, that key
+in the login Keychain by running `/usr/bin/security` (absolute path, no shell)
+inside the OpenClaw process; `REMEMBRANCE_PRIVATE_LESSON_KEYCHAIN=0` makes it
+use the mode-0600 key file instead. How ClawHub's staged security checks treat
+that process execution has not been verified: read the scan result of the
+first release that ships it before announcing that release.
+
 ## Behavior
 
 The pre-prompt hook runs before every model turn but only calls Remembrance when
@@ -434,18 +669,16 @@ reminder into system context. It is enabled by default; set
 English-first, so multilingual workflows should call `query_skills` explicitly
 when useful.
 
-The completion hook is the contribution mirror and recovery path. When the
-session used Remembrance, or a reusable prompt was eligible but no query
-completed, and it has not been nudged for that task yet, it returns
-`{ action: "revise", reason, retry: { instruction, maxAttempts: 1 } }` exactly
-once and asks the agent to submit a redacted remembrance / feedback / skill
-idea. Otherwise it returns `{ action: "finalize" }`. It is loop-safe: a
-per-session prompted-count sentinel means the agent is asked at most once per
-distinct use or eligible task, so a revise never re-triggers itself. The compact
-retry instruction keeps routine hook narration, tool receipts, and correlation
-IDs out of the final response; only a failure, host-policy block, or required
-user action is surfaced. Set `REMEMBRANCE_AUTO_CONTRIBUTE=0` only when automatic
-contribution closure is not wanted.
+The completion hook is a silent recovery checkpoint. When the session used
+Remembrance or a reusable prompt was eligible but no query completed, it records
+bounded pending obligations and finalizes the current answer. On the next real
+user prompt, the prompt hook injects only the exact outstanding query,
+unopened-match, `submit_query_feedback`, categorical `submit_feedback`, or
+`capture_learning` actions. Routine hook narration, tool receipts, and
+correlation IDs do not obscure the final response; only a failure, host-policy
+block, or required user action is surfaced. Set
+`REMEMBRANCE_AUTO_CONTRIBUTE=0` only when automatic contribution closure is not
+wanted.
 
 ### How usage is detected
 
@@ -453,7 +686,11 @@ The Claude plugin decides whether to prompt for a contribution by scanning the
 session transcript for registry-consumption markers. OpenClaw's
 `before_agent_finalize` event does not carry a transcript, so this plugin reuses
 the Codex plugin's marker mechanism (`src/hook-core.mjs`, generated from the
-shared core with OpenClaw-specific security hardening):
+shared core with OpenClaw-specific security hardening). OpenClaw starts a new
+run for every turn, so these counters and pending actions belong to the
+OpenClaw session (`ctx.sessionId`, else `ctx.sessionKey`), as Codex keeps them
+per session; lifecycle markers, directives and value episodes belong to the
+run (`ctx.runId`):
 
 - The pre-prompt hook calls `recordRegistryUse(sessionId)` whenever a registry
   query completes, incrementing a per-session counter file under
@@ -469,10 +706,209 @@ shared core with OpenClaw-specific security hardening):
 - Relevant and contextual prompts call `recordTaskEligibility(sessionId)`,
   incrementing a `<hash>.eligible` counter even when the query is missed or
   unavailable. Later tasks in the same session therefore remain recoverable.
-- The completion hook reads that count via `readRegistryUseCount(sessionId)` and
-  combines it with eligibility before comparing the result to a last-prompted
-  sentinel (`<hash>.prompt`). It revises once for either a new use or an
-  unclosed eligible task, then records the handled count.
+- The completion hook reads that count via `readRegistryUseCount(sessionId)`,
+  combines it with eligibility, records any still-pending obligations, and
+  finalizes. The next real prompt consumes the bounded recovery state.
+- A subagent session (key `agent:<id>:subagent:<uuid>`) keeps its debts in
+  its own session's ledger. Its `before_agent_finalize` is decided by the
+  same `decideStop` as any session, read before its debts move, with one
+  difference: unless it is thread-bound, it is never asked about its debts,
+  in silent or visible mode. In visible mode it is still asked, as on master,
+  for a contribution, a high-value lesson or an unclosed eligible task.
+  Where `decideStop` asks about its debts, the hand-up takes that ask's
+  place, and the plugin still records master's accounting of that ask: the
+  prompted count it records (`writePromptedCount`). The moved copies reach
+  the session that started the subagent unprompted all the same, because
+  `transferSubagentObligations` resets their `prompted_at`. A later run of
+  the same subagent session (OpenClaw's `sessions_send`, a wake run, or the
+  honored revise of a host-policy alert) is then decided as on master, with
+  one exception in visible mode. When a finalize revised for a host-policy
+  alert while the subagent owed something, those debts went up at that
+  finalize, so the next pass that uses the registry without leaving a new
+  debt (the honored revise, or a later run if OpenClaw dropped that revise)
+  gets master's contribution ask where master gave its debt ask. That pass
+  revises on both, with the same prompted count.
+  The spawning session's `after_tool_call`
+  for an accepted `sessions_spawn` result records, in the plugin's memory (at
+  most 512 subagents), which session started the subagent. Each finalize of
+  the subagent, whatever it decides, then moves the subagent's debts to that
+  session's ledger, marked second-hand (`transferSubagentObligations`, as
+  Codex does at `SubagentStop`). A thread-bound subagent (`mode: "session"`
+  in that spawn result) keeps them, and its finalize is decided like any
+  session's: no ask in silent mode, the usual single ask in visible mode.
+- A subagent that finalizes before its spawn result is seen hands its debts up
+  when the result arrives. OpenClaw's announce of the subagent's result moves
+  them too when it starts a new run in the session that started the
+  subagent, whose prompt begins with OpenClaw's `[Inter-session message]`
+  line naming the subagent's key and `sourceTool=subagent_announce`. While
+  that session still has a run in progress, OpenClaw instead steers the
+  announce into that run: that is not a new run, and no prompt hook sees it.
+  The announce follows the subagent's run however it ended, also after a
+  model error, a timeout or an abort, when OpenClaw calls no
+  `before_agent_finalize`; the subagent's own prompt hook recorded its
+  ledger. The debts go to the session the spawn result named, else to the
+  session that receives the announce, which the announce names also when it
+  moves nothing; a later announce never redirects them. The announce names no
+  run, so once the plugin has seen a later run of the subagent start, an
+  announce moves nothing: the run that is going keeps the debts, and a run's
+  finalize or end moves them up. What a later run that ends without
+  `before_agent_finalize` leaves therefore reaches the session above with
+  OpenClaw's report of that run's end, which comes after the announce, and
+  may be asked for in that session's next run rather than in its announce
+  run. After a Gateway restart the plugin knows no earlier run and has no
+  spawn result: an announce moves the debts as before until the plugin has
+  seen two runs of the subagent start, and after that the latest run's end
+  hands them up to the session that announce named.
+- OpenClaw's `subagent_ended` follows each ended run of a subagent (of a
+  thread-bound one only when it was killed), once per run (not for a run
+  OpenClaw replaced with a newer one, as at a steer restart: what it left
+  goes up with the newer run), after the announce: outcome `ok`, `error`,
+  `timeout` or `killed`. It names the
+  subagent's key (`ctx.childSessionKey`) and the session OpenClaw reports to
+  (`ctx.requesterSessionKey`). For a subagent this plugin saw, it moves the
+  debts to the session that started it, also for a run steered into a
+  running parent, as at a finalize: a full parent ledger turns a moved debt
+  into an overflow count (while that count cannot be written, the debt stays
+  with the subagent, where the parent's association reaches it, and a later
+  end counts it), but a debt whose exact arguments are sealed moves
+  whole only when the parent can take an equal copy and no other ledger
+  points to it yet; otherwise it stays where it is kept, and the parent's
+  ledger gets a content-free pointer to it, however many there are: the
+  parent's reminder names it, second-hand, and never counts it. So does a
+  debt the subagent itself got from its own subagent (only possible when
+  OpenClaw's `maxSpawnDepth` is above 1), also when the subagent's ledger
+  holds nothing but such pointers. When that nested subagent's end comes, or
+  comes again, after the end of the subagent that started it, its debts
+  still go to the session of the subagent that started it: that session's
+  next run (OpenClaw's announce of the nested result, or a later run) is
+  asked for them and settles them, and its next end hands up what is left.
+  Until that session runs again, the session above it reaches them: a
+  subagent's ledgers each leave a content-free forwarding marker when they
+  hand up, also when they hold nothing, and the ledger those markers lead to
+  (following at most 8) gets a content-free association to that session's
+  ledger; the session's next prompt turns its marker into a released one
+  (content-free: it says only that the session runs again). One session at a
+  time is asked for a kept debt, with the exceptions below. The pointers and
+  associations this plugin's hand-ups write say so in one more content-free
+  field (`"forwarded": true`), and a read that decides who is asked (a
+  prompt's or a finalize's) follows one only when no session that runs again
+  owns what it names: the keeping session itself, or the first session whose
+  marker is released on the way the keeper's markers lead (looked for through
+  at most 8 markers, two per level of nesting; each marker read counts among
+  the 256 entries a read examines). Otherwise the read removes the entry (the
+  keeping session asks), or moves it unchanged to the owning session (written
+  there first; while that write fails, it stays and is not followed): a
+  session that runs again is asked for debts kept below it once the session
+  above has read. Every other read (one that records a debt or looks one up,
+  or ends a tool call) moves nothing, so a run keeps the entry it was asked
+  through until its next prompt or finalize, and a completion or a decline
+  settles through every entry its session holds, owned or not, and names
+  nothing: a debt is settled once, where it is kept. The exceptions: a run
+  already asked stays asked until it ends, so when the session that keeps the
+  debt, or a session between the two, runs again meanwhile, its prompt asks
+  it too, and both may complete it. The debt is settled once, where it is
+  kept, and the other completion settles nothing locally, but its call still
+  reaches Remembrance: a second identical `record_preference` from the same
+  OpenClaw installation, or a second identical `submit_remembrance`, is
+  replayed rather than recorded again, except that a remembrance submitted
+  with `verified_attestation: true` is recorded and verified a second time,
+  and a second `submit_feedback` gives that session a remembrance follow-up
+  of its own whenever the service returns a next step. A second
+  `submit_query_feedback` for the same query is replayed when its judgments
+  are the same (a replayed `overall_fit: "none"` still counts the
+  missing-skill demand again) and refused when they differ (the first
+  judgment stands). A decline in one session does not withdraw a reminder the
+  other already holds, and that session may still complete the debt (its call
+  reaches Remembrance; locally it settles nothing). An end that names no run,
+  or a run the plugin does not remember (below), hands over at once, also
+  while a later run of the subagent goes, and so does the first announce
+  after a Gateway restart while a later run goes: the session above and that
+  run are then both asked until that run ends. When the session that runs
+  again lies more than 8 markers above the one that keeps the debt (only with
+  OpenClaw's `maxSpawnDepth` at its maximum of 5), the session above it can
+  be asked as well. A released marker lost to a reboot or a
+  temporary-directory cleanup, or one a session that runs again cannot write
+  (its forwarding marker then goes all the same), lets the session above be
+  asked too, until that session's next end. OpenClaw may report a run's end
+  after the next run of the same subagent started: that end hands nothing
+  over, and the latest run's end hands up. For that the plugin remembers, in
+  memory, the ids of a subagent's last four runs (one id however often
+  OpenClaw builds a run's prompt, recorded before the prompt hook awaits
+  anything), and relies on OpenClaw naming the ended run (`runId` in the
+  event and its context; OpenClaw 2026.7.1-2 names it); an end that names no
+  run (a session reset or delete), or a run the plugin never saw or no longer
+  remembers, hands over at once. OpenClaw 2026.7.1-2 reports the end of each
+  run its subagent registry tracks, also after an error, a timeout or an
+  abort: a spawned run, and a later run of the subagent's session that the
+  Gateway's `agent` method (which `sessions_send` and a wake use) or its
+  `sessions.send` method starts once the registry has recorded the previous
+  run's end (a yield is not reported as an end). When a later run is one the
+  registry does not track (one that the Gateway's `chat.send` method starts
+  directly, as the Control UI's chat, the TUI, an ACP client or Talk do; one
+  that starts before the registry has recorded the previous run's end; or one
+  of a session the registry holds no run for) and it also ends without
+  `before_agent_finalize` (OpenClaw skips it, for example, when a run errors,
+  times out or is aborted, ends without visible assistant text, with the
+  expected silent reply or on a yield, or completes a client tool call), the
+  plugin sees no end of it: that session's marker stays released, and what it
+  owns, kept debts it handed up before included, waits in its ledger, named
+  to nobody until it runs again, or until a reset or delete that OpenClaw
+  reports through `subagent_ended` (OpenClaw's own deletion of a subagent
+  spawned with `cleanup: "delete"` reports none, so what it left stays named
+  to nobody).
+  A debt that moves whole is named after the subagent that ended; one that
+  stays kept keeps the name of the first subagent it came from. One end hands
+  over one page (the subagent's own debts and at most 64 it points to), and
+  the parent's ledger first gets one content-free association to the
+  subagent's ledger, removed again once that page handed everything over:
+  whatever the page leaves stays reachable through it. A reminder names at
+  most 12 actions and reads at most 64 pointed or associated debts at a time;
+  later ones are named as earlier ones are completed or declined.
+  Where no pointer directory accepts the association or the pointer, the
+  debt stays with the subagent, neither named nor counted, until a later end
+  of that subagent writes them; a pointer or association written to the
+  temporary usage directory, while the durable directory under
+  $XDG_STATE_HOME is refused, moves there on the first read after it is
+  usable, and a reboot or temporary-directory cleanup before then leaves the
+  debt unnamed until a later end writes it again, which may never come, as
+  does a pointer whose mode, owner or bytes change. The same cleanup removes
+  the records kept in the temporary usage directory: debts without a payload,
+  and a sealed record whose durable write failed, with its payload. The first
+  read that finds such a sealed record there while the durable directory is
+  usable moves it to the durable directory, whether that is the keeping
+  session's own read or the read of a session asked for it; a cleanup before
+  that read takes it. When that cleanup removes a forwarding marker
+  before a nested subagent's late end, or a nested subagent's hand-up stops
+  mid-way (the Gateway killed) after its debts reached the session of the
+  subagent that started it and before the association was written, those
+  debts wait in that session, named at its next run and handed up at its
+  next end. Such a debt
+  still counts as a user of the local private-learning key, so no new key is
+  made while it waits.
+  When it fires before the spawn result, the spawn
+  result moves them, to the session it came from. It moves nothing
+  for a thread-bound subagent, and nothing when the spawn result came before
+  the end and OpenClaw names another requester than the session it came from
+  (it logs one line without keys or content instead); the debts then stay
+  with the subagent. A repeated event changes nothing an earlier one handed
+  over; it hands over only what that one could not. A later run of the
+  subagent's session hands up what that run left, also when OpenClaw gave
+  the session key a new session id first (its daily or idle reset): the
+  plugin follows the ledger of the subagent's latest prompt, and when a
+  prompt brings a new ledger, what the previous one still holds goes up
+  first. OpenClaw does not
+  hold this hook before the conversation-access grant (it is not a
+  conversation hook): it reads and writes only local Remembrance ledger files
+  (the usage directory and the private-learning hint directory under
+  $XDG_STATE_HOME/remembrance), reads no conversation content and makes no
+  request.
+- Debts that reach none of these paths stay in the subagent's own ledger,
+  and nothing hands them up later: the plugin remembers subagents in memory
+  only (at most 512), so a subagent that ran in another process, or whose run
+  ended after the plugin was reloaded or the Gateway restarted, or whose
+  prompt and spawn result the plugin never saw, keeps them. Its ledger is
+  read only at prompts of the subagent's own session, as for any session,
+  and a subagent that finished usually gets none.
 
 Both hooks **fail open**: query errors never block the user's work. Timeout,
 HTTP, and malformed-response failures inject compact recovery guidance;
@@ -491,10 +927,30 @@ query is sent.
   private/link-local HTTPS self-host. Remote HTTP is rejected except on loopback.
 - `REMEMBRANCE_AUTO_QUERY=0`: disables the pre-prompt hook's network query.
 - `REMEMBRANCE_AUTO_QUERY_LIMIT`: result limit, default `3`, max `10`.
-- `REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS`: hook query timeout, default `2000`.
+- `REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS`: hook request timeout. The search waits
+  `3000` by default, so the server's relevance judge can take its longer
+  2,000 ms hook deadline when Jev leaves candidates undecided; the hook's
+  other requests wait `2000`. A value applies to every hook request, and one
+  under `3000` tells the server not to wait that long. A stopped search whose
+  preference read and search both hang delays the prompt about 5 s.
+- `REMEMBRANCE_AUTO_QUERY_HYGIENE=0`: also searches host-generated text a
+  trigger word matches (a Codex commit or pull-request generation prompt, a
+  subagent hand-back, pasted `git status` output, an explicit local skill
+  invocation). By default only its skill search is skipped: the organization
+  policy, required settings and preferences a search would carry still arrive.
+- `REMEMBRANCE_AUTO_QUERY_TASK_SHAPE=0`: searches only prompts a keyword
+  trigger matches. By default the hook also searches any other task-shaped
+  prompt of at least 40 characters (trigger reason `task_shape`); one-off fact
+  questions, status acknowledgments, explicit skill references, host text and
+  short follow-ups are decided as before. A task-shape search that finds
+  nothing adds no no-match block, completion recovery or query-feedback request
+  of its own; the organization policy, required settings, preferences and
+  capture lines still arrive, and the server still records the missing-skill
+  demand.
 - `REMEMBRANCE_DIRECTIVE_EVENT_TIMEOUT_MS`: fail-open shown/followed event
   timeout, default `750`, bounded to `100`-`2000` milliseconds.
-- `REMEMBRANCE_AUTO_CONTRIBUTE=0`: disables the completion contribution prompt.
+- `REMEMBRANCE_AUTO_CONTRIBUTE=0`: disables silent completion recovery and its
+  next-prompt contribution guidance.
 - `REMEMBRANCE_USAGE_DIR`: overrides the per-session usage-marker directory.
 - `REMEMBRANCE_AGENT_KEY_PATH`: optional local TOFU key path for MCP identity.
 
@@ -519,6 +975,42 @@ by hand; change the canonical source or the OpenClaw hardening transform and run
 
 ## Verified vs. unverified against OpenClaw docs
 
+**Confirmed against the OpenClaw 2026.7.1-2 runtime** (its typed hook
+declarations, `dist/hook-types-*.d.ts`, and the native host check,
+`scripts/native-host-checks/openclaw.mjs`):
+
+- OpenClaw calls a typed hook as `handler(event, ctx)`. The run's identity is
+  only in the second argument: `ctx.runId` (new for every run, that is every
+  turn), `ctx.sessionId`, `ctx.sessionKey` and `ctx.agentId`. The event has no
+  `context`, and a plugin's configuration is `api.pluginConfig`, never part of
+  an event. `register()` copies `ctx` onto the event it hands this plugin's
+  handlers.
+- The plugin keeps lifecycle markers, directives, value episodes, task
+  outcomes and host-policy alerts per run (`ctx.runId`), and usage, task
+  eligibility, the prompted count and pending actions per session
+  (`ctx.sessionId`, else `ctx.sessionKey`), so a debt one run leaves is offered
+  at the next prompt of the same session and never in another session.
+- `subagent_ended`, verified natively on the pinned 2026.7.1-2 CLI by a
+  contract probe through a loopback Gateway before this plugin used the hook
+  (the probe's record is kept with the release qualification evidence,
+  outside this repository; the native host check drives the error case).
+  OpenClaw calls it as `handler(event, ctx)`. The event carries
+  `accountId`, `endedAt`, `error`, `outcome`, `reason`, `runId`,
+  `sendFarewell`, `targetKind` (`"subagent"`) and `targetSessionKey`; the
+  context carries exactly `childSessionKey` (equal to `targetSessionKey`),
+  `requesterSessionKey` (the spawning session's key, as the spawn result's
+  `after_tool_call` context names it) and `runId`, with no `sessionId` or
+  `sessionKey`, so the subagent's ledger comes from the plugin's own record.
+  Outcomes observed: `ok`, `error` and `timeout` (`killed`, for reason
+  `subagent-killed`, is in OpenClaw's source only). It fires once per ended
+  run, after the announce, also when the announce was steered into a run of
+  the requester in progress; a later run of the subagent's session
+  (`sessions_send`, once the registry has recorded the previous run's end)
+  fires it again with a new `runId`. It is not a
+  conversation hook: OpenClaw does not hold it before the conversation-access
+  grant (a plugin never granted received every event), while it still holds
+  `before_agent_finalize`.
+
 **Confirmed by the OpenClaw docs** (cited above):
 
 - `openclaw.plugin.json` is metadata-only (id / configSchema required; an empty
@@ -529,13 +1021,15 @@ by hand; change the canonical source or the OpenClaw hardening transform and run
   `openclaw.extensions` / `openclaw.runtimeExtensions`.
   ([Plugin entry points](https://docs.openclaw.ai/plugins/sdk-entrypoints))
 - Plugins register hooks in code via `register(api)` + `api.on(name, handler,
-opts?)` (with `priority` / `timeoutMs` options); handlers are `async (event)
-=> ...`, and `event.context` carries `sessionId` / `runId` / `pluginConfig`.
+opts?)` (with `priority` / `timeoutMs` options).
   ([Plugin hooks](https://docs.openclaw.ai/plugins/hooks),
   [Plugin internals](https://docs.openclaw.ai/plugins/architecture))
-- Conversation hook names — `before_model_resolve`, `before_prompt_build`,
+- Hook names in the agent loop — `before_model_resolve`, `before_prompt_build`,
   `llm_input`, `before_agent_reply`, `llm_output`, `before_agent_finalize`,
   `agent_end` — and that `llm_output` / `agent_end` are observation-only.
+  OpenClaw gates only the raw conversation hooks quoted in
+  [Conversation access](#conversation-access); `before_prompt_build` is not one
+  of them.
   ([Plugin hooks](https://docs.openclaw.ai/plugins/hooks),
   [Agent loop](https://docs.openclaw.ai/concepts/agent-loop))
 - `after_tool_call` is the observation-only hook for successful/error tool
@@ -585,8 +1079,9 @@ opts?)` (with `priority` / `timeoutMs` options); handlers are `async (event)
   (nor a documented plugin-root variable) for MCP configs, so the shipped
   fragment is illustrative only. The plugin-owned `openclaw remembrance setup`
   command writes the installed absolute path through OpenClaw's supported
-  config-mutation API; managed installations may use an absolute `args` path or
-  `openclaw mcp add remembrance --command node --arg /abs/path/...`.
+  config-mutation API; managed installations may use absolute `command` and
+  `args` paths or
+  `openclaw mcp add remembrance --command "$(command -v node)" --arg /abs/path/...`.
 - **`openclaw.compat.pluginApi` / `openclaw.build.openclawVersion` values.**
   ClawHub requires date-versioned compatibility metadata. The package is pinned
   to the oldest OpenClaw host exercised by the release gate; update the pin and

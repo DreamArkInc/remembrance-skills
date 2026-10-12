@@ -50,4 +50,22 @@ describe("Claude Code host-policy denial observer", () => {
       ),
     ).toBeNull();
   });
+
+  it("does not emit a duplicate warning for a previously delivered denial", () => {
+    const mark = vi.fn();
+    expect(
+      handleHostPolicyDenial(
+        { session_id: "same-session" },
+        {
+          env: {},
+          recordHostPolicyDenial: () => ({
+            id: "same-observation",
+            alerted_at: new Date().toISOString(),
+          }),
+          markHostPolicyAlertDelivered: mark,
+        },
+      ),
+    ).toBeNull();
+    expect(mark).not.toHaveBeenCalled();
+  });
 });

@@ -22,8 +22,9 @@ describe("OpenClaw after_tool_call hook", () => {
       cleared: true,
       why: "matched_detail_open",
     });
+    // The high match is the session's: a later run of it may open the match.
     expect(clear).toHaveBeenCalledWith(
-      "run_openclaw",
+      "session_openclaw",
       "mcp__remembrance__get_resource",
       {
         slug: "vercel-docs",

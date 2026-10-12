@@ -23,19 +23,23 @@ import {
   randomBytes,
   sign as signPayload,
 } from "node:crypto";
+import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
   closeSync,
   constants,
   existsSync,
   fstatSync,
+  linkSync,
   lstatSync,
   mkdirSync,
+  opendirSync,
   openSync,
   readFileSync,
   readSync,
   readdirSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -44,33 +48,143 @@ import { isIP } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
+import {
+  acknowledgeFeedbackDenial,
+  feedbackDenialAcknowledged,
+} from "./feedback-disposition.mjs";
+import {
+  inventoryRetainedKeyConsumers,
+  normalizeResupplyEnvelope,
+  normalizeRetainedKeyHoldCodes,
+  openResupplyEnvelope,
+  resupplyEnvelopeBytes,
+  resupplyPayloadDigest,
+  retainedKeyHoldCodes,
+  retainedKeyHoldRemediation,
+  retainedLedgerRoot,
+  retainedRootsUsable,
+  sealResupplyPayload,
+} from "./pending-action-payload.mjs";
+import {
+  boundedContextSection,
+  composeBoundedHookContext,
+  composeBoundedHookContextResult,
+  PRIVATE_LEARNING_INSPECTOR_DIGEST,
+  promptContainsFirstPartyCorrection,
+  userCorrectionCaptureDirectiveText,
+} from "./private-learning-hook-policy.mjs";
+
+export { composeBoundedHookContext } from "./private-learning-hook-policy.mjs";
 
 const DEFAULT_API_URL = "https://remembrance.dev";
 const DEFAULT_LIMIT = 3;
 const DEFAULT_TIMEOUT_MS = 2000;
+// The search waits longer than the hook's other registry requests: the
+// server's relevance judge may take up to 2 s when Jev leaves candidates
+// undecided (owner decision 40 = B), with ranking and network on top.
+const DEFAULT_SEARCH_TIMEOUT_MS = 3000;
 const DEFAULT_DIRECTIVE_EVENT_TIMEOUT_MS = 750;
+const PRIVATE_LEARNING_CAPTURE_CAPABILITY = "private-learning-capture-v1";
+// Tells the server this search waits for the judge's longer hook deadline.
+const RELEVANCE_JUDGE_WAIT_CAPABILITY = "relevance-judge-wait-v1";
+const CLIENT_CAPABILITIES_HEADER = "x-remembrance-client-capabilities";
 const DIRECTIVE_MARKER_TTL_MS = 30 * 60 * 1000;
 const MAX_SUMMARY_CHARS = 1200;
 const MAX_CONTEXT_CHARS = 4000;
 const MAX_CONTEXT_FIELD_CHARS = 280;
 const MAX_DIRECTIVE_CHARS = 900;
-const MAX_PREFERENCE_CONTEXT_CHARS = 520;
+// Room for the rules, one complete custom preference (96-char label, 320-char
+// behavior), and an omission note that points to the rest.
+const MAX_PREFERENCE_CONTEXT_CHARS = 1200;
 const MAX_MANDATORY_PREFERENCE_CONTEXT_CHARS = 1200;
+// Mirrors MAX_MANDATORY_ORG_PREFERENCES in core: up to eight exact keys
+// (1,313 characters at the 96-character key limit) fit the required fetch.
+const MAX_REQUIRED_SETTING_KEYS = 8;
 const VALUE_EPISODE_MARKER_LIMIT = 20;
 const VALUE_EPISODE_MARKER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DIRECT_SELECTION_MARKER_LIMIT = 20;
 const DIRECT_SELECTION_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
 const COMPLETION_OBLIGATION_LIMIT = 64;
+// The most pointer entries one read of a ledger examines over its two pointer
+// homes, of which it presents at most COMPLETION_OBLIGATION_LIMIT: the bound
+// of one listing of a ledger's own records.
+const COMPLETION_POINTER_SCAN_LIMIT = 256;
+// A post-use debt keeps the receipts of later invocations of its skill
+// version (repeatedResultUse), newest last; feedback under any of them pays it.
+const COMPLETION_ALIAS_QUERY_ID_LIMIT = 4;
+// Results a ledger paid post-use feedback for, newest last.
+const RATED_RESULT_LIMIT = 32;
+const RATED_RESULTS_VERSION = "rated-results-v1";
+// Every obligation file is read with this bound, so a retained re-supply
+// payload must fit inside it whole. Sealed, a payload takes about four thirds
+// of its bytes; at 12 KiB a record still keeps every payload the earlier 8 KiB
+// plaintext record kept (the largest beside the longest provenance grew from
+// 6,739 to 7,968 bytes). pending-action-payload.mjs reads the same bound.
+const COMPLETION_OBLIGATION_MAX_BYTES = 12 * 1024;
+// The most a record grows once written: the prompted mark, and the parent's
+// engagement count and the largest provenance a transfer sets. A payload is
+// retained only with room for all of it, so no rewrite has to drop it.
+const COMPLETION_OBLIGATION_GROWN_FIELDS = Object.freeze({
+  engagement_count: 1_000_000,
+  prompted_at: new Date(0).toISOString(),
+  transferred_from: Object.freeze({
+    agent_id: "a".repeat(256),
+    transcript_path: "p".repeat(512),
+  }),
+});
+const PRIVATE_AUTHORIZATION_RETRY_INTERVAL_MS = 6 * 60 * 60 * 1000;
+// Inherited cleanup for a debt record without content (a marker), which a
+// ledger read removes once it is this old. It never applies to a record
+// that keeps an unresolved action's payload: only completing, declining or
+// withdrawing the action removes that (review R2, Task 15). No owner
+// decision set this age.
 const COMPLETION_OBLIGATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const COMPLETION_OBLIGATION_POINTER_VERSION = "completion-obligation-pointer-v1";
+// A ledger that hands over leaves a content-free forwarding marker naming the
+// ledger it handed over to; when one page cannot hand everything over, the
+// recipient gets a content-free association naming the ledger that still
+// holds or points to the rest. A read, or a hand-over, follows at most
+// COMPLETION_HOP_LIMIT of them in a row.
+const COMPLETION_OBLIGATION_ASSOCIATION_VERSION =
+  "completion-obligation-association-v1";
+const COMPLETION_OBLIGATION_FORWARD_VERSION = "completion-obligation-forward-v1";
+// What a forwarding marker becomes when its ledger's session runs again
+// (releaseCompletionForward): content-free, it says only that this session
+// runs, so a read elsewhere leaves to it what it keeps, and what is kept
+// below it (completionOwner), until its next end writes a forwarding marker
+// again. A hand-over stops there as at a ledger without a marker.
+const COMPLETION_OBLIGATION_RELEASED_VERSION =
+  "completion-obligation-released-v1";
+const COMPLETION_OBLIGATION_RELEASED_TEXT = `${JSON.stringify({
+  version: COMPLETION_OBLIGATION_RELEASED_VERSION,
+})}\n`;
+const COMPLETION_HOP_LIMIT = 8;
+// The bound a pointer, an association or a forwarding marker is read with,
+// as pointers were at master: the largest valid one is under 1 KiB (an agent
+// id of at most 256 characters, a transcript path within its room).
+const COMPLETION_POINTER_MAX_BYTES = 1024;
 const COMPLETION_OBLIGATION_VERSION = "completion-obligation-v1";
+const COMPLETION_OBLIGATION_OVERFLOW_VERSION =
+  "completion-obligation-overflow-v1";
+const PRIVATE_SKILL_NATIVE_CONTEXT_EVENT_MAX_BYTES = 512 * 1024;
+const PRIVATE_SKILL_NATIVE_CONTEXT_OUTPUT_MAX_BYTES = 16 * 1024;
+const PRIVATE_SKILL_NATIVE_CONTEXT_TIMEOUT_MS = 2_500;
 const COMPLETION_CONTRIBUTION_TOOLS = new Set([
   "submit_query_feedback",
   "submit_feedback",
+  "decline_pending_action",
+  "capture_learning",
   "submit_remembrance",
   "propose_skill_idea",
   "propose_private_skill",
   "submit_private_lesson_candidate",
   "retry_private_lesson_candidate",
+  "submit_private_skill_candidate",
+  "retry_private_skill_candidate",
+  "delete_private_lesson_candidate",
+  "delete_private_skill_candidate",
+  "record_preference",
   "submit_suggestion",
   "submit_resource",
   "submit_resource_review",
@@ -78,6 +192,12 @@ const COMPLETION_CONTRIBUTION_TOOLS = new Set([
 const PREFERENCE_EVIDENCE_SKILL_LIMIT = 2;
 const PREFERENCE_EVIDENCE_SETTING_LIMIT = 4;
 const PREFERENCE_EVIDENCE_CONTEXT_CHARS = 520;
+// submit_preference_compatibility_feedback accepts a query_id, result_id,
+// skill_slug and skill_version_id of up to 160 characters each, so the hook
+// carries them that far unchanged: a shortened ID is a wrong ID.
+const MAX_FEEDBACK_IDENTIFIER_CHARS = 160;
+// Mirrors MAX_EFFECTIVE_PREFERENCES in core: a response never states more.
+const MAX_EFFECTIVE_PREFERENCE_STATEMENTS = 32;
 const EFFECTIVE_PREFERENCE_SOURCES = new Set([
   "mandatory_org",
   "explicit_task",
@@ -113,13 +233,28 @@ const CLIENT_UPDATE_CACHE_TTL_MS = 5 * 60 * 1000;
 const CLIENT_UPDATE_TIMEOUT_MS = 1200;
 const PRINCIPAL_SESSION_TIMEOUT_MS = 1200;
 const MAX_LOCAL_PRINCIPAL_SESSION_BYTES = 16 * 1024;
+// The recovery reminders parse a private skill draft's whole encrypted envelope
+// to read its state. 4 MiB holds a 56,000-character skill with its projection,
+// reformulation attempts and native contexts; a larger draft is left out of
+// the reminders, never read partly. This is not a submission limit.
+const MAX_PRIVATE_SKILL_ENVELOPE_BYTES = 4 * 1024 * 1024;
 const principalSessionWarmups = new Map();
 export const HOST_POLICY_ALERT_TEXT =
-  "Remembrance was blocked by host policy before reaching Remembrance. Nothing was sent. Querying remains available.";
+  "The host blocked this Remembrance action. Do not treat it as submitted. Earlier successful actions are unaffected; querying remains available.";
 export const PRIVATE_LESSON_HOST_POLICY_ALERT_TEXT =
-  "Remembrance was blocked by host policy before reaching Remembrance. No lesson or candidate content was sent. The private draft remains on this device and will be submitted after authorization. Querying remains available.";
+  "The host blocked this private Remembrance submission. Do not treat it as submitted. Earlier successful actions are unaffected; querying remains available.";
+const FEEDBACK_DENIAL_GUIDANCE =
+  "For host-denied feedback, call local acknowledge_feedback_denial with the tool, exact receipt IDs, and reason host_policy_denied. Report once; do not retry through another transport.";
+const PENDING_ACTION_DECLINE_REASONS = [
+  "not_observed_by_this_agent",
+  "agent_exited",
+  "not_reusable",
+  "duplicate",
+];
+const PENDING_ACTION_DECLINE_GUIDANCE =
+  "If you cannot complete an action, call local decline_pending_action with the action_id under it and one reason (not_observed_by_this_agent, agent_exited, not_reusable, or duplicate) instead of guessing.";
 export const PRIVATE_LESSON_AUTHORIZATION_REQUEST_TEXT =
-  "Allow Remembrance to submit this retained private lesson to your organization?";
+  "Allow Remembrance to submit this retained private lesson or skill candidate to your organization?";
 const PLUGIN_HEALTH_COMPONENTS = new Set([
   "session_start",
   "prompt_hook",
@@ -192,12 +327,17 @@ const CLIENT_UPDATE_GUIDANCE = {
   },
 };
 
+// Every common word below also matches its plural and verb forms (-s/-es,
+// -ed, -ing; a final e drops before -ed and -ing): the patterns end at a word
+// boundary, so "deploying" or "components" missed their own entry. Names and
+// abbreviations are left as they are. No word is added this way.
 const SERVICE_PATTERNS = [
   /\b(vercel|heroku|netlify|cloudflare|aws|gcp|azure)\b/i,
   /\b(github actions?|circleci|gitlab ci|buildkite|jenkins)\b/i,
-  /\b(stripe|x402|mpp|model payment protocol|mcp servers?)\b/i,
-  /\b(?:openai|anthropic|claude|voyage|mongodb atlas)\b.{0,80}\b(?:api|sdk|provider|gateway|model|embedding|integration|authentication|authorization|credential|request|endpoint)\b/i,
-  /\b(?:api|sdk|provider|gateway|model|embedding|integration|authentication|authorization|credential|request|endpoint)\b.{0,80}\b(?:openai|anthropic|claude|voyage|mongodb atlas)\b/i,
+  // MPP is the Machine Payments Protocol; the earlier name stays matched.
+  /\b(stripe|x402|mpp|model payment protocol|machine payments? protocol|mcp servers?)\b/i,
+  /\b(?:openai|anthropic|claude|voyage|mongodb atlas)\b.{0,80}\b(?:apis?|sdks?|providers?|gateways?|models?|embeddings?|integrations?|authentication|authorization|credentials?|requests?|endpoints?)\b/i,
+  /\b(?:apis?|sdks?|providers?|gateways?|models?|embeddings?|integrations?|authentication|authorization|credentials?|requests?|endpoints?)\b.{0,80}\b(?:openai|anthropic|claude|voyage|mongodb atlas)\b/i,
 ];
 
 const TOOL_PATTERNS = [
@@ -207,16 +347,16 @@ const TOOL_PATTERNS = [
 ];
 
 const WORKFLOW_PATTERNS = [
-  /\b(deploy|deployment|migrate|migration|ci\/cd|ci|pipeline)\b/i,
-  /\b(payment integration|schema upgrade|observability|monitoring)\b/i,
-  /\b(build error|release|rollback|provision|backfill)\b/i,
+  /\b(deploy(?:s|ed|ing|ments?)?|migrat(?:e|es|ed|ing|ions?)|ci\/cd|ci|pipelin(?:e|es|ed|ing))\b/i,
+  /\b(payments? integrations?|schemas? upgrad(?:e|es|ed|ing)|observability|monitoring)\b/i,
+  /\b(build errors?|releas(?:e|es|ed|ing)|rollbacks?|provision(?:s|ed|ing)?|backfill(?:s|ed|ing)?)\b/i,
 ];
 
 const UI_PATTERNS = [
-  /\b(web ?ui|ux|usability|accessibility|a11y|responsive|frontend|front-end)\b/i,
-  /\b(dashboard|admin (page|panel|surface)|review card|settings layout)\b/i,
-  /\b(layout|nav(igation| bar| panel)?|sidebar|modal|tooltip|popover)\b/i,
-  /\b(tailwind|styling|component|button|form design|redesign|declutter|design system)\b/i,
+  /\b(web ?uis?|ux|usability|accessibility|a11y|responsive|frontends?|front-ends?)\b/i,
+  /\b(dashboards?|admin (?:pages?|panels?|surfaces?)|review cards?|settings layouts?)\b/i,
+  /\b(layouts?|nav(?:igations?| bars?| panels?)?|sidebars?|modals?|tooltips?|popovers?)\b/i,
+  /\b(tailwind|styling|components?|buttons?|form designs?|redesign(?:s|ed|ing)?|declutter(?:s|ed|ing)?|design systems?)\b/i,
 ];
 
 // Short action prompts often depend entirely on earlier conversation. The hook
@@ -232,6 +372,15 @@ const CONTEXTUAL_CONTINUATION_PATTERNS = [
   /^\s*(?:run|rerun)\s+(?:it|that|the tests?|the checks?)\b/i,
 ];
 
+// Positive setup-state acknowledgments can contain a service name without
+// asking the agent to do any work. Keep this semantic and anchored: short
+// action prompts still flow through the contextual-continuation path below.
+const FRAGMENTARY_STATUS_ACKNOWLEDGMENT_PATTERNS = [
+  /^\s*(?:the\s+)?[a-z][a-z0-9._-]*(?:\s+(?:cli|account|session))?\s+(?:(?:is|has)\s+)?(?:now\s+)?(?:logged\s+in|authenticated|connected)\s*[.!]*\s*$/i,
+  /^\s*(?:i(?:'m|\s+am)|we(?:'re|\s+are))\s+(?:now\s+)?(?:logged\s+in|authenticated|connected)\s+(?:to|with)\s+[a-z][a-z0-9._-]*\s*[.!]*\s*$/i,
+  /^\s*[a-z][a-z0-9._-]*\s+(?:login|authentication|connection)\s+(?:succeeded|(?:is\s+)?(?:done|complete))\s*[.!]*\s*$/i,
+];
+
 const EXPLICIT_SKILL_REFERENCE_PATTERNS = [
   /\bremembrance:\/\/skills\/[^\s"'<>]+/i,
   /\/remembrance:use\b/i,
@@ -239,6 +388,38 @@ const EXPLICIT_SKILL_REFERENCE_PATTERNS = [
   /\b(?:use|invoke|open|load|select)\s+(?:the\s+)?remembrance\s+skill(?:\s+(?:named|called))?\s+[`"']?[a-z0-9][a-z0-9._-]*[`"']?/i,
   /\b(?:use|invoke|open|load|select)\s+(?:the\s+)?skill\s+(?:named|called)\s+[`"']?[a-z0-9][a-z0-9._-]*[`"']?\s+(?:from|in)\s+remembrance\b/i,
 ];
+
+// A closed class (coordinator decision, 2026-09-29): a request for an
+// existing reusable skill, resource, workflow or registry before building
+// one, the request Remembrance exists for. It holds reuse and registry words
+// only. No vendor, product or topic word belongs here: searching more topics
+// is the owner's open decision, not an addition to this list. It is
+// consulted only after every stop rule and every topic rule found nothing,
+// and hygiene still applies to what it matches.
+export const REUSE_REQUEST_PATTERNS = Object.freeze([
+  /\bskills?\b.{0,60}\b(?:registry|registries|marketplace|installable|published)\b/i,
+  /\b(?:find|search|look up|install)\b.{0,40}\bskills?\b/i,
+  /\b(?:ready[- ]made|reusable|proven|off[- ]the[- ]shelf|already (?:published|built))\b.{0,40}\b(?:packages?|skills?|resources?|workflows?|approach(?:es)?|instructions?|capabilit(?:y|ies)|solutions?|recipes?|playbooks?)\b/i,
+  /\b(?:someone|anyone)\s+(?:already|has)\s+(?:published|built|written|shared)\b/i,
+  /\b(?:before|instead of|rather than)\s+(?:building|writing|creating|starting|prompting|rolling)\b.{0,40}\b(?:our own|custom|from scratch|ourselves)\b/i,
+  /\bshared\s+(?:registry|operational memory)\b/i,
+]);
+
+export function isReuseRequest(prompt) {
+  const text = String(prompt ?? "");
+  return REUSE_REQUEST_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+// Task-shape default (owner decision 34C, 2026-09-29): a prompt no stop rule,
+// topic rule or reuse rule decided is searched once it holds at least this
+// many characters, with trigger reason task_shape. Hygiene still stops host
+// text, redaction and the preview cap are unchanged, and a contextual
+// continuation keeps its full-conversation query directive. An empty
+// task-shape search adds no no-match block, eligibility or feedback
+// obligation (see buildPromptHookResult). Cursor, whose hook never searches,
+// keeps deciding on the keyword triggers alone.
+// REMEMBRANCE_AUTO_QUERY_TASK_SHAPE=0 restores keyword-only searching.
+const TASK_SHAPE_MIN_CHARACTERS = 40;
 
 const SKIP_PATTERNS = [
   /\b(general web search|search the web|google this|look up current facts?)\b/i,
@@ -267,10 +448,40 @@ const SECRET_PATTERNS = [
 
 // --- Trigger heuristic -------------------------------------------------------
 
-export function shouldQueryPrompt(prompt) {
-  const normalized = String(prompt ?? "").trim();
+// A triggered search stops when the prompt is host text (searchHygieneReason);
+// REMEMBRANCE_AUTO_QUERY_HYGIENE=0 turns that off. Hygiene never turns a
+// prompt without a trigger into a search or changes its reason.
+export function shouldQueryPrompt(prompt, env = process.env) {
+  const decision = triggerDecision(prompt, env);
+  if (!decision.likely_match || disabled(env?.REMEMBRANCE_AUTO_QUERY_HYGIENE)) {
+    return decision;
+  }
+  const hygiene = searchHygieneReason(prompt);
+  return hygiene
+    ? {
+        likely_match: false,
+        reason: `hygiene_${hygiene}`,
+        hygiene,
+        trigger: decision.reason,
+      }
+    : decision;
+}
+
+function triggerDecision(prompt, env = process.env) {
+  const userPrompt = userPromptOutsideHostNotifications(prompt);
+  if (userPrompt === null) {
+    return { likely_match: false, reason: "host_notification" };
+  }
+  const normalized = userPrompt.trim();
   if (!normalized || normalized.length < 8) {
     return { likely_match: false, reason: "empty_or_too_short" };
+  }
+  if (
+    FRAGMENTARY_STATUS_ACKNOWLEDGMENT_PATTERNS.some((pattern) =>
+      pattern.test(normalized),
+    )
+  ) {
+    return { likely_match: false, reason: "status_acknowledgment" };
   }
   if (
     EXPLICIT_SKILL_REFERENCE_PATTERNS.some((pattern) =>
@@ -293,14 +504,277 @@ export function shouldQueryPrompt(prompt) {
       return { likely_match: true, reason };
     }
   }
-  if (/\b(integrate|integration|configure|setup|set up)\b/i.test(normalized)) {
+  if (
+    /\b(integrat(?:e|es|ed|ing|ions?)|configur(?:e|es|ed|ing)|setups?|set up|sets up|setting up)\b/i.test(
+      normalized,
+    )
+  ) {
     return { likely_match: true, reason: "third_party_integration" };
+  }
+  if (isReuseRequest(normalized)) {
+    return { likely_match: true, reason: "reuse_request" };
+  }
+  if (
+    !disabled(env?.REMEMBRANCE_AUTO_QUERY_TASK_SHAPE) &&
+    normalized.length >= TASK_SHAPE_MIN_CHARACTERS &&
+    !CONTEXTUAL_CONTINUATION_PATTERNS.some((pattern) => pattern.test(normalized))
+  ) {
+    return { likely_match: true, reason: "task_shape" };
   }
   return { likely_match: false, reason: "no_trigger_match" };
 }
 
+// Envelopes hosts wrap around text they generate: notifications, reminders
+// and statuses; Claude Code's local-command, bash-mode and hook-output blocks
+// (its own reserved names: command-name, local-command-caveat, bash-input,
+// ...); and Codex's contextual items (turn_aborted, user_shell_command,
+// environment_context), which it records as user-role messages.
+const HOST_EVENT_TAG_NAME =
+  /^(?:(?:codex|system|host|task|background|subagent|tool)[_-]?(?:notification|completion|status|result|reminder)|notification|system|command[_-](?:name|message|args)|local[_-]command[_-](?:caveat|stdout|stderr)|bash[_-](?:input|stdout|stderr|exit[_-]code)|user[_-]prompt[_-]submit[_-]hook|turn[_-]aborted|user[_-]shell[_-]command|environment[_-]context)$/iu;
+
+// Claude Code builds a task notification as the envelope plus optional
+// trailing text (a stalled command's last output, a cloud review's findings)
+// and hooks each queued notification on its own, so nothing after one is the
+// user's; a Codex subagent notification carries the subagent's own message.
+// The header Claude's wrappers put before a notification says the same.
+const NOTIFICATION_TAG = /<\s*(?:task|subagent)[_-]?notification(?=[\s/>]|$)/iu;
+const HOST_NOTIFICATION_HEADER = "[SYSTEM NOTIFICATION - NOT USER INPUT]";
+
+// Only leading host envelopes are metadata. Scan at most 64 KiB / 256 tokens,
+// tracking nested host tags and quoted/opaque markup so an inner close cannot
+// expose notification prose. An unclosed or over-budget envelope has no proven
+// user-text boundary; null keeps it out of capture and querying. A body is
+// host text, not markup (command output, a subagent's message): a closing tag
+// in it ends its envelope early. So an envelope holding a notification or its
+// header has no user text after it at all, and a stripped envelope's closing
+// tag after its end shows that end was not the real one.
+function userPromptOutsideHostNotifications(prompt) {
+  const text = String(prompt ?? "");
+  const scan = text.slice(0, 64 * 1024);
+  const leading = /^\s*(?:<\?xml\s[^?]*\?>\s*)?/iu.exec(scan)[0];
+  const opening = /<\s*([a-z][a-z0-9_.:-]*)(?=[\s/>]|$)/iy;
+  const token =
+    /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<\s*(\/?)\s*([a-z][a-z0-9_.:-]*)(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/giy;
+  let cursor = leading.length;
+  let tokens = 0;
+  const stripped = new Set();
+  while (true) {
+    if (scan.startsWith(HOST_NOTIFICATION_HEADER, cursor)) return null;
+    opening.lastIndex = cursor;
+    const start = opening.exec(scan);
+    if (!start || !HOST_EVENT_TAG_NAME.test(start[1])) {
+      if (stripped.size === 0) return text;
+      const rest = text.slice(cursor).trimStart();
+      return rest && !closesStrippedEnvelope(rest, stripped) ? rest : null;
+    }
+    const envelopeStart = cursor;
+    const stack = [];
+    do {
+      if (++tokens > 256) return null;
+      token.lastIndex = cursor;
+      const part = token.exec(scan);
+      if (!part) return null;
+      const name = part[2]?.toLowerCase();
+      if (name && HOST_EVENT_TAG_NAME.test(name)) {
+        if (part[1]) {
+          if (!/^<\s*\/\s*[a-z][a-z0-9_.:-]*\s*>$/iu.test(part[0])) return null;
+          if (stack.pop() !== name) return null;
+        } else if (!/\/\s*>$/u.test(part[0])) {
+          stack.push(name);
+        }
+      }
+      cursor = token.lastIndex;
+      if (stack.length > 0) {
+        cursor = scan.indexOf("<", cursor);
+        if (cursor < 0) return null;
+      }
+    } while (stack.length > 0);
+    // A notification, leading or inside another envelope, or its header:
+    // nothing in this prompt is the user's.
+    const envelope = scan.slice(envelopeStart, cursor);
+    if (
+      envelope.includes(HOST_NOTIFICATION_HEADER) ||
+      NOTIFICATION_TAG.test(envelope)
+    ) {
+      return null;
+    }
+    stripped.add(start[1].toLowerCase());
+    while (cursor < scan.length && /\s/u.test(scan[cursor])) cursor += 1;
+    if (cursor === scan.length && scan.length < text.length) return null;
+  }
+}
+
+function closesStrippedEnvelope(text, names) {
+  for (const tag of text.matchAll(/<\s*\/\s*([a-z][a-z0-9_.:-]*)\s*>/giu)) {
+    if (names.has(tag[1].toLowerCase())) return true;
+  }
+  return false;
+}
+
+export function isHostNotificationPrompt(prompt) {
+  return userPromptOutsideHostNotifications(prompt) === null;
+}
+
+// --- Search hygiene ----------------------------------------------------------
+
+// Text a host generates and delivers as if the user had typed it: a Codex
+// commit or pull-request generation prompt, a Claude Code subagent's hand-back,
+// a Codex message-board notification, Claude Code's persisted tool output,
+// pasted `git status` output, or an explicit local skill invocation. Each rule
+// is the host's own text anchored at the start of what remains after leading
+// host envelopes are stripped, never a length or a user-written phrase. A text
+// that holds the user's words after the host block is not matched, and a text
+// cut inside the block (a stored 1,200-character summary) is: a replay may
+// over-count stops but never misses one. A match stops only the skill search;
+// the hook still delivers everything else it would have delivered.
+const HOST_GENERATION_PROMPT =
+  /^(?:Using the supplied git context below, generate a git commit message\.|You are a helpful assistant\. Generate a pull request title and body\.|Using the supplied commit and pull request contexts below, generate one git commit message plus one pull request title and body\.)\s*\n\s*Write the result into the structured response fields? /u;
+const HOST_ENVELOPE_RULES = [
+  {
+    reason: "subagent_handback",
+    open: /^<agent-message\b[^>]*>\s*\n\[Subagent hand-back\]/u,
+    close: "</agent-message>",
+    trailer: null,
+  },
+  {
+    reason: "host_notification_relay",
+    open: /^<agent_message_board_notification>/u,
+    close: "</agent_message_board_notification>",
+    trailer: "[Use read_post for the rest.]",
+  },
+  {
+    reason: "tool_output_echo",
+    open: /^<persisted-output>\s*\nOutput too large \(/u,
+    close: "</persisted-output>",
+    trailer: null,
+  },
+];
+const GIT_STATUS_HEAD = /^(?:On branch \S+|HEAD detached (?:at|from) \S+)$/u;
+const GIT_STATUS_LINE =
+  /^(?:[\t ]|Your branch |and have \d+ and \d+ different commits each, respectively\.$|(?:Changes to be committed|Changes not staged for commit|Untracked files|Unmerged paths|Ignored files):$|You have unmerged paths\.$|All conflicts fixed but you are still merging\.$|You are currently |No commits yet$|no changes added to commit|nothing to commit|nothing added to commit but untracked files present)/u;
+const LOCAL_SKILL_REFERENCES = [
+  // Codex's explicit skill mention link (an app connector link is not one).
+  /^\[\$[a-z0-9][a-z0-9_:-]*\]\((?!app:\/\/)[^()\n]+\)/u,
+  // A namespaced (plugin) or dashed slash command.
+  /^\/[a-z0-9]+(?:-[a-z0-9]+)*:[a-z0-9]+(?:-[a-z0-9]+)*(?=\s|$)/u,
+  /^\/[a-z][a-z0-9]*(?:-[a-z0-9]+)+(?=\s|$)/u,
+];
+
+function wholeHostEnvelope(text, rule) {
+  if (!rule.open.test(text)) return false;
+  const end = text.indexOf(rule.close);
+  if (end < 0) return true;
+  let rest = text.slice(end + rule.close.length).trim();
+  if (rule.trailer && rest.startsWith(rule.trailer)) {
+    rest = rest.slice(rule.trailer.length).trim();
+  }
+  return rest.length === 0;
+}
+
+function wholeGitStatus(text) {
+  const [head, ...lines] = text.split(/\r?\n/u);
+  if (!GIT_STATUS_HEAD.test(head)) return false;
+  const body = lines.filter((line) => line.trim());
+  return body.length > 0 && body.every((line) => GIT_STATUS_LINE.test(line));
+}
+
+// OpenCode prompts can open with a closed block of other projects' examples
+// that is not the user's request. With
+// REMEMBRANCE_AUTO_QUERY_STRIP_INJECTED_CONTEXT=1 (off by default) the search
+// decision and query read only what follows it; everything else still reads
+// the whole prompt. An unclosed or later block leaves the prompt whole.
+const INJECTED_CONTEXT_BLOCK =
+  /^\s*<compartment_examples_from_other_projects>[\s\S]*?<\/compartment_examples_from_other_projects>/u;
+
+export function searchTextForPrompt(prompt, env = process.env) {
+  const text = String(prompt ?? "");
+  if (
+    !/^(1|true|yes)$/i.test(
+      String(env?.REMEMBRANCE_AUTO_QUERY_STRIP_INJECTED_CONTEXT ?? "").trim(),
+    )
+  ) {
+    return text;
+  }
+  const block = INJECTED_CONTEXT_BLOCK.exec(text);
+  return block ? text.slice(block[0].length).trim() : text;
+}
+
+// A content-free reason when the prompt is host text a skill search should
+// not run on, else null. Independent of the trigger rules.
+export function searchHygieneReason(prompt) {
+  const userPrompt = userPromptOutsideHostNotifications(prompt);
+  if (userPrompt === null) return null;
+  const text = userPrompt.trim();
+  if (!text) return null;
+  if (HOST_GENERATION_PROMPT.test(text)) return "host_generation_prompt";
+  const envelope = HOST_ENVELOPE_RULES.find((rule) =>
+    wholeHostEnvelope(text, rule),
+  );
+  if (envelope) return envelope.reason;
+  if (wholeGitStatus(text)) return "status_output";
+  if (LOCAL_SKILL_REFERENCES.some((pattern) => pattern.test(text))) {
+    return "local_skill_reference";
+  }
+  return null;
+}
+
+function containsHostEventMarkup(value) {
+  if (String(value ?? "").includes(HOST_NOTIFICATION_HEADER)) return true;
+  const tags = String(value ?? "").matchAll(
+    /<\s*\/?\s*([a-z][a-z0-9_.:-]*)(?=[\s/>]|$)/giu,
+  );
+  for (const tag of tags) {
+    if (HOST_EVENT_TAG_NAME.test(tag[1])) return true;
+  }
+  return false;
+}
+
+// Servers before 2026-08-23 titled and described the proposal with the query's
+// summary (the title cut to 77 characters and "..."), and a hook's summary is
+// the user's prompt. The hook never offers prompt text as a skill idea: a
+// proposal whose title or description is part of the summary, or holds all of
+// it, is left out, and the agent names an idea after the work.
+function echoedQueryText(value) {
+  return String(value ?? "")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(/(?:\.\.\.|\u2026)$/u, "")
+    .trim()
+    .toLowerCase();
+}
+
+function echoesQuerySummary(value, querySummary) {
+  const text = echoedQueryText(value);
+  const summary = echoedQueryText(querySummary);
+  return (
+    text.length > 0 &&
+    summary.length > 0 &&
+    (summary.includes(text) || text.includes(summary))
+  );
+}
+
+function safeProposedSkillIdeaPayload(noResults, querySummary = null) {
+  const payload = noResults?.propose_skill_idea_payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  if (
+    typeof payload.title !== "string" ||
+    !payload.title.trim() ||
+    typeof payload.description !== "string" ||
+    !payload.description.trim() ||
+    containsHostEventMarkup(payload.title) ||
+    containsHostEventMarkup(payload.description) ||
+    echoesQuerySummary(payload.title, querySummary) ||
+    echoesQuerySummary(payload.description, querySummary)
+  ) {
+    return null;
+  }
+  return payload;
+}
+
 export function isContextualContinuationPrompt(prompt) {
-  const normalized = String(prompt ?? "").trim();
+  const normalized = userPromptOutsideHostNotifications(prompt)?.trim() ?? "";
   if (
     !normalized ||
     SKIP_PATTERNS.some((pattern) => pattern.test(normalized)) ||
@@ -318,7 +792,7 @@ export function isContextualContinuationPrompt(prompt) {
 // --- Redaction ---------------------------------------------------------------
 
 export function redactPrompt(prompt) {
-  let redacted = String(prompt ?? "");
+  let redacted = userPromptOutsideHostNotifications(prompt) ?? "";
   for (const pattern of SECRET_PATTERNS) {
     redacted = redacted.replace(pattern, (match, prefix) => {
       if (typeof prefix === "string" && /^Bearer\s+/i.test(prefix)) {
@@ -581,6 +1055,24 @@ export function inferConstraints(prompt) {
 
 // Query Remembrance. Returns { body } on success, null on any failure (HTTP
 // error, timeout, malformed JSON, thrown error). Never throws.
+// The credential and principal-session headers a hook's registry request
+// carries, the same for the query and for a stopped search's preference read.
+function hookRegistryHeaders(access, runtime, env, userAgent) {
+  const headers = {
+    "content-type": "application/json",
+    "user-agent": clientUserAgent(userAgent),
+  };
+  const apiKey = access.credential.apiKey;
+  if (apiKey) {
+    headers["x-remembrance-api-key"] = apiKey;
+  }
+  const principalSession = readHookPrincipalSession(runtime, env, access);
+  if (principalSession?.token) {
+    headers["x-remembrance-principal-session"] = principalSession.token;
+  }
+  return { headers, principalSession };
+}
+
 export async function queryRemembrance(payload, options = {}) {
   const env = options.env ?? process.env;
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -593,22 +1085,19 @@ export async function queryRemembrance(payload, options = {}) {
       debugLog(env, "shared_config_unusable", {}, options);
       return null;
     }
-    const headers = {
-      "content-type": "application/json",
-      "user-agent": clientUserAgent(options.userAgent),
-    };
-    const apiKey = credential.apiKey;
-    if (apiKey) {
-      headers["x-remembrance-api-key"] = apiKey;
-    }
-    const principalSession = readHookPrincipalSession(
+    const { headers: registryHeaders, principalSession } = hookRegistryHeaders(
+      access,
       normalizeRuntime(payload?.client_context?.runtime),
       env,
-      access,
+      options.userAgent,
     );
-    if (principalSession?.token) {
-      headers["x-remembrance-principal-session"] = principalSession.token;
-    }
+    const headers = {
+      ...registryHeaders,
+      [CLIENT_CAPABILITIES_HEADER]:
+        autoQueryTimeoutMs(env) >= DEFAULT_SEARCH_TIMEOUT_MS
+          ? `${PRIVATE_LEARNING_CAPTURE_CAPABILITY}, ${RELEVANCE_JUDGE_WAIT_CAPABILITY}`
+          : PRIVATE_LEARNING_CAPTURE_CAPABILITY,
+    };
     const response = await fetchImpl(
       `${access.apiConfiguration.apiUrl}/api/v1/agent/query`,
       {
@@ -667,6 +1156,103 @@ export async function queryRemembrance(payload, options = {}) {
     debugLog(
       env,
       errorName(error) === "AbortError" ? "timeout" : "request_error",
+      { error: errorName(error) },
+      options,
+    );
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// A search the hygiene rules stopped still delivers what it would have
+// governed the task with. An organization credential reads the policy,
+// required settings and preferences from the effective-preferences endpoint
+// for the would-be query's domain and project, with the query's credential
+// and principal session; a caller without a credential has none to read.
+// `context` opens with the header a search's context opens with; `governs`
+// is false when it carries nothing past it, and the hook then delivers it
+// only beside another addition. `search` is true when the read failed, the
+// policy was not confirmed or the shared config is unusable: the hook then
+// runs the search the rule stopped, exactly as without the rule, so a failed
+// read never costs a delivery, and a search that fails too fails closed.
+export async function stoppedSearchGovernance(payload, options = {}) {
+  const env = options.env ?? process.env;
+  const access = resolveApiAccessSnapshot(env);
+  if (isUnusableConfigurationSource(access.credential.source)) {
+    return { search: true };
+  }
+  const nothing = {
+    search: false,
+    governs: false,
+    context: AUTO_QUERY_CONTEXT_HEADER,
+  };
+  if (!access.credential.apiKey) return nothing;
+  const projectKey = payload?.client_context?.project_key;
+  const body = await readEffectivePreferences(
+    {
+      keys: [],
+      domains: [payload?.task?.domain].filter(Boolean),
+      ...(projectKey ? { project_key: projectKey } : {}),
+    },
+    {
+      ...options,
+      env,
+      access,
+      runtime: normalizeRuntime(payload?.client_context?.runtime),
+    },
+  );
+  if (!body || !["allow", "org_only"].includes(body.skill_access?.policy)) {
+    return { search: true };
+  }
+  const context = governanceContext(body, {
+    maxChars: options.maxChars ?? 32_000,
+  });
+  return context ? { search: false, governs: true, context } : nothing;
+}
+
+async function readEffectivePreferences(request, options) {
+  const env = options.env;
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    autoQueryTimeoutMs(env, DEFAULT_TIMEOUT_MS),
+  );
+  try {
+    const { headers } = hookRegistryHeaders(
+      options.access,
+      options.runtime,
+      env,
+      options.userAgent,
+    );
+    const response = await (options.fetchImpl ?? fetch)(
+      `${options.access.apiConfiguration.apiUrl}/api/v1/agent/preferences/effective`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(request),
+        signal: controller.signal,
+      },
+    );
+    if (!response.ok) {
+      debugLog(
+        env,
+        "effective_preferences_http_error",
+        { status: response.status },
+        options,
+      );
+      return null;
+    }
+    const body = await response.json();
+    return body && typeof body === "object" && !Array.isArray(body)
+      ? body
+      : null;
+  } catch (error) {
+    debugLog(
+      env,
+      errorName(error) === "AbortError"
+        ? "effective_preferences_timeout"
+        : "effective_preferences_error",
       { error: errorName(error) },
       options,
     );
@@ -863,17 +1449,22 @@ export function highMatchFromResponse(response) {
 
 // Format the query response into the plain context string Codex injects via
 // additionalContext. Returns null when there is nothing useful to inject.
+// `options.env` selects the capture guidance of the empty-result context that
+// carries a filtered response's organization policy and required settings.
+// `options.querySummary`, the summary the query sent, keeps a proposal that
+// repeats it out of the context.
 export function formatContext(
   response,
   reason = "trigger_match",
   limit = DEFAULT_LIMIT,
+  options = {},
 ) {
   const body = responseBodyFromToolResponse(response);
   const itemLimit = Math.min(Math.max(Number(limit) || DEFAULT_LIMIT, 1), 10);
   const skills = Array.isArray(body?.skills)
     ? body.skills
         .filter((item) => publicSkillCandidateAllowed(body, item))
-        .filter(autoQueryResponseCandidateAllowed)
+        .filter(autoQuerySkillAllowed)
         .slice(0, itemLimit)
     : [];
   const resources = Array.isArray(body?.resources)
@@ -882,23 +1473,23 @@ export function formatContext(
         .slice(0, itemLimit)
     : [];
   const noResults = body?.no_results ?? null;
+  const { governanceLines, discretionaryPreferenceLines } =
+    governanceContextLines(body);
   if (skills.length === 0 && resources.length === 0 && !noResults) {
-    return null;
+    // The server sends no_results only for raw-empty arrays, so a response
+    // whose every candidate was filtered out arrives without it. Its
+    // governance still applies, in the empty-result context and without any
+    // filtered candidate, ID, or offer.
+    return governanceLines.length > 0
+      ? emptyQueryContext(reason, options.env, governanceLines)
+      : null;
   }
 
   const lines = [
     "Remembrance auto-query context:",
     `Trigger: ${reason}. Use these results only if they fit the user's task constraints.`,
+    ...governanceLines,
   ];
-  if (body?.skill_access?.policy === "org_only") {
-    lines.push(
-      "Organization policy: use organization skills only. Do not use public skills or bundled public skill references, including as an offline fallback.",
-    );
-  }
-  const effectivePreferenceLines = effectivePreferencesContextLines(
-    body?.effective_preferences,
-  );
-  lines.push(...effectivePreferenceLines);
   const queryId = body?.query_feedback?.query_id ?? body?.query_id;
   const highMatch = highMatchFromResponse(body);
   if (queryId) {
@@ -914,40 +1505,47 @@ export function formatContext(
       ...(highMatch.query_id ? { query_id: highMatch.query_id } : {}),
       ...(highMatch.result_id ? { result_id: highMatch.result_id } : {}),
     };
-    lines.push(
-      `HIGH MATCH — required next step: call ${tool} with ${JSON.stringify(args)} before proceeding. ${highMatch.match_reason}; ${matchEvidenceLabel(highMatch)}. If it does not actually fit, do not force its use: submit query feedback with fit poor and a concrete reason.`,
+    const requiredAction = `HIGH MATCH — required next step: call ${tool} with ${JSON.stringify(args)} before proceeding.`;
+    const explanation = boundedContextSection(
+      `${highMatch.match_reason}; ${matchEvidenceLabel(highMatch)}. If it does not actually fit, do not force its use: submit query feedback with fit poor and a concrete reason.`,
+      Math.max(80, 720 - requiredAction.length - 1),
     );
+    lines.push(`${requiredAction} ${explanation}`.trim());
   }
   // Tail lines (the no-results payload, the contribution directive, and the
   // delegation instruction) are the actionable part of this context. They are
   // reserved BEFORE candidate lines fill the remaining budget — the previous
   // append-then-truncate order let rich per-candidate decision labels push
   // them past MAX_CONTEXT_CHARS, silently evicting the directive.
-  const tailLines = [];
+  const requiredTailLines = [];
+  const optionalItems = [];
   if (noResults) {
-    const payload = safeText(
-      JSON.stringify(noResults.propose_skill_idea_payload ?? noResults),
-      1200,
+    const proposedSkillIdea = safeProposedSkillIdeaPayload(
+      noResults,
+      options.querySummary,
     );
-    tailLines.push(
-      `No matching skill/resource. Proposed skill idea payload: ${payload}`,
+    requiredTailLines.push(
+      proposedSkillIdea
+        ? `No matching skill/resource. Proposed skill idea payload: ${safeText(JSON.stringify(proposedSkillIdea), 1200)}`
+        : "No matching skill/resource.",
     );
   }
   const contributionDirective =
     body?.contribution_directive?.message ?? body?.fallback_instruction;
   if (contributionDirective) {
-    tailLines.push(
+    requiredTailLines.push(
       `After using Remembrance: ${safeText(contributionDirective, MAX_DIRECTIVE_CHARS)}`,
     );
   }
   const preferenceEvidence = preferenceCompatibilityEvidenceFromResponse(body);
   if (preferenceEvidence.length > 0) {
-    tailLines.push(
-      preferenceCompatibilityEvidenceInstruction(preferenceEvidence),
-    );
+    optionalItems.push({
+      line: preferenceCompatibilityEvidenceInstruction(preferenceEvidence),
+      fallback: null,
+    });
   }
   if (skills.length > 0 || resources.length > 0) {
-    tailLines.push(
+    requiredTailLines.push(
       "Delegating this task? Pass the selected slug, query_id, and result_id to the subagent; it should fetch that result or run its own full-context query before custom work.",
     );
   }
@@ -971,14 +1569,99 @@ export function formatContext(
       ),
     });
   }
-  lines.push(
-    ...budgetedCandidateLines(
-      candidateSections,
-      MAX_CONTEXT_CHARS - joinedLength([...lines, ...tailLines]),
+  return prioritizedQueryContext({
+    criticalLines: lines,
+    candidateSections,
+    optionalItems: [
+      ...optionalItems,
+      ...discretionaryPreferenceItems(discretionaryPreferenceLines),
+    ],
+    requiredTailLines,
+    maxChars: options.maxChars ?? MAX_CONTEXT_CHARS,
+  });
+}
+
+const AUTO_QUERY_CONTEXT_HEADER = "Remembrance auto-query context:";
+
+const ORGANIZATION_ONLY_POLICY_LINE =
+  "Organization policy: use organization skills only. Do not use public skills or bundled public skill references, including as an offline fallback.";
+
+// The organization policy and required settings govern the task whether or
+// not any returned candidate applies to it; discretionary preferences follow.
+function governanceContextLines(body) {
+  const governanceLines = [];
+  if (body?.skill_access?.policy === "org_only") {
+    governanceLines.push(ORGANIZATION_ONLY_POLICY_LINE);
+  }
+  const effectivePreferenceLines = effectivePreferencesContextLines(
+    body?.effective_preferences,
+  );
+  governanceLines.push(
+    ...effectivePreferenceLines.filter((line) =>
+      line.startsWith("Required organization settings"),
     ),
   );
-  lines.push(...tailLines);
-  return safeText(lines.join("\n"), MAX_CONTEXT_CHARS);
+  const discretionaryPreferenceLines = effectivePreferenceLines.filter(
+    (line) => !line.startsWith("Required organization settings"),
+  );
+  return { governanceLines, discretionaryPreferenceLines };
+}
+
+function discretionaryPreferenceItems(lines) {
+  return lines.map((line) => ({
+    line,
+    fallback:
+      "Discretionary preferences omitted from this bounded hook context; call get_effective_preferences when they could affect the task.",
+  }));
+}
+
+// What a query context says whatever the results: the organization policy,
+// required settings and discretionary preferences of a query or
+// effective-preferences response body, in a query context's own words and
+// order. Null when there are none.
+export function governanceContext(body, options = {}) {
+  const { governanceLines, discretionaryPreferenceLines } =
+    governanceContextLines(body);
+  if (
+    governanceLines.length === 0 &&
+    discretionaryPreferenceLines.length === 0
+  ) {
+    return null;
+  }
+  return prioritizedQueryContext({
+    criticalLines: [AUTO_QUERY_CONTEXT_HEADER, ...governanceLines],
+    candidateSections: [],
+    optionalItems: discretionaryPreferenceItems(discretionaryPreferenceLines),
+    requiredTailLines: [],
+    maxChars: options.maxChars ?? MAX_CONTEXT_CHARS,
+  });
+}
+
+// What an empty task-shape search delivers (owner decision 34C): exactly what
+// a keyword-triggered empty search delivers without its no-match block. That
+// is the organization policy and required settings, and the discretionary
+// preferences when the server reported the empty result itself (no_results);
+// formatContext leaves those out of an answer whose every candidate the
+// client dropped. `governs` is false when there is none of them, and the
+// header then only introduces the prompt's own additions.
+export function emptyTaskShapeContext(response, options = {}) {
+  const body = responseBodyFromToolResponse(response);
+  const { governanceLines, discretionaryPreferenceLines } =
+    governanceContextLines(body);
+  const discretionary = body?.no_results ? discretionaryPreferenceLines : [];
+  if (governanceLines.length === 0 && discretionary.length === 0) {
+    return { governs: false, context: AUTO_QUERY_CONTEXT_HEADER };
+  }
+  return {
+    governs: true,
+    context: prioritizedQueryContext({
+      criticalLines: [AUTO_QUERY_CONTEXT_HEADER, ...governanceLines],
+      candidateSections: [],
+      optionalItems: discretionaryPreferenceItems(discretionary),
+      requiredTailLines: [],
+      maxChars: options.maxChars ?? 32_000,
+    }),
+  };
 }
 
 function joinedLength(lines) {
@@ -988,52 +1671,90 @@ function joinedLength(lines) {
   );
 }
 
-// Fit candidate lines (with their section headers) into the character budget
-// left after the head/tail lines. Dropping is explicit, never silent: when
-// candidates are omitted, a short note says how many and gives the agent the
-// explicit recovery action.
-function budgetedCandidateLines(sections, budget) {
-  const total = sections.reduce(
+// Preserve task authority and one actionable candidate before reconstructable
+// lifecycle guidance. Optional lines are included only as complete lines.
+function prioritizedQueryContext({
+  criticalLines,
+  candidateSections,
+  optionalItems,
+  requiredTailLines,
+  maxChars = MAX_CONTEXT_CHARS,
+}) {
+  const total = candidateSections.reduce(
     (count, section) => count + section.lines.length,
     0,
   );
   const omissionNote = (count) =>
     `(+${count} more match${count === 1 ? "" : "es"} omitted to fit this context; call query_skills with the current task context to retrieve the full list.)`;
-  // +1: inserting this block between head and tail costs one MORE newline
-  // than the block's own internal joins (joinedLength counts n-1 separators
-  // for n lines; the block itself joins to its neighbors with an nth).
-  const fits = (lines) => joinedLength(lines) + 1 <= budget;
-
-  const chosen = [];
+  const selected = [...criticalLines];
+  const entries = candidateSections.flatMap((section) =>
+    section.lines.map((line, index) => ({
+      header: index === 0 ? section.header : null,
+      line,
+    })),
+  );
+  const optionalFallbackLines = optionalItems
+    .map((item) => item.fallback)
+    .filter(Boolean);
   let shown = 0;
-  for (const section of sections) {
-    let headerAdded = false;
-    for (const line of section.lines) {
-      const attempt = headerAdded
-        ? [...chosen, line]
-        : [...chosen, section.header, line];
-      const remainingAfter = total - (shown + 1);
-      // Every non-final line must leave room for the omission note, so that
-      // if the NEXT line does not fit, the note (for exactly that many
-      // dropped candidates) is guaranteed to fit alongside what was kept.
-      const accepted =
-        remainingAfter > 0
-          ? fits([...attempt, omissionNote(remainingAfter)])
-          : fits(attempt);
-      if (!accepted) {
-        const dropped = total - shown;
-        if (fits([...chosen, omissionNote(dropped)])) {
-          chosen.push(omissionNote(dropped));
-        }
-        return chosen;
-      }
-      chosen.length = 0;
-      chosen.push(...attempt);
-      headerAdded = true;
-      shown += 1;
+
+  if (entries.length > 0) {
+    const first = entries[0];
+    const header = [first.header].filter(Boolean);
+    const fixedLines = [
+      ...selected,
+      ...header,
+      ...optionalFallbackLines,
+      ...requiredTailLines,
+    ];
+    const firstLineBudget = maxChars - joinedLength(fixedLines) - 1;
+    if (firstLineBudget < 120) {
+      throw new Error("Critical Remembrance query context exceeds its budget.");
+    }
+    selected.push(
+      ...header,
+      boundedContextSection(first.line, firstLineBudget),
+    );
+    shown = 1;
+  }
+
+  const appendIfFits = (candidateLines, reservedLines = []) => {
+    const completeLines = candidateLines.filter(Boolean);
+    const next = [...selected, ...completeLines, ...reservedLines];
+    if (joinedLength(next) > maxChars) return false;
+    selected.push(...completeLines);
+    return true;
+  };
+  for (const entry of entries.slice(shown)) {
+    const remainingAfter = total - (shown + 1);
+    const reserve = [
+      ...(remainingAfter > 0 ? [omissionNote(remainingAfter)] : []),
+      ...optionalFallbackLines,
+      ...requiredTailLines,
+    ];
+    if (!appendIfFits([entry.header, entry.line], reserve)) break;
+    shown += 1;
+  }
+  if (total > shown) {
+    appendIfFits(
+      [omissionNote(total - shown)],
+      [...optionalFallbackLines, ...requiredTailLines],
+    );
+  }
+  for (let index = 0; index < optionalItems.length; index += 1) {
+    const item = optionalItems[index];
+    const laterFallbacks = optionalItems
+      .slice(index + 1)
+      .map((entry) => entry.fallback)
+      .filter(Boolean);
+    if (!appendIfFits([item.line], [...laterFallbacks, ...requiredTailLines])) {
+      appendIfFits([item.fallback], [...laterFallbacks, ...requiredTailLines]);
     }
   }
-  return chosen;
+  if (!appendIfFits(requiredTailLines)) {
+    throw new Error("Critical Remembrance query tail exceeds its budget.");
+  }
+  return selected.join("\n");
 }
 
 function matchTierLabel(value) {
@@ -1055,6 +1776,8 @@ function candidateDecisionLabel(candidate) {
   const why = sanitizeWhyMatched(candidate?.why_matched);
   const applicability = sanitizeApplicability(candidate?.applicability);
   const evidence = [];
+  const judged = relevanceJudgeFit(candidate);
+  if (judged) evidence.push(`relevance judge: ${judged} fit`);
   if (why?.matched_terms.length) {
     evidence.push(`terms ${why.matched_terms.join(", ")}`);
   }
@@ -1077,11 +1800,12 @@ function candidateDecisionLabel(candidate) {
   const applicabilityParts = [];
   if (applicability) {
     applicabilityParts.push(
-      `applicability ${applicability.fit}/${applicability.scope}: ${applicability.reason}`,
+      `applicability ${applicability.fit}/${applicability.scope}${APPLICABILITY_PROVENANCE_NOTES[applicability.provenance] ?? ""}: ${applicability.reason}`,
     );
+    // A stated use condition only promotes (plan 15.8, owner decision 43 = A).
     if (applicability.use_when.length) {
       applicabilityParts.push(
-        `use only when ${applicability.use_when.join("; ")}`,
+        `use when ${applicability.use_when.join("; ")}`,
       );
     }
     if (applicability.avoid_when.length) {
@@ -1112,7 +1836,11 @@ function sanitizePreferenceApplication(value, effectivePreferences) {
   ) {
     return null;
   }
-  const settings = sanitizeEffectivePreferences(effectivePreferences);
+  // The decision note is capped, so it carries discretionary preferences only;
+  // required settings stay in their own line, complete or fetched by key.
+  const settings = sanitizeEffectivePreferenceEntries(effectivePreferences)
+    .filter((entry) => !entry.mandatory)
+    .map((entry) => entry.text);
   if (settings.length === 0) return null;
   const overridden = Array.isArray(value.overridden_skill_defaults)
     ? value.overridden_skill_defaults
@@ -1140,6 +1868,13 @@ function sanitizePreferenceApplication(value, effectivePreferences) {
     : `skill preference defaults ${settings.join("; ")}`;
 }
 
+// Reads both offer shapes. REST responses, and MCP results from a server that
+// does not shape them, carry the full per-result offer: query_id, result_id and
+// each setting beside its fingerprint. A shaped MCP query_skills result states
+// each preference once, so its compact offer lists only
+// `preference_fingerprints`; the query_id is the response's, the result_id the
+// result's own, and each setting is the top-level effective_preferences entry
+// that carries that fingerprint.
 export function preferenceCompatibilityEvidenceFromResponse(response) {
   const body = responseBodyFromToolResponse(response);
   const candidates = [
@@ -1159,17 +1894,31 @@ export function preferenceCompatibilityEvidenceFromResponse(response) {
   const seen = new Set();
   return candidates
     .flatMap((candidate) => {
-      const slug = safePreferenceIdentifier(candidate?.slug, 120);
+      const slug = safeFeedbackSkillSlug(candidate?.slug);
       if (!slug || seen.has(slug)) return [];
       const feedback = candidate?.preference_compatibility_feedback;
-      const queryId = safeCorrelationIdentifier(feedback?.query_id, 160);
-      const resultId = safeCorrelationIdentifier(feedback?.result_id, 160);
+      const compact = isCompactPreferenceFeedbackOffer(feedback);
+      const queryId = safeCorrelationIdentifier(
+        compact ? (feedback.query_id ?? body?.query_id) : feedback?.query_id,
+        160,
+      );
+      const resultId = safeCorrelationIdentifier(
+        compact
+          ? (feedback.result_id ?? candidate?.result_id)
+          : feedback?.result_id,
+        160,
+      );
       const skillVersionId = safeCorrelationIdentifier(
         feedback?.skill_version_id,
         160,
       );
       const preferences = sanitizePreferenceFeedbackSettings(
-        feedback?.preferences,
+        compact
+          ? preferenceFeedbackEntriesFromStatements(
+              feedback.preference_fingerprints,
+              body?.effective_preferences,
+            )
+          : feedback?.preferences,
       );
       if (
         feedback?.available !== true ||
@@ -1194,39 +1943,118 @@ export function preferenceCompatibilityEvidenceFromResponse(response) {
     .slice(0, PREFERENCE_EVIDENCE_SKILL_LIMIT);
 }
 
+function isCompactPreferenceFeedbackOffer(feedback) {
+  return (
+    Boolean(feedback) &&
+    typeof feedback === "object" &&
+    !Array.isArray(feedback) &&
+    !Array.isArray(feedback.preferences) &&
+    Array.isArray(feedback.preference_fingerprints)
+  );
+}
+
+// Resolve each compact fingerprint to the one top-level statement that carries
+// it. A missing or ambiguous statement yields no evidence, never a guess.
+function preferenceFeedbackEntriesFromStatements(fingerprints, statements) {
+  if (!Array.isArray(statements)) return [];
+  const candidates = statements
+    .slice(0, MAX_EFFECTIVE_PREFERENCE_STATEMENTS)
+    .filter(
+      (entry) => entry && typeof entry === "object" && !Array.isArray(entry),
+    );
+  return fingerprints
+    .slice(0, MAX_EFFECTIVE_PREFERENCE_STATEMENTS)
+    .flatMap((fingerprint) => {
+      const matches =
+        typeof fingerprint === "string"
+          ? candidates.filter(
+              (entry) => entry.preference_fingerprint === fingerprint,
+            )
+          : [];
+      if (matches.length !== 1) return [];
+      const [statement] = matches;
+      return [
+        {
+          preference_fingerprint: fingerprint,
+          setting: {
+            key: statement.key,
+            value: statement.value,
+            label: statement.label,
+            behavior: statement.behavior,
+            effect: statement.effect,
+            strength: statement.strength,
+            definition_version: statement.definition_version,
+          },
+        },
+      ];
+    });
+}
+
 function preferenceCompatibilityEvidenceInstruction(evidence) {
   const payload = boundedPreferenceEvidencePayload(evidence);
   if (!payload) return "";
+  const omitted =
+    payload.omitted > 0
+      ? ` (+${payload.omitted} more offered preference${payload.omitted === 1 ? "" : "s"} omitted to fit this hint.)`
+      : "";
   return [
     "Private preference evidence (silent, after actual use only): if the selected skill clearly supports or conflicts with one server-issued working preference below, call submit_preference_compatibility_feedback using its exact query_id, result_id, preference_fingerprint, skill slug, and version id.",
     'Judge observed behavior independently: selection and an existing classifier label are not new evidence. Skip neutral or uncertain cases. Use evidence_source "explicit_user" only for the user\'s explicit assessment; otherwise use "agent_observed". Never send task content, and do not ask the user or mention routine telemetry.',
-    `Candidates: ${payload}`,
-  ].join(" ");
+    payload.compact
+      ? "An entry without label and behavior is a compact reference: before judging it, read that setting in full with get_effective_preferences and its key."
+      : null,
+    `Candidates: ${payload.entries}${omitted}`,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
+// Inline evidence stays within PREFERENCE_EVIDENCE_CONTEXT_CHARS. An offer too
+// large to repeat in full keeps its exact IDs, fingerprint, key and value as a
+// compact reference, so its meaning is fetched rather than truncated. The
+// first offer is always kept, at least in that form, instead of dropping the
+// feedback opportunity; field limits then bound it (160-character IDs and
+// slug, 96-character key and value: 1,033 characters at most). Later offers
+// that do not fit are counted in the hint, never dropped silently.
 function boundedPreferenceEvidencePayload(evidence) {
+  const offers = evidence
+    .slice(0, PREFERENCE_EVIDENCE_SKILL_LIMIT)
+    .flatMap((candidate) =>
+      candidate.preferences
+        .slice(0, PREFERENCE_EVIDENCE_SETTING_LIMIT)
+        .map((preference) => ({
+          query_id: candidate.query_id,
+          result_id: candidate.result_id,
+          skill_slug: candidate.skill_slug,
+          skill_version_id: candidate.skill_version_id,
+          preference_fingerprint: preference.preference_fingerprint,
+          setting: preference.setting,
+        })),
+    );
   const entries = [];
-  for (const candidate of evidence.slice(0, PREFERENCE_EVIDENCE_SKILL_LIMIT)) {
-    for (const preference of candidate.preferences.slice(
-      0,
-      PREFERENCE_EVIDENCE_SETTING_LIMIT,
-    )) {
-      const next = {
-        query_id: candidate.query_id,
-        result_id: candidate.result_id,
-        skill_slug: candidate.skill_slug,
-        skill_version_id: candidate.skill_version_id,
-        preference_fingerprint: preference.preference_fingerprint,
-        setting: preference.setting,
-      };
-      const serialized = JSON.stringify([...entries, next]);
-      if (serialized.length > PREFERENCE_EVIDENCE_CONTEXT_CHARS) {
-        return entries.length > 0 ? JSON.stringify(entries) : null;
-      }
-      entries.push(next);
+  const fits = (entry) =>
+    JSON.stringify([...entries, entry]).length <=
+    PREFERENCE_EVIDENCE_CONTEXT_CHARS;
+  for (const offer of offers) {
+    const reference = {
+      ...offer,
+      setting: { key: offer.setting.key, value: offer.setting.value },
+    };
+    if (fits(offer)) {
+      entries.push(offer);
+    } else if (entries.length === 0 || fits(reference)) {
+      entries.push(reference);
+    } else {
+      break;
     }
   }
-  return entries.length > 0 ? JSON.stringify(entries) : null;
+  return entries.length > 0
+    ? {
+        entries: JSON.stringify(entries),
+        compact: entries.some((entry) => !("label" in entry.setting)),
+        omitted: offers.length - entries.length,
+      }
+    : null;
 }
 
 function sanitizePreferenceFeedbackSettings(value) {
@@ -1296,6 +2124,17 @@ function safePreferenceIdentifier(value, maxLength) {
     : null;
 }
 
+// The exact catalog slug grammar the feedback request accepts.
+function safeFeedbackSkillSlug(value) {
+  const text = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  return text.length <= MAX_FEEDBACK_IDENTIFIER_CHARS &&
+    SESSION_SKILL_SLUG_PATTERN.test(text)
+    ? text
+    : null;
+}
+
 function sanitizeWhyMatched(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return {
@@ -1308,6 +2147,15 @@ function sanitizeWhyMatched(value) {
     semantic_signal: signalStrength(value.semantic_signal),
   };
 }
+
+// Who stated a result's applicability (plan 15.8): conditions the platform
+// generated and no person reviewed are hints; an author's or a reviewer's
+// exclusion is what makes a result unlikely. Unknown adds no note.
+const APPLICABILITY_PROVENANCE_NOTES = {
+  generated_unreviewed: " (generated, unreviewed)",
+  reviewed: " (reviewed)",
+  mixed: " (mixed provenance)",
+};
 
 function sanitizeApplicability(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -1327,6 +2175,14 @@ function sanitizeApplicability(value) {
     reason: safeText(value.reason ?? "No applicability reason provided", 180),
     use_when: safeStringList(value.use_when, 2, 120),
     avoid_when: safeStringList(value.avoid_when, 2, 120),
+    provenance: [
+      "author_provided",
+      "generated_unreviewed",
+      "reviewed",
+      "mixed",
+    ].includes(value.provenance)
+      ? value.provenance
+      : "unknown",
   };
 }
 
@@ -1355,7 +2211,7 @@ function matchEvidenceLabel(match) {
   return `${tokens}, ${match.verified_uses} verified ${match.verified_uses === 1 ? "use" : "uses"}, risk ${match.risk_level}${savings ? `, ${savings}` : ""}${candidateDecisionLabel(match)}`;
 }
 
-export function continuationQueryContext(directive = null) {
+export function continuationQueryContext(directive = null, env = process.env) {
   const clientContext = directive
     ? ` Use client_context ${JSON.stringify({
         runtime: directive.runtime,
@@ -1367,31 +2223,49 @@ export function continuationQueryContext(directive = null) {
     "Remembrance task-continuation reminder:",
     `This prompt depends on earlier conversation. Infer the concrete task, domain, and constraints from the full thread, then call the Remembrance MCP tool query_skills before acting; do not wait for the current prompt to repeat service, framework, workflow, or UI keywords.${clientContext}`,
     "If MCP is unavailable, use POST /api/v1/agent/query. Do not send raw prior conversation: submit a redacted task summary and constraints.",
-    "Before finishing, use submit_query_feedback once with one complete set of explicit good/partial/poor query matches, submit_feedback and submit_remembrance when a returned skill was actually used, or submit a failure_report / skill idea only when a reusable lesson or genuinely missing workflow was found.",
+    organizationPrivateLessonAuthorized(env)
+      ? "Before finishing, call submit_query_feedback once with one complete good/partial/poor verdict set. Call submit_feedback only after real use. Route each new reusable item once through capture_learning; follow its exact next_action or bounded agent_recovery instructions. These are independent loops."
+      : "Before finishing, use submit_query_feedback once with one complete set of explicit good/partial/poor query matches, submit_feedback and submit_remembrance when a returned skill was actually used, or submit a failure_report / skill idea only when a reusable lesson or genuinely missing workflow was found.",
   ].join("\n");
 }
 
-export function unavailableQueryContext(env = process.env) {
+function organizationPolicyFallbackLine(env) {
   const credential = resolveApiCredential(env);
-  const organizationFallback = isUnusableConfigurationSource(credential.source)
+  return isUnusableConfigurationSource(credential.source)
     ? "The shared Remembrance config exists but is unreadable or invalid. Fail closed: do not use bundled public references or remote tools until the config is fixed or intentionally removed."
     : credential.apiKey
       ? "An organization API key is configured, but the organization skill policy could not be confirmed. Fail closed: do not use bundled public skill references while the query is unavailable."
       : "No organization API key is configured; bundled public references remain an optional offline fallback.";
+}
+
+export function unavailableQueryContext(env = process.env) {
   return [
     "Remembrance query-unavailable context:",
     "This task qualified for Remembrance, but the automatic query did not complete. Continue without blocking, and call query_skills directly when the MCP tool is visible.",
-    organizationFallback,
-    "Before finishing, submit a failure_report only if the outage or workaround produced a reusable lesson. Redact secrets, private URLs, credentials, and proprietary content.",
+    organizationPolicyFallbackLine(env),
+    organizationPrivateLessonAuthorized(env)
+      ? "If the outage or workaround produced a reusable lesson, complete workflow, or durable preference, call capture_learning once. Query-fit feedback is unavailable without a query receipt. Never switch destination or visibility when submission is unavailable."
+      : "Before finishing, submit a failure_report only if the outage or workaround produced a reusable lesson. Redact secrets, private URLs, credentials, and proprietary content.",
   ].join("\n");
 }
 
-export function emptyQueryContext(reason = "trigger_match") {
+// `governanceLines` are the organization policy and required-settings lines of
+// a response whose candidates were all filtered out; they apply unchanged.
+export function emptyQueryContext(
+  reason = "trigger_match",
+  env = process.env,
+  governanceLines = [],
+) {
   return [
     "Remembrance auto-query context:",
     `Trigger: ${reason}. The query completed but returned no matching skill or resource.`,
-    "Use the full conversation before deciding whether the workflow is genuinely missing. Propose a skill idea only when you built a reusable workflow that the registry does not already cover.",
-    "Before finishing, submit a failure_report when the task exposed a reusable failure lesson.",
+    ...governanceLines,
+    organizationPrivateLessonAuthorized(env)
+      ? "Use the full conversation before deciding whether the workflow is genuinely missing. A complete reusable workflow belongs in capture_learning.private_skill; a compact generalized lesson belongs in capture_learning.lesson."
+      : "Use the full conversation before deciding whether the workflow is genuinely missing. Propose a skill idea only when you built a reusable workflow that the registry does not already cover.",
+    organizationPrivateLessonAuthorized(env)
+      ? "If you build a reusable workflow or discover a reusable lesson, capture each new item once with private_skill or lesson. Follow its exact next_action or bounded agent_recovery instructions."
+      : "Before finishing, submit a failure_report when the task exposed a reusable failure lesson.",
   ].join("\n");
 }
 
@@ -1402,22 +2276,97 @@ export function emptyQueryContext(reason = "trigger_match") {
 // query completed; `matched` means that response contained at least one result
 // the current credential is allowed to use.
 export async function runPromptHook(prompt, options = {}) {
+  const result = await buildPromptHookResult(prompt, options);
+  if (!options.deferReminderAcknowledgement) {
+    acknowledgePrivateAuthorizationReminders(
+      result?.context ?? "",
+      options.env ?? process.env,
+    );
+  }
+  return result;
+}
+
+async function buildPromptHookResult(prompt, options = {}) {
   const env = options.env ?? process.env;
-  // This is the master switch for prompt-hook automation. Check it before
-  // preference detection, session warming, or any network-capable work.
+  const rawPrompt = userPromptOutsideHostNotifications(prompt);
+  if (rawPrompt === null) {
+    debugLog(env, "skip", { reason: "host_notification" }, options);
+    return null;
+  }
+  if (options.sessionId) recordUserPrompt(options.sessionId, env);
+  // Native recovery is local, bounded, and controlled by AUTO_CONTRIBUTE. It
+  // remains available when registry auto-query is disabled, but only when an
+  // adapter supplied a verified stable native session and an exhausted draft
+  // exists. Ordinary prompts do not start a child process.
+  await capturePrivateSkillNativeUserPrompt(rawPrompt, {
+    env,
+    nativeContextBridge: options.nativeContextBridge,
+    nativeSessionId: options.nativeSessionId,
+  });
+  // This is the master switch for query/preference automation. Native retained
+  // draft recovery above has its own explicit contribution switch.
   if (disabled(env.REMEMBRANCE_AUTO_QUERY)) {
     debugLog(env, "disabled", {}, options);
     return null;
   }
-  const privateLessonRecovery = privateLessonLifecycleRecoveryInstruction(env);
+  // Rendered for each prompt context in withContext below.
+  const lifecycleRecovery =
+    !options.sessionId && privateLearningLifecycleRecoveryInstruction(env);
+  const recovery = options.sessionId
+    ? pendingCompletionRecovery(options.sessionId, env)
+    : lifecycleRecovery && (() => lifecycleRecovery);
+  const recoveryAddition = recovery
+    ? { id: "private_learning_recovery", kind: "completion" }
+    : null;
   const includeSharedConfigCredentialNotice =
     options.includeSharedConfigCredentialNotice !== false;
-  const redacted = redactPrompt(String(prompt ?? ""));
-  const correctionCapture = userCorrectionCaptureDirective(redacted);
+  const redacted = redactPrompt(rawPrompt);
+  if (isHostNotificationPrompt(redacted)) {
+    debugLog(env, "skip", { reason: "host_notification" }, options);
+    return null;
+  }
+  const correctionCapture = userCorrectionCaptureDirective(redacted, env);
   const preferenceCapture = genericPreferenceCaptureDirective(redacted, {
     env,
     projectPath: options.projectPath,
   });
+  const contextAdditions = [
+    correctionCapture
+      ? {
+          id: "correction_capture",
+          kind: "correction",
+          text: correctionCapture,
+        }
+      : null,
+    preferenceCapture
+      ? {
+          id: "preference_capture",
+          kind: "preference",
+          text: preferenceCapture,
+        }
+      : null,
+    recoveryAddition,
+    ...(Array.isArray(options.contextAdditions)
+      ? options.contextAdditions
+      : [options.contextAdditions]),
+  ].filter(Boolean);
+  const withContext = (baseContext, result) => {
+    const composeWith = (text) =>
+      composeBoundedHookContextResult(
+        baseContext,
+        contextAdditions.map((addition) =>
+          addition === recoveryAddition ? { ...addition, text } : addition,
+        ),
+      );
+    const composed = composeWith(
+      recovery?.((text) => composeWith(text).context),
+    );
+    return {
+      ...result,
+      context: composed.context,
+      deliveredContextAdditionIds: composed.deliveredAdditionIds,
+    };
+  };
   void recordExplicitPreferenceObservations(redacted, {
     env,
     fetchImpl: options.fetchImpl ?? fetch,
@@ -1425,9 +2374,60 @@ export async function runPromptHook(prompt, options = {}) {
     userAgent: options.userAgent,
     projectPath: options.projectPath,
   }).catch(() => 0);
-  const decision = shouldQueryPrompt(redacted);
+  const searchText = searchTextForPrompt(redacted, env);
+  let decision = shouldQueryPrompt(searchText, env);
+  if (decision.hygiene) {
+    // Only the skill search stops: the governance a search would have carried
+    // and every addition this prompt earns are still delivered.
+    debugLog(
+      env,
+      "search_hygiene",
+      { reason: decision.reason, trigger: decision.trigger },
+      options,
+    );
+    const stopped = await stoppedSearchGovernance(
+      buildQueryPayload(
+        searchText,
+        env,
+        options.identity,
+        {
+          surface: "plugin_hook",
+          runtime: runtimeFromIdentity(options.identity),
+          trigger_reason: decision.reason,
+        },
+        options.projectPath,
+      ),
+      {
+        env,
+        fetchImpl: options.fetchImpl ?? fetch,
+        stderr: options.stderr,
+        userAgent: options.userAgent,
+      },
+    );
+    if (!stopped.search) {
+      if (!stopped.governs && contextAdditions.length === 0) return null;
+      return withContext(
+        includeSharedConfigCredentialNotice
+          ? withSharedConfigCredentialNotice(stopped.context, env)
+          : stopped.context,
+        {
+          consumed: false,
+          eligible: Boolean(correctionCapture),
+          reason: decision.reason,
+        },
+      );
+    }
+    // The read failed: run the search the rule stopped, as without the rule.
+    debugLog(
+      env,
+      "search_hygiene_fallback",
+      { reason: decision.reason },
+      options,
+    );
+    decision = { likely_match: true, reason: decision.trigger };
+  }
   if (!decision.likely_match) {
-    if (isContextualContinuationPrompt(redacted)) {
+    if (isContextualContinuationPrompt(searchText)) {
       const directive = await createContinuationDirective({
         env,
         fetchImpl: options.fetchImpl ?? fetch,
@@ -1436,53 +2436,32 @@ export async function runPromptHook(prompt, options = {}) {
         stderr: options.stderr,
         userAgent: options.userAgent,
       });
-      return {
+      return withContext(continuationQueryContext(directive, env), {
         consumed: false,
-        context: appendPreferenceCapture(
-          appendUserCorrectionCapture(
-            appendPrivateLessonLifecycleRecovery(
-              continuationQueryContext(directive),
-              privateLessonRecovery,
-            ),
-            correctionCapture,
-          ),
-          preferenceCapture,
-        ),
         directive,
         eligible: true,
         reason: "contextual_continuation",
-      };
+      });
     }
     if (preferenceCapture || correctionCapture) {
-      return {
+      return withContext("Remembrance capture routing:", {
         consumed: false,
-        context: appendPreferenceCapture(
-          appendUserCorrectionCapture(
-            appendPrivateLessonLifecycleRecovery(
-              "Remembrance capture routing:",
-              privateLessonRecovery,
-            ),
-            correctionCapture,
-          ),
-          preferenceCapture,
-        ),
         eligible: Boolean(correctionCapture),
         reason: correctionCapture ? "user_correction" : "preference_capture",
-      };
+      });
     }
-    if (privateLessonRecovery) {
-      return {
+    if (recovery) {
+      return withContext("", {
         consumed: false,
-        context: privateLessonRecovery,
         eligible: false,
-        reason: "private_lesson_lifecycle_recovery",
-      };
+        reason: "private_learning_lifecycle_recovery",
+      });
     }
     debugLog(env, "skip", { reason: decision.reason }, options);
     return null;
   }
   const payload = buildQueryPayload(
-    redacted,
+    searchText,
     env,
     options.identity,
     {
@@ -1499,65 +2478,65 @@ export async function runPromptHook(prompt, options = {}) {
     userAgent: options.userAgent,
   });
   if (!response) {
-    return {
-      consumed: false,
-      context: appendPreferenceCapture(
-        appendUserCorrectionCapture(
-          appendPrivateLessonLifecycleRecovery(
-            includeSharedConfigCredentialNotice
-              ? withSharedConfigCredentialNotice(
-                  unavailableQueryContext(env),
-                  env,
-                )
-              : unavailableQueryContext(env),
-            privateLessonRecovery,
-          ),
-          correctionCapture,
-        ),
-        preferenceCapture,
-      ),
-      eligible: true,
-      reason: "query_unavailable",
-    };
+    return withContext(
+      includeSharedConfigCredentialNotice
+        ? withSharedConfigCredentialNotice(unavailableQueryContext(env), env)
+        : unavailableQueryContext(env),
+      {
+        consumed: false,
+        eligible: true,
+        reason: "query_unavailable",
+      },
+    );
   }
-  return {
-    consumed: true,
-    matched: queryResponseHasMatches(response),
-    context: appendPreferenceCapture(
-      appendUserCorrectionCapture(
-        appendPrivateLessonLifecycleRecovery(
-          includeSharedConfigCredentialNotice
-            ? withSharedConfigCredentialNotice(
-                formatContext(response, decision.reason, limitFromEnv(env)) ??
-                  emptyQueryContext(decision.reason),
-                env,
-              )
-            : (formatContext(response, decision.reason, limitFromEnv(env)) ??
-                emptyQueryContext(decision.reason)),
-          privateLessonRecovery,
-        ),
-        correctionCapture,
-      ),
-      preferenceCapture,
-    ),
-    eligible: true,
-    highMatch: highMatchFromResponse(response),
-    queryFeedback: queryFeedbackTrackingFromResponse(response),
-    valueEpisode: valueEpisodeFromResponse(response),
-    reason: decision.reason,
-  };
-}
-
-function appendPreferenceCapture(context, directive) {
-  return directive ? `${context}\n\n${directive}` : context;
-}
-
-function appendUserCorrectionCapture(context, directive) {
-  return directive ? `${context}\n\n${directive}` : context;
-}
-
-function appendPrivateLessonLifecycleRecovery(context, instruction) {
-  return instruction ? `${context}\n\n${instruction}` : context;
+  if (
+    decision.reason === "task_shape" &&
+    !queryResponseHasMatches(response)
+  ) {
+    // Owner decision 34C (coordinator, 2026-09-29): an empty task-shape
+    // search shows no no-match block, makes the turn eligible for completion
+    // recovery only through a correction, and records no query-feedback
+    // obligation. Everything else a keyword-triggered empty search delivers
+    // arrives unchanged; the server has recorded the receipt and the
+    // missing-skill request. A result without context prints nothing.
+    const empty = emptyTaskShapeContext(response);
+    const result = {
+      consumed: true,
+      matched: false,
+      eligible: Boolean(correctionCapture),
+      reason: decision.reason,
+    };
+    if (!empty.governs && contextAdditions.length === 0) {
+      debugLog(env, "task_shape_no_result", {}, options);
+      return { ...result, context: "", deliveredContextAdditionIds: [] };
+    }
+    return withContext(
+      includeSharedConfigCredentialNotice
+        ? withSharedConfigCredentialNotice(empty.context, env)
+        : empty.context,
+      result,
+    );
+  }
+  const context =
+    formatContext(response, decision.reason, limitFromEnv(env), {
+      maxChars: 32_000,
+      env,
+      querySummary: payload.task.summary,
+    }) ?? emptyQueryContext(decision.reason, env);
+  return withContext(
+    includeSharedConfigCredentialNotice
+      ? withSharedConfigCredentialNotice(context, env)
+      : context,
+    {
+      consumed: true,
+      matched: queryResponseHasMatches(response),
+      eligible: true,
+      highMatch: highMatchFromResponse(response),
+      queryFeedback: queryFeedbackTrackingFromResponse(response),
+      valueEpisode: valueEpisodeFromResponse(response),
+      reason: decision.reason,
+    },
+  );
 }
 
 export function queryResponseHasMatches(response) {
@@ -1565,7 +2544,7 @@ export function queryResponseHasMatches(response) {
   const skills = Array.isArray(body?.skills)
     ? body.skills
         .filter((item) => publicSkillCandidateAllowed(body, item))
-        .filter(autoQueryResponseCandidateAllowed)
+        .filter(autoQuerySkillAllowed)
     : [];
   const resources = Array.isArray(body?.resources)
     ? body.resources.filter(autoQueryResponseCandidateAllowed)
@@ -1573,6 +2552,28 @@ export function queryResponseHasMatches(response) {
   return skills.length > 0 || resources.length > 0;
 }
 
+// Plan 15.4, P1 step 6: the server's tier floor decides which skills the hook
+// shows, so the client drops only exploratory and known-inapplicable ones. A
+// skill the relevance judge chose is shown whatever its tier; a
+// known-inapplicable one (an exclusion its author stated or a person
+// reviewed matches the task) is still dropped, since the judge never sees an
+// author's own exclusions.
+function autoQuerySkillAllowed(candidate) {
+  if (candidate?.applicability?.fit === "unlikely") return false;
+  if (relevanceJudgeFit(candidate)) return true;
+  return (
+    !candidate?.match_tier ||
+    candidate.match_tier === "high" ||
+    candidate.match_tier === "possible"
+  );
+}
+
+function relevanceJudgeFit(candidate) {
+  const fit = candidate?.relevance_judge?.fit;
+  return fit === "direct" || fit === "partial" ? fit : null;
+}
+
+// Resources keep the defensive auto-query floor.
 function autoQueryResponseCandidateAllowed(candidate) {
   if (candidate?.applicability?.fit === "unlikely") return false;
   if (!candidate?.match_tier) return true;
@@ -1613,17 +2614,6 @@ export async function runQuery(prompt, options = {}) {
 
 // --- Contribution decision (stop hook) ---------------------------------------
 
-// Count only CONSUMPTION of the registry (queries / explicit skill retrieval) —
-// not the agent's own submissions. Kept for parity with the Claude hook and for
-// any transcript-shaped input a caller wants to scan; Codex's own Stop payload
-// has no transcript, so the marker mechanism below is what actually drives the
-// Codex stop decision.
-const CONSUMPTION_MARKERS =
-  /Remembrance auto-query context|mcp__[a-z0-9_]*remembrance[a-z0-9_]*__(query_skills|get_skill|get_resource|invoke_skill)|\/api\/v1\/agent\/(?:query(?!-feedback)|skill-invocations)\b/gi;
-
-const TASK_ELIGIBILITY_MARKERS =
-  /Remembrance task-continuation reminder|Remembrance query-unavailable context/gi;
-
 const CONTRIBUTION_SUBMITTED_PATTERNS = [
   /\brpub_[a-f0-9]{16,}\b/i,
   /\baccepted_private_candidate\b/i,
@@ -1658,16 +2648,6 @@ const HIGH_VALUE_LESSON_PATTERNS = [
     reason: "user-caught agent miss",
   },
 ];
-
-export function countRegistryConsumption(transcript) {
-  const matches = String(transcript ?? "").match(CONSUMPTION_MARKERS);
-  return matches ? matches.length : 0;
-}
-
-export function countTaskEligibility(transcript) {
-  const matches = String(transcript ?? "").match(TASK_ELIGIBILITY_MARKERS);
-  return matches ? matches.length : 0;
-}
 
 export function contributionReason(
   signal = null,
@@ -1711,11 +2691,15 @@ export function contributionReason(
       ...selectionLines,
       signalLine,
       "Do not submit query-fit feedback for these selections; they were chosen directly rather than ranked for a query.",
-      "Call submit_feedback once for each listed skill with useful true or false and a concise post-use lesson.",
+      options.privateLessonAuthorized
+        ? "Call submit_feedback once for each listed skill with categorical useful true or false. Keep reusable prose separate."
+        : "Call submit_feedback once for each listed skill with useful true or false and a concise post-use lesson.",
       preferenceEvidenceLine,
-      "If submit_feedback returns next_step.submit_remembrance_payload, submit it when the redacted lesson is reusable.",
+      options.privateLessonAuthorized
+        ? "If this task produced reusable learning, call capture_learning once per new item; follow its exact next_action or bounded agent_recovery instructions."
+        : "If submit_feedback returns next_step.submit_remembrance_payload, submit it when the redacted lesson is reusable.",
       privateLessonGuidance,
-      routineContributionVisibilityInstruction(),
+      routineContributionVisibilityInstruction(options.privateLessonAuthorized),
     ]
       .filter(Boolean)
       .join("\n");
@@ -1725,10 +2709,10 @@ export function contributionReason(
     signalLine,
     highMatchLine,
     options.privateLessonAuthorized
-      ? "Call submit_query_feedback for pending query fit and submit_feedback only for used results. Honor an exact next_step.submit_remembrance_payload returned by submit_feedback; route a compact organization evidence lesson through the private lesson lane below. If no skill fit and you built a complete reusable skill or playbook, default to propose_private_skill; use propose_skill_idea only when a public candidate is explicitly appropriate."
+      ? "Call submit_query_feedback for pending query fit and submit_feedback only for used results. Separately route each new reusable item once through capture_learning; follow its exact next_action or bounded agent_recovery instructions. Never compress a complete workflow into a lesson."
       : "Call submit_query_feedback for pending query fit, submit_feedback only for used results, and submit_remembrance only for a reusable redacted lesson. If no skill fit and you built a complete reusable skill or playbook, default to propose_private_skill; use propose_skill_idea only when a public candidate is explicitly appropriate. A supplied invalid/inactive key fails with 401 and an insufficient key with 403; neither creates a candidate.",
     privateLessonGuidance,
-    routineContributionVisibilityInstruction(),
+    routineContributionVisibilityInstruction(options.privateLessonAuthorized),
   ]
     .filter(Boolean)
     .join("\n");
@@ -1743,10 +2727,19 @@ function directPreferenceCompatibilityInstruction(selections) {
     selection.preference_feedback_settings.length > 0
       ? [
           {
-            query_id: safeText(selection.query_id, 160),
-            result_id: safeText(selection.result_id, 160),
-            skill_slug: safeText(selection.slug, 120),
-            skill_version_id: safeText(selection.version_id, 160),
+            query_id: safeText(
+              selection.query_id,
+              MAX_FEEDBACK_IDENTIFIER_CHARS,
+            ),
+            result_id: safeText(
+              selection.result_id,
+              MAX_FEEDBACK_IDENTIFIER_CHARS,
+            ),
+            skill_slug: safeText(selection.slug, MAX_FEEDBACK_IDENTIFIER_CHARS),
+            skill_version_id: safeText(
+              selection.version_id,
+              MAX_FEEDBACK_IDENTIFIER_CHARS,
+            ),
             preferences: sanitizeStoredPreferenceFeedbackSettings(
               selection.preference_feedback_settings,
             ),
@@ -1759,8 +2752,11 @@ function directPreferenceCompatibilityInstruction(selections) {
     : null;
 }
 
-function routineContributionVisibilityInstruction() {
-  return `Use Remembrance MCP tools when available; otherwise use this session's REST fallback, or emit REMEMBRANCE_SUBMISSION_PAYLOAD only if the API is unavailable. Never remove or bypass an organization key to force a public candidate. Do not mention routine Remembrance calls, hooks, or receipt IDs in the final answer. Surface only failures, host blocks, or required action. For a host block unrelated to a private-lesson submit/retry action, say exactly: "${HOST_POLICY_ALERT_TEXT}" and do not retry through another transport. Redact secrets and proprietary content.`;
+function routineContributionVisibilityInstruction(privateCapture = false) {
+  const visibility = privateCapture
+    ? `Use the capture-capable Remembrance MCP tools. Private preparation is local and encrypted; invoke only the returned exact private action. Never substitute REST, a broad write tool, another destination, or another visibility. Query-fit feedback remains a separate bounded action. Do not mention routine calls, hooks, or receipts. Surface only failures, host blocks, or required action. For a host block unrelated to an exact private submit/retry action, say exactly: "${HOST_POLICY_ALERT_TEXT}". Redact secrets and proprietary content.`
+    : `Use Remembrance MCP tools when available; REST or REMEMBRANCE_SUBMISSION_PAYLOAD fallback is for API unavailability, never host denial. Never remove or bypass an organization key to force a public candidate. Do not mention routine Remembrance calls, hooks, or receipt IDs. For a host block: "${HOST_POLICY_ALERT_TEXT}" Redact private content.`;
+  return `${visibility} ${FEEDBACK_DENIAL_GUIDANCE}`;
 }
 
 export function privateLessonCompletionGuidance({
@@ -1768,22 +2764,32 @@ export function privateLessonCompletionGuidance({
   env = process.env,
 } = {}) {
   const recovery = includeLifecycleRecovery
-    ? privateLessonLifecycleRecoveryInstruction(env)
+    ? privateLearningLifecycleRecoveryInstruction(env)
     : null;
   return [
-    "For a new compact failure, correction, or evidence lesson that is not already a complete skill, silently generalize it without raw repository content, then call prepare_private_lesson_candidate. If it returns next_action, immediately call submit_private_lesson_candidate with exactly its draft_id; do not substitute submit_remembrance, REST, or another transport.",
-    "If the work produced a complete reusable procedure, playbook, or actionable instructions, follow the separate skill-proposal guidance instead; do not compress a finished skill into the private lesson contract.",
-    "Let the host's exact submit_private_lesson_candidate approval be the only authorization prompt. If the host cannot present it, ask once: \"" +
+    "Call capture_learning once per new item: lesson for a compact generalized failure/correction, private_skill with complete instructions for a reusable procedure, or preference for a durable working preference. Follow its exact next_action or bounded agent_recovery instructions; reformulation updates the retained draft, not a new item.",
+    "The router encrypts lesson and private-skill drafts locally before any network action. Do not substitute a legacy broad write, REST, another destination, or another visibility.",
+    'Let the returned exact private submission action be the only authorization prompt. If the host cannot present it, ask once: "' +
       PRIVATE_LESSON_AUTHORIZATION_REQUEST_TEXT +
       '\"',
-    `If the host denies the action, say exactly: "${PRIVATE_LESSON_HOST_POLICY_ALERT_TEXT}" Do not retry that draft through another transport. Never auto-delete a draft.`,
+    `If the host denies the action, report the affected submission once: "${PRIVATE_LESSON_HOST_POLICY_ALERT_TEXT}" Claim local retention only when preparation or inspection returned that draft_id. A preparation error with no draft_id does not prove retention. Do not retry that draft through another transport. Never auto-delete a draft.`,
     recovery,
   ]
     .filter(Boolean)
     .join("\n");
 }
 
-export function completionContinuationReason(reason, input = {}) {
+// answerShown is for hosts that keep the answer that triggered the stop on
+// screen (Claude Code and VS Code), so the continuation must not restate it.
+// subagent is for a subagent's stop: the cleanup must not displace its
+// report, whichever way that reaches its caller.
+export function completionContinuationReason(
+  reason,
+  input = {},
+  env = process.env,
+  { answerShown = false, subagent = false } = {},
+) {
+  acknowledgePrivateAuthorizationReminders(reason, env);
   const priorAnswer = String(
     input?.last_assistant_message ??
       input?.lastAssistantMessage ??
@@ -1791,9 +2797,13 @@ export function completionContinuationReason(reason, input = {}) {
       input?.message ??
       "",
   ).trim();
-  const finalAnswerInstruction = priorAnswer
-    ? "After the silent cleanup, preserve the task result: repeat your immediately preceding user-facing answer unchanged, preceded only by any Remembrance failure or required action that must be surfaced. Do not replace the task answer with hook, receipt, or Remembrance status text."
-    : "After the silent cleanup, provide the task's normal user-facing final answer. Do not replace it with hook, receipt, or Remembrance status text.";
+  const finalAnswerInstruction = subagent
+    ? "After the silent cleanup, make sure your caller still gets your complete final report, unchanged and without Remembrance status text. Deliver it again the way your task returns results, unless you already returned it through a tool meant to be called once."
+    : answerShown
+      ? "The user already sees your answer. After the cleanup, do not restate it; report only Remembrance failures or required action."
+      : priorAnswer
+        ? "After the silent cleanup, preserve the task result in the user-facing final answer. Do not repeat already reported Remembrance warnings. Do not replace the task answer with hook, receipt, or Remembrance status text."
+        : "After the silent cleanup, provide the task's normal user-facing final answer. Do not replace it with hook, receipt, or Remembrance status text.";
   return [String(reason ?? "").trim(), finalAnswerInstruction]
     .filter(Boolean)
     .join("\n");
@@ -1804,13 +2814,18 @@ export function taskClosureReason(signal = null, options = {}) {
     ? `High-value lesson detected: ${signal}. Capture this specific lesson unless it was already submitted. A lower-value earlier capture does not satisfy this obligation; compare it with the most valuable reusable lesson formed since.`
     : null;
   return [
-    "Before finishing, silently recover the pending Remembrance query for this reusable task using the full conversation; no completed Remembrance query/use was recorded.",
+    "Before finishing, silently recover the pending Remembrance query for this reusable task using the full conversation; no Remembrance query with the task's full context and no skill use was recorded for it.",
     signalLine,
-    "Call query_skills with a redacted full-context summary, evaluate the returned matches, then close any warranted submit_query_feedback, submit_feedback, or submit_remembrance action before responding.",
+    options.privateLessonAuthorized
+      ? "Call query_skills with a redacted full-context summary, evaluate the returned matches, then close query-fit feedback and any real post-use feedback. Route reusable content only through capture_learning."
+      : "Call query_skills with a redacted full-context summary, evaluate the returned matches, then close any warranted submit_query_feedback, submit_feedback, or submit_remembrance action before responding.",
+    options.sessionSkills?.length
+      ? `Skills already selected for this session (${options.sessionSkills.join(", ")}) stay active; do not invoke or query them again.`
+      : null,
     options.privateLessonAuthorized
       ? privateLessonCompletionGuidance({ env: options.env })
       : null,
-    routineContributionVisibilityInstruction(),
+    routineContributionVisibilityInstruction(options.privateLessonAuthorized),
   ]
     .filter(Boolean)
     .join("\n");
@@ -1852,7 +2867,11 @@ export function hostPolicyAlertWasReported(input) {
   );
   return (
     value.includes(HOST_POLICY_ALERT_TEXT) ||
-    value.includes(PRIVATE_LESSON_HOST_POLICY_ALERT_TEXT)
+    value.includes(PRIVATE_LESSON_HOST_POLICY_ALERT_TEXT) ||
+    // Recognize older installed-client alerts without prescribing them again.
+    value.includes(
+      "Remembrance was blocked by host policy before reaching Remembrance.",
+    )
   );
 }
 
@@ -1869,10 +2888,28 @@ export function decideStop(input, options = {}) {
   if (input?.stop_hook_active) {
     return { allow: true, why: "stop_hook_active" };
   }
+  const subagent = input?.hook_event_name === "SubagentStop";
+  // Without the host's agent id a subagent's debts cannot be told from its
+  // parent's, so such a stop neither asks nor touches any ledger.
+  if (subagent && !normalizeNativeSessionId(input?.agent_id)) {
+    return { allow: true, why: "subagent_identity_unavailable" };
+  }
   if (hostPolicyAlertWasReported(input)) {
     return { allow: true, why: "host_policy_alert_reported" };
   }
-  const sessionId = sessionIdFor(input);
+  // Hosts render a Stop-block reason as a new user-visible prompt. Routine
+  // recovery therefore happens in the next prompt context by default, where
+  // the agent can close exact durable obligations before its normal answer.
+  // Keep visible Stop recovery only as an explicit diagnostic/strict mode.
+  // A subagent has no next prompt, so its stop still asks it, once, for its
+  // own pending actions.
+  const silent =
+    options.visibleCompletionRecovery !== true &&
+    !visibleCompletionRecoveryEnabled(env);
+  if (silent && !subagent) {
+    return { allow: true, why: "silent_prompt_recovery" };
+  }
+  const sessionId = agentLedgerIdFor(input);
   const readUse = options.readUseCount ?? readRegistryUseCount;
   const useCount = readUse(sessionId, env);
   const readEligible = options.readEligibilityCount ?? readTaskEligibilityCount;
@@ -1882,15 +2919,39 @@ export function decideStop(input, options = {}) {
   const promptedCount = readPrompted(sessionId, env);
   const readObligations =
     options.readCompletionObligations ?? readCompletionObligations;
-  const unpromptedObligations = readObligations(sessionId, env).filter(
-    (obligation) => !obligation.prompted_at,
+  const obligations = readObligations(sessionId, env);
+  const unpromptedObligations = obligations.filter(
+    (obligation) =>
+      !obligation.prompted_at && completionObligationIsDue(obligation, env),
   );
+  const overflow = readCompletionObligationOverflow(sessionId, env);
   const highValueSignal = detectHighValueLessonSignal(input);
-  if (unpromptedObligations.length > 0 && !highValueSignal) {
+  const directSelections = options.readDirectSelections
+    ? options.readDirectSelections(sessionId, env)
+    : options.readDirectSelection
+      ? [options.readDirectSelection(sessionId, env)].filter(Boolean)
+      : readDirectSelectionSurfaces(sessionId, env);
+  if (
+    !highValueSignal &&
+    obligations.length > 0 &&
+    obligations.every((obligation) =>
+      feedbackObligationDenied(obligation, env),
+    ) &&
+    engagementCount <=
+      Math.max(...obligations.map((item) => item.engagement_count))
+  ) {
+    return { allow: true, why: "feedback_host_denied" };
+  }
+  if (unpromptedObligations.length > 0 && (silent || !highValueSignal)) {
     return {
       allow: false,
       why: "prompt_pending_obligations",
-      reason: completionObligationInstruction(unpromptedObligations),
+      reason: completionObligationInstruction(
+        unpromptedObligations,
+        directSelections,
+        overflow,
+        stopRetainedPayloads(unpromptedObligations, sessionId, env),
+      ),
       useCount: Math.max(
         engagementCount,
         ...unpromptedObligations.map(
@@ -1900,21 +2961,40 @@ export function decideStop(input, options = {}) {
       obligationIds: unpromptedObligations.map((obligation) => obligation.id),
     };
   }
+  if (silent) {
+    return { allow: true, why: "silent_prompt_recovery" };
+  }
   const readHighMatch = options.readHighMatch ?? readHighMatchSurface;
   const highMatch = readHighMatch(sessionId, env);
-  const directSelections = options.readDirectSelections
-    ? options.readDirectSelections(sessionId, env)
-    : options.readDirectSelection
-      ? [options.readDirectSelection(sessionId, env)].filter(Boolean)
-      : readDirectSelectionSurfaces(sessionId, env);
+  // A session-scoped selection stays active for the whole session, so its
+  // post-use feedback and task outcome are not due at a turn's stop. Closing
+  // them when the session ends is a follow-up. A turn whose only Remembrance
+  // action was invoking such a skill is therefore treated like a turn with no
+  // Remembrance action: an eligible task still gets the closure prompt, which
+  // names these skills as already selected so they are not invoked or queried
+  // again.
   const newDirectSelections = directSelections.filter(
-    (selection) => !selection?.prompted_at,
+    (selection) => !selection?.prompted_at && selection?.scope !== "session",
   );
+  const sessionSkills = [
+    ...new Set(
+      directSelections
+        .filter((selection) => selection?.scope === "session" && selection.slug)
+        .map((selection) => selection.slug),
+    ),
+  ];
   const feedbackDirectSelections = newDirectSelections.filter(
     (selection) => selection.feedback_available !== false,
   );
+  // A completed query, whatever it found, or a registry use closes the task
+  // it was made in. The cumulative counts alone cannot tell: an agent's own
+  // query that found nothing is no registry use, and a transcript read from
+  // its tail after a long, compacted session no longer shows earlier calls.
+  const readClosed = options.readClosedTaskCount ?? readClosedTaskCount;
   const hasUnclosedEligibility =
-    eligibilityCount > useCount && newDirectSelections.length === 0;
+    eligibilityCount > useCount &&
+    eligibilityCount > readClosed(sessionId, env) &&
+    newDirectSelections.length === 0;
   const privateLessonAuthorized = organizationPrivateLessonAuthorized(env);
   const privateLessonRecovery = privateLessonAuthorized
     ? privateLessonLifecycleRecoveryInstruction(env)
@@ -1972,7 +3052,12 @@ export function decideStop(input, options = {}) {
           : "prompt_contribution",
     reason: [
       unpromptedObligations.length > 0
-        ? completionObligationInstruction(unpromptedObligations)
+        ? completionObligationInstruction(
+            unpromptedObligations,
+            directSelections,
+            overflow,
+            stopRetainedPayloads(unpromptedObligations, sessionId, env),
+          )
         : null,
       privateLessonRecovery && engagementCount === 0 && !highValueSignal
         ? [
@@ -1983,6 +3068,7 @@ export function decideStop(input, options = {}) {
           ? taskClosureReason(highValueSignal, {
               env,
               privateLessonAuthorized,
+              sessionSkills,
             })
           : contributionReason(
               highValueSignal,
@@ -2024,10 +3110,30 @@ function highMatchClosureInstruction(match) {
 //   <hash>.use     — incremented every time the query adapter completes a query.
 //   <hash>.eligible — records that a reusable task should be closed out even if
 //                     no query result was consumed.
+//   <hash>.closed  — the .eligible count when a completed query or a registry
+//                     use last closed the task.
 //   <hash>.prompt  — the use count at which the stop adapter last prompted.
 //   <hash>.high-match.json — latest high result until its exact detail opens.
-//   <hash>.obligations/*.json — content-free query/feedback/lesson actions,
-//                               each closed only by its correlated tool call.
+//   <hash>.obligations/*.json — pending query/feedback/lesson actions, each
+//                               closed only by its correlated tool call. A
+//                               remembrance follow-up also keeps the exact
+//                               payload the server returned, and a durable
+//                               preference the exact record_preference
+//                               arguments capture_learning returned, sealed
+//                               with the private-learning key
+//                               (local_resupply_envelope,
+//                               pending-action-payload.mjs), so a demand can
+//                               repeat a follow-up's payload or hand either
+//                               back by action id; an earlier build's
+//                               plaintext local_resupply_payload is still
+//                               read.
+//   <hash>.obligations-overflow.json — how many debts a full ledger could not
+//                               record, since when, and of which kinds.
+//   <hash>.user-prompts — the user prompts the agent received (host text and
+//                         a subagent's task are not counted).
+//   <hash>.rated.json — results the ledger paid post-use feedback for, each
+//                               with the user prompt (.user-prompts count) it
+//                               was paid in.
 // The stop adapter compares max(.use, .eligible) with .prompt, then records the
 // new engagement count. This reproduces the Claude hook's sentinel behavior
 // without retaining a transcript.
@@ -2050,7 +3156,10 @@ function usageDir(env = process.env) {
     : join(tmpdir(), `${USAGE_DIR}-${localUsageOwnerId()}`);
 }
 
+// A ledger known only by its hash (an association or a forwarding marker
+// names no session id) is passed as { ledger: "<16 hex>" }.
 function sessionHash(sessionId) {
+  if (/^[a-f0-9]{16}$/.test(sessionId?.ledger ?? "")) return sessionId.ledger;
   return createHash("sha256")
     .update(String(sessionId ?? "unknown"))
     .digest("hex")
@@ -2069,6 +3178,10 @@ function eligibilityPath(sessionId, env) {
   return join(usageDir(env), `${sessionHash(sessionId)}.eligible`);
 }
 
+function closedTaskPath(sessionId, env) {
+  return join(usageDir(env), `${sessionHash(sessionId)}.closed`);
+}
+
 function highMatchPath(sessionId, env) {
   return join(usageDir(env), `${sessionHash(sessionId)}.high-match.json`);
 }
@@ -2085,16 +3198,469 @@ function directivePath(sessionId, env) {
   return join(usageDir(env), `${sessionHash(sessionId)}.directive.json`);
 }
 
+function ratedResultsPath(sessionId, env) {
+  return join(usageDir(env), `${sessionHash(sessionId)}.rated.json`);
+}
+
+function userPromptCountPath(sessionId, env) {
+  return join(usageDir(env), `${sessionHash(sessionId)}.user-prompts`);
+}
+
 function completionObligationDir(sessionId, env) {
   return join(usageDir(env), `${sessionHash(sessionId)}.obligations`);
 }
 
+function completionObligationOverflowPath(sessionId, env) {
+  return join(
+    usageDir(env),
+    `${sessionHash(sessionId)}.obligations-overflow.json`,
+  );
+}
+
+function privateCompletionObligationDir(env) {
+  return join(privateLearningLifecycleDirectory(env), "obligations");
+}
+
+// The lifecycle directory alone, for the private-learning hints kept in it
+// (pending-action-payload.mjs, retainedRootsUsable).
+function lifecycleDirectoryUsable(env) {
+  return retainedRootsUsable(env, undefined, { retained: false });
+}
+
+function privateLearningLifecycleDirectory(env) {
+  return join(
+    dirname(privateLessonOutboxDirectoryForHook(env)),
+    "private-learning-lifecycle",
+  );
+}
+
+function legacyPrivateCompletionObligationDir(env) {
+  return join(
+    usageDir(env),
+    `private-learning-${sessionHash(privateLessonOutboxDirectoryForHook(env))}.obligations`,
+  );
+}
+
 function completionObligationPath(sessionId, obligationId, env) {
-  const hash = createHash("sha256")
+  const directory = /^(private_lesson|private_skill):/.test(obligationId)
+    ? privateCompletionObligationDir(env)
+    : completionObligationDir(sessionId, env);
+  return join(directory, completionObligationFileName(obligationId));
+}
+
+function completionObligationFileName(obligationId) {
+  return `${createHash("sha256")
     .update(String(obligationId), "utf8")
     .digest("hex")
-    .slice(0, 32);
-  return join(completionObligationDir(sessionId, env), `${hash}.json`);
+    .slice(0, 32)}.json`;
+}
+
+// A ledger's two homes, by its 16-hex name: the temporary usage directory,
+// where every debt record lived before, and the durable per-user state
+// directory, where a record that keeps an unresolved action's payload lives
+// (pending-action-payload.mjs, retainedLedgerRoot), so that the operating
+// system's cleaning of temporary files never removes it. That durable root is
+// used only while retainedRootsUsable allows it: a symlinked, foreign or
+// group-writable private-learning-lifecycle or retained directory is refused,
+// never followed, and a record then stays in the temporary ledger.
+function ledgerObligationDir(ledger, env) {
+  return join(usageDir(env), `${ledger}.obligations`);
+}
+
+function retainedObligationDir(ledger, env) {
+  return join(retainedLedgerRoot(env), `${ledger}.obligations`);
+}
+
+// Content-free pointers to records another ledger keeps for this one: a
+// subagent's debt whose payload could not move to its parent whole. A pointer
+// lives in the durable root while that is usable, else in the temporary usage
+// directory, from which a read moves it to the durable root.
+function completionObligationPointerDir(ledger, env) {
+  return join(retainedLedgerRoot(env), `${ledger}.pointers`);
+}
+
+function temporaryCompletionObligationPointerDir(ledger, env) {
+  return join(usageDir(env), `${ledger}.pointers`);
+}
+
+function completionObligationPointerHomes(
+  ledger,
+  env,
+  durable = retainedRootsUsable(env),
+) {
+  return [
+    ...(durable ? [completionObligationPointerDir(ledger, env)] : []),
+    temporaryCompletionObligationPointerDir(ledger, env),
+  ];
+}
+
+function completionObligationPointerName(target, obligationId) {
+  return `${createHash("sha256")
+    .update(`${target}:${obligationId}`, "utf8")
+    .digest("hex")
+    .slice(0, 32)}.json`;
+}
+
+// The association in a ledger to the ledger `from`.
+function completionObligationAssociationName(from) {
+  return `${createHash("sha256")
+    .update(`association:${from}`, "utf8")
+    .digest("hex")
+    .slice(0, 32)}.json`;
+}
+
+// Where a ledger names the ledger it handed over to.
+function completionObligationForwardPath(ledger, env) {
+  return join(usageDir(env), `${ledger}.forward.json`);
+}
+
+// The subagent a debt came from, as a record names it.
+function completionProvenance(value) {
+  const agentId = normalizeNativeSessionId(value?.agent_id);
+  return agentId
+    ? {
+        agent_id: agentId,
+        transcript_path: transferTranscriptPath(value.transcript_path),
+      }
+    : null;
+}
+
+// A file of `ledger`'s pointer homes, from every home that is a directory of
+// this user's: a refused durable root, or a home that is a link, is never
+// reached through.
+function removeCompletionObligationPointerFile(
+  ledger,
+  name,
+  env,
+  durable = retainedRootsUsable(env),
+) {
+  for (const directory of completionObligationPointerHomes(ledger, env, durable)) {
+    try {
+      assertSecureHookDirectory(lstatSync(directory));
+    } catch {
+      continue;
+    }
+    rmSync(join(directory, name), { force: true });
+  }
+}
+
+// The pointer in `ledger` to `target`'s record.
+function removeCompletionObligationPointer(
+  ledger,
+  target,
+  obligationId,
+  env,
+  durable = retainedRootsUsable(env),
+) {
+  removeCompletionObligationPointerFile(
+    ledger,
+    completionObligationPointerName(target, obligationId),
+    env,
+    durable,
+  );
+}
+
+// Whether a debt keeps its action's payload on this machine, sealed or as
+// an earlier build kept it in plaintext.
+function retainsResupplyContent(obligation) {
+  return Boolean(
+    obligation?.local_resupply_envelope || obligation?.local_resupply_payload,
+  );
+}
+
+function sameResupplyContent(left, right) {
+  return (
+    left.id === right.id &&
+    left.payload_digest === right.payload_digest &&
+    JSON.stringify(left.local_resupply_envelope ?? null) ===
+      JSON.stringify(right.local_resupply_envelope ?? null) &&
+    JSON.stringify(left.local_resupply_payload ?? null) ===
+      JSON.stringify(right.local_resupply_payload ?? null)
+  );
+}
+
+function privateObligationCredentialDigest(env) {
+  const credential = resolveApiCredential(env);
+  if (!credential.apiKey || isUnusableConfigurationSource(credential.source))
+    return null;
+  return `sha256:${createHash("sha256").update(credential.apiKey).digest("hex")}`;
+}
+
+function privateAuthorizationMarkerPath(draftId, env) {
+  if (!/^(pld|psd)_[A-Za-z0-9_-]{8,96}$/.test(draftId ?? "")) return null;
+  return join(
+    privateLearningLifecycleDirectory(env),
+    `${draftId}.authorization.json`,
+  );
+}
+
+function privateAuthorizationMarker(draftId, env) {
+  const path = privateAuthorizationMarkerPath(draftId, env);
+  if (!path) return null;
+  try {
+    const marker = JSON.parse(readSecureHookFile(path, 1024));
+    if (
+      marker.version !== 1 ||
+      !Number.isFinite(Date.parse(marker.observed_at)) ||
+      !/^sha256:[a-f0-9]{64}$/.test(marker.credential_digest)
+    )
+      return null;
+    return marker;
+  } catch {
+    return null;
+  }
+}
+
+function clearPrivateAuthorizationOpportunity(draftId, env) {
+  const path = privateAuthorizationMarkerPath(draftId, env);
+  if (!path) return;
+  try {
+    rmSync(path, { force: true });
+  } catch {
+    // Content-free scheduling state never controls draft acceptance/deletion.
+  }
+}
+
+function privateTerminalTimestamp(value) {
+  if (typeof value !== "string") return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
+
+function privateTerminalDigest(value) {
+  return typeof value === "string" && /^sha256:[a-f0-9]{64}$/.test(value);
+}
+
+function privateAuthorizationTerminalIsKnown(draftId, env) {
+  if (!/^(?:pld|psd)_[A-Za-z0-9_-]{8,96}$/.test(draftId ?? "")) return false;
+  const lesson = draftId.startsWith("pld_");
+  const directory = lesson
+    ? privateLessonOutboxDirectoryForHook(env)
+    : privateSkillOutboxDirectoryForHook(env);
+  const lane = lesson ? "lesson" : "skill";
+  for (const terminal of ["submitted", "deleted"]) {
+    try {
+      const value = JSON.parse(
+        readSecureHookFile(
+          join(directory, `${draftId}.${terminal}.json`),
+          8 * 1024,
+        ),
+      );
+      if (
+        !value ||
+        typeof value !== "object" ||
+        Array.isArray(value) ||
+        value.draft_id !== draftId ||
+        value.version !==
+          `private-${lane}-outbox-${terminal === "submitted" ? "submitted" : "deletion"}-v1`
+      ) {
+        continue;
+      }
+      if (
+        terminal === "submitted"
+          ? value.state === "submitted" &&
+            privateTerminalTimestamp(value.submitted_at) &&
+            privateTerminalDigest(
+              lane === "lesson" ? value.receipt_digest : value.candidate_digest,
+            )
+          : value.reason === "explicit_confirmed_deletion" &&
+            privateTerminalTimestamp(value.deleted_at)
+      ) {
+        return true;
+      }
+    } catch {
+      // Missing or malformed terminal state cannot prove delivery or deletion.
+    }
+  }
+  return false;
+}
+
+function clearKnownTerminalAuthorizationOpportunities(env) {
+  const directory = privateLearningLifecycleDirectory(env);
+  try {
+    assertSecureHookDirectory(lstatSync(directory));
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const match = entry.name.match(
+        /^((?:pld|psd)_[A-Za-z0-9_-]{8,96})\.authorization\.json$/,
+      );
+      if (
+        !match ||
+        entry.isSymbolicLink() ||
+        !entry.isFile() ||
+        !privateAuthorizationMarker(match[1], env) ||
+        !privateAuthorizationTerminalIsKnown(match[1], env)
+      ) {
+        continue;
+      }
+      clearPrivateAuthorizationOpportunity(match[1], env);
+    }
+  } catch {
+    // Terminal cleanup is best-effort and never controls retained draft state.
+  }
+}
+
+function retireKnownTerminalPrivateObligations(env) {
+  removeCompletionObligations(
+    null,
+    (obligation) =>
+      ["private_lesson", "private_skill"].includes(obligation.kind) &&
+      privateAuthorizationTerminalIsKnown(obligation.draft_id, env),
+    env,
+  );
+}
+
+function recordPrivateAuthorizationOpportunity(draftId, env) {
+  const path = privateAuthorizationMarkerPath(draftId, env);
+  const credentialDigest = privateObligationCredentialDigest(env);
+  return Boolean(
+    path &&
+    credentialDigest &&
+    writePrivateUsageMarker(
+      path,
+      JSON.stringify({
+        version: 1,
+        observed_at: new Date().toISOString(),
+        credential_digest: credentialDigest,
+      }),
+    ),
+  );
+}
+
+function privateAuthorizationRetryIsDue(draftId, lastFailureAt, env) {
+  const marker = privateAuthorizationMarker(draftId, env);
+  const credentialDigest = privateObligationCredentialDigest(env);
+  if (!credentialDigest) return false;
+  if (marker && marker.credential_digest !== credentialDigest) return true;
+  const timestamp = Date.parse(marker?.observed_at ?? lastFailureAt ?? "");
+  // A future timestamp cannot strand recovery. The next emitted reminder
+  // establishes a local cooldown; merely inspecting state never consumes it.
+  if (timestamp > Date.now()) return true;
+  return (
+    Number.isFinite(timestamp) &&
+    timestamp + PRIVATE_AUTHORIZATION_RETRY_INTERVAL_MS <= Date.now()
+  );
+}
+
+export function acknowledgePrivateAuthorizationReminders(
+  context,
+  env = process.env,
+) {
+  clearKnownTerminalAuthorizationOpportunities(env);
+  retireKnownTerminalPrivateObligations(env);
+  if (
+    !organizationPrivateLessonAuthorized(env) ||
+    recentPrivateLessonHostDenial(env)
+  )
+    return;
+  const references = String(context ?? "").matchAll(
+    /\bcall retry_private_(lesson|skill)_candidate with draft_id ((?:pld|psd)_[A-Za-z0-9_-]{8,96})(?![A-Za-z0-9_-])/g,
+  );
+  for (const [, lane, draftId] of references) {
+    if (!draftId.startsWith(lane === "lesson" ? "pld_" : "psd_")) continue;
+    let obligationIsDue = false;
+    try {
+      const obligation = normalizeCompletionObligation(
+        JSON.parse(
+          readSecureHookFile(
+            completionObligationPath(null, `private_${lane}:${draftId}`, env),
+            8 * 1024,
+          ),
+        ),
+      );
+      obligationIsDue = Boolean(
+        obligation?.failed_credential_digest &&
+        completionObligationIsDue(obligation, env),
+      );
+    } catch {
+      // Envelope-only recovery does not require a tool-observer obligation.
+    }
+    let lastFailureAt = null;
+    try {
+      const directory =
+        lane === "lesson"
+          ? privateLessonOutboxDirectoryForHook(env)
+          : privateSkillOutboxDirectoryForHook(env);
+      const envelope = JSON.parse(
+        readSecureHookFile(
+          join(
+            directory,
+            `${draftId}${lane === "lesson" ? ".lesson" : ""}.json`,
+          ),
+          lane === "lesson"
+            ? MAX_PRIVATE_LESSON_ENVELOPE_BYTES
+            : MAX_PRIVATE_SKILL_ENVELOPE_BYTES,
+        ),
+      );
+      if (
+        envelope.draft_id === draftId &&
+        (envelope.state === "awaiting_authorization" ||
+          (envelope.state === "held_safety" &&
+            envelope.hold_telemetry_status === "awaiting_authorization"))
+      ) {
+        lastFailureAt = envelope.updated_at;
+      }
+    } catch {
+      // A retained tool-observer marker is sufficient without an envelope read.
+    }
+    if (
+      obligationIsDue ||
+      privateAuthorizationRetryIsDue(draftId, lastFailureAt, env)
+    ) {
+      recordPrivateAuthorizationOpportunity(draftId, env);
+    }
+  }
+}
+
+function feedbackObligationDenied(obligation, env) {
+  const feedbackTool =
+    obligation.kind === "query_feedback"
+      ? "submit_query_feedback"
+      : obligation.kind === "post_use_feedback"
+        ? "submit_feedback"
+        : null;
+  return Boolean(
+    feedbackTool &&
+    feedbackDenialAcknowledged(
+      {
+        tool: feedbackTool,
+        query_id: obligation.query_id,
+        ...(feedbackTool === "submit_feedback"
+          ? { result_id: obligation.result_id }
+          : {}),
+        reason: "host_policy_denied",
+      },
+      env,
+    ),
+  );
+}
+
+function completionObligationIsDue(obligation, env) {
+  if (feedbackObligationDenied(obligation, env)) return false;
+  if (!["private_lesson", "private_skill"].includes(obligation.kind))
+    return true;
+  // A terminal artifact is authoritative even if a concurrent hook rewrites
+  // an older content-free obligation after best-effort retirement.
+  if (privateAuthorizationTerminalIsKnown(obligation.draft_id, env))
+    return false;
+  if (obligation.delivery_blocked) return false;
+  if (
+    !organizationPrivateLessonAuthorized(env) ||
+    recentPrivateLessonHostDenial(env)
+  )
+    return false;
+  if (obligation.next_retry_at && !retryIsDue(obligation.next_retry_at))
+    return false;
+  if (!obligation.failed_credential_digest) return true;
+  const marker = privateAuthorizationMarker(obligation.draft_id, env);
+  return marker
+    ? privateAuthorizationRetryIsDue(obligation.draft_id, null, env)
+    : obligation.failed_credential_digest !==
+        privateObligationCredentialDigest(env) ||
+        privateAuthorizationRetryIsDue(
+          obligation.draft_id,
+          obligation.created_at,
+          env,
+        );
 }
 
 function readCountFile(path) {
@@ -2107,7 +3673,10 @@ function readCountFile(path) {
   }
 }
 
-function writePrivateUsageMarker(path, value) {
+// A drained ledger's directory is removed once empty, so a concurrent hook
+// can remove it between its creation here and the first write into it: then
+// it is created once more.
+function writePrivateUsageMarker(path, value, retry = true) {
   const temporaryPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     ensureSecureHookDirectory(dirname(path));
@@ -2117,13 +3686,15 @@ function writePrivateUsageMarker(path, value) {
     });
     renameSync(temporaryPath, path);
     return true;
-  } catch {
+  } catch (error) {
     try {
       rmSync(temporaryPath, { force: true });
     } catch {
       // Best-effort cleanup only; marker persistence must remain fail-open.
     }
-    return false;
+    return retry && error?.code === "ENOENT"
+      ? writePrivateUsageMarker(path, value, false)
+      : false;
   }
 }
 
@@ -2156,6 +3727,8 @@ function normalizeCompletionObligation(value) {
       "post_use_feedback",
       "remembrance_followup",
       "private_lesson",
+      "private_skill",
+      "capture_next_action",
     ].includes(value.kind) ||
     typeof value.id !== "string" ||
     !value.id ||
@@ -2183,6 +3756,92 @@ function normalizeCompletionObligation(value) {
       /^sha256:[a-f0-9]{64}$/.test(value.payload_digest)
         ? value.payload_digest
         : null,
+    // Local-only re-supply material: the exact payload the server returned
+    // for a follow-up, or the exact record_preference arguments
+    // capture_learning returned for a durable preference, so a demand after
+    // compaction or in a fresh context, or get_pending_action_payload, can
+    // hand it back verbatim. Nothing uploads, logs, or copies it; it leaves
+    // this 0600 file only inside a demand shown to, or a retrieval by, the
+    // agent that owes it, and moves with the debt when an exiting subagent
+    // passes it to its parent. This version keeps it sealed
+    // (local_resupply_envelope); a plaintext follow-up payload an earlier
+    // version kept is read and carried as it is, never converted. Preference
+    // arguments were never kept in plaintext.
+    local_resupply_payload:
+      value.kind === "remembrance_followup" &&
+      value.local_resupply_payload &&
+      typeof value.local_resupply_payload === "object" &&
+      !Array.isArray(value.local_resupply_payload) &&
+      completionPayloadDigest(value.local_resupply_payload) ===
+        value.payload_digest
+        ? value.local_resupply_payload
+        : null,
+    // Format: pending-action-payload.mjs.
+    local_resupply_envelope: [
+      "remembrance_followup",
+      "capture_next_action",
+    ].includes(value.kind)
+      ? normalizeResupplyEnvelope(value.local_resupply_envelope)
+      : null,
+    local_resupply_payload_omitted: ["too_large", "key_unavailable"].includes(
+      value.local_resupply_payload_omitted,
+    )
+      ? value.local_resupply_payload_omitted
+      : null,
+    // Why no key was made for it, as content-free codes
+    // (pending-action-payload.mjs, retainedKeyHoldCodes).
+    ...(value.local_resupply_payload_omitted === "key_unavailable" &&
+    normalizeRetainedKeyHoldCodes(value.local_resupply_hold)
+      ? {
+          local_resupply_hold: normalizeRetainedKeyHoldCodes(
+            value.local_resupply_hold,
+          ),
+        }
+      : {}),
+    // Set on every record this version writes; it names the writer, not an
+    // agent. Only Claude Code and Codex hooks key a subagent's debts to that
+    // subagent, so there a record without it was written by an older client
+    // under the session alone and may be a subagent's.
+    agent_keyed: value.agent_keyed === true,
+    // Recorded where the host named no agent although it may have been a
+    // subagent's (declareSubagentIdentityUnavailable).
+    ...(value.subagent_identity === "unavailable"
+      ? { subagent_identity: "unavailable" }
+      : {}),
+    ...normalizedAliasQueryIds(value),
+    // The subagent that left this debt unpaid when it exited.
+    transferred_from: normalizeNativeSessionId(value.transferred_from?.agent_id)
+      ? {
+          agent_id: normalizeNativeSessionId(value.transferred_from.agent_id),
+          transcript_path: transferTranscriptPath(
+            value.transferred_from.transcript_path,
+          ),
+        }
+      : null,
+    action_tool:
+      value.action_tool === "record_preference" ||
+      (value.kind === "private_skill" &&
+        [
+          "inspect_private_learning_outbox",
+          "submit_private_skill_candidate",
+          "retry_private_skill_candidate",
+        ].includes(value.action_tool)) ||
+      (value.kind === "private_lesson" &&
+        [
+          "submit_private_lesson_candidate",
+          "retry_private_lesson_candidate",
+        ].includes(value.action_tool))
+        ? value.action_tool
+        : null,
+    next_retry_at: Number.isFinite(Date.parse(value.next_retry_at ?? ""))
+      ? new Date(value.next_retry_at).toISOString()
+      : null,
+    failed_credential_digest: /^sha256:[a-f0-9]{64}$/.test(
+      value.failed_credential_digest ?? "",
+    )
+      ? value.failed_credential_digest
+      : null,
+    delivery_blocked: value.delivery_blocked === true,
     created_at: new Date(createdAt).toISOString(),
     prompted_at:
       promptedAt !== null && Number.isFinite(promptedAt)
@@ -2191,71 +3850,1022 @@ function normalizeCompletionObligation(value) {
   };
 }
 
-export function readCompletionObligations(sessionId, env = process.env) {
-  const directory = completionObligationDir(sessionId, env);
-  try {
-    const now = Date.now();
-    const obligations = [];
-    for (const name of readdirSync(directory).sort().slice(0, 256)) {
-      if (!/^[a-f0-9]{32}\.json$/.test(name)) continue;
-      const path = join(directory, name);
-      try {
-        const stat = lstatSync(path);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8 * 1024) {
-          continue;
-        }
-        const obligation = normalizeCompletionObligation(
-          JSON.parse(readFileSync(path, "utf8")),
-        );
-        if (!obligation) continue;
-        if (
-          Date.parse(obligation.created_at) + COMPLETION_OBLIGATION_TTL_MS <
-          now
-        ) {
-          rmSync(path, { force: true });
-          continue;
-        }
-        obligations.push(obligation);
-      } catch {
-        // One malformed marker must not hide other pending work.
-      }
-    }
-    return obligations
-      .sort(
-        (left, right) =>
-          Date.parse(left.created_at) - Date.parse(right.created_at) ||
-          left.id.localeCompare(right.id),
-      )
-      .slice(0, COMPLETION_OBLIGATION_LIMIT);
-  } catch {
-    return [];
+function normalizedAliasQueryIds(value) {
+  if (
+    value.kind !== "post_use_feedback" ||
+    !Array.isArray(value.alias_query_ids)
+  ) {
+    return {};
   }
+  const primary = completionIdentifier(value.query_id);
+  const aliases = [
+    ...new Set(
+      value.alias_query_ids
+        .filter((id) => typeof id === "string")
+        .map((id) => completionIdentifier(id))
+        .filter((id) => id && id !== primary),
+    ),
+  ].slice(-COMPLETION_ALIAS_QUERY_ID_LIMIT);
+  return aliases.length > 0 ? { alias_query_ids: aliases } : {};
 }
 
-function writeCompletionObligation(sessionId, obligation, env) {
-  const normalized = normalizeCompletionObligation(obligation);
-  if (!normalized) return null;
-  const existing = readCompletionObligations(sessionId, env);
-  if (
-    !existing.some((item) => item.id === normalized.id) &&
-    existing.length >= COMPLETION_OBLIGATION_LIMIT
-  ) {
-    return null;
-  }
-  return writePrivateUsageMarker(
-    completionObligationPath(sessionId, normalized.id, env),
-    `${JSON.stringify(normalized)}\n`,
-  )
-    ? normalized
+// Kept only while its JSON form fits the room a retained payload leaves for
+// it; a longer path is dropped.
+function transferTranscriptPath(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const path = safeText(value, 512);
+  const room = JSON.stringify(
+    COMPLETION_OBLIGATION_GROWN_FIELDS.transferred_from.transcript_path,
+  );
+  return Buffer.byteLength(JSON.stringify(path), "utf8") <=
+    Buffer.byteLength(room, "utf8")
+    ? path
     : null;
 }
 
-function addCompletionObligation(
+// `pointers: false` reads only the ledger's own records, for a decision that
+// needs nothing else (is it held, is it full): no pointer entry is examined,
+// and such a read never counts the ledger as drained.
+export function readCompletionObligations(
   sessionId,
-  obligation,
   env = process.env,
+  options = {},
 ) {
-  const existing = readCompletionObligations(sessionId, env).find(
+  return readCompletionLedger(sessionId, env, options).obligations;
+}
+
+// What a session holds, read without asking it for anything (`ask: false`):
+// the reads that record a debt or look one up, and those that end a tool
+// call. Only a prompt's or a stop's read decides who is asked.
+function heldCompletionObligations(sessionId, env) {
+  return readCompletionObligations(sessionId, env, { ask: false });
+}
+
+// readCompletionObligations, with `complete`: every home of the ledger, and
+// everything it points or associates to, was examined (the durable root
+// usable, nothing out of reach, no bound reached). Only a complete read
+// drains a ledger (retiring its count and its empty directories), and only
+// a complete read lets a hand-over leave nothing behind.
+// `associations: "list"` (a hand-over's read) shows each association
+// `sessionId` holds as { association, transferred_from } instead of what it
+// reaches, so a hand-over moves the association itself. `settle: true` (a
+// completion's or a decline's read) follows every entry `sessionId` holds,
+// whichever session asks for it now, and names nothing: a debt it was shown
+// before its keeper ran again is settled once, and what it reaches through
+// an OpenClaw entry is not named after anything. `ask: false` (a read that
+// asks nothing of the session: one that records a debt or looks one up, or
+// ends a tool call) follows every entry `sessionId` holds, moves or
+// removes none and, as a completion's read, names nothing it reaches
+// through an OpenClaw entry: a run that was asked keeps the entry it was
+// asked through, and settles through it, until its next prompt or stop.
+function readCompletionLedger(
+  sessionId,
+  env,
+  {
+    pointers = true,
+    associations = "expand",
+    settle = false,
+    ask = true,
+  } = {},
+) {
+  const obligations = new Map();
+  const ledger = sessionHash(sessionId);
+  const temporary = completionObligationDir(sessionId, env);
+  const durable = retainedRootsUsable(env);
+  const kept = durable ? retainedObligationDir(ledger, env) : null;
+  const lifecycle = durable || lifecycleDirectoryUsable(env);
+  let listed = false;
+  let ownComplete = true;
+  for (const directory of [
+    temporary,
+    ...(kept ? [kept] : []),
+    legacyPrivateCompletionObligationDir(env),
+    ...(lifecycle ? [privateCompletionObligationDir(env)] : []),
+  ]) {
+    try {
+      const now = Date.now();
+      assertSecureHookDirectory(lstatSync(directory));
+      if (directory === temporary || directory === kept) listed = true;
+      const names = readdirSync(directory).sort();
+      if ((directory === temporary || directory === kept) && names.length > 256) {
+        ownComplete = false;
+      }
+      for (const name of names.slice(0, 256)) {
+        if (!/^[a-f0-9]{32}\.json$/.test(name)) continue;
+        const path = join(directory, name);
+        try {
+          const stat = lstatSync(path);
+          if (
+            !stat.isFile() ||
+            stat.isSymbolicLink() ||
+            stat.size > COMPLETION_OBLIGATION_MAX_BYTES
+          ) {
+            continue;
+          }
+          const text = readSecureHookFile(
+            path,
+            COMPLETION_OBLIGATION_MAX_BYTES,
+          );
+          const raw = JSON.parse(text);
+          const obligation = normalizeCompletionObligation(raw);
+          if (!obligation) continue;
+          if (
+            ["private_lesson", "private_skill"].includes(obligation.kind) &&
+            directory !== privateCompletionObligationDir(env)
+          ) {
+            const destination = completionObligationPath(
+              sessionId,
+              obligation.id,
+              env,
+            );
+            // Migrate content-free hints only; encrypted drafts remain untouched.
+            if (
+              lifecycle &&
+              !existsSync(destination) &&
+              writePrivateUsageMarker(destination, JSON.stringify(obligation))
+            ) {
+              rmSync(path, { force: true });
+            }
+          }
+          // A sealed payload an earlier build kept in the temporary usage
+          // directory moves to the durable ledger, whole.
+          if (
+            durable &&
+            directory === temporary &&
+            obligation.local_resupply_envelope
+          ) {
+            promoteRetainedRecord(
+              path,
+              join(retainedObligationDir(ledger, env), name),
+              text,
+            );
+          }
+          // Only a marker without content ages out. A record that keeps (or
+          // may keep) an unresolved action's payload stays until the action
+          // is completed, declined or withdrawn.
+          if (
+            !["private_lesson", "private_skill"].includes(obligation.kind) &&
+            raw.local_resupply_envelope == null &&
+            raw.local_resupply_payload == null &&
+            Date.parse(obligation.created_at) + COMPLETION_OBLIGATION_TTL_MS <
+              now
+          ) {
+            rmSync(path, { force: true });
+            continue;
+          }
+          // The durable copy, read after the temporary one, is the one kept.
+          obligations.set(obligation.id, obligation);
+        } catch {
+          // One malformed marker must not hide other pending work.
+        }
+      }
+    } catch (error) {
+      // Session-local feedback and durable draft obligations are independent.
+      if (
+        error?.code !== "ENOENT" &&
+        (directory === temporary || directory === kept)
+      ) {
+        ownComplete = false;
+      }
+    }
+  }
+  const ordered = [...obligations.values()].sort(
+    (left, right) =>
+      Date.parse(left.created_at) - Date.parse(right.created_at) ||
+      left.id.localeCompare(right.id),
+  );
+  const privateKinds = ["private_lesson", "private_skill"];
+  const walked = pointers
+    ? readPointedCompletionObligations(ledger, env, durable, {
+        examined: 0,
+        presented: 0,
+        seen: new Set(),
+        list: associations === "list",
+        reader: ask ? ledger : null,
+        owners: new Map(),
+        settle,
+      })
+    : { pointed: [], complete: false, present: false };
+  const { pointed, present } = walked;
+  // A refused durable root, a home not read, a bound reached, a record out
+  // of reach or more own debts than one page shows leaves the ledger
+  // undrained: nothing is retired on a partial view.
+  const complete =
+    durable &&
+    ownComplete &&
+    ordered.filter((item) => !privateKinds.includes(item.kind)).length <=
+      COMPLETION_OBLIGATION_LIMIT &&
+    walked.complete;
+  // Once the ledger has drained, its overflow count is history, and its
+  // directories go once empty.
+  if (
+    !ordered.some((item) => !privateKinds.includes(item.kind)) &&
+    pointed.length === 0 &&
+    complete
+  ) {
+    try {
+      rmSync(completionObligationOverflowPath(sessionId, env), { force: true });
+    } catch {
+      // A stale count can only repeat a true, older report.
+    }
+    if (listed || present) removeEmptyLedgerDirectories(ledger, env, durable);
+  }
+  // Non-expiring private hints must never occupy the session feedback budget.
+  // Records another ledger keeps for this one come after its own; they never
+  // count against its own bound.
+  return {
+    complete,
+    obligations: [
+      ...ordered
+        .filter((item) => !privateKinds.includes(item.kind))
+        .slice(0, COMPLETION_OBLIGATION_LIMIT),
+      ...pointed,
+      ...ordered
+        .filter((item) => privateKinds.includes(item.kind))
+        .slice(0, COMPLETION_OBLIGATION_LIMIT),
+    ],
+  };
+}
+
+// Copies a sealed record from the temporary usage directory into the durable
+// ledger and removes the temporary copy only once the durable one is
+// byte-identical (by digest). A durable record that differs is never
+// overwritten, and any failure leaves the temporary copy where it was.
+function promoteRetainedRecord(path, destination, text) {
+  const digest = (value) => createHash("sha256").update(value).digest("hex");
+  try {
+    let held = null;
+    try {
+      held = readSecureHookFile(destination, COMPLETION_OBLIGATION_MAX_BYTES);
+    } catch (error) {
+      if (error?.code !== "ENOENT") return;
+    }
+    if (held === null) {
+      if (!writePrivateUsageMarker(destination, text)) return;
+      held = readSecureHookFile(destination, COMPLETION_OBLIGATION_MAX_BYTES);
+    }
+    if (digest(held) === digest(text)) rmSync(path, { force: true });
+  } catch {
+    // The temporary copy stays readable where it is.
+  }
+}
+
+// A ledger's directory in each home, once nothing is left in it: a drained
+// ledger must not count toward the inventory's directory bound. A refused
+// durable root is never reached through, and a directory a concurrent hook
+// has just written to stays.
+function removeEmptyLedgerDirectories(
+  ledger,
+  env,
+  durable = retainedRootsUsable(env),
+) {
+  for (const directory of [
+    ledgerObligationDir(ledger, env),
+    ...(durable ? [retainedObligationDir(ledger, env)] : []),
+    ...completionObligationPointerHomes(ledger, env, durable),
+  ]) {
+    try {
+      rmdirSync(directory);
+    } catch {
+      // Not empty, already gone, or holding a file this client does not read.
+    }
+  }
+}
+
+// A record kept in `ledger`'s temporary or durable home, if it is there. A
+// sealed record found in the temporary home while the durable root is
+// usable moves to the durable home, as its keeper's own read moves it: a
+// keeper that never reads its ledger again (an ended subagent's) must not
+// leave it to temporary-directory cleanup.
+function readLedgerRecord(
+  ledger,
+  obligationId,
+  env,
+  durable = retainedRootsUsable(env),
+) {
+  const name = completionObligationFileName(obligationId);
+  const temporary = ledgerObligationDir(ledger, env);
+  let found = false;
+  for (const directory of [
+    ...(durable ? [retainedObligationDir(ledger, env)] : []),
+    temporary,
+  ]) {
+    try {
+      const path = join(directory, name);
+      const text = readSecureHookFile(path, COMPLETION_OBLIGATION_MAX_BYTES);
+      const obligation = normalizeCompletionObligation(JSON.parse(text));
+      if (obligation?.id === obligationId) {
+        if (
+          durable &&
+          directory === temporary &&
+          obligation.local_resupply_envelope
+        ) {
+          promoteRetainedRecord(
+            path,
+            join(retainedObligationDir(ledger, env), name),
+            text,
+          );
+        }
+        return obligation;
+      }
+      found = true;
+    } catch (error) {
+      if (error?.code !== "ENOENT") found = true;
+    }
+  }
+  return found ? undefined : null;
+}
+
+// The debts other ledgers keep for `ledger`. A pointer names one record (its
+// keeper and id); an association names a ledger whose own records, and what
+// it points or associates to in turn, `ledger` owes (at most
+// COMPLETION_HOP_LIMIT associations deep). One read presents at most
+// COMPLETION_OBLIGATION_LIMIT debts and examines at most
+// COMPLETION_POINTER_SCAN_LIMIT entries over every home it visits (the
+// temporary one first), in directory order, never a full listing. Resolving
+// a debt removes its pointer or record, and a read removes pointers whose
+// records are gone and associations to ledgers left empty, so the next read
+// starts at the first unresolved debt. A temporary entry moves to the durable
+// home once that is usable. Nothing goes as resolved unless the durable root
+// is usable and the record is absent from both homes of its keeper, or the
+// associated ledger was examined whole. On OpenClaw's path a flagged entry is
+// followed only when no other session asks for what it names: an asking read
+// (not a hand-over's list) first takes its keeper's owner (completionOwner),
+// and an entry another session owns is never followed, named or tagged
+// through; it goes to that session (settleForeignCompletionEntry), or, when it
+// cannot go, stays and leaves the read incomplete. `complete`: every home was
+// examined to its end, the durable one included, no bound was reached and
+// nothing was out of reach; `present`: some pointer home exists.
+function readPointedCompletionObligations(
+  ledger,
+  env,
+  durable = retainedRootsUsable(env),
+  walk = { examined: 0, presented: 0, seen: new Set() },
+  depth = 0,
+  provenance = null,
+  quiet = false,
+) {
+  const pointed = [];
+  const temporary = temporaryCompletionObligationPointerDir(ledger, env);
+  const homes = [
+    temporary,
+    ...(durable ? [completionObligationPointerDir(ledger, env)] : []),
+  ];
+  let complete = durable;
+  let present = false;
+  for (const directory of homes) {
+    let entries;
+    try {
+      assertSecureHookDirectory(lstatSync(directory));
+      entries = opendirSync(directory);
+    } catch (error) {
+      if (error?.code !== "ENOENT") complete = false;
+      continue;
+    }
+    present = true;
+    try {
+      for (;;) {
+        if (
+          walk.presented >= COMPLETION_OBLIGATION_LIMIT ||
+          walk.examined >= COMPLETION_POINTER_SCAN_LIMIT
+        ) {
+          complete = false;
+          break;
+        }
+        const entry = entries.readSync();
+        if (!entry) break;
+        walk.examined += 1;
+        const { name } = entry;
+        if (!/^[a-f0-9]{32}\.json$/.test(name)) continue;
+        // Shown once per read. A temporary copy of an entry already shown is
+        // still promoted below, so where an entry ends up never depends on
+        // the order a read meets it in.
+        const shown = walk.seen.has(name);
+        if (shown && !(durable && directory === temporary)) continue;
+        walk.seen.add(name);
+        const path = join(directory, name);
+        let text;
+        try {
+          text = readSecureHookFile(path, COMPLETION_POINTER_MAX_BYTES);
+        } catch {
+          complete = false;
+          continue;
+        }
+        let pointer;
+        try {
+          pointer = JSON.parse(text);
+        } catch {
+          continue;
+        }
+        if (
+          !/^[a-f0-9]{16}$/.test(pointer?.ledger ?? "") ||
+          pointer.ledger === ledger
+        ) {
+          continue;
+        }
+        if (pointer.version === COMPLETION_OBLIGATION_ASSOCIATION_VERSION) {
+          if (completionObligationAssociationName(pointer.ledger) !== name) {
+            continue;
+          }
+          const owned = ownedCompletionEntry(
+            directory,
+            name,
+            text,
+            pointer,
+            env,
+            durable,
+            walk,
+          );
+          if (owned !== true) {
+            if (owned === false) complete = false;
+            continue;
+          }
+          if (durable && directory === temporary) {
+            promoteRetainedRecord(path, join(homes[1], name), text);
+          }
+          if (shown) continue;
+          if (walk.list) {
+            pointed.push({
+              association: pointer.ledger,
+              transferred_from: completionProvenance(pointer.transferred_from),
+            });
+            walk.presented += 1;
+            continue;
+          }
+          if (depth >= COMPLETION_HOP_LIMIT) {
+            complete = false;
+            continue;
+          }
+          const through = readAssociatedCompletionObligations(
+            pointer.ledger,
+            env,
+            durable,
+            walk,
+            depth + 1,
+            completionProvenance(pointer.transferred_from) ?? provenance,
+            quiet ||
+              ((walk.settle || !walk.reader) && pointer.forwarded === true),
+          );
+          pointed.push(...through.pointed);
+          if (through.drained) {
+            try {
+              removeCompletionObligationPointerFile(ledger, name, env, true);
+              removeEmptyLedgerDirectories(pointer.ledger, env, true);
+            } catch {
+              // Expanded again, and removed, by a later read.
+            }
+          } else if (!through.complete) {
+            complete = false;
+          }
+          continue;
+        }
+        // Only a pointer this client wrote, named by its keeper and id.
+        if (
+          pointer.version !== COMPLETION_OBLIGATION_POINTER_VERSION ||
+          typeof pointer.id !== "string" ||
+          completionObligationPointerName(pointer.ledger, pointer.id) !== name
+        ) {
+          continue;
+        }
+        const owned = ownedCompletionEntry(
+          directory,
+          name,
+          text,
+          pointer,
+          env,
+          durable,
+          walk,
+        );
+        if (owned !== true) {
+          if (owned === false) complete = false;
+          continue;
+        }
+        if (shown) {
+          promoteRetainedRecord(path, join(homes[1], name), text);
+          continue;
+        }
+        const obligation = readLedgerRecord(
+          pointer.ledger,
+          pointer.id,
+          env,
+          durable,
+        );
+        if (obligation === null && durable) {
+          try {
+            removeCompletionObligationPointer(
+              ledger,
+              pointer.ledger,
+              pointer.id,
+              env,
+              true,
+            );
+          } catch {
+            // Removed by a later read.
+          }
+          continue;
+        }
+        if (durable && directory === temporary) {
+          promoteRetainedRecord(path, join(homes[1], name), text);
+        }
+        if (!obligation || !retainsResupplyContent(obligation)) {
+          complete = false;
+          continue;
+        }
+        pointed.push(
+          presentAssociatedCompletionObligation(
+            obligation,
+            pointer.ledger,
+            provenance,
+            env,
+            !(
+              quiet ||
+              ((walk.settle || !walk.reader) && pointer.forwarded === true)
+            ),
+          ),
+        );
+        walk.presented += 1;
+      }
+    } catch {
+      // One unreadable home must not hide the other.
+      complete = false;
+    } finally {
+      entries.closeSync();
+    }
+  }
+  return { pointed, complete, present };
+}
+
+// Whether an asking read follows an entry (mechanism A, OpenClaw only): true
+// for every entry Claude Code or Codex wrote (no `forwarded` flag: nothing is
+// looked up), for every entry a hand-over's list, a completion's read or a
+// read that asks nothing (`ask: false`) meets, and for a flagged one whose
+// keeper's debts no other session asks for. A flagged entry whose debts
+// another session owns is never followed: it is settled
+// (settleForeignCompletionEntry) and this returns "settled", or it stays
+// and this returns false (the read is then incomplete). False as well when
+// the read's bound is reached while its owner is looked up.
+function ownedCompletionEntry(
+  directory,
+  name,
+  text,
+  pointer,
+  env,
+  durable,
+  walk,
+) {
+  if (pointer.forwarded !== true || walk.list || walk.settle || !walk.reader) {
+    return true;
+  }
+  const owner = completionOwner(pointer.ledger, env, walk);
+  if (owner === undefined) return false;
+  if (!owner || owner === walk.reader) return true;
+  return settleForeignCompletionEntry(
+    directory,
+    name,
+    text,
+    pointer.ledger,
+    owner,
+    env,
+    durable,
+  )
+    ? "settled"
+    : false;
+}
+
+// The session that asks for what `keeper` keeps (OpenClaw's path): the
+// keeper's own when its marker is released (its session runs again), else
+// the first ledger along its forwarding markers whose marker is released;
+// null when none is (a ledger without a marker, such as the top session's,
+// an invalid or looping marker, or COMPLETION_HOP_LIMIT markers read). Then
+// a reader follows, as before. Every marker read counts as an examined entry
+// of the read, which stops looking (undefined) once its bound is reached; an
+// owner found is kept for each ledger on the way, for the rest of the read.
+function completionOwner(keeper, env, walk) {
+  const owners = (walk.owners ??= new Map());
+  if (owners.has(keeper)) return owners.get(keeper);
+  const visited = [];
+  let ledger = keeper;
+  let owner = null;
+  let limited = true;
+  for (let hop = 0; hop < COMPLETION_HOP_LIMIT; hop += 1) {
+    if (owners.has(ledger)) {
+      owner = owners.get(ledger);
+      limited = false;
+      break;
+    }
+    if (walk.examined >= COMPLETION_POINTER_SCAN_LIMIT) return undefined;
+    visited.push(ledger);
+    let marker;
+    try {
+      marker = JSON.parse(
+        readSecureHookFile(
+          completionObligationForwardPath(ledger, env),
+          COMPLETION_POINTER_MAX_BYTES,
+        ),
+      );
+    } catch {
+      limited = false;
+      break;
+    }
+    walk.examined += 1;
+    if (marker?.version === COMPLETION_OBLIGATION_RELEASED_VERSION) {
+      owner = ledger;
+      limited = false;
+      break;
+    }
+    if (
+      marker?.version !== COMPLETION_OBLIGATION_FORWARD_VERSION ||
+      !/^[a-f0-9]{16}$/.test(marker.ledger ?? "") ||
+      visited.includes(marker.ledger)
+    ) {
+      limited = false;
+      break;
+    }
+    ledger = marker.ledger;
+  }
+  // A walk cut by the hop limit says nothing about a ledger further on.
+  for (const each of limited ? [keeper] : visited) owners.set(each, owner);
+  return owner;
+}
+
+// A flagged entry whose debts the live session `owner` asks for: removed
+// when that session keeps them itself, else moved, byte for byte, into its
+// pointer homes, where its own reads follow it. Where that session already
+// holds an entry of that name naming the same record or ledger (another
+// holder's provenance), that one stays as it is and this one goes. The
+// copy is written first (writePrivateUsageMarker: a 0600 file in a 0700
+// home, never through a link); only then does the entry go, after an
+// lstat of its home and of the entry itself. Nothing moves or goes while
+// the durable root is refused, and a write that fails leaves the entry
+// where it is. True once it is gone.
+function settleForeignCompletionEntry(
+  directory,
+  name,
+  text,
+  keeper,
+  owner,
+  env,
+  durable,
+) {
+  if (!durable) return false;
+  try {
+    if (
+      owner !== keeper &&
+      !writeCompletionObligationPointerFile(owner, name, text, env, true)
+    ) {
+      return false;
+    }
+    assertSecureHookDirectory(lstatSync(directory));
+    const path = join(directory, name);
+    const entry = lstatSync(path);
+    if (entry.isSymbolicLink() || !entry.isFile()) return false;
+    rmSync(path, { force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// What an association to `ledger` names: its own records (every kind but the
+// private hints, which stay per machine), then what it points or associates
+// to in turn, within the walk's bounds. `drained`: nothing is left there and
+// every home of it was examined.
+function readAssociatedCompletionObligations(
+  ledger,
+  env,
+  durable,
+  walk,
+  depth,
+  provenance,
+  quiet = false,
+) {
+  const pointed = [];
+  const own = new Map();
+  const temporary = ledgerObligationDir(ledger, env);
+  let complete = durable;
+  for (const directory of [
+    ...(durable ? [retainedObligationDir(ledger, env)] : []),
+    temporary,
+  ]) {
+    let entries;
+    try {
+      assertSecureHookDirectory(lstatSync(directory));
+      entries = opendirSync(directory);
+    } catch (error) {
+      if (error?.code !== "ENOENT") complete = false;
+      continue;
+    }
+    try {
+      for (;;) {
+        if (walk.examined >= COMPLETION_POINTER_SCAN_LIMIT) {
+          complete = false;
+          break;
+        }
+        const entry = entries.readSync();
+        if (!entry) break;
+        walk.examined += 1;
+        if (!/^[a-f0-9]{32}\.json$/.test(entry.name)) continue;
+        if (walk.presented + own.size >= COMPLETION_OBLIGATION_LIMIT) {
+          complete = false;
+          break;
+        }
+        const path = join(directory, entry.name);
+        try {
+          const text = readSecureHookFile(path, COMPLETION_OBLIGATION_MAX_BYTES);
+          const raw = JSON.parse(text);
+          const obligation = normalizeCompletionObligation(raw);
+          if (
+            !obligation ||
+            ["private_lesson", "private_skill"].includes(obligation.kind) ||
+            completionObligationFileName(obligation.id) !== entry.name
+          ) {
+            continue;
+          }
+          // A sealed record in the temporary home moves to the durable one,
+          // as in readLedgerRecord.
+          if (
+            durable &&
+            directory === temporary &&
+            obligation.local_resupply_envelope
+          ) {
+            promoteRetainedRecord(
+              path,
+              join(retainedObligationDir(ledger, env), entry.name),
+              text,
+            );
+          }
+          // A marker without content ages out here as in its owner's read.
+          if (
+            raw.local_resupply_envelope == null &&
+            raw.local_resupply_payload == null &&
+            Date.parse(obligation.created_at) + COMPLETION_OBLIGATION_TTL_MS <
+              Date.now()
+          ) {
+            rmSync(path, { force: true });
+            continue;
+          }
+          // The durable copy, read first, is the one kept.
+          if (!own.has(obligation.id)) own.set(obligation.id, obligation);
+        } catch {
+          complete = false;
+        }
+      }
+    } catch {
+      complete = false;
+    } finally {
+      entries.closeSync();
+    }
+  }
+  for (const obligation of own.values()) {
+    const key = completionObligationPointerName(ledger, obligation.id);
+    if (walk.seen.has(key)) continue;
+    if (walk.presented >= COMPLETION_OBLIGATION_LIMIT) {
+      complete = false;
+      break;
+    }
+    walk.seen.add(key);
+    pointed.push(
+      presentAssociatedCompletionObligation(
+        obligation,
+        ledger,
+        provenance,
+        env,
+        !quiet,
+      ),
+    );
+    walk.presented += 1;
+  }
+  const deeper = readPointedCompletionObligations(
+    ledger,
+    env,
+    durable,
+    walk,
+    depth,
+    provenance,
+    quiet,
+  );
+  return {
+    pointed: [...pointed, ...deeper.pointed],
+    complete: complete && deeper.complete,
+    drained:
+      complete &&
+      deeper.complete &&
+      own.size === 0 &&
+      deeper.pointed.length === 0,
+  };
+}
+
+// A debt `keeper` keeps, as the ledger that owes it shows it. One reached
+// through an association that names a subagent, and that names none yet, is
+// named after it where it is kept (once: the first name stays), so its
+// retrieval says second-hand as its demand line does; not by a completion's
+// read through an OpenClaw entry (`tag` false), which names nothing.
+function presentAssociatedCompletionObligation(
+  obligation,
+  keeper,
+  provenance,
+  env,
+  tag = true,
+) {
+  if (!provenance || obligation.transferred_from) {
+    return { ...obligation, ledger: keeper };
+  }
+  if (tag) tagKeptCompletionObligation(keeper, obligation.id, provenance, env);
+  return { ...obligation, ledger: keeper, transferred_from: provenance };
+}
+
+function completionLedgerIsFull(existing, obligation) {
+  const isPrivate = (item) =>
+    ["private_lesson", "private_skill"].includes(item.kind);
+  // A record another ledger keeps for this one takes no room here.
+  const own = existing.filter((item) => !item.ledger);
+  return (
+    !own.some((item) => item.id === obligation.id) &&
+    own.filter((item) => isPrivate(item) === isPrivate(obligation)).length >=
+      COMPLETION_OBLIGATION_LIMIT
+  );
+}
+
+// Debts a full ledger could not record are counted, never dropped silently:
+// every demand for that ledger reports them until it has drained.
+function readCompletionObligationOverflow(sessionId, env) {
+  return readCompletionObligationOverflowAt(
+    completionObligationOverflowPath(sessionId, env),
+  );
+}
+
+function readCompletionObligationOverflowAt(path) {
+  try {
+    const value = JSON.parse(readSecureHookFile(path, 4096));
+    const first = Date.parse(value?.first_dropped_at);
+    const last = Date.parse(value?.last_dropped_at);
+    if (
+      value?.version !== COMPLETION_OBLIGATION_OVERFLOW_VERSION ||
+      !Number.isInteger(value.count) ||
+      value.count < 1 ||
+      !Number.isFinite(first) ||
+      !Number.isFinite(last)
+    ) {
+      return null;
+    }
+    return {
+      count: Math.min(1_000_000, value.count),
+      first_dropped_at: new Date(first).toISOString(),
+      last_dropped_at: new Date(last).toISOString(),
+      kinds: (Array.isArray(value.kinds) ? value.kinds : []).filter((kind) =>
+        [
+          "query_feedback",
+          "post_use_feedback",
+          "remembrance_followup",
+          "capture_next_action",
+        ].includes(kind),
+      ),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function addCompletionObligationOverflow(sessionId, dropped, env) {
+  const current = readCompletionObligationOverflow(sessionId, env);
+  const earliest = [current?.first_dropped_at, dropped.first_dropped_at]
+    .filter(Boolean)
+    .sort()[0];
+  const latest = [current?.last_dropped_at, dropped.last_dropped_at]
+    .filter(Boolean)
+    .sort()
+    .at(-1);
+  return writePrivateUsageMarker(
+    completionObligationOverflowPath(sessionId, env),
+    `${JSON.stringify({
+      version: COMPLETION_OBLIGATION_OVERFLOW_VERSION,
+      count: (current?.count ?? 0) + dropped.count,
+      first_dropped_at: earliest,
+      last_dropped_at: latest,
+      kinds: [...new Set([...(current?.kinds ?? []), ...dropped.kinds])].sort(),
+    })}\n`,
+  );
+}
+
+// `kept`: the caller keeps the debt elsewhere when this ledger is full, or
+// counts it itself (a hand-over points to it, or counts it before the debt
+// leaves where it was), so it is not counted here.
+function writeCompletionObligation(sessionId, obligation, env, { kept = false } = {}) {
+  let normalized = normalizeCompletionObligation(obligation);
+  if (!normalized) return null;
+  // A record another ledger keeps for this one is rewritten where it is.
+  const own = sessionHash(sessionId);
+  const ledger = /^[a-f0-9]{16}$/.test(obligation?.ledger ?? "")
+    ? obligation.ledger
+    : own;
+  if (
+    ledger === own &&
+    completionLedgerIsFull(
+      readCompletionObligations(sessionId, env, { pointers: false }),
+      normalized,
+    )
+  ) {
+    // A private hint only points into the private-learning outbox, which
+    // stays authoritative; any other debt not kept elsewhere is counted.
+    if (!kept && !["private_lesson", "private_skill"].includes(normalized.kind)) {
+      countCompletionObligation(sessionId, normalized.kind, env);
+    }
+    return null;
+  }
+  let serialized = `${JSON.stringify(normalized)}\n`;
+  // A payload is retained whole or not at all, and only while the record
+  // still fits once every field a later rewrite can grow has grown.
+  if (
+    (normalized.local_resupply_payload || normalized.local_resupply_envelope) &&
+    Buffer.byteLength(
+      `${JSON.stringify({
+        ...normalized,
+        ...COMPLETION_OBLIGATION_GROWN_FIELDS,
+        transferred_from:
+          normalized.transferred_from ??
+          COMPLETION_OBLIGATION_GROWN_FIELDS.transferred_from,
+      })}\n`,
+      "utf8",
+    ) > COMPLETION_OBLIGATION_MAX_BYTES
+  ) {
+    normalized = {
+      ...normalized,
+      local_resupply_payload: null,
+      local_resupply_envelope: null,
+      local_resupply_payload_omitted: "too_large",
+    };
+    serialized = `${JSON.stringify(normalized)}\n`;
+  }
+  if (["private_lesson", "private_skill"].includes(normalized.kind)) {
+    // A private hint lives in the lifecycle directory, which is refused,
+    // never followed, as the retained root is; the outbox stays authoritative.
+    return lifecycleDirectoryUsable(env) &&
+      writePrivateUsageMarker(
+        completionObligationPath(sessionId, normalized.id, env),
+        serialized,
+      )
+      ? normalized
+      : null;
+  }
+  const name = completionObligationFileName(normalized.id);
+  const written = normalized.local_resupply_envelope
+    ? writeRetainedRecord(ledger, name, serialized, normalized, env)
+    : writePrivateUsageMarker(
+        join(ledgerObligationDir(ledger, env), name),
+        serialized,
+      );
+  if (!written) return null;
+  return ledger === own ? normalized : { ...normalized, ledger };
+}
+
+// One debt of `kind` that ledger `sessionId` could not record, counted: true
+// once the count is written.
+function countCompletionObligation(sessionId, kind, env) {
+  const now = new Date().toISOString();
+  return addCompletionObligationOverflow(
+    sessionId,
+    { count: 1, first_dropped_at: now, last_dropped_at: now, kinds: [kind] },
+    env,
+  );
+}
+
+// A record that keeps a sealed payload is written to the durable ledger; only
+// when that fails does it go to the temporary one, which the next read moves
+// to the durable ledger again. A temporary copy that keeps nothing, or this
+// same envelope, is then redundant and removed; any other is left alone.
+function writeRetainedRecord(ledger, name, serialized, normalized, env) {
+  const temporary = join(ledgerObligationDir(ledger, env), name);
+  if (
+    !retainedRootsUsable(env) ||
+    !writePrivateUsageMarker(
+      join(retainedObligationDir(ledger, env), name),
+      serialized,
+    )
+  ) {
+    return writePrivateUsageMarker(temporary, serialized);
+  }
+  try {
+    const raw = JSON.parse(
+      readSecureHookFile(temporary, COMPLETION_OBLIGATION_MAX_BYTES),
+    );
+    const stale = normalizeCompletionObligation(raw);
+    if (
+      stale?.id === normalized.id &&
+      raw.local_resupply_payload == null &&
+      (raw.local_resupply_envelope == null ||
+        JSON.stringify(stale.local_resupply_envelope) ===
+          JSON.stringify(normalized.local_resupply_envelope))
+    ) {
+      rmSync(temporary, { force: true });
+    }
+  } catch {
+    // Nothing there, or nothing this write can vouch for.
+  }
+  return true;
+}
+
+function addCompletionObligation(sessionId, obligation, env = process.env) {
+  const existing = heldCompletionObligations(sessionId, env).find(
     (item) => item.id === obligation.id,
   );
   return writeCompletionObligation(
@@ -2263,41 +4873,665 @@ function addCompletionObligation(
     {
       version: COMPLETION_OBLIGATION_VERSION,
       ...obligation,
+      agent_keyed: true,
+      ...(subagentIdentityUnavailable
+        ? { subagent_identity: "unavailable" }
+        : {}),
       created_at: existing?.created_at ?? new Date().toISOString(),
-      prompted_at: existing?.prompted_at ?? null,
+      prompted_at:
+        existing?.action_tool === (obligation.action_tool ?? null) &&
+        existing?.next_retry_at === (obligation.next_retry_at ?? null) &&
+        existing?.failed_credential_digest ===
+          (obligation.failed_credential_digest ?? null)
+          ? (existing?.prompted_at ?? null)
+          : null,
     },
     env,
   );
 }
 
+// A subagent's debts are kept under its agent id, and nothing reads that
+// ledger once it has exited. At its stop (SubagentStop, or StopFailure when
+// an API error ended it), whatever it left unpaid moves to the session's
+// ledger with its payload and the subagent it came from, for the
+// parent to submit as given or decline. A debt without content the parent
+// already owes itself stays first-hand; one a full parent ledger cannot take
+// is counted in its overflow marker, as is the subagent's own overflow count,
+// once. A debt that keeps its action's payload leaves the subagent's ledger
+// only once the parent holds it whole, and only on its first hop
+// (handOverCompletionObligation); otherwise it stays where it is,
+// second-hand, and the parent's ledger gets one content-free pointer to it,
+// however many it already holds; so does every debt the subagent itself only
+// points to. One stop hands over one page; the parent's reads reach the rest
+// through one association (handOverLedger). A kept debt is never counted.
+// Private-learning hints are held per machine, not per agent, and stay where
+// they are.
+export function transferSubagentObligations(
+  input,
+  env = process.env,
+  { forward = false } = {},
+) {
+  const agentId = normalizeNativeSessionId(input?.agent_id);
+  if (
+    !["SubagentStop", "StopFailure"].includes(input?.hook_event_name) ||
+    !agentId
+  ) {
+    return 0;
+  }
+  const from = agentLedgerIdFor(input);
+  // The ledger it was started from, never past it: an OpenClaw subagent
+  // whose session runs again for this one's result owes what it left there.
+  const to = mainLedgerIdFor(input);
+  const provenance = {
+    agent_id: agentId,
+    transcript_path: input?.agent_transcript_path,
+  };
+  // A moved debt takes the parent's current engagement count, never the
+  // subagent's. The parent's stop records the highest count it asked about,
+  // so a subagent's higher count would hide the parent's next own use.
+  const engagementCount = Math.max(1, currentEngagementCount(to, env));
+  // The subagent's own count is claimed by rename before anything reads its
+  // ledger (a drained read retires it), and passes on once: a repeated stop
+  // finds no count to add, as a turn's is folded once.
+  const overflowPath = completionObligationOverflowPath(from, env);
+  const claimed = `${overflowPath}.${process.pid}.${randomBytes(6).toString("hex")}.transfer`;
+  let overflow = null;
+  try {
+    renameSync(overflowPath, claimed);
+    overflow = readCompletionObligationOverflowAt(claimed);
+  } catch {
+    // No count, or a concurrent stop claimed it first.
+  }
+  const { moved } = handOverLedger(
+    from,
+    to,
+    ({ ledger: _kept, ...rest }) => ({
+      ...rest,
+      engagement_count: engagementCount,
+      prompted_at: null,
+      transferred_from: provenance,
+    }),
+    env,
+    provenance,
+    { forward },
+  );
+  try {
+    if (!overflow || addCompletionObligationOverflow(to, overflow, env)) {
+      rmSync(claimed, { force: true });
+    } else {
+      // Not added: the count goes back where it was, for the next stop.
+      renameSync(claimed, overflowPath);
+    }
+  } catch {
+    // A claimed count that cannot be returned is not counted twice.
+  }
+  return moved;
+}
+
+// Hands one page of `from` over to `to`: its own records and at most a page
+// of what it points to (readCompletionLedger's bounds), so one event's work
+// does not grow with what `from` holds. `to` first gets one content-free
+// association to `from`, so whatever this page leaves (more debts, a home
+// out of reach, a debt not handed over, an interrupted hook) stays
+// reachable: `to`'s reads expand it under the same bounds. It goes again
+// once the page handed everything over, and comes back if anything reached
+// `from` meanwhile. An association `from` holds moves to `to` as it is. Only
+// on OpenClaw's path (`forward`), where a ledger that handed over can still
+// receive (a nested subagent's late end): `from` leaves a forwarding marker,
+// and when `to` has handed over itself, the ledger it went to gets an
+// association to `to`; every pointer and association it writes there says it
+// is OpenClaw's (`forwarded`). `to` is always the ledger the caller names.
+// `prepare` gives a debt's form in `to`. Returns how many moved, and whether
+// everything moved or is pointed or associated to by `to`.
+function handOverLedger(
+  from,
+  to,
+  prepare,
+  env,
+  provenance = null,
+  { forward = false } = {},
+) {
+  const source = sessionHash(from);
+  const recipient = sessionHash(to);
+  // No caller names one ledger twice; never hand a ledger into itself.
+  if (source === recipient) return { moved: 0, associated: false };
+  if (forward) writeCompletionObligationForward(from, to, provenance, env);
+  // A ledger with no home hands nothing over: no association, nothing in
+  // `to`'s homes. Its marker came first, so a hand-over into it that chose it
+  // before the marker existed finds the marker in its own onward check (the
+  // end of this function) and gives the ledger it went to an association.
+  if (completionLedgerAbsent(source, env)) return { moved: 0, associated: true };
+  const associated = writeCompletionObligationAssociation(
+    recipient,
+    source,
+    provenance,
+    env,
+    forward,
+  );
+  const { obligations, complete } = readCompletionLedger(from, env, {
+    associations: "list",
+  });
+  let moved = 0;
+  let handed = complete;
+  // Records of `from`'s own that this page leaves in its homes: kept records
+  // `to` now points to. (Private hints are held per machine, not there.)
+  let left = 0;
+  for (const obligation of obligations) {
+    if (obligation.association) {
+      if (
+        writeCompletionObligationAssociation(
+          recipient,
+          obligation.association,
+          obligation.transferred_from ?? provenance,
+          env,
+          forward,
+        )
+      ) {
+        try {
+          removeCompletionObligationPointerFile(
+            source,
+            completionObligationAssociationName(obligation.association),
+            env,
+          );
+        } catch {
+          // Two associations to one ledger show its debts once.
+        }
+      } else {
+        handed = false;
+      }
+      continue;
+    }
+    if (["private_lesson", "private_skill"].includes(obligation.kind)) continue;
+    const result = handOverCompletionObligation(
+      from,
+      to,
+      obligation,
+      prepare(obligation),
+      env,
+      forward,
+    );
+    if (result === "moved") moved += 1;
+    if (result === "pointed" && !obligation.ledger) left += 1;
+    if (!result) handed = false;
+  }
+  if (handed) {
+    try {
+      removeCompletionObligationPointerFile(
+        recipient,
+        completionObligationAssociationName(source),
+        env,
+      );
+    } catch {
+      // A read of `to` removes it once `from` is found empty.
+    }
+    // Its directories go once nothing is left in them.
+    removeEmptyLedgerDirectories(source, env);
+    // What a nested hand-over put into `from` after its page was read (two
+    // hooks at once, OpenClaw's path only) keeps `to`'s way to it: a pointer
+    // home of `from` that is still there, or a record home when this page
+    // left no record of its own there.
+    if (forward && !completionLedgerAbsent(source, env, { records: !left })) {
+      writeCompletionObligationAssociation(
+        recipient,
+        source,
+        provenance,
+        env,
+        forward,
+      );
+    }
+  }
+  if (forward) {
+    const onward = resolveCompletionRecipient(to, from, env);
+    if (sessionHash(onward.recipient) !== recipient) {
+      writeCompletionObligationAssociation(
+        sessionHash(onward.recipient),
+        recipient,
+        onward.provenance,
+        env,
+        true,
+      );
+    }
+  }
+  return { moved, associated: handed || associated };
+}
+
+// Hands one debt from ledger `from` to ledger `to`, as `moved`: "moved" once
+// `from` no longer keeps it, "pointed" once `to` points to where it stays,
+// else false. A debt without content moves as before: once `to` holds its
+// id, or is full and has counted it in its overflow marker; while that
+// count cannot be written, it stays, where `to`'s association reaches it,
+// and the next hand-over counts it. A debt that
+// keeps its action's payload moves whole only on its first hop (`from`'s
+// own, named after no subagent yet), before any other ledger can point to
+// it, and leaves where it was kept only once `to` holds a record with the
+// same id, digest and payload, byte for byte; otherwise it stays, and `to`
+// gets one content-free pointer to it, so the parent's demands name it and
+// the payload is never dropped; a pointer `from` held for it then goes. It
+// is never counted. Whatever leaves `from` is removed by name, where it was
+// kept. A repeated hand-over finds the same state and changes nothing.
+function handOverCompletionObligation(
+  from,
+  to,
+  obligation,
+  moved,
+  env,
+  forward = false,
+) {
+  const keptBy = obligation.ledger ?? sessionHash(from);
+  // Whether `to` holds it, or has room, depends on its own records alone.
+  const own = () => readCompletionObligations(to, env, { pointers: false });
+  const held = (records) =>
+    records.some((item) => item.id === obligation.id && !item.ledger);
+  const release = () => {
+    try {
+      removeCompletionObligationRecord(
+        from,
+        obligation,
+        env,
+        retainedRootsUsable(env),
+      );
+    } catch {
+      // What `to` now holds, or has counted, is the one demanded.
+    }
+  };
+  if (!retainsResupplyContent(obligation)) {
+    if (
+      held(own()) ||
+      writeCompletionObligation(to, moved, env, { kept: true }) ||
+      (completionLedgerIsFull(own(), moved) &&
+        countCompletionObligation(to, moved.kind, env))
+    ) {
+      release();
+      return "moved";
+    }
+    return false;
+  }
+  if (!obligation.ledger && !obligation.transferred_from) {
+    const records = own();
+    if (!held(records) && !completionLedgerIsFull(records, moved)) {
+      writeCompletionObligation(to, moved, env, { kept: true });
+    }
+  }
+  const holder = readLedgerRecord(sessionHash(to), obligation.id, env);
+  if (holder && sameResupplyContent(holder, obligation)) {
+    // The equal copy `to` holds is the one demanded now.
+    release();
+    try {
+      removeCompletionObligationPointer(
+        sessionHash(to),
+        keptBy,
+        obligation.id,
+        env,
+      );
+    } catch {
+      // A pointer to a record that is gone is removed by the next read.
+    }
+    return "moved";
+  }
+  // Kept where it is, the debt is the parent's now and second-hand there: the
+  // first hop names the subagent it came from, and later hops keep that name.
+  if (moved.transferred_from) {
+    tagKeptCompletionObligation(
+      keptBy,
+      obligation.id,
+      moved.transferred_from,
+      env,
+    );
+  }
+  if (
+    !writeCompletionObligationPointer(
+      sessionHash(to),
+      keptBy,
+      obligation.id,
+      env,
+      forward,
+    )
+  ) {
+    return false;
+  }
+  if (obligation.ledger) {
+    try {
+      removeCompletionObligationPointer(
+        sessionHash(from),
+        keptBy,
+        obligation.id,
+        env,
+      );
+    } catch {
+      // A second pointer to the same record shows it once more, never less.
+    }
+  }
+  return "pointed";
+}
+
+// Names, once, the subagent a kept record came from, in every home of the
+// ledger that keeps it. Only transferred_from changes: the id, digest and
+// payload stay byte for byte, so the envelope still opens (its AAD is the id
+// and digest) and an equal copy still compares equal. A record that already
+// names one, or would outgrow the record bound, is left as it is. True when
+// this call named it in some home.
+function tagKeptCompletionObligation(ledger, obligationId, provenance, env) {
+  const name = completionObligationFileName(obligationId);
+  let named = false;
+  for (const directory of [
+    ...(retainedRootsUsable(env) ? [retainedObligationDir(ledger, env)] : []),
+    ledgerObligationDir(ledger, env),
+  ]) {
+    const path = join(directory, name);
+    try {
+      const raw = JSON.parse(
+        readSecureHookFile(path, COMPLETION_OBLIGATION_MAX_BYTES),
+      );
+      const from = normalizeCompletionObligation({
+        ...raw,
+        transferred_from: provenance,
+      })?.transferred_from;
+      if (raw?.id !== obligationId || raw.transferred_from || !from) continue;
+      const tagged = `${JSON.stringify({ ...raw, transferred_from: from })}\n`;
+      if (
+        Buffer.byteLength(tagged, "utf8") <= COMPLETION_OBLIGATION_MAX_BYTES &&
+        writePrivateUsageMarker(path, tagged)
+      ) {
+        named = true;
+      }
+    } catch {
+      // Not kept in this home, or not readable: nothing to name there.
+    }
+  }
+  return named;
+}
+
+// One content-free file of `ledger`'s pointer homes: in the durable home, or
+// in the temporary one when the durable root is refused or the write fails
+// (a read moves it to the durable home). No listing and no cap: a repeated
+// hand-over finds it where it is. A file counts as there only when it reads
+// back exactly as a read accepts it; one whose mode, owner or bytes changed
+// is written again, since a read skips it. True once it is there.
+// `keep` (a move): an entry of that name already there that names the same
+// record or ledger (whatever provenance or flag it carries) is kept as it
+// is, never written over; one that cannot be read, or names something
+// else, is written over, as by every other write.
+function writeCompletionObligationPointerFile(
+  ledger,
+  name,
+  text,
+  env,
+  keep = false,
+) {
+  for (const directory of completionObligationPointerHomes(ledger, env)) {
+    const path = join(directory, name);
+    try {
+      const existing = readSecureHookFile(path, COMPLETION_POINTER_MAX_BYTES);
+      if (existing === text || (keep && sameCompletionEntry(existing, text))) {
+        return true;
+      }
+    } catch {
+      // Not there yet, unreadable, or a home this write must refuse.
+    }
+    if (writePrivateUsageMarker(path, text)) return true;
+  }
+  return false;
+}
+
+function sameCompletionEntry(existing, text) {
+  try {
+    const [before, after] = [JSON.parse(existing), JSON.parse(text)];
+    return ["version", "ledger", "id"].every(
+      (field) => before?.[field] === after?.[field],
+    );
+  } catch {
+    return false;
+  }
+}
+
+// One pointer per kept record: `target`'s record of that id. On OpenClaw's
+// path (`forwarded`), where the session that keeps it can run again, it says
+// so, and a read decides whose session asks for it before it follows it
+// (completionOwner); Claude Code's and Codex's are written as before.
+function writeCompletionObligationPointer(
+  ledger,
+  target,
+  obligationId,
+  env,
+  forwarded = false,
+) {
+  return writeCompletionObligationPointerFile(
+    ledger,
+    completionObligationPointerName(target, obligationId),
+    `${JSON.stringify({
+      version: COMPLETION_OBLIGATION_POINTER_VERSION,
+      ledger: target,
+      id: obligationId,
+      ...(forwarded ? { forwarded: true } : {}),
+    })}\n`,
+    env,
+  );
+}
+
+// One association per ledger whose rest `ledger` owes: `from`, with the
+// subagent its debts came from, if one is named; `forwarded` as for a pointer.
+function writeCompletionObligationAssociation(
+  ledger,
+  from,
+  provenance,
+  env,
+  forwarded = false,
+) {
+  return writeCompletionObligationPointerFile(
+    ledger,
+    completionObligationAssociationName(from),
+    `${JSON.stringify({
+      version: COMPLETION_OBLIGATION_ASSOCIATION_VERSION,
+      ledger: from,
+      transferred_from: completionProvenance(provenance),
+      ...(forwarded ? { forwarded: true } : {}),
+    })}\n`,
+    env,
+  );
+}
+
+// `from` handed over to `to` (OpenClaw's path): a later hand-over into
+// `from` gives the ledger this leads to an association to `from`
+// (resolveCompletionRecipient), until `from`'s session runs again
+// (releaseCompletionForward). Content-free, in the temporary usage directory
+// beside the ledger's other markers.
+function writeCompletionObligationForward(from, to, provenance, env) {
+  const path = completionObligationForwardPath(sessionHash(from), env);
+  const text = `${JSON.stringify({
+    version: COMPLETION_OBLIGATION_FORWARD_VERSION,
+    ledger: sessionHash(to),
+    transferred_from: completionProvenance(provenance),
+  })}\n`;
+  try {
+    if (readSecureHookFile(path, COMPLETION_POINTER_MAX_BYTES) === text) {
+      return true;
+    }
+  } catch {
+    // Not there yet.
+  }
+  return writePrivateUsageMarker(path, text);
+}
+
+// True only while the durable root is usable and none of `ledger`'s homes
+// exists: nothing kept, pointed or associated there, and nothing out of sight.
+// `records: false` checks its pointer homes only.
+function completionLedgerAbsent(ledger, env, { records = true } = {}) {
+  if (!retainedRootsUsable(env)) return false;
+  return [
+    ...(records
+      ? [ledgerObligationDir(ledger, env), retainedObligationDir(ledger, env)]
+      : []),
+    ...completionObligationPointerHomes(ledger, env, true),
+  ].every((path) => {
+    try {
+      lstatSync(path);
+      return false;
+    } catch (error) {
+      return error?.code === "ENOENT";
+    }
+  });
+}
+
+// Where a hand-over into `ledger` goes: on along the forwarding markers
+// ledgers leave when they hand over, at most COMPLETION_HOP_LIMIT of them and
+// never back to `from`, stopping at a ledger whose session runs again (its
+// released marker) as at one without a marker; with the provenance of the
+// nearest hop that names a subagent, for a hand-over that names none (a fold).
+function resolveCompletionRecipient(ledger, from, env) {
+  let recipient = ledger;
+  let provenance = null;
+  const visited = new Set([sessionHash(from), sessionHash(ledger)]);
+  for (let hop = 0; hop < COMPLETION_HOP_LIMIT; hop += 1) {
+    let marker;
+    try {
+      marker = JSON.parse(
+        readSecureHookFile(
+          completionObligationForwardPath(sessionHash(recipient), env),
+          COMPLETION_POINTER_MAX_BYTES,
+        ),
+      );
+    } catch {
+      break;
+    }
+    if (
+      marker?.version !== COMPLETION_OBLIGATION_FORWARD_VERSION ||
+      !/^[a-f0-9]{16}$/.test(marker.ledger ?? "") ||
+      visited.has(marker.ledger)
+    ) {
+      break;
+    }
+    visited.add(marker.ledger);
+    provenance ??= completionProvenance(marker.transferred_from);
+    recipient = { ledger: marker.ledger };
+  }
+  return { recipient, provenance };
+}
+
+// An OpenClaw session that handed over runs again (its next prompt): what its
+// ledger holds is its own to settle again, as on master, and its next end
+// hands up what is left. Its marker becomes a released one, so a read
+// elsewhere leaves this session's debts, and those kept below it, to it while
+// it runs (completionOwner): an association to it that a session above holds
+// stays until that session's next prompt or stop, whose read removes it, and
+// a run asked through it settles through it until then. Should that write
+// fail, the marker goes, as before. True when it had a forwarding marker; a
+// released one is left as it is. It writes nothing else.
+export function releaseCompletionForward(sessionId, env = process.env) {
+  const ledger = sessionHash(sessionId);
+  const path = completionObligationForwardPath(ledger, env);
+  if (!existsSync(path)) return false;
+  try {
+    if (
+      readSecureHookFile(path, COMPLETION_POINTER_MAX_BYTES) ===
+      COMPLETION_OBLIGATION_RELEASED_TEXT
+    ) {
+      return false;
+    }
+  } catch {
+    // Unreadable: released below all the same.
+  }
+  if (!writePrivateUsageMarker(path, COMPLETION_OBLIGATION_RELEASED_TEXT)) {
+    rmSync(path, { force: true });
+  }
+  return true;
+}
+
+// A debt `sessionId` holds or points to, from both homes of the ledger that
+// keeps it, and the pointer to it; a refused durable root, or a home that is
+// a link, is never reached through. Returns the ledger that kept it.
+function removeCompletionObligationRecord(sessionId, obligation, env, durable) {
+  const ledger = obligation.ledger ?? sessionHash(sessionId);
+  const name = completionObligationFileName(obligation.id);
+  for (const directory of [
+    ...(durable ? [retainedObligationDir(ledger, env)] : []),
+    ledgerObligationDir(ledger, env),
+  ]) {
+    try {
+      assertSecureHookDirectory(lstatSync(directory));
+    } catch {
+      continue;
+    }
+    rmSync(join(directory, name), { force: true });
+  }
+  if (obligation.ledger) {
+    removeCompletionObligationPointer(
+      sessionHash(sessionId),
+      obligation.ledger,
+      obligation.id,
+      env,
+      durable,
+    );
+  }
+  return ledger;
+}
+
 function removeCompletionObligations(sessionId, predicate, env) {
   const removed = [];
-  for (const obligation of readCompletionObligations(sessionId, env)) {
+  const durable = retainedRootsUsable(env);
+  const emptied = new Set();
+  for (const obligation of readCompletionObligations(sessionId, env, {
+    settle: true,
+  })) {
     if (!predicate(obligation)) continue;
     try {
-      rmSync(completionObligationPath(sessionId, obligation.id, env), {
-        force: true,
-      });
+      if (!["private_lesson", "private_skill"].includes(obligation.kind)) {
+        emptied.add(
+          removeCompletionObligationRecord(sessionId, obligation, env, durable),
+        );
+      } else if (lifecycleDirectoryUsable(env)) {
+        rmSync(completionObligationPath(sessionId, obligation.id, env), {
+          force: true,
+        });
+      }
+      // Clear the old session-local form lazily without touching other sessions.
+      if (["private_lesson", "private_skill"].includes(obligation.kind)) {
+        const hash = createHash("sha256")
+          .update(obligation.id, "utf8")
+          .digest("hex")
+          .slice(0, 32);
+        rmSync(join(completionObligationDir(sessionId, env), `${hash}.json`), {
+          force: true,
+        });
+        rmSync(
+          join(legacyPrivateCompletionObligationDir(env), `${hash}.json`),
+          { force: true },
+        );
+        const marker = privateAuthorizationMarkerPath(obligation.draft_id, env);
+        if (marker) rmSync(marker, { force: true });
+      }
       removed.push(obligation);
     } catch {
       // Fail open: a retained marker can cause one reminder, never data loss.
     }
   }
+  for (const ledger of emptied) {
+    removeEmptyLedgerDirectories(ledger, env, durable);
+  }
   return removed;
 }
 
 function normalizedCompletionToolName(toolName) {
-  const normalized = String(toolName ?? "").trim().toLowerCase();
+  const normalized = String(toolName ?? "")
+    .trim()
+    .toLowerCase();
   for (const candidate of [
     "query_skills",
     "get_skill",
     "get_resource",
     "invoke_skill",
+    "capture_learning",
+    "inspect_private_learning_outbox",
     "prepare_private_lesson_candidate",
     "submit_private_lesson_candidate",
     "retry_private_lesson_candidate",
+    "submit_private_skill_candidate",
+    "retry_private_skill_candidate",
+    "delete_private_lesson_candidate",
+    "delete_private_skill_candidate",
+    "record_preference",
     "submit_query_feedback",
     "submit_feedback",
+    "decline_pending_action",
     "submit_remembrance",
     "propose_skill_idea",
     "propose_private_skill",
@@ -2310,20 +5544,10 @@ function normalizedCompletionToolName(toolName) {
   return normalized;
 }
 
+// Host SDK payloads should be JSON, but observation must never break a turn:
+// anything else has no digest.
 function completionPayloadDigest(payload) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return null;
-  }
-  try {
-    const normalized = JSON.parse(JSON.stringify(payload));
-    delete normalized.verified_attestation;
-    return `sha256:${createHash("sha256")
-      .update(canonicalHookJson(normalized), "utf8")
-      .digest("hex")}`;
-  } catch {
-    // Host SDK payloads should be JSON, but observation must never break a turn.
-    return null;
-  }
+  return resupplyPayloadDigest(payload);
 }
 
 export function recordQueryFeedbackObligation(
@@ -2378,6 +5602,121 @@ export function recordPostUseFeedbackObligation(
   );
 }
 
+// Post-use feedback is owed once per use, and invoking a skill version again
+// while it is in use (reloading it after the host compacted the context, for
+// example) is the same use. A result is in use while this ledger owes feedback
+// for it under another receipt, and after the payment until the next user
+// prompt (.user-prompts), whatever that prompt asks: a prompt that only names
+// the skill starts a new use too. Returns the pending debt (the new receipt
+// then pays it too), true for a use paid since the last prompt, or null for a
+// new use.
+function repeatedResultUse(
+  sessionId,
+  { query_id: queryId, result_id: resultId } = {},
+  env = process.env,
+) {
+  const query = completionIdentifier(queryId);
+  const result = completionIdentifier(resultId);
+  if (!query || !result) return null;
+  const pending = heldCompletionObligations(sessionId, env).find(
+    (obligation) =>
+      obligation.kind === "post_use_feedback" &&
+      obligation.result_id === result,
+  );
+  if (pending) return pending.query_id === query ? null : pending;
+  const prompt = readUserPromptCount(sessionId, env);
+  return readRatedResults(sessionId, env).some(
+    (item) => item.result_id === result && item.prompt === prompt,
+  )
+    ? true
+    : null;
+}
+
+function aliasPostUseFeedbackObligation(sessionId, obligation, queryId, env) {
+  const query = completionIdentifier(queryId);
+  if (
+    !query ||
+    query === obligation.query_id ||
+    (obligation.alias_query_ids ?? []).includes(query)
+  ) {
+    return obligation;
+  }
+  return writeCompletionObligation(
+    sessionId,
+    {
+      ...obligation,
+      alias_query_ids: [...(obligation.alias_query_ids ?? []), query],
+    },
+    env,
+  );
+}
+
+// Opens the debt for a use, or, for a repeat of a use still in progress, adds
+// its receipt to the debt already open.
+function recordResultUseObligation(
+  sessionId,
+  use,
+  env = process.env,
+  engagementCount = currentEngagementCount(sessionId, env),
+) {
+  const repeat = repeatedResultUse(sessionId, use, env);
+  if (repeat) {
+    if (repeat !== true) {
+      aliasPostUseFeedbackObligation(sessionId, repeat, use.query_id, env);
+    }
+    return null;
+  }
+  return recordPostUseFeedbackObligation(sessionId, use, env, engagementCount);
+}
+
+function readRatedResults(sessionId, env) {
+  try {
+    const value = JSON.parse(
+      readSecureHookFile(ratedResultsPath(sessionId, env), 16 * 1024),
+    );
+    if (
+      value?.version !== RATED_RESULTS_VERSION ||
+      !Array.isArray(value.results)
+    ) {
+      return [];
+    }
+    return value.results
+      .filter(
+        (item) =>
+          typeof item?.result_id === "string" &&
+          completionIdentifier(item.result_id) &&
+          Number.isInteger(item.prompt) &&
+          item.prompt >= 0,
+      )
+      .map((item) => ({
+        result_id: completionIdentifier(item.result_id),
+        prompt: Math.min(1_000_000, item.prompt),
+      }))
+      .slice(-RATED_RESULT_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function recordRatedResult(sessionId, resultId, env) {
+  const result = completionIdentifier(resultId);
+  if (!result) return false;
+  const results = readRatedResults(sessionId, env).filter(
+    (item) => item.result_id !== result,
+  );
+  results.push({
+    result_id: result,
+    prompt: readUserPromptCount(sessionId, env),
+  });
+  return writePrivateUsageMarker(
+    ratedResultsPath(sessionId, env),
+    `${JSON.stringify({
+      version: RATED_RESULTS_VERSION,
+      results: results.slice(-RATED_RESULT_LIMIT),
+    })}\n`,
+  );
+}
+
 export function recordPrivateLessonObligation(
   sessionId,
   response,
@@ -2388,6 +5727,12 @@ export function recordPrivateLessonObligation(
   const draftId = completionIdentifier(body?.draft_id);
   if (!/^pld_[A-Za-z0-9_-]{8,96}$/.test(draftId)) return null;
   if (["submitted", "superseded_redactor"].includes(body?.state)) return null;
+  if (
+    body?.state === "awaiting_authorization" &&
+    body?.status === "not_submitted"
+  ) {
+    recordPrivateAuthorizationOpportunity(draftId, env);
+  }
   return addCompletionObligation(
     sessionId,
     {
@@ -2395,6 +5740,158 @@ export function recordPrivateLessonObligation(
       kind: "private_lesson",
       engagement_count: Math.max(1, engagementCount),
       draft_id: draftId,
+      action_tool: [
+        "retry_scheduled",
+        "awaiting_authorization",
+        "awaiting_compatible_profile",
+      ].includes(body?.state)
+        ? "retry_private_lesson_candidate"
+        : "submit_private_lesson_candidate",
+      next_retry_at: body?.next_retry_at ?? null,
+      delivery_blocked:
+        body?.status === "not_submitted" &&
+        ![
+          "retry_scheduled",
+          "awaiting_authorization",
+          "awaiting_compatible_profile",
+        ].includes(body?.state),
+      failed_credential_digest:
+        body?.state === "awaiting_authorization" &&
+        body?.status === "not_submitted"
+          ? privateObligationCredentialDigest(env)
+          : null,
+    },
+    env,
+  );
+}
+
+export function recordPrivateSkillObligation(
+  sessionId,
+  response,
+  env = process.env,
+  engagementCount = currentEngagementCount(sessionId, env),
+) {
+  const body = responseBodyFromToolResponse(response);
+  const draftId = completionIdentifier(body?.draft_id);
+  if (!/^psd_[A-Za-z0-9_-]{8,96}$/.test(draftId)) return null;
+  const reformulationAvailable = privateSkillReformulationAvailable(body);
+  const submissionAction = privateSkillSubmissionAction(body, draftId);
+  if (
+    body?.state === "submitted" ||
+    (!submissionAction && !reformulationAvailable)
+  )
+    return null;
+  if (
+    body?.state === "awaiting_authorization" &&
+    body?.status === "not_submitted"
+  ) {
+    recordPrivateAuthorizationOpportunity(draftId, env);
+  }
+  return addCompletionObligation(
+    sessionId,
+    {
+      id: completionObligationId("private_skill", [draftId]),
+      kind: "private_skill",
+      engagement_count: Math.max(1, engagementCount),
+      draft_id: draftId,
+      action_tool: reformulationAvailable
+        ? "inspect_private_learning_outbox"
+        : submissionAction,
+      next_retry_at: body?.next_retry_at ?? null,
+      delivery_blocked:
+        body?.status === "not_submitted" &&
+        !submissionAction &&
+        !reformulationAvailable,
+      failed_credential_digest:
+        body?.state === "awaiting_authorization" &&
+        body?.status === "not_submitted"
+          ? privateObligationCredentialDigest(env)
+          : null,
+    },
+    env,
+  );
+}
+
+function privateSkillSubmissionAction(value, draftId) {
+  const action = value?.next_action;
+  if (
+    !action ||
+    typeof action !== "object" ||
+    Array.isArray(action) ||
+    ![
+      "submit_private_skill_candidate",
+      "retry_private_skill_candidate",
+    ].includes(action.tool) ||
+    !action.arguments ||
+    typeof action.arguments !== "object" ||
+    Array.isArray(action.arguments) ||
+    Object.keys(action.arguments).join(",") !== "draft_id" ||
+    action.arguments.draft_id !== draftId ||
+    (action.tool === "submit_private_skill_candidate" &&
+      value?.state !== "ready") ||
+    (action.tool === "retry_private_skill_candidate" &&
+      !["retry_scheduled", "awaiting_authorization"].includes(value?.state))
+  ) {
+    return null;
+  }
+  return action.tool;
+}
+
+function recordCaptureLearningObligation(
+  sessionId,
+  response,
+  env,
+  engagementCount,
+) {
+  const body = responseBodyFromToolResponse(response);
+  if (body?.capture_route === "private_lesson") {
+    return recordPrivateLessonObligation(
+      sessionId,
+      response,
+      env,
+      engagementCount,
+    );
+  }
+  if (body?.capture_route === "private_skill") {
+    return recordPrivateSkillObligation(
+      sessionId,
+      response,
+      env,
+      engagementCount,
+    );
+  }
+  const nextAction = body?.next_action;
+  if (
+    body?.capture_route !== "preference" ||
+    nextAction?.tool !== "record_preference"
+  ) {
+    return null;
+  }
+  const digest = completionPayloadDigest(nextAction.arguments);
+  if (!digest) return null;
+  const id = completionObligationId("capture_next_action", [digest]);
+  // The exact arguments are kept sealed, as a follow-up's payload is, so a
+  // demand after compaction, a restart or a subagent's exit can hand them
+  // back by action id. A repeated callback keeps what is already retained.
+  const existing = heldCompletionObligations(sessionId, env).find(
+    (item) => item.id === id,
+  );
+  const retained = existing?.local_resupply_envelope
+    ? { local_resupply_envelope: existing.local_resupply_envelope }
+    : sealRetainedPayload(
+        { id, payload_digest: digest },
+        nextAction.arguments,
+        env,
+      );
+  return addCompletionObligation(
+    sessionId,
+    {
+      id,
+      kind: "capture_next_action",
+      engagement_count: Math.max(1, engagementCount),
+      payload_digest: digest,
+      action_tool: "record_preference",
+      ...retained,
     },
     env,
   );
@@ -2418,23 +5915,283 @@ function recordRemembranceFollowupObligation(
   const resultId = completionIdentifier(
     payload?.interaction?.result_id ?? fallback?.result_id,
   );
+  const id = completionObligationId("remembrance_followup", [digest]);
+  // A repeated callback keeps what is already retained, sealed or not.
+  const existing = heldCompletionObligations(sessionId, env).find(
+    (item) => item.id === id,
+  );
+  const retained =
+    existing?.local_resupply_envelope || existing?.local_resupply_payload
+      ? {
+          local_resupply_envelope: existing.local_resupply_envelope,
+          local_resupply_payload: existing.local_resupply_payload,
+        }
+      : sealRetainedPayload({ id, payload_digest: digest }, payload, env);
   return addCompletionObligation(
     sessionId,
     {
-      id: completionObligationId("remembrance_followup", [digest]),
+      id,
       kind: "remembrance_followup",
       engagement_count: Math.max(1, engagementCount),
       query_id: queryId || null,
       result_id: resultId || null,
       payload_digest: digest,
+      ...retained,
     },
     env,
   );
 }
 
+// --- Retained payload key -----------------------------------------------------
+//
+// Owner decision 2 (Task 13) approved encrypted local retention with the
+// plugin's existing local encryption, no new prompts, existing records
+// readable and keys never switched. A follow-up's payload, and a durable
+// preference's record_preference arguments, are therefore sealed with the
+// private-learning outbox key; the format lives in pending-action-payload.mjs.
+// The key sources and the rules for creating a key mirror the bundled MCP
+// server's outbox (private-lesson-keychain.ts, private-lesson-outbox.ts): the
+// login Keychain item first, then an existing mode-0600 key file. With
+// neither, a key is created only where the outbox would create it (the
+// Keychain when it confirms no item exists, else the file) and only while a
+// complete inventory finds nothing retained that any key sealed
+// (inventoryRetainedKeyConsumers): a first key for an installation that
+// holds nothing. An existing key is never replaced; a key that cannot be
+// found or made leaves the payload unretained, and the demand says so.
+// Restoring the original key is the only recovery for what it sealed.
+const PRIVATE_LESSON_KEYCHAIN_SERVICE = "dev.remembrance.private-lessons";
+const SECURITY_BINARY = "/usr/bin/security";
+let testKeychainExecutor = null;
+
+// Tests stand in for the Keychain command on any platform; they never reach
+// the real one. Passing nothing restores it.
+export function useKeychainExecutorForTests(executor) {
+  testKeychainExecutor = executor ?? null;
+}
+
+function keychainExecutor(...args) {
+  return (testKeychainExecutor ?? execFileSync)(...args);
+}
+
+function privateLessonKeychainEnabled(env) {
+  const optedOut = (value) => /^(0|false|no)$/i.test(value ?? "");
+  return (
+    !optedOut(env?.REMEMBRANCE_PRIVATE_LESSON_KEYCHAIN) &&
+    !optedOut(process.env.REMEMBRANCE_PRIVATE_LESSON_KEYCHAIN) &&
+    (testKeychainExecutor !== null ||
+      (process.platform === "darwin" && existsSync(SECURITY_BINARY)))
+  );
+}
+
+function privateLessonKeychainAccount() {
+  return `uid-${typeof process.getuid === "function" ? process.getuid() : "user"}`;
+}
+
+function probePrivateLessonKeychain(env) {
+  if (!privateLessonKeychainEnabled(env)) return { status: "disabled" };
+  try {
+    const key = Buffer.from(
+      String(
+        keychainExecutor(
+          SECURITY_BINARY,
+          [
+            "find-generic-password",
+            "-s",
+            PRIVATE_LESSON_KEYCHAIN_SERVICE,
+            "-a",
+            privateLessonKeychainAccount(),
+            "-w",
+          ],
+          {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "ignore"],
+            timeout: 2_000,
+          },
+        ),
+      ).trim(),
+      "base64url",
+    );
+    return key.length === 32 ? { status: "ready", key } : { status: "invalid" };
+  } catch (error) {
+    // errSecItemNotFound (-25300) is exit status 44; nothing else proves
+    // that no item exists.
+    return {
+      status: error?.status === 44 ? "confirmed_missing" : "unavailable",
+    };
+  }
+}
+
+function privateLessonKeyPath(env) {
+  return join(
+    env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config"),
+    "remembrance",
+    "private-lesson-outbox.key",
+  );
+}
+
+function readPrivateLessonKeyFile(env) {
+  let encoded;
+  try {
+    encoded = readSecureHookFile(privateLessonKeyPath(env), 256).trim();
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw new Error("The private-learning key is unavailable.");
+  }
+  const key = Buffer.from(encoded, "base64url");
+  if (key.length !== 32) {
+    throw new Error("The private-learning key is invalid.");
+  }
+  return key;
+}
+
+function createPrivateLessonKey(env, keychain) {
+  if (keychain.status === "confirmed_missing") {
+    try {
+      // Interactive mode reads the command from stdin, so the key never
+      // appears in an argument list.
+      keychainExecutor(SECURITY_BINARY, ["-i"], {
+        input: `add-generic-password -s ${PRIVATE_LESSON_KEYCHAIN_SERVICE} -a ${privateLessonKeychainAccount()} -w ${randomBytes(32).toString("base64url")}\n`,
+        stdio: ["pipe", "ignore", "ignore"],
+        timeout: 2_000,
+      });
+    } catch {
+      // Another process may have won the first write; never overwrite it.
+    }
+    // Adopt only a key the Keychain holds, ours or a concurrent winner's.
+    // With still none there, the file is next, as in the outbox.
+    const created = probePrivateLessonKeychain(env);
+    if (created.status === "ready") {
+      return { key: created.key, source: "os_keychain" };
+    }
+    if (created.status !== "confirmed_missing") {
+      throw new Error("The private-learning Keychain key is unusable.");
+    }
+  }
+  const path = privateLessonKeyPath(env);
+  const directory = dirname(path);
+  const temporaryPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    // An existing directory others can write to is refused, not repaired.
+    if (existsSync(directory)) assertSecureHookDirectory(lstatSync(directory));
+    ensureSecureHookDirectory(directory);
+    writeFileSync(temporaryPath, `${randomBytes(32).toString("base64url")}\n`, {
+      mode: 0o600,
+      flag: "wx",
+    });
+    // Published whole or not at all; a concurrent winner's key stays.
+    linkSync(temporaryPath, path);
+  } catch (error) {
+    if (error?.code !== "EEXIST") {
+      throw new Error("The private-learning key is unavailable.");
+    }
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
+  const key = readPrivateLessonKeyFile(env);
+  if (!key) throw new Error("The private-learning key is unavailable.");
+  return { key, source: "mode_0600_file" };
+}
+
+function retainedPayloadWriteKey(env) {
+  const keychain = probePrivateLessonKeychain(env);
+  if (keychain.status === "ready") {
+    return { key: keychain.key, source: "os_keychain" };
+  }
+  const file = readPrivateLessonKeyFile(env);
+  if (file) return { key: file, source: "mode_0600_file" };
+  if (keychain.status === "invalid") {
+    throw new Error("The private-learning key is invalid.");
+  }
+  // Anything retained, or anything the inventory could not account for, may
+  // need the original key: no other key is made beside it. The outbox holds
+  // on this same inventory of both lanes and every ledger, and the hold says
+  // why (pending-action-payload.mjs, retainedKeyHoldCodes).
+  // The decision is the inventory's; the codes only say why.
+  const inventory = inventoryRetainedKeyConsumers(env, {
+    lanes: [
+      privateLessonOutboxDirectoryForHook(env),
+      privateSkillOutboxDirectoryForHook(env),
+    ],
+  });
+  if (inventory.consumers.total > 0 || inventory.incomplete) {
+    // A first use running at the same time may have made the key, then
+    // sealed with it, since the lookup above: look once more before holding.
+    const again =
+      keychain.status === "confirmed_missing"
+        ? probePrivateLessonKeychain(env)
+        : keychain;
+    if (again.status === "ready") {
+      return { key: again.key, source: "os_keychain" };
+    }
+    const made = readPrivateLessonKeyFile(env);
+    if (made) return { key: made, source: "mode_0600_file" };
+    throw Object.assign(new Error("The private-learning key is missing."), {
+      holdCodes: retainedKeyHoldCodes(inventory),
+    });
+  }
+  return createPrivateLessonKey(env, keychain);
+}
+
+function sealRetainedPayload(obligation, payload, env) {
+  try {
+    return {
+      local_resupply_envelope: sealResupplyPayload(
+        obligation,
+        payload,
+        retainedPayloadWriteKey(env),
+      ),
+    };
+  } catch (error) {
+    const hold = normalizeRetainedKeyHoldCodes(error?.holdCodes);
+    return {
+      local_resupply_payload_omitted: "key_unavailable",
+      ...(hold ? { local_resupply_hold: hold } : {}),
+    };
+  }
+}
+
+// Opens a retained payload for a demand, reading each key source at most
+// once; never creates a key. Null when it cannot be opened now: the demand
+// then shows the handle, and the retrieval tool reports why.
+function retainedPayloadOpener(env) {
+  const keys = new Map();
+  const readKey = (source) => {
+    if (!keys.has(source)) {
+      let key = null;
+      try {
+        if (source === "os_keychain") {
+          const probe = probePrivateLessonKeychain(env);
+          key = probe.status === "ready" ? probe.key : null;
+        } else {
+          key = readPrivateLessonKeyFile(env);
+        }
+      } catch {
+        key = null;
+      }
+      keys.set(source, key);
+    }
+    return keys.get(source);
+  };
+  return (obligation) => {
+    if (obligation.local_resupply_payload) {
+      return obligation.local_resupply_payload;
+    }
+    const envelope = obligation.local_resupply_envelope;
+    const key = envelope ? readKey(envelope.key_source) : null;
+    if (!key) return null;
+    try {
+      return openResupplyEnvelope(obligation, key);
+    } catch {
+      return null;
+    }
+  };
+}
+
 function markEngagementHandledWhenClear(sessionId, env) {
   const count = currentEngagementCount(sessionId, env);
-  const hasPending = readCompletionObligations(sessionId, env).length > 0;
+  const hasPending = heldCompletionObligations(sessionId, env).some(
+    (obligation) => !feedbackObligationDenied(obligation, env),
+  );
   if (!hasPending && count > 0) {
     writePromptedCount(sessionId, count, env);
   }
@@ -2456,6 +6213,11 @@ export function observeSuccessfulCompletionTool(
   let closed = [];
 
   if (tool === "query_skills") {
+    // A query the agent completed closes the task, whatever it found.
+    const body = responseBodyFromToolResponse(response);
+    if (Array.isArray(body?.skills) || Array.isArray(body?.resources)) {
+      closeCurrentTask(sessionId, env);
+    }
     const obligation = recordQueryFeedbackObligation(
       sessionId,
       response,
@@ -2465,22 +6227,24 @@ export function observeSuccessfulCompletionTool(
     if (obligation) opened.push(obligation);
   } else if (tool === "invoke_skill") {
     const selection = directSelectionFromResponse(response);
-    const obligation = selection
-      ? recordPostUseFeedbackObligation(
-          sessionId,
-          {
-            query_id: selection.query_id,
-            result_id: selection.result_id,
-            skill_slug: selection.slug,
-            feedback_available: selection.feedback_available,
-          },
-          env,
-          engagementCount,
-        )
-      : null;
+    // A session-scoped skill is still in use when a turn ends; see decideStop.
+    const obligation =
+      selection && selection.scope !== "session"
+        ? recordResultUseObligation(
+            sessionId,
+            {
+              query_id: selection.query_id,
+              result_id: selection.result_id,
+              skill_slug: selection.slug,
+              feedback_available: selection.feedback_available,
+            },
+            env,
+            engagementCount,
+          )
+        : null;
     if (obligation) opened.push(obligation);
   } else if (tool === "get_skill" || tool === "get_resource") {
-    const obligation = recordPostUseFeedbackObligation(
+    const obligation = recordResultUseObligation(
       sessionId,
       {
         query_id: input.query_id,
@@ -2491,6 +6255,31 @@ export function observeSuccessfulCompletionTool(
       engagementCount,
     );
     if (obligation) opened.push(obligation);
+  } else if (tool === "capture_learning") {
+    const obligation = recordCaptureLearningObligation(
+      sessionId,
+      response,
+      env,
+      engagementCount,
+    );
+    if (obligation) opened.push(obligation);
+  } else if (tool === "inspect_private_learning_outbox") {
+    const body = responseBodyFromToolResponse(response);
+    const selected = body?.private_skills?.selected_draft;
+    if (
+      /^psd_[A-Za-z0-9_-]{8,96}$/.test(
+        String(input.private_skill_draft_id ?? ""),
+      ) &&
+      selected?.draft_id === input.private_skill_draft_id &&
+      privateSkillReformulationAvailable(selected)
+    ) {
+      // Advance only after the exact local inspection returned. This cursor is
+      // a fair prompt-selection hint, never a submission/completion receipt.
+      writePrivateUsageMarker(
+        join(usageDir(env), "private-skill-recovery-cursor"),
+        selected.draft_id,
+      );
+    }
   } else if (tool === "prepare_private_lesson_candidate") {
     const obligation = recordPrivateLessonObligation(
       sessionId,
@@ -2499,6 +6288,30 @@ export function observeSuccessfulCompletionTool(
       engagementCount,
     );
     if (obligation) opened.push(obligation);
+  } else if (
+    tool === "delete_private_lesson_candidate" ||
+    tool === "delete_private_skill_candidate"
+  ) {
+    const body = responseBodyFromToolResponse(response);
+    const kind =
+      tool === "delete_private_lesson_candidate"
+        ? "private_lesson"
+        : "private_skill";
+    if (
+      input.confirm === true &&
+      body?.draft_id === input.draft_id &&
+      (["deleted", "already_absent"].includes(body?.state) ||
+        (body?.version === "private-lesson-outbox-deletion-v1" &&
+          body?.reason === "explicit_confirmed_deletion"))
+    ) {
+      clearPrivateAuthorizationOpportunity(input.draft_id, env);
+      closed = removeCompletionObligations(
+        sessionId,
+        (obligation) =>
+          obligation.kind === kind && obligation.draft_id === input.draft_id,
+        env,
+      );
+    }
   } else if (tool === "submit_query_feedback") {
     const queryId = completionIdentifier(input.query_id);
     closed = removeCompletionObligations(
@@ -2518,10 +6331,12 @@ export function observeSuccessfulCompletionTool(
         obligation.kind === "post_use_feedback" &&
         Boolean(queryId) &&
         Boolean(resultId) &&
-        obligation.query_id === queryId &&
+        (obligation.query_id === queryId ||
+          (obligation.alias_query_ids ?? []).includes(queryId)) &&
         obligation.result_id === resultId,
       env,
     );
+    if (queryId && resultId) recordRatedResult(sessionId, resultId, env);
     const followup = recordRemembranceFollowupObligation(
       sessionId,
       response,
@@ -2530,11 +6345,26 @@ export function observeSuccessfulCompletionTool(
       engagementCount,
     );
     if (followup) opened.push(followup);
+  } else if (tool === "decline_pending_action") {
+    // Only the observed call closes an action, in the caller's own ledger;
+    // nothing in a message can.
+    const actionId = String(input.action_id ?? "");
+    closed = PENDING_ACTION_DECLINE_REASONS.includes(input.reason)
+      ? removeCompletionObligations(
+          sessionId,
+          (obligation) =>
+            completionActionDeclinable(obligation) &&
+            completionActionId(obligation) === actionId,
+          env,
+        )
+      : [];
   } else if (tool === "submit_remembrance") {
     const digest = completionPayloadDigest(input);
     const queryId = completionIdentifier(input?.interaction?.query_id);
     const resultId = completionIdentifier(input?.interaction?.result_id);
-    const pendingFollowups = readCompletionObligations(sessionId, env).filter(
+    const pendingFollowups = readCompletionObligations(sessionId, env, {
+      settle: true,
+    }).filter(
       (obligation) => obligation.kind === "remembrance_followup",
     );
     closed = removeCompletionObligations(
@@ -2549,12 +6379,49 @@ export function observeSuccessfulCompletionTool(
           (!queryId && !resultId && pendingFollowups.length === 1)),
       env,
     );
+  } else if (tool === "record_preference") {
+    const digest = completionPayloadDigest(input);
+    closed = removeCompletionObligations(
+      sessionId,
+      (obligation) =>
+        obligation.kind === "capture_next_action" &&
+        obligation.action_tool === "record_preference" &&
+        Boolean(digest) &&
+        obligation.payload_digest === digest,
+      env,
+    );
   } else if (
     tool === "submit_private_lesson_candidate" ||
     tool === "retry_private_lesson_candidate"
   ) {
     const body = responseBodyFromToolResponse(response);
     const draftId = completionIdentifier(input.draft_id ?? body?.draft_id);
+    if (body?.retained_locally === true) {
+      const retained = recordPrivateLessonObligation(
+        sessionId,
+        response,
+        env,
+        engagementCount,
+      );
+      if (!retained) {
+        // Retained terminal work is not completed, but its old delivery hint is
+        // no longer actionable. The encrypted outbox remains authoritative.
+        removeCompletionObligations(
+          sessionId,
+          (obligation) =>
+            obligation.kind === "private_lesson" &&
+            obligation.draft_id === draftId,
+          env,
+        );
+      }
+      return {
+        tool,
+        opened: retained ? [retained] : [],
+        closed: [],
+        pending: heldCompletionObligations(sessionId, env),
+        handled_count: 0,
+      };
+    }
     closed = removeCompletionObligations(
       sessionId,
       (obligation) =>
@@ -2563,19 +6430,59 @@ export function observeSuccessfulCompletionTool(
         obligation.draft_id === draftId,
       env,
     );
+    clearPrivateAuthorizationOpportunity(draftId, env);
+  } else if (
+    tool === "submit_private_skill_candidate" ||
+    tool === "retry_private_skill_candidate"
+  ) {
+    const body = responseBodyFromToolResponse(response);
+    const draftId = completionIdentifier(input.draft_id ?? body?.draft_id);
+    if (body?.retained_locally === true) {
+      const retained = recordPrivateSkillObligation(
+        sessionId,
+        response,
+        env,
+        engagementCount,
+      );
+      if (!retained) {
+        removeCompletionObligations(
+          sessionId,
+          (obligation) =>
+            obligation.kind === "private_skill" &&
+            obligation.draft_id === draftId,
+          env,
+        );
+      }
+      return {
+        tool,
+        opened: retained ? [retained] : [],
+        closed: [],
+        pending: heldCompletionObligations(sessionId, env),
+        handled_count: 0,
+      };
+    }
+    closed = removeCompletionObligations(
+      sessionId,
+      (obligation) =>
+        obligation.kind === "private_skill" &&
+        Boolean(draftId) &&
+        obligation.draft_id === draftId,
+      env,
+    );
+    clearPrivateAuthorizationOpportunity(draftId, env);
   }
 
   const handled = COMPLETION_CONTRIBUTION_TOOLS.has(tool)
     ? markEngagementHandledWhenClear(sessionId, env)
     : {
         count: engagementCount,
-        hasPending: readCompletionObligations(sessionId, env).length > 0,
+        hasPending: heldCompletionObligations(sessionId, env).length > 0,
       };
   return {
     tool,
     opened,
     closed,
-    pending: readCompletionObligations(sessionId, env),
+    pending: heldCompletionObligations(sessionId, env),
     handled_count: handled.hasPending ? 0 : handled.count,
   };
 }
@@ -2609,27 +6516,327 @@ export function markCompletionObligationsPrompted(
   return marked;
 }
 
-function completionObligationInstruction(obligations) {
-  const lines = obligations.slice(0, 12).map((obligation) => {
+// An explicitly selected skill's preference offer stays in the invoke_skill
+// result the agent already holds. Its post-use feedback line only points
+// there, naming exact keys when they fit, so a recovery repeated on every
+// prompt while the obligation is pending stays small. The pointer ends the
+// line's one sentence, so the allocator keeps or drops it with the IDs.
+const PREFERENCE_OFFER_POINTER_MAX_CHARS = 100;
+
+function preferenceOfferPointer(obligation, directSelections) {
+  const selection = directSelections.find(
+    (candidate) =>
+      candidate?.query_id === obligation.query_id &&
+      candidate?.result_id === obligation.result_id,
+  );
+  const keys = [
+    ...new Set(
+      (selection?.preference_feedback_settings ?? [])
+        .map((entry) => entry?.setting?.key)
+        .filter(Boolean),
+    ),
+  ];
+  if (keys.length === 0) return "";
+  const label = keys.length === 1 ? "preference" : "preferences";
+  const tail = ": see your invoke_skill result or get_effective_preferences";
+  for (let shown = keys.length; shown > 0; shown -= 1) {
+    const more = keys.length - shown;
+    const pointer = `; ${label} ${keys.slice(0, shown).join(", ")}${more > 0 ? ` +${more}` : ""}${tail}`;
+    if (pointer.length <= PREFERENCE_OFFER_POINTER_MAX_CHARS) return pointer;
+  }
+  return `; offered ${label}${tail}`;
+}
+
+// A reminder lists each declinable action with this id, which
+// decline_pending_action echoes back. Private-learning hints point into the
+// private-learning outbox and are handled there, not declined.
+function completionActionDeclinable(obligation) {
+  return !["private_lesson", "private_skill"].includes(obligation.kind);
+}
+
+function completionActionId(obligation) {
+  return createHash("sha256")
+    .update(obligation.id, "utf8")
+    .digest("hex")
+    .slice(0, 16);
+}
+
+const RESUPPLY_POINTER =
+  "call submit_remembrance with exactly the payload on the next line";
+
+// The bounded recovery for exact arguments this machine could not keep.
+const REPEAT_ORIGINAL_REQUEST =
+  "repeat the original request so the exact arguments can be supplied again";
+
+// A prompt shares its 4,000-character context with the task, so a payload
+// line may take at most half of it.
+const PROMPT_PAYLOAD_MAX_CHARS = 2000;
+
+// The plaintext size of a retained payload, known without opening it.
+function retainedPayloadBytes(obligation) {
+  return obligation.local_resupply_envelope
+    ? resupplyEnvelopeBytes(obligation.local_resupply_envelope)
+    : Buffer.byteLength(JSON.stringify(obligation.local_resupply_payload));
+}
+
+// `retained.inline` maps each follow-up whose retained payload this demand
+// shows to that payload. Any other retained payload, and every durable
+// preference's retained arguments, gets a handle instead: the local
+// get_pending_action_payload returns it from `retained.ledger`, the ledger
+// this demand was read from.
+function completionObligationInstruction(
+  obligations,
+  directSelections,
+  overflow,
+  retained,
+) {
+  const shown = obligations.slice(0, 12);
+  // The first line with each tag carries the tag's explanation, so the
+  // context allocator keeps or drops the two together. Private-learning
+  // lines, which name no provenance, always come after the others.
+  const explained = new Set(
+    [...PROVENANCE_TAG_EXPLANATIONS.keys()].map((tag) =>
+      shown.find((obligation) => provenanceLabel(obligation) === tag),
+    ),
+  );
+  const lines = shown.map((obligation) => {
+    const from = explained.has(obligation)
+      ? PROVENANCE_TAG_EXPLANATIONS.get(provenanceLabel(obligation))
+      : provenanceLabel(obligation);
     if (obligation.kind === "query_feedback") {
-      return `- Query fit: call submit_query_feedback for query_id ${obligation.query_id}.`;
+      return `- Query fit${from}: call submit_query_feedback for query_id ${obligation.query_id}.`;
     }
     if (obligation.kind === "post_use_feedback") {
-      return `- Post-use feedback${obligation.skill_slug ? ` for ${obligation.skill_slug}` : ""}: call submit_feedback with query_id ${obligation.query_id} and result_id ${obligation.result_id}.`;
+      return `- Post-use feedback${obligation.skill_slug ? ` for ${obligation.skill_slug}` : ""}${from}: call submit_feedback with query_id ${obligation.query_id} and result_id ${obligation.result_id}${preferenceOfferPointer(obligation, directSelections)}.`;
     }
     if (obligation.kind === "remembrance_followup") {
-      return "- Reusable evidence: submit the exact next_step.submit_remembrance_payload returned by the preceding feedback call.";
+      const ids =
+        obligation.query_id && obligation.result_id
+          ? ` for query_id ${obligation.query_id} and result_id ${obligation.result_id}`
+          : "";
+      const payload = retained.inline.get(obligation.id);
+      if (payload) {
+        return `- Reusable evidence${ids}${from}: ${RESUPPLY_POINTER}, which submit_feedback returned and Remembrance keeps on this machine only to re-supply it.\n  ${resupplyPayloadLine(payload)}`;
+      }
+      if (
+        obligation.local_resupply_envelope ||
+        obligation.local_resupply_payload
+      ) {
+        return `- Reusable evidence${ids}${from}: payload kept on this machine (${retainedPayloadBytes(obligation)} bytes, ${obligation.payload_digest}); call local get_pending_action_payload with action_id ${completionActionId(obligation)} and ledger ${obligation.ledger ?? retained.ledger}, then submit_remembrance with exactly the payload it returns.`;
+      }
+      const unretained = {
+        too_large: "payload too large to retain",
+        key_unavailable:
+          "payload not retained because the local encryption key was unavailable",
+      }[obligation.local_resupply_payload_omitted];
+      return unretained
+        ? `- Reusable evidence${ids}${from}: ${unretained}; call submit_remembrance with the payload submit_feedback returned only if you still hold it verbatim.`
+        : `- Reusable evidence${ids}${from}: submit the exact next_step.submit_remembrance_payload returned by the preceding feedback call.`;
     }
-    return `- Private lesson: call submit_private_lesson_candidate with draft_id ${obligation.draft_id}.`;
+    if (obligation.kind === "private_lesson") {
+      return `- Private lesson: call ${obligation.action_tool ?? "submit_private_lesson_candidate"} with draft_id ${obligation.draft_id}.`;
+    }
+    if (obligation.kind === "private_skill") {
+      if (obligation.action_tool === "inspect_private_learning_outbox") {
+        return `- Recoverable private skill: call inspect_private_learning_outbox with private_skill_draft_id ${obligation.draft_id}, then follow its bounded agent reformulation instructions. Do not submit the held original.`;
+      }
+      if (obligation.action_tool === "retry_private_skill_candidate") {
+        return `- Retry private skill: call retry_private_skill_candidate with draft_id ${obligation.draft_id}.`;
+      }
+      return `- Complete private skill: call submit_private_skill_candidate with draft_id ${obligation.draft_id}.`;
+    }
+    if (obligation.local_resupply_envelope) {
+      return `- Durable preference${from}: arguments kept on this machine (${retainedPayloadBytes(obligation)} bytes, ${obligation.payload_digest}); call local get_pending_action_payload with action_id ${completionActionId(obligation)} and ledger ${obligation.ledger ?? retained.ledger}, then record_preference with exactly the arguments it returns.`;
+    }
+    const unretained = {
+      too_large: "arguments too large to retain",
+      key_unavailable:
+        "arguments not retained because the local encryption key was unavailable",
+    }[obligation.local_resupply_payload_omitted];
+    return unretained
+      ? `- Durable preference${from}: ${unretained}; call record_preference with the arguments capture_learning returned only if you still hold them verbatim${obligation.local_resupply_payload_omitted === "too_large" ? `; otherwise ${REPEAT_ORIGINAL_REQUEST}` : ""}.`
+      : `- Durable preference${from}: call record_preference with the exact next_action returned by capture_learning.`;
+  });
+  shown.forEach((obligation, index) => {
+    if (completionActionDeclinable(obligation)) {
+      lines[index] += `\n  action_id ${completionActionId(obligation)}`;
+    }
   });
   if (obligations.length > lines.length) {
-    lines.push(`- ${obligations.length - lines.length} additional pending action(s) remain in this session.`);
+    lines.push(
+      `- ${obligations.length - lines.length} additional pending action(s) remain in this session.`,
+    );
+  }
+  if (overflow) {
+    const kinds = overflow.kinds.length
+      ? ` (${overflow.kinds.join(", ")})`
+      : "";
+    // Nothing of a debt that was not recorded is kept, so only the original
+    // request can supply its exact arguments again.
+    const action = overflow.kinds.some((kind) =>
+      ["capture_next_action", "remembrance_followup"].includes(kind),
+    )
+      ? ` To complete a durable preference or follow-up among them, ${REPEAT_ORIGINAL_REQUEST}.`
+      : "";
+    lines.push(
+      `- ${overflow.count} ${overflow.count === 1 ? "obligation" : "obligations"} could not be recorded since ${overflow.first_dropped_at}${kinds}: the pending list was full.${action}`,
+    );
+  }
+  // Why the newest debt kept without its payload for want of a key has none,
+  // once, with what clears that (retainedKeyHoldRemediation, shared with the
+  // outbox's hold).
+  const hold = obligations.findLast(
+    (obligation) => obligation.local_resupply_hold,
+  )?.local_resupply_hold;
+  if (hold) {
+    lines.push(
+      `- No local encryption key was made. ${retainedKeyHoldRemediation(hold)}`,
+    );
   }
   return [
     "Before finishing, silently complete only these pending Remembrance actions:",
     ...lines,
+    shown.some(completionActionDeclinable)
+      ? PENDING_ACTION_DECLINE_GUIDANCE
+      : null,
+    FEEDBACK_DENIAL_GUIDANCE,
     "Do not mention routine hook, tool, or receipt output. Surface only a failure or required user action.",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+// Says so when the agent reading a demand may not be the one that earned the
+// debt: a subagent passed it up when it exited, an older client recorded it
+// under the session alone, where a subagent's debts looked like its
+// parent's, or the host named no agent where a subagent may have acted.
+const PRE_AGENT_KEYING_TAG = " [pre-agent-keying]";
+const SUBAGENT_IDENTITY_UNAVAILABLE_TAG = " [subagent identity unavailable]";
+const PROVENANCE_TAG_EXPLANATIONS = new Map([
+  [
+    PRE_AGENT_KEYING_TAG,
+    " [pre-agent-keying: this and every debt tagged so were recorded before per-agent keying and may be a subagent's; decline one with not_observed_by_this_agent if you did not receive it]",
+  ],
+  [
+    SUBAGENT_IDENTITY_UNAVAILABLE_TAG,
+    " [subagent identity unavailable: this host does not say whether you or a subagent received this and every debt tagged so; decline one with not_observed_by_this_agent if you did not receive it]",
+  ],
+]);
+
+function provenanceLabel(obligation) {
+  const from = obligation.transferred_from;
+  if (from) {
+    const transcript = from.transcript_path ? ` (${from.transcript_path})` : "";
+    return ` (second-hand from subagent ${from.agent_id}${transcript})`;
+  }
+  if (obligation.subagent_identity === "unavailable") {
+    return SUBAGENT_IDENTITY_UNAVAILABLE_TAG;
+  }
+  return obligation.agent_keyed ? "" : PRE_AGENT_KEYING_TAG;
+}
+
+// The retained payload follows its instruction as one JSON line. Whitespace
+// after sentence punctuation inside its strings is escaped, so the context
+// allocator sees one directive unit and keeps or drops the payload whole;
+// JSON.parse still returns the identical payload.
+function resupplyPayloadLine(payload) {
+  return JSON.stringify(payload).replace(
+    /([.!?])(\s)/gu,
+    (_, mark, space) =>
+      `${mark}\\u${space.codePointAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+export function pendingCompletionRecoveryInstruction(
+  sessionId,
+  env = process.env,
+) {
+  return pendingCompletionRecovery(sessionId, env)?.() ?? null;
+}
+
+// Null when nothing is pending, else a renderer for one prompt: `compose`
+// maps a recovery text to the context that prompt would carry (by default the
+// recovery alone). The prompt context is shared with the task, so it
+// re-supplies one payload: the oldest within the cap whose line and pointer
+// it keeps. Every other retained payload gets its retrieval handle; a payload
+// of more bytes than the cap is not opened, since its line cannot fit. A
+// durable preference's arguments are never opened here: only its handle is
+// shown.
+export function pendingCompletionRecovery(sessionId, env = process.env) {
+  const obligations = readCompletionObligations(sessionId, env).filter(
+    (obligation) => completionObligationIsDue(obligation, env),
+  );
+  const lifecycle = privateLearningLifecycleRecoveryInstruction(env);
+  if (obligations.length === 0 && !lifecycle) return null;
+  const directSelections = readDirectSelectionSurfaces(sessionId, env);
+  const overflow = readCompletionObligationOverflow(sessionId, env);
+  // Both prompt adapters pass this source through the one shared context
+  // allocator. Pre-truncating here could lose consent or query identifiers
+  // before that allocator has a chance to preserve their compact forms.
+  const ledger = sessionHash(sessionId);
+  const render = (inline) =>
+    [
+      lifecycle,
+      obligations.length > 0
+        ? completionObligationInstruction(
+            obligations,
+            directSelections,
+            overflow,
+            { ledger, inline },
+          )
+        : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  return (compose = composeRecoveryAlone) => {
+    const open = retainedPayloadOpener(env);
+    for (const obligation of obligations.slice(0, 12)) {
+      if (
+        obligation.kind !== "remembrance_followup" ||
+        !(
+          obligation.local_resupply_envelope ||
+          obligation.local_resupply_payload
+        ) ||
+        retainedPayloadBytes(obligation) > PROMPT_PAYLOAD_MAX_CHARS
+      ) {
+        continue;
+      }
+      const payload = open(obligation);
+      if (!payload) continue;
+      const line = resupplyPayloadLine(payload);
+      if (line.length > PROMPT_PAYLOAD_MAX_CHARS) continue;
+      const text = render(new Map([[obligation.id, payload]]));
+      const context = compose(text);
+      if (context.includes(RESUPPLY_POINTER) && context.includes(line)) {
+        return text;
+      }
+    }
+    return render(new Map());
+  };
+}
+
+function composeRecoveryAlone(text) {
+  return composeBoundedHookContext("", [
+    { id: "private_learning_recovery", kind: "completion", text },
+  ]);
+}
+
+// A Stop demand has no shared context budget: it shows every retained
+// follow-up payload of the obligations it lists that opens now. A durable
+// preference's arguments get their handle only.
+function stopRetainedPayloads(obligations, ledgerId, env) {
+  const open = retainedPayloadOpener(env);
+  const inline = new Map();
+  for (const obligation of obligations.slice(0, 12)) {
+    if (
+      obligation.kind === "remembrance_followup" &&
+      (obligation.local_resupply_envelope || obligation.local_resupply_payload)
+    ) {
+      const payload = open(obligation);
+      if (payload) inline.set(obligation.id, payload);
+    }
+  }
+  return { ledger: sessionHash(ledgerId), inline };
 }
 
 // Increment (and return) the per-session registry-use counter. Prompt and tool
@@ -2640,7 +6847,18 @@ export function recordRegistryUse(sessionId, env = process.env) {
   const path = usePath(sessionId, env);
   const next = readCountFile(path) + 1;
   writeCountFile(path, next);
+  closeCurrentTask(sessionId, env);
   return next;
+}
+
+// Marks the current task (.eligible count) closed; see decideStop.
+function closeCurrentTask(sessionId, env) {
+  const task = readTaskEligibilityCount(sessionId, env);
+  return task > 0 && writeCountFile(closedTaskPath(sessionId, env), task);
+}
+
+export function readClosedTaskCount(sessionId, env = process.env) {
+  return readCountFile(closedTaskPath(sessionId, env));
 }
 
 export function markCurrentEngagementHandled(sessionId, env = process.env) {
@@ -2648,7 +6866,12 @@ export function markCurrentEngagementHandled(sessionId, env = process.env) {
     readRegistryUseCount(sessionId, env),
     readTaskEligibilityCount(sessionId, env),
   );
-  if (count > 0 && readCompletionObligations(sessionId, env).length === 0) {
+  if (
+    count > 0 &&
+    !heldCompletionObligations(sessionId, env).some(
+      (obligation) => !feedbackObligationDenied(obligation, env),
+    )
+  ) {
     writePromptedCount(sessionId, count, env);
   }
   return count;
@@ -2670,6 +6893,20 @@ export function recordTaskEligibility(sessionId, env = process.env) {
 
 export function readTaskEligibilityCount(sessionId, env = process.env) {
   return readCountFile(eligibilityPath(sessionId, env));
+}
+
+// Every prompt adapter counts each user prompt its agent receives, after
+// host text and a subagent's task are set aside and whether or not it
+// queries; a paid result stays in use until the next one (repeatedResultUse).
+export function recordUserPrompt(sessionId, env = process.env) {
+  const path = userPromptCountPath(sessionId, env);
+  const next = readCountFile(path) + 1;
+  writeCountFile(path, next);
+  return next;
+}
+
+export function readUserPromptCount(sessionId, env = process.env) {
+  return readCountFile(userPromptCountPath(sessionId, env));
 }
 
 export function recordDirectiveSurface(
@@ -2817,9 +7054,13 @@ export function responseBodyFromToolResponse(value, depth = 0) {
     return null;
   }
   if (typeof value !== "object") return null;
+  // A local capture_learning result names its route and nothing else here:
+  // the preference route carries no query or draft id.
   if (
+    typeof value.capture_route === "string" ||
     typeof value.query_id === "string" ||
     typeof value.draft_id === "string" ||
+    typeof value.private_skills?.selected_draft?.draft_id === "string" ||
     value.selection_mode === "explicit" ||
     (value.next_step && typeof value.next_step === "object") ||
     Array.isArray(value.skills) ||
@@ -2872,7 +7113,7 @@ export function toolResponseIndicatesFailure(value, depth = 0) {
     value.ok === false ||
     value.isError === true ||
     value.is_error === true ||
-    value.status === "not_submitted" ||
+    (value.status === "not_submitted" && value.retained_locally !== true) ||
     value.status === "held_safety" ||
     (typeof value.status === "number" && value.status >= 400)
   ) {
@@ -2915,20 +7156,27 @@ export function directSelectionFromResponse(response) {
         ? safeText(body.invocation_id, 80)
         : null,
     query_id:
-      typeof body.query_id === "string" ? safeText(body.query_id, 80) : null,
+      typeof body.query_id === "string"
+        ? safeText(body.query_id, MAX_FEEDBACK_IDENTIFIER_CHARS)
+        : null,
     result_id:
-      typeof body.result_id === "string" ? safeText(body.result_id, 80) : null,
-    slug: safeText(skill.slug, 120),
+      typeof body.result_id === "string"
+        ? safeText(body.result_id, MAX_FEEDBACK_IDENTIFIER_CHARS)
+        : null,
+    slug: safeText(skill.slug, MAX_FEEDBACK_IDENTIFIER_CHARS),
     version:
       skill.version === null || skill.version === undefined
         ? null
         : safeText(skill.version, 80),
     version_id:
       typeof skill.version_id === "string"
-        ? safeText(skill.version_id, 80)
+        ? safeText(skill.version_id, MAX_FEEDBACK_IDENTIFIER_CHARS)
         : null,
     source:
       typeof skill.source === "string" ? safeText(skill.source, 40) : null,
+    // "session" marks a skill invoked to stay active for the whole session;
+    // anything else, including a missing field, is one task.
+    scope: body.scope === "session" ? "session" : "task",
     feedback_available: body?.feedback?.available === true,
     task_outcome_available: body?.task_outcome?.available === true,
     preference_feedback_settings:
@@ -2969,6 +7217,45 @@ export function recordDirectSelectionSurface(
   }
 }
 
+// Every tool observer records an invoke_skill selection through this helper.
+// A session-scoped skill stays active for the whole session, so invoking it is
+// not registry use that a turn's stop should close: it is stored at the
+// current use count instead of advancing it. Invoking a skill version again
+// while it is in use (repeatedResultUse), or a host reporting the same
+// invocation twice, is the same use: nothing is recorded and the first
+// receipt's surface stays, but the skill was used for the current task, so
+// that task is closed. Returns the use count.
+export function recordDirectSelectionUse(
+  sessionId,
+  selection,
+  env = process.env,
+  options = {},
+) {
+  if (
+    selection.scope !== "session" &&
+    (repeatedResultUse(sessionId, selection, env) ||
+      (selection.query_id &&
+        selection.result_id &&
+        readDirectSelectionSurfaces(sessionId, env).some(
+          (item) =>
+            item.query_id === selection.query_id &&
+            item.result_id === selection.result_id,
+        )))
+  ) {
+    closeCurrentTask(sessionId, env);
+    return readRegistryUseCount(sessionId, env);
+  }
+  const recordUse = options.recordRegistryUse ?? recordRegistryUse;
+  const useCount =
+    selection.scope === "session"
+      ? readRegistryUseCount(sessionId, env)
+      : recordUse(sessionId, env);
+  const recordSelection =
+    options.recordDirectSelection ?? recordDirectSelectionSurface;
+  recordSelection(sessionId, { ...selection, use_count: useCount }, env);
+  return useCount;
+}
+
 export function readDirectSelectionSurfaces(sessionId, env = process.env) {
   try {
     const parsed = JSON.parse(
@@ -3001,14 +7288,19 @@ function normalizeDirectSelectionSurface(selection, sessionId, env) {
     invocation_id: selection.invocation_id
       ? safeText(selection.invocation_id, 80)
       : null,
-    query_id: selection.query_id ? safeText(selection.query_id, 80) : null,
-    result_id: selection.result_id ? safeText(selection.result_id, 80) : null,
-    slug: safeText(selection.slug, 120),
+    query_id: selection.query_id
+      ? safeText(selection.query_id, MAX_FEEDBACK_IDENTIFIER_CHARS)
+      : null,
+    result_id: selection.result_id
+      ? safeText(selection.result_id, MAX_FEEDBACK_IDENTIFIER_CHARS)
+      : null,
+    slug: safeText(selection.slug, MAX_FEEDBACK_IDENTIFIER_CHARS),
     version: selection.version ? safeText(selection.version, 80) : null,
     version_id: selection.version_id
-      ? safeText(selection.version_id, 80)
+      ? safeText(selection.version_id, MAX_FEEDBACK_IDENTIFIER_CHARS)
       : null,
     source: selection.source ? safeText(selection.source, 40) : null,
+    scope: selection.scope === "session" ? "session" : "task",
     feedback_available: selection.feedback_available === true,
     task_outcome_available: selection.task_outcome_available === true,
     preference_feedback_settings: sanitizeStoredPreferenceFeedbackSettings(
@@ -3031,14 +7323,19 @@ function normalizeStoredDirectSelectionSurface(selection) {
     invocation_id: selection.invocation_id
       ? safeText(selection.invocation_id, 80)
       : null,
-    query_id: selection.query_id ? safeText(selection.query_id, 80) : null,
-    result_id: selection.result_id ? safeText(selection.result_id, 80) : null,
-    slug: safeText(selection.slug, 120),
+    query_id: selection.query_id
+      ? safeText(selection.query_id, MAX_FEEDBACK_IDENTIFIER_CHARS)
+      : null,
+    result_id: selection.result_id
+      ? safeText(selection.result_id, MAX_FEEDBACK_IDENTIFIER_CHARS)
+      : null,
+    slug: safeText(selection.slug, MAX_FEEDBACK_IDENTIFIER_CHARS),
     version: selection.version ? safeText(selection.version, 80) : null,
     version_id: selection.version_id
-      ? safeText(selection.version_id, 80)
+      ? safeText(selection.version_id, MAX_FEEDBACK_IDENTIFIER_CHARS)
       : null,
     source: selection.source ? safeText(selection.source, 40) : null,
+    scope: selection.scope === "session" ? "session" : "task",
     feedback_available: selection.feedback_available === true,
     task_outcome_available: selection.task_outcome_available === true,
     preference_feedback_settings: sanitizeStoredPreferenceFeedbackSettings(
@@ -3118,6 +7415,7 @@ export function markDirectSelectionSurfacesPrompted(
   for (const selection of records) {
     if (
       !selection.prompted_at &&
+      selection.scope !== "session" &&
       Number.isFinite(selection.use_count) &&
       selection.use_count <= useCount
     ) {
@@ -3228,7 +7526,9 @@ export function clearHighMatchSurfaceIfOpened(
     .toLowerCase();
   if (
     normalizedTool.endsWith("submit_private_lesson_candidate") ||
-    normalizedTool.endsWith("retry_private_lesson_candidate")
+    normalizedTool.endsWith("retry_private_lesson_candidate") ||
+    normalizedTool.endsWith("submit_private_skill_candidate") ||
+    normalizedTool.endsWith("retry_private_skill_candidate")
   ) {
     // The PostToolUse adapter calls this function only after a successful tool
     // response. Clear the content-free denial suppression so future retained
@@ -3331,6 +7631,7 @@ export function valueEpisodeFromResponse(response) {
   return {
     query_id: safeText(queryId, 80),
     interaction_kind: directSelection ? "direct_selection" : "query",
+    scope: directSelection && body.scope === "session" ? "session" : "task",
     candidates,
     bundles,
     selected_result_ids:
@@ -3385,6 +7686,7 @@ export function readValueEpisodeSurfaces(sessionId, env = process.env) {
           item.interaction_kind === "direct_selection"
             ? "direct_selection"
             : "query",
+        scope: item.scope === "session" ? "session" : "task",
         candidates: Array.isArray(item.candidates)
           ? item.candidates.slice(0, 40).map((candidate) => ({
               result_id: safeText(candidate?.result_id, 80),
@@ -3440,7 +7742,12 @@ export function markValueEpisodeSelection(
 export async function reportTaskOutcomesOnStop(sessionId, input, options = {}) {
   const env = options.env ?? process.env;
   const records = readValueEpisodeSurfaces(sessionId, env);
-  const pending = records.filter((item) => !item.reported_at).slice(0, 5);
+  // A session-scoped skill has not completed when a turn stops, so its
+  // episode stays unreported. Reporting it when the session ends is a
+  // follow-up.
+  const pending = records
+    .filter((item) => !item.reported_at && item.scope !== "session")
+    .slice(0, 5);
   if (pending.length === 0) return 0;
   const tokenUsage = tokenUsageFromRuntime(input);
   const modelRevision = stringOrNull(
@@ -3499,7 +7806,10 @@ export async function reportTaskOutcomesOnStop(sessionId, input, options = {}) {
 async function postTaskOutcome(payload, options = {}) {
   const env = options.env ?? process.env;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), autoQueryTimeoutMs(env));
+  const timeout = setTimeout(
+    () => controller.abort(),
+    autoQueryTimeoutMs(env, DEFAULT_TIMEOUT_MS),
+  );
   try {
     const access = resolveApiAccessSnapshot(env);
     const credential = access.credential;
@@ -3646,12 +7956,218 @@ export function sessionIdFor(input) {
   return input?.turn_id ?? input?.session_id ?? "unknown";
 }
 
+// The main thread's ledger. Debts outlive a turn, so it is keyed by the
+// session: Codex sends session_id ("Session id shared by threads that belong
+// to the same session tree") with every hook and a new turn_id ("the active
+// turn id") for every prompt. The turn id is only a fallback for a host that
+// sends no session id; Claude Code and VS Code send no turn id.
+function mainLedgerIdFor(input) {
+  return input?.session_id ?? input?.turn_id ?? "unknown";
+}
+
+// The ledger of the agent that received a Remembrance payload. A subagent
+// shares its parent's session_id, and Claude Code derives transcript_path from
+// that id too, so only the host's agent_id, sent when a hook fires inside a
+// subagent, separates a subagent's debts from its parent's. Without an agent id
+// this is the main thread's ledger.
+export function agentLedgerIdFor(input) {
+  const agentId = normalizeNativeSessionId(input?.agent_id);
+  return agentId
+    ? `${mainLedgerIdFor(input)}:agent:${agentId}`
+    : mainLedgerIdFor(input);
+}
+
+// VS Code (Copilot Chat 0.61) runs a subagent under its parent's session_id
+// and names it only in SubagentStart and SubagentStop; its prompt and tool
+// hooks carry no agent id. An adapter for such a host declares that once at
+// load, and each debt it then records is stamped subagent_identity
+// "unavailable": it may be a subagent's. Nothing is recorded under the
+// subagent's own id there, so its SubagentStop finds nothing to ask.
+let subagentIdentityUnavailable = false;
+export function declareSubagentIdentityUnavailable() {
+  subagentIdentityUnavailable = true;
+}
+
+// Such a host also sends a subagent's task through UserPromptSubmit, just
+// after its SubagentStart and under the parent's session_id: Copilot Chat
+// 0.61 awaits a subagent request's SubagentStart hooks, then runs its
+// UserPromptSubmit hooks (extension.js:2815), each input stamped with the
+// host's clock when that hook starts (`timestamp`, extension.js:6677). A
+// SubagentStart leaves a marker, and a prompt the host stamped within
+// SUBAGENT_START_CLAIM_MS after it claims it: that prompt is the subagent's
+// task, neither the user's nor its parent's. Between the two lie only the
+// rest of the SubagentStart hook and the host's transcript flush (at most
+// 500 ms). A marker whose prompt never came, because the request was
+// cancelled between the two hooks, is discarded by the next prompt stamped
+// later than that; one the host stamped within it is still taken for the
+// subagent's (it gets no query or recovery context; the next prompt does).
+// Without a host stamp, the time of the claim stands in for it.
+const SUBAGENT_START_CLAIM_MS = 10_000;
+// Clock granularity between a file's mtime and a host's millisecond stamp.
+const SUBAGENT_START_CLOCK_SLACK_MS = 1_000;
+
+function subagentStartDir(input, env) {
+  return join(
+    usageDir(env),
+    `${sessionHash(mainLedgerIdFor(input))}.subagent-starts`,
+  );
+}
+
+export function recordSubagentStart(input, env = process.env) {
+  const agentId = normalizeNativeSessionId(input?.agent_id);
+  if (input?.hook_event_name !== "SubagentStart" || !agentId) return false;
+  const name = createHash("sha256")
+    .update(agentId, "utf8")
+    .digest("hex")
+    .slice(0, 32);
+  return writePrivateUsageMarker(
+    join(subagentStartDir(input, env), `${name}.start`),
+    "subagent-start-v1\n",
+  );
+}
+
+export function claimSubagentStart(input, env = process.env) {
+  const directory = subagentStartDir(input, env);
+  let names;
+  try {
+    assertSecureHookDirectory(lstatSync(directory));
+    names = readdirSync(directory)
+      .filter((name) => /^[a-f0-9]{32}\.start$/.test(name))
+      .slice(0, COMPLETION_OBLIGATION_LIMIT);
+  } catch {
+    return false;
+  }
+  const stamped = Date.parse(String(input?.timestamp ?? ""));
+  const at = Number.isFinite(stamped) ? stamped : Date.now();
+  for (const name of names) {
+    const marker = join(directory, name);
+    let written;
+    try {
+      written = lstatSync(marker).mtimeMs;
+    } catch {
+      continue;
+    }
+    // A start recorded after the host stamped this prompt awaits its own.
+    if (written > at + SUBAGENT_START_CLOCK_SLACK_MS) continue;
+    const claimed = join(
+      directory,
+      `${name}.${process.pid}.${randomBytes(6).toString("hex")}.claimed`,
+    );
+    try {
+      // Only one prompt can move a marker.
+      renameSync(marker, claimed);
+    } catch {
+      continue;
+    }
+    rmSync(claimed, { force: true });
+    if (at - written <= SUBAGENT_START_CLAIM_MS) return true;
+  }
+  return false;
+}
+
+// Before this client a Codex main thread kept its debts under turn_id, so
+// turn N's debts were read under turn N+1 and never demanded. Each Codex hook
+// folds the ledger of the turn it names into the session's: whole records,
+// unchanged, each removed from the turn's ledger only once the session holds
+// it; a kept one a full session ledger cannot take stays and the session
+// points to it, any other is counted in its overflow marker, and the turn
+// ledger's own count follows once every debt is moved, pointed or
+// associated to (one page per hook; the session's reads reach the rest). The
+// ledgers of earlier turns record no session id, so nothing links them to
+// this one.
+export function foldTurnLedgerIntoSession(
+  input,
+  env = process.env,
+  { forward = false } = {},
+) {
+  const session = input?.session_id;
+  const turn = input?.turn_id;
+  if (
+    typeof session !== "string" ||
+    typeof turn !== "string" ||
+    !session ||
+    !turn ||
+    session === turn
+  ) {
+    return 0;
+  }
+  const overflowPath = completionObligationOverflowPath(turn, env);
+  // OpenClaw hands a subagent's session ledger up through here, `forward`:
+  // it leaves its marker even when it holds nothing, so a nested subagent
+  // whose end comes later still reaches where it went.
+  if (forward) writeCompletionObligationForward(turn, session, null, env);
+  // Once folded, a turn leaves nothing behind: one check per home per hook.
+  // A ledger that only points to debts (an OpenClaw subagent's whose own
+  // subagent left them) is folded too.
+  if (
+    !existsSync(completionObligationDir(turn, env)) &&
+    !existsSync(retainedObligationDir(sessionHash(turn), env)) &&
+    !existsSync(completionObligationPointerDir(sessionHash(turn), env)) &&
+    !existsSync(temporaryCompletionObligationPointerDir(sessionHash(turn), env)) &&
+    !existsSync(overflowPath)
+  ) {
+    return 0;
+  }
+  // Into the session it names, never past it; whole records, unchanged.
+  const { moved, associated } = handOverLedger(
+    turn,
+    session,
+    ({ ledger: _kept, ...whole }) => whole,
+    env,
+    null,
+    { forward },
+  );
+  // A debt the session neither holds, nor points or associates to, stays,
+  // and the turn's overflow count waits with it: moved alone, a count would
+  // be retired by the next read of a session ledger holding no debt.
+  if (!associated) return moved;
+  removeEmptyLedgerDirectories(sessionHash(turn), env);
+  // Claimed by rename, so a concurrent hook cannot count it twice.
+  const claimed = `${overflowPath}.${process.pid}.${randomBytes(6).toString("hex")}.fold`;
+  try {
+    renameSync(overflowPath, claimed);
+  } catch {
+    return moved;
+  }
+  const overflow = readCompletionObligationOverflowAt(claimed);
+  if (!overflow || addCompletionObligationOverflow(session, overflow, env)) {
+    rmSync(claimed, { force: true });
+  } else {
+    renameSync(claimed, overflowPath);
+  }
+  return moved;
+}
+
+// Native recovery has a stricter provenance boundary than lifecycle counters.
+// Adapters pass only a host-provided stable session/thread identifier here;
+// turn IDs and compatibility fallbacks remain valid only for the older marker
+// accounting performed by sessionIdFor().
+export function normalizeNativeSessionId(value) {
+  if (typeof value !== "string") return null;
+  const sessionId = value.trim();
+  if (
+    sessionId.length === 0 ||
+    sessionId.length > 256 ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(sessionId) ||
+    /^(?:unknown|null|undefined|cursor|opencode-session)$/iu.test(sessionId)
+  ) {
+    return null;
+  }
+  return sessionId;
+}
+
 export function disabled(value) {
   return /^(0|false|no)$/i.test(String(value ?? ""));
 }
 
 export function contributeDisabled(value) {
   return /^(0|false|no)$/i.test(String(value ?? "").trim());
+}
+
+export function visibleCompletionRecoveryEnabled(env = process.env) {
+  return /^(1|true|yes)$/i.test(
+    String(env?.REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY ?? "").trim(),
+  );
 }
 
 function organizationPrivateLessonAuthorized(env = process.env) {
@@ -3668,6 +8184,15 @@ function privateLessonOutboxDirectoryForHook(env = process.env) {
     stateRoot || join(homedir(), ".local", "state"),
     "remembrance",
     "private-lessons",
+  );
+}
+
+function privateSkillOutboxDirectoryForHook(env = process.env) {
+  const stateRoot = String(env?.XDG_STATE_HOME ?? "").trim();
+  return join(
+    stateRoot || join(homedir(), ".local", "state"),
+    "remembrance",
+    "private-skills",
   );
 }
 
@@ -3688,63 +8213,117 @@ export function readPrivateLessonLifecycleState(env = process.env) {
     const counts = {
       ready: 0,
       retry_scheduled: 0,
+      awaiting_authorization: 0,
+      awaiting_compatible_profile: 0,
+      held_policy_refresh: 0,
       hold_telemetry_pending: 0,
       hold_telemetry_retry_scheduled: 0,
+      hold_telemetry_awaiting_compatible_profile: 0,
     };
+    const authorizationIds = [];
     for (const entry of entries) {
       if (!entry.name.endsWith(".lesson.json")) continue;
-      if (entry.isSymbolicLink() || !entry.isFile()) return null;
-      const expectedDraftId = entry.name.slice(0, -".lesson.json".length);
-      if (!/^pld_[A-Za-z0-9_-]{8,96}$/.test(expectedDraftId)) return null;
-      const parsed = JSON.parse(
-        readSecureHookFile(
-          join(directory, entry.name),
-          MAX_PRIVATE_LESSON_ENVELOPE_BYTES,
-        ),
-      );
-      if (
-        parsed?.version !== "private-lesson-outbox-envelope-v1" ||
-        parsed?.draft_id !== expectedDraftId ||
-        ![
-          "ready",
-          "awaiting_authorization",
-          "retry_scheduled",
-          "held_safety",
-          "submitted",
-          "superseded_redactor",
-        ].includes(parsed?.state) ||
-        ![
-          "not_required",
-          "pending",
-          "awaiting_authorization",
-          "retry_scheduled",
-          "submitted",
-          "disabled",
-        ].includes(parsed?.hold_telemetry_status)
-      ) {
-        return null;
-      }
-      if (parsed.state === "ready" || parsed.state === "retry_scheduled") {
-        counts[parsed.state] += 1;
-      }
-      if (
-        privateLessonHealthReportingEnabledForHook(env) &&
-        parsed.state === "held_safety" &&
-        parsed.hold_telemetry_status === "pending"
-      ) {
-        counts.hold_telemetry_pending += 1;
-      }
-      if (
-        privateLessonHealthReportingEnabledForHook(env) &&
-        parsed.state === "held_safety" &&
-        parsed.hold_telemetry_status === "retry_scheduled"
-      ) {
-        counts.hold_telemetry_retry_scheduled += 1;
+      try {
+        if (entry.isSymbolicLink() || !entry.isFile()) continue;
+        const expectedDraftId = entry.name.slice(0, -".lesson.json".length);
+        if (!/^pld_[A-Za-z0-9_-]{8,96}$/.test(expectedDraftId)) continue;
+        const parsed = JSON.parse(
+          readSecureHookFile(
+            join(directory, entry.name),
+            MAX_PRIVATE_LESSON_ENVELOPE_BYTES,
+          ),
+        );
+        if (
+          parsed?.version !== "private-lesson-outbox-envelope-v1" ||
+          parsed?.draft_id !== expectedDraftId ||
+          ![
+            "ready",
+            "awaiting_authorization",
+            "retry_scheduled",
+            "awaiting_compatible_profile",
+            "held_safety",
+            "held_policy",
+            "held_validation",
+            "submitted",
+            "superseded_redactor",
+          ].includes(parsed?.state) ||
+          (parsed?.last_error_code !== undefined &&
+            parsed?.last_error_code !== null &&
+            typeof parsed?.last_error_code !== "string") ||
+          ![
+            "not_required",
+            "pending",
+            "awaiting_authorization",
+            "retry_scheduled",
+            "awaiting_compatible_profile",
+            "submitted",
+            "disabled",
+          ].includes(parsed?.hold_telemetry_status)
+        ) {
+          continue;
+        }
+        if (
+          parsed.state === "ready" ||
+          ((parsed.state === "retry_scheduled" ||
+            parsed.state === "awaiting_compatible_profile") &&
+            retryIsDue(parsed.next_retry_at))
+        ) {
+          counts[parsed.state] += 1;
+        }
+        if (
+          (parsed.state === "awaiting_authorization" ||
+            (parsed.state === "held_safety" &&
+              parsed.hold_telemetry_status === "awaiting_authorization" &&
+              privateLessonHealthReportingEnabledForHook(env))) &&
+          privateAuthorizationRetryIsDue(
+            parsed.draft_id,
+            parsed.updated_at,
+            env,
+          )
+        ) {
+          counts.awaiting_authorization += 1;
+          authorizationIds.push(parsed.draft_id);
+        }
+        if (
+          parsed.state === "held_policy" &&
+          [
+            "policy_expired",
+            "policy_changed",
+            "policy_sequence_conflict",
+            "unsupported_redaction_version",
+            "unsupported_redactor_digest",
+          ].includes(parsed.last_error_code)
+        ) {
+          counts.held_policy_refresh += 1;
+        }
+        if (
+          privateLessonHealthReportingEnabledForHook(env) &&
+          parsed.state === "held_safety" &&
+          parsed.hold_telemetry_status === "pending"
+        ) {
+          counts.hold_telemetry_pending += 1;
+        }
+        if (
+          privateLessonHealthReportingEnabledForHook(env) &&
+          parsed.state === "held_safety" &&
+          (parsed.hold_telemetry_status === "retry_scheduled" ||
+            parsed.hold_telemetry_status === "awaiting_compatible_profile") &&
+          retryIsDue(parsed.next_retry_at)
+        ) {
+          counts[
+            parsed.hold_telemetry_status === "awaiting_compatible_profile"
+              ? "hold_telemetry_awaiting_compatible_profile"
+              : "hold_telemetry_retry_scheduled"
+          ] += 1;
+        }
+      } catch {
+        // An interrupted or unreadable entry must not hide independent drafts.
       }
     }
     if (Object.values(counts).every((count) => count === 0)) return null;
     return {
       ...counts,
+      next_authorization_draft_id: authorizationIds.sort()[0] ?? null,
       host_denial_active: recentPrivateLessonHostDenial(env),
     };
   } catch {
@@ -3752,19 +8331,618 @@ export function readPrivateLessonLifecycleState(env = process.env) {
   }
 }
 
-export function privateLessonLifecycleRecoveryInstruction(env = process.env) {
-  const state = readPrivateLessonLifecycleState(env);
-  if (!state || state.host_denial_active) return null;
-  const pending =
-    state.ready +
-    state.retry_scheduled +
-    state.hold_telemetry_pending +
-    state.hold_telemetry_retry_scheduled;
+function retryIsDue(value) {
+  if (!value) return true;
+  const timestamp = Date.parse(String(value));
+  return Number.isFinite(timestamp) && timestamp <= Date.now();
+}
+
+function privateSkillRecoveryAction(value, allowStaleInspectorAction = false) {
+  const action = value?.next_action;
+  if (!action || typeof action !== "object" || Array.isArray(action))
+    return null;
+  if (
+    Object.keys(action).sort().join(",") !==
+      "candidate_digest,draft_updated_at,inspector_digest,kind,version" ||
+    action.version !== "private-skill-recovery-action-v1" ||
+    ![
+      "submit_candidate",
+      "retry_delivery",
+      "retry_resolution",
+      "reformulate",
+      "retry_operational",
+      "reinspect",
+      "capture_native_context",
+    ].includes(action.kind) ||
+    !/^sha256:[a-f0-9]{64}$/.test(String(action.candidate_digest ?? "")) ||
+    action.draft_updated_at !== value.updated_at ||
+    action.inspector_digest !== (value.inspector_digest ?? null)
+  ) {
+    return null;
+  }
+  const currentInspector =
+    action.inspector_digest === PRIVATE_LEARNING_INSPECTOR_DIGEST;
+  const staleInspectorAction =
+    allowStaleInspectorAction &&
+    typeof action.inspector_digest === "string" &&
+    !currentInspector &&
+    ((action.kind === "submit_candidate" && value.state === "ready") ||
+      (["reformulate", "retry_operational", "capture_native_context"].includes(
+        action.kind,
+      ) &&
+        value.state === "held_validation"));
+  if (
+    (action.kind === "submit_candidate" &&
+      ((!currentInspector && !staleInspectorAction) ||
+        value.state !== "ready")) ||
+    (action.kind === "retry_delivery" &&
+      !["ready", "retry_scheduled"].includes(value.state)) ||
+    (action.kind === "retry_resolution" &&
+      ![
+        "held_validation",
+        "retry_scheduled",
+        "awaiting_authorization",
+      ].includes(value.state)) ||
+    (["reformulate", "retry_operational", "capture_native_context"].includes(
+      action.kind,
+    ) &&
+      ((!currentInspector && !staleInspectorAction) ||
+        value.state !== "held_validation")) ||
+    (action.kind === "reinspect" &&
+      (currentInspector ||
+        !["ready", "held_safety", "held_validation"].includes(value.state)))
+  ) {
+    return null;
+  }
+  return action;
+}
+
+// Tool responses already carry the outbox's outcome-derived availability.
+// This compatibility helper never reconstructs eligibility from a reason code.
+function privateSkillReformulationAvailable(value) {
+  if (privateSkillRecoveryAction(value)?.kind === "reformulate") return true;
+  return (
+    value?.state === "held_validation" &&
+    value?.attempts === 0 &&
+    value?.reformulation_available === true &&
+    value?.reformulation_status === "awaiting_candidate" &&
+    value?.reformulation_attempt_count === 0 &&
+    value?.retained_locally === true &&
+    value?.next_action === null
+  );
+}
+
+function bundledNativeContextServerPath() {
+  try {
+    const path = fileURLToPath(
+      new URL("../servers/remembrance-mcp.mjs", import.meta.url),
+    );
+    const metadata = lstatSync(path);
+    if (metadata.isSymbolicLink() || !metadata.isFile()) return null;
+    assertCurrentHookUser(metadata.uid);
+    if (isPosixHookRuntime() && (metadata.mode & 0o022) !== 0) return null;
+    return path;
+  } catch {
+    return null;
+  }
+}
+
+function privateSkillNativeContextEvent(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const sessionId = normalizeNativeSessionId(value.session_id);
+  if (!sessionId) return null;
+  if (
+    value.kind === "user_prompt" &&
+    value.origin === "user" &&
+    typeof value.prompt === "string"
+  ) {
+    return {
+      kind: "user_prompt",
+      session_id: sessionId,
+      origin: "user",
+      prompt: value.prompt,
+    };
+  }
+  if (
+    value.kind === "private_skill_capture" &&
+    /^psd_[A-Za-z0-9_-]{8,96}$/u.test(String(value.draft_id ?? "")) &&
+    value.original_capture === true
+  ) {
+    return {
+      kind: "private_skill_capture",
+      session_id: sessionId,
+      draft_id: value.draft_id,
+      original_capture: true,
+    };
+  }
+  return null;
+}
+
+function nativeContextBridgeResult(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const status = String(value.status ?? "");
+  if (
+    !["bound", "recorded", "ignored", "disabled", "unavailable"].includes(
+      status,
+    )
+  ) {
+    return null;
+  }
+  const result = { status };
+  if (status === "recorded" && Number.isSafeInteger(value.count)) {
+    result.count = Math.max(0, Number(value.count));
+  }
+  if (
+    status === "unavailable" &&
+    /^native_context_[a-z_]{1,80}$/u.test(String(value.reason_code ?? ""))
+  ) {
+    result.reason_code = value.reason_code;
+  }
+  return result;
+}
+
+/**
+ * Invoke the fixed local native-context command. The child receives no shell,
+ * no MCP request, and no alternate transport. All output is reduced to a
+ * bounded content-free status before it reaches adapter code.
+ */
+export function runPrivateSkillNativeContextBridge(event, options = {}) {
+  const parsed = privateSkillNativeContextEvent(event);
+  if (!parsed) {
+    return Promise.resolve({
+      status: "unavailable",
+      reason_code: "native_context_event_invalid",
+    });
+  }
+  let input;
+  try {
+    input = `${JSON.stringify(parsed)}\n`;
+  } catch {
+    return Promise.resolve({
+      status: "unavailable",
+      reason_code: "native_context_event_invalid",
+    });
+  }
+  if (
+    Buffer.byteLength(input, "utf8") >
+    PRIVATE_SKILL_NATIVE_CONTEXT_EVENT_MAX_BYTES
+  ) {
+    return Promise.resolve({
+      status: "unavailable",
+      reason_code: "native_context_event_too_large",
+    });
+  }
+  const serverPath = options.serverPath ?? bundledNativeContextServerPath();
+  if (!serverPath) {
+    return Promise.resolve({
+      status: "unavailable",
+      reason_code: "native_context_bundle_unavailable",
+    });
+  }
+  const spawnImpl = options.spawnImpl ?? spawn;
+  const timeoutMs = Math.min(
+    10_000,
+    Math.max(
+      100,
+      Number(options.timeoutMs) || PRIVATE_SKILL_NATIVE_CONTEXT_TIMEOUT_MS,
+    ),
+  );
+  return new Promise((resolvePromise) => {
+    let settled = false;
+    let outputBytes = 0;
+    const output = [];
+    const finish = (result, child, timer) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        child?.stdin?.end();
+      } catch {
+        // The local child may already have exited.
+      }
+      resolvePromise(result);
+    };
+    let child;
+    try {
+      child = spawnImpl(process.execPath, [serverPath, "--native-context"], {
+        cwd: dirname(serverPath),
+        env: { ...process.env, ...(options.env ?? {}) },
+        shell: false,
+        stdio: ["pipe", "pipe", "ignore"],
+        windowsHide: true,
+      });
+    } catch {
+      resolvePromise({
+        status: "unavailable",
+        reason_code: "native_context_bridge_unavailable",
+      });
+      return;
+    }
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Best-effort bounded shutdown.
+      }
+      finish(
+        {
+          status: "unavailable",
+          reason_code: "native_context_bridge_timeout",
+        },
+        child,
+        timer,
+      );
+    }, timeoutMs);
+    child.on("error", () => {
+      finish(
+        {
+          status: "unavailable",
+          reason_code: "native_context_bridge_unavailable",
+        },
+        child,
+        timer,
+      );
+    });
+    child.stdout?.on("data", (chunk) => {
+      if (settled) return;
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      outputBytes += bytes.byteLength;
+      if (outputBytes > PRIVATE_SKILL_NATIVE_CONTEXT_OUTPUT_MAX_BYTES) {
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          // Best-effort bounded shutdown.
+        }
+        finish(
+          {
+            status: "unavailable",
+            reason_code: "native_context_output_too_large",
+          },
+          child,
+          timer,
+        );
+        return;
+      }
+      output.push(bytes);
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      let parsedOutput = null;
+      if (code === 0) {
+        try {
+          parsedOutput = nativeContextBridgeResult(
+            JSON.parse(Buffer.concat(output).toString("utf8").trim()),
+          );
+        } catch {
+          // Child diagnostics and malformed output stay inside the bridge.
+        }
+      }
+      finish(
+        parsedOutput ?? {
+          status: "unavailable",
+          reason_code: "native_context_bridge_unavailable",
+        },
+        child,
+        timer,
+      );
+    });
+    child.stdin?.on("error", () => {
+      finish(
+        {
+          status: "unavailable",
+          reason_code: "native_context_bridge_unavailable",
+        },
+        child,
+        timer,
+      );
+    });
+    try {
+      child.stdin?.end(input, "utf8");
+    } catch {
+      finish(
+        {
+          status: "unavailable",
+          reason_code: "native_context_bridge_unavailable",
+        },
+        child,
+        timer,
+      );
+    }
+  });
+}
+
+export async function capturePrivateSkillNativeUserPrompt(
+  prompt,
+  options = {},
+) {
+  const env = options.env ?? process.env;
+  const nativeSessionId = normalizeNativeSessionId(options.nativeSessionId);
+  const userPrompt = userPromptOutsideHostNotifications(prompt);
+  if (
+    !nativeSessionId ||
+    contributeDisabled(env.REMEMBRANCE_AUTO_CONTRIBUTE) ||
+    userPrompt === null ||
+    !privateSkillNativeContextCaptureNeeded(env)
+  ) {
+    return { status: "ignored" };
+  }
+  const bridge =
+    options.nativeContextBridge ?? runPrivateSkillNativeContextBridge;
+  try {
+    return await bridge(
+      {
+        kind: "user_prompt",
+        session_id: nativeSessionId,
+        origin: "user",
+        prompt: userPrompt,
+      },
+      { env },
+    );
+  } catch {
+    return {
+      status: "unavailable",
+      reason_code: "native_context_bridge_unavailable",
+    };
+  }
+}
+
+export async function bindPrivateSkillNativeCapture(
+  toolName,
+  args,
+  response,
+  options = {},
+) {
+  const nativeSessionId = normalizeNativeSessionId(options.nativeSessionId);
+  const tool = normalizedCompletionToolName(toolName);
+  const input =
+    args && typeof args === "object" && !Array.isArray(args) ? args : {};
+  const body = responseBodyFromToolResponse(response);
+  if (
+    !nativeSessionId ||
+    tool !== "capture_learning" ||
+    toolResponseIndicatesFailure(response) ||
+    input.replacement_of !== undefined ||
+    !input.private_skill ||
+    typeof input.private_skill !== "object" ||
+    Array.isArray(input.private_skill) ||
+    body?.capture_route !== "private_skill" ||
+    !/^psd_[A-Za-z0-9_-]{8,96}$/u.test(String(body?.draft_id ?? ""))
+  ) {
+    return { status: "ignored" };
+  }
+  const bridge =
+    options.nativeContextBridge ?? runPrivateSkillNativeContextBridge;
+  try {
+    return await bridge(
+      {
+        kind: "private_skill_capture",
+        session_id: nativeSessionId,
+        draft_id: body.draft_id,
+        original_capture: true,
+      },
+      { env: options.env ?? process.env },
+    );
+  } catch {
+    return {
+      status: "unavailable",
+      reason_code: "native_context_bridge_unavailable",
+    };
+  }
+}
+
+export function readPrivateSkillLifecycleState(env = process.env) {
+  if (!organizationPrivateLessonAuthorized(env)) return null;
+  const directory = privateSkillOutboxDirectoryForHook(env);
+  try {
+    const directoryMetadata = lstatSync(directory);
+    if (
+      directoryMetadata.isSymbolicLink() ||
+      !directoryMetadata.isDirectory() ||
+      (isPosixHookRuntime() && (directoryMetadata.mode & 0o077) !== 0)
+    ) {
+      return null;
+    }
+    assertCurrentHookUser(directoryMetadata.uid);
+    const counts = {
+      ready: 0,
+      retry_scheduled: 0,
+      awaiting_authorization: 0,
+      retry_delivery: 0,
+      retry_resolution: 0,
+      reformulation_available: 0,
+      operational_retry: 0,
+      native_context_needed: 0,
+      native_context_pending: 0,
+      inspector_refresh: 0,
+    };
+    const recoveryIds = [];
+    const authorizationIds = [];
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (!/^psd_[A-Za-z0-9_-]{8,96}\.json$/.test(entry.name)) continue;
+      try {
+        if (entry.isSymbolicLink() || !entry.isFile()) continue;
+        const expectedDraftId = entry.name.slice(0, -".json".length);
+        const parsed = JSON.parse(
+          readSecureHookFile(
+            join(directory, entry.name),
+            MAX_PRIVATE_SKILL_ENVELOPE_BYTES,
+          ),
+        );
+        if (
+          parsed?.version !== "private-skill-outbox-envelope-v1" ||
+          parsed?.draft_id !== expectedDraftId ||
+          ![
+            "ready",
+            "awaiting_authorization",
+            "retry_scheduled",
+            "held_safety",
+            "held_validation",
+          ].includes(parsed?.state)
+        ) {
+          continue;
+        }
+        const action = privateSkillRecoveryAction(parsed, true);
+        if (
+          parsed.state === "awaiting_authorization" &&
+          privateAuthorizationRetryIsDue(
+            parsed.draft_id,
+            parsed.updated_at,
+            env,
+          )
+        ) {
+          counts.awaiting_authorization += 1;
+          authorizationIds.push(parsed.draft_id);
+          continue;
+        }
+        const staleInspectorAction =
+          action &&
+          typeof action.inspector_digest === "string" &&
+          action.inspector_digest !== PRIVATE_LEARNING_INSPECTOR_DIGEST &&
+          ((action.kind === "submit_candidate" && parsed.state === "ready") ||
+            ([
+              "reformulate",
+              "retry_operational",
+              "capture_native_context",
+            ].includes(action.kind) &&
+              parsed.state === "held_validation"));
+        const staleInspectorBlockedRecovery =
+          action === null &&
+          parsed.next_action === null &&
+          typeof parsed.inspector_digest === "string" &&
+          parsed.inspector_digest !== PRIVATE_LEARNING_INSPECTOR_DIGEST &&
+          parsed.state === "held_validation" &&
+          parsed.reformulation_available === false &&
+          typeof parsed.reformulation_reason === "string" &&
+          Number.isSafeInteger(parsed.reformulation_attempt_count) &&
+          Number.isSafeInteger(parsed.recovery_epoch_attempt_count) &&
+          parsed.reformulation_attempt_count -
+            parsed.recovery_epoch_attempt_count >=
+            3;
+        if (staleInspectorAction || staleInspectorBlockedRecovery) {
+          counts.inspector_refresh += 1;
+          recoveryIds.push(parsed.draft_id);
+        } else if (action?.kind === "submit_candidate") {
+          counts.ready += 1;
+        } else if (
+          action?.kind === "retry_delivery" &&
+          retryIsDue(parsed.next_retry_at)
+        ) {
+          counts.retry_delivery += 1;
+        } else if (
+          action?.kind === "retry_resolution" &&
+          (parsed.state === "held_validation" ||
+            (parsed.state === "retry_scheduled" &&
+              retryIsDue(parsed.next_retry_at)))
+        ) {
+          counts.retry_resolution += 1;
+        } else if (action?.kind === "reformulate") {
+          counts.reformulation_available += 1;
+          recoveryIds.push(parsed.draft_id);
+        } else if (action?.kind === "retry_operational") {
+          counts.operational_retry += 1;
+          recoveryIds.push(parsed.draft_id);
+        } else if (action?.kind === "reinspect") {
+          counts.inspector_refresh += 1;
+          recoveryIds.push(parsed.draft_id);
+        } else if (action?.kind === "capture_native_context") {
+          counts.native_context_needed += 1;
+        }
+      } catch {
+        // One unsafe or malformed entry cannot hide independent due drafts.
+      }
+    }
+    recoveryIds.sort();
+    let cursor = "";
+    try {
+      const value = readSecureHookFile(
+        join(usageDir(env), "private-skill-recovery-cursor"),
+        104,
+      );
+      if (/^psd_[A-Za-z0-9_-]{8,96}$/.test(value)) cursor = value;
+    } catch {
+      // A missing/stale hint cannot withhold recoverable drafts.
+    }
+    return Object.values(counts).every((count) => count === 0)
+      ? null
+      : {
+          ...counts,
+          next_authorization_draft_id: authorizationIds.sort()[0] ?? null,
+          next_reformulation_draft_id:
+            recoveryIds.find((id) => id > cursor) ?? recoveryIds[0] ?? null,
+          host_denial_active: recentPrivateLessonHostDenial(env),
+        };
+  } catch {
+    return null;
+  }
+}
+
+export function privateSkillNativeContextCaptureNeeded(env = process.env) {
+  return (readPrivateSkillLifecycleState(env)?.native_context_needed ?? 0) > 0;
+}
+
+export function privateLearningLifecycleRecoveryInstruction(env = process.env) {
+  const lessons = readPrivateLessonLifecycleState(env);
+  const skills = readPrivateSkillLifecycleState(env);
+  const hostDenialActive = Boolean(
+    lessons?.host_denial_active || skills?.host_denial_active,
+  );
+  if (hostDenialActive || (!lessons && !skills)) return null;
+  const lessonCandidates =
+    (lessons?.ready ?? 0) +
+    (lessons?.retry_scheduled ?? 0) +
+    (lessons?.awaiting_compatible_profile ?? 0) +
+    (lessons?.held_policy_refresh ?? 0);
+  const lessonTelemetry =
+    (lessons?.hold_telemetry_pending ?? 0) +
+    (lessons?.hold_telemetry_retry_scheduled ?? 0) +
+    (lessons?.hold_telemetry_awaiting_compatible_profile ?? 0);
+  const skillCandidates = (skills?.ready ?? 0) + (skills?.retry_scheduled ?? 0);
+  const skillDeliveryRetries =
+    (skills?.retry_delivery ?? 0) + (skills?.retry_resolution ?? 0);
+  const authorizationRetries =
+    (lessons?.awaiting_authorization ?? 0) +
+    (skills?.awaiting_authorization ?? 0);
+  const reformulations =
+    (skills?.reformulation_available ?? 0) +
+    (skills?.operational_retry ?? 0) +
+    (skills?.inspector_refresh ?? 0);
+  const nativeContextNeeded = skills?.native_context_needed ?? 0;
+  const authorizationId =
+    lessons?.next_authorization_draft_id ?? skills?.next_authorization_draft_id;
+  const authorizationReminder = authorizationId
+    ? `Authorization recovery is due for ${authorizationId}. Inspect that exact draft, then call ${authorizationId.startsWith("pld_") ? "retry_private_lesson_candidate" : "retry_private_skill_candidate"} with draft_id ${authorizationId} once using the existing private lane approval. A repeated refusal remains retained and backs off for six hours; never switch transport to bypass a denial.`
+    : null;
+  if (
+    !authorizationReminder &&
+    lessonCandidates +
+      lessonTelemetry +
+      skillCandidates +
+      skillDeliveryRetries +
+      reformulations +
+      nativeContextNeeded ===
+      0
+  )
+    return null;
   return [
-    `Private lesson lifecycle recovery: ${pending} retained local draft${pending === 1 ? " needs" : "s need"} attention. Silently call inspect_private_lesson_outbox.`,
-    "Call submit_private_lesson_candidate for each ready candidate or safety-held draft with pending content-free telemetry. Call retry_private_lesson_candidate only when the candidate or telemetry retry is due.",
-    "Do not retry awaiting_authorization, disabled telemetry, submitted telemetry, or superseded-redactor drafts; do not use another transport, and never delete an unresolved draft automatically. Verified submissions compact automatically and their content-free markers expire after 14 days. Hide routine results.",
+    `Private learning recovery: ${lessonCandidates} lesson candidate${lessonCandidates === 1 ? "" : "s"}, ${skillCandidates} complete skill candidate${skillCandidates === 1 ? "" : "s"}, ${skillDeliveryRetries} private skill delivery retr${skillDeliveryRetries === 1 ? "y" : "ies"}${authorizationRetries > 0 ? `, ${authorizationRetries} authorization retr${authorizationRetries === 1 ? "y" : "ies"}` : ""}, and ${lessonTelemetry} content-free hold event${lessonTelemetry === 1 ? "" : "s"} are due.`,
+    "Silently call inspect_private_learning_outbox. Submit ready lessons with submit_private_lesson_candidate and ready complete skills with submit_private_skill_candidate. Use the matching retry tool only for a due retry.",
+    ...(authorizationReminder ? [authorizationReminder] : []),
+    ...(reformulations > 0
+      ? [
+          `${reformulations} private skill draft${reformulations === 1 ? " awaits" : "s await"} bounded agent reformulation. Inspect private_skill_draft_id ${skills.next_reformulation_draft_id} with inspect_private_learning_outbox, independent of listing order. Use active task context or independently validated recovery context. Follow agent_recovery, then the replacement's exact next_action. Never copy suspected secrets or manufacture missing context.`,
+        ]
+      : []),
+    ...(nativeContextNeeded > 0
+      ? [
+          `${nativeContextNeeded} retained private skill draft${nativeContextNeeded === 1 ? " has" : "s have"} exhausted the current reformulation epoch. A later verified native user prompt will be inspected locally and may open one new bounded epoch automatically; no user action or alternate transport is required.`,
+        ]
+      : []),
+    "Do not ask the user to inspect files or repeat an existing lane approval. Do not retry authorization, policy, validation, safety, or terminal holds through another transport. Never delete an unresolved draft automatically. Hide routine receipts; surface only a concrete failure or required user action.",
   ].join("\n");
+}
+
+export function privateLessonLifecycleRecoveryInstruction(env = process.env) {
+  return privateLearningLifecycleRecoveryInstruction(env);
 }
 
 function privateLessonHealthReportingEnabledForHook(env = process.env) {
@@ -4316,49 +9494,61 @@ function runtimeDisplayName(runtime) {
   );
 }
 
-function sanitizeEffectivePreferences(value) {
-  return sanitizeEffectivePreferenceEntries(value).map((item) => item.text);
-}
-
+// Keys and values stay exact (core caps both at 96 characters): a required
+// setting is fetched by its key. Required settings sort before the statement
+// cap so a discretionary entry can never displace one.
 function sanitizeEffectivePreferenceEntries(value) {
   if (!Array.isArray(value)) return [];
   return value
-    .filter(
-      (item) =>
-        item &&
-        typeof item === "object" &&
-        !Array.isArray(item) &&
-        typeof item.key === "string" &&
-        /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/.test(item.key) &&
-        typeof item.value === "string" &&
-        /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/.test(item.value) &&
+    .flatMap((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+      const key =
+        typeof item.key === "string"
+          ? safePreferenceIdentifier(item.key, 96)
+          : null;
+      const preferenceValue =
+        typeof item.value === "string"
+          ? safePreferenceIdentifier(item.value, 96)
+          : null;
+      return key &&
+        preferenceValue &&
         EFFECTIVE_PREFERENCE_SOURCES.has(item.source) &&
         ["presentation", "workflow", "strategy_selection"].includes(
           item.effect ?? "presentation",
         ) &&
-        ["prefer", "avoid"].includes(item.strength ?? "prefer"),
+        ["prefer", "avoid"].includes(item.strength ?? "prefer")
+        ? [{ item, key, value: preferenceValue }]
+        : [];
+    })
+    .sort(
+      (left, right) =>
+        Number(right.item.source === "mandatory_org") -
+        Number(left.item.source === "mandatory_org"),
     )
-    .slice(0, 32)
-    .map((item) => {
-      const label = safeText(item.label ?? item.key, 96);
-      const behavior = safeText(item.behavior ?? item.value, 320);
+    .slice(0, MAX_EFFECTIVE_PREFERENCE_STATEMENTS)
+    .map(({ item, key, value: preferenceValue }) => {
+      const label = safeText(item.label ?? key, 96);
+      const source = item.behavior ?? preferenceValue;
+      const behavior = safeText(source, 320);
       const direction = item.strength === "avoid" ? "avoid" : "prefer";
       const authority =
         item.source === "mandatory_org" ? "required organization" : item.source;
       return {
         mandatory: item.source === "mandatory_org",
-        key: safeText(item.key, 48),
-        value: safeText(item.value, 48),
+        key,
+        value: preferenceValue,
         behavior,
+        // Complete only when the shown text is the unredacted source: a cut,
+        // or a redaction that swallows a word such as "never", can reverse it.
+        behaviorComplete:
+          behavior === String(source).replace(/\s+/g, " ").trim(),
         text: `${label} [${safeText(item.effect ?? "presentation", 24)}, ${safeText(authority ?? "preference", 32)}]: ${direction} ${behavior}`,
       };
     });
 }
 
 function effectivePreferencesContextLines(value) {
-  const entries = sanitizeEffectivePreferenceEntries(value).sort(
-    (left, right) => Number(right.mandatory) - Number(left.mandatory),
-  );
+  const entries = sanitizeEffectivePreferenceEntries(value);
   if (entries.length === 0) return [];
   const mandatory = entries.filter((entry) => entry.mandatory);
   const discretionary = entries.filter((entry) => !entry.mandatory);
@@ -4367,38 +9557,43 @@ function effectivePreferencesContextLines(value) {
   return [mandatoryLine, discretionaryLine].filter(Boolean);
 }
 
+// A required setting is never shortened or shown redacted: a partial text
+// presented as authoritative can drop the exception or restriction it states.
+// Every setting appears complete when all fit the preview budget unaltered;
+// otherwise the line makes the complete fetch a required step and names each
+// exact key (an out-of-contract count above core's eight fetches every setting).
 function mandatoryPreferenceContextLine(entries) {
   if (entries.length === 0) return null;
-  const prefix = "Required organization settings (apply all): ";
-  const suffix =
-    ". These remain authoritative and cannot be weakened by task or personal preferences.";
-  const separators = Math.max(0, entries.length - 1) * 2;
-  const perEntryBudget = Math.max(
-    48,
-    Math.floor(
-      (MAX_MANDATORY_PREFERENCE_CONTEXT_CHARS -
-        prefix.length -
-        suffix.length -
-        separators) /
-        entries.length,
-    ),
-  );
-  const body = entries
-    .map((entry) =>
-      safeText(
-        `${entry.key}=${entry.value}: ${entry.behavior}`,
-        perEntryBudget,
-      ),
-    )
-    .join("; ");
-  return `${prefix}${body}${suffix}`;
+  const authority =
+    "These remain authoritative and cannot be weakened by task or personal preferences.";
+  const complete = `Required organization settings (apply all): ${entries
+    .map((entry) => `${entry.key}=${entry.value}: ${entry.behavior}`)
+    .join("; ")}. ${authority}`;
+  if (
+    complete.length <= MAX_MANDATORY_PREFERENCE_CONTEXT_CHARS &&
+    entries.every((entry) => entry.behaviorComplete)
+  ) {
+    return complete;
+  }
+  const keyed = entries.length <= MAX_REQUIRED_SETTING_KEYS;
+  const keys = keyed
+    ? ` with ${JSON.stringify({ keys: entries.map((entry) => entry.key) })}`
+    : "";
+  const covered = keyed
+    ? "a get_effective_preferences result covering every listed key"
+    : "a complete get_effective_preferences result";
+  return `Required organization settings (${entries.length}; complete text not shown here). Required next step before acting: call get_effective_preferences${keys} and apply every returned setting in full; skip the call only when this conversation already holds ${covered}, and hook-injected text never counts as that result. If the call is unavailable or omits a key, say the complete required settings could not be loaded, do not claim they were applied, and never read a key name as permission. ${authority}`;
 }
+
+// Installation and member preferences reach every agent runtime on that
+// identity, so this mirrors REMEMBRANCE_CROSS_FAMILY_PREFERENCE_RULE in core.
+const CROSS_FAMILY_PREFERENCE_RULE =
+  "Follow the part of a preference written for this host. Unlike an outage, one naming a model, tool, or agent this host lacks, with no part for this host, was written for another agent family: apply the closest equivalent this host supports and say which. When none is safe to assume, ask the user; if you cannot ask, keep your default and say so.";
 
 function discretionaryPreferenceContextLine(entries) {
   if (entries.length === 0) return null;
   const prefix = "Apply these persisted discretionary preferences silently: ";
-  const suffix =
-    ". Do not ask the user to reconfirm them. Current-task instructions may override these preferences. Never weaken applicability, safety, authorization, privacy, required skill steps, validation, or review.";
+  const suffix = `. Do not ask the user to reconfirm them. ${CROSS_FAMILY_PREFERENCE_RULE} Current-task instructions may override these preferences. Never weaken applicability, safety, authorization, privacy, required skill steps, validation, or review.`;
   const budget = Math.max(
     0,
     MAX_PREFERENCE_CONTEXT_CHARS - prefix.length - suffix.length,
@@ -4429,6 +9624,35 @@ function clientUpdatePath(surface, env = process.env) {
   return normalized ? join(clientUpdateDir(env), `${normalized}.json`) : null;
 }
 
+// Bounded GET for hook-time registry reads. Resolves to { status, body }, where
+// body is the parsed JSON of a 2xx response of at most maxBytes and otherwise
+// null, or to null when the request fails, times out, or returns invalid JSON.
+async function getBoundedJson(
+  fetchImpl,
+  url,
+  { headers, timeoutMs, maxBytes },
+) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(url, {
+      headers,
+      signal: controller.signal,
+    });
+    if (!response?.ok) return { status: response?.status ?? null, body: null };
+    const text = await response.text();
+    return {
+      status: response.status,
+      body:
+        Buffer.byteLength(text, "utf8") > maxBytes ? null : JSON.parse(text),
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function checkForClientUpdate(
   {
     surface,
@@ -4452,33 +9676,22 @@ export async function checkForClientUpdate(
   const path = clientUpdatePath(normalizedSurface, env);
   let manifest = readCachedClientRelease(path, now);
   if (!manifest) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const response = await getBoundedJson(
+      fetchImpl,
+      `${configuration.apiUrl.replace(/\/+$/, "")}/.well-known/remembrance-client-release.json`,
+      {
+        headers: { accept: "application/json" },
+        timeoutMs,
+        maxBytes: MAX_LOCAL_CLIENT_UPDATE_BYTES,
+      },
+    );
     try {
-      const response = await fetchImpl(
-        `${configuration.apiUrl.replace(/\/+$/, "")}/.well-known/remembrance-client-release.json`,
-        {
-          headers: { accept: "application/json" },
-          signal: controller.signal,
-        },
-      );
-      if (!response?.ok) return null;
-      const text = await response.text();
-      if (Buffer.byteLength(text, "utf8") > MAX_LOCAL_CLIENT_UPDATE_BYTES) {
-        return null;
-      }
-      try {
-        manifest = parseClientReleaseManifest(JSON.parse(text));
-      } catch {
-        return null;
-      }
-      if (!manifest) return null;
-      writeCachedClientRelease(path, manifest, now);
+      manifest = parseClientReleaseManifest(response?.body);
     } catch {
       return null;
-    } finally {
-      clearTimeout(timer);
     }
+    if (!manifest) return null;
+    writeCachedClientRelease(path, manifest, now);
   }
   const release = clientSurfaceRelease(manifest, normalizedSurface);
   if (
@@ -4677,6 +9890,208 @@ function compareStableClientVersions(left, right) {
   return 0;
 }
 
+// --- Organization session skills --------------------------------------------
+//
+// Session-start adapters read the organization's session skills (slugs and
+// version ids only) and tell the agent to load each one with invoke_skill
+// before its first reply. The list is cached per native session in the usage
+// directory, bound to the registry URL and credential by a digest, so a
+// compaction repeats the directive with no network call and a resume falls
+// back to it when the registry is unreachable. Every repeat carries the same
+// idempotency key, so the server replays the first invocation.
+const SESSION_SKILLS_CONTRACT_VERSION = "session-skills-v1";
+const SESSION_SKILLS_TIMEOUT_MS = 1200;
+const SESSION_SKILLS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// Five entries of at most 200-character slugs and 128-character version ids
+// keep the directive under 3,000 characters; the hook-core tests pin that, and
+// formatSessionSkillsDirective drops trailing entries if it is ever exceeded.
+const MAX_SESSION_SKILLS = 5;
+const MAX_SESSION_SKILLS_DIRECTIVE_CHARS = 3000;
+const MAX_SESSION_SKILLS_BYTES = 16 * 1024;
+// Slugs and version ids are written verbatim into the directive, so only the
+// server's strict identifier grammars are accepted.
+const SESSION_SKILL_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const SESSION_SKILL_VERSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/;
+
+function sessionSkillsAccess(env) {
+  if (disabled(env?.REMEMBRANCE_SESSION_SKILLS)) return null;
+  const access = resolveApiAccessSnapshot(env);
+  return access.credential.apiKey &&
+    !isUnusableConfigurationSource(access.credential.source)
+    ? access
+    : null;
+}
+
+function sanitizeSessionSkills(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, MAX_SESSION_SKILLS).flatMap((entry) => {
+    const slug = entry?.slug;
+    const versionId = entry?.version_id ?? null;
+    const pinned = entry?.pinned === true;
+    const valid =
+      typeof slug === "string" &&
+      slug.length <= 200 &&
+      SESSION_SKILL_SLUG_PATTERN.test(slug) &&
+      (versionId === null ||
+        (typeof versionId === "string" &&
+          SESSION_SKILL_VERSION_ID_PATTERN.test(versionId))) &&
+      // A pin names one exact version; without it the pin cannot be honored.
+      (!pinned || versionId !== null);
+    return valid ? [{ slug, version_id: versionId, pinned }] : [];
+  });
+}
+
+// Returns the validated entries, the empty list when none apply or the
+// registry refuses the credential (401 or 403), or null when the feature is
+// off, the configuration is anonymous or unusable, or the request fails in any
+// other way, including an older server's 404. Never throws.
+export async function fetchSessionSkills(
+  {
+    fetchImpl = fetch,
+    timeoutMs = SESSION_SKILLS_TIMEOUT_MS,
+    apiAccess = null,
+  } = {},
+  env = process.env,
+) {
+  const access = apiAccess ?? sessionSkillsAccess(env);
+  if (!access) return null;
+  const response = await getBoundedJson(
+    fetchImpl,
+    `${access.apiConfiguration.apiUrl}/api/v1/agent/session-skills`,
+    {
+      headers: principalRequestHeaders(access),
+      timeoutMs,
+      maxBytes: MAX_SESSION_SKILLS_BYTES,
+    },
+  );
+  if (response?.status === 401 || response?.status === 403) return [];
+  const body = response?.body;
+  if (body?.contract_version !== SESSION_SKILLS_CONTRACT_VERSION) return null;
+  return body.available === true
+    ? sanitizeSessionSkills(body.session_skills)
+    : [];
+}
+
+function sessionSkillsCachePath(nativeSessionId, env) {
+  return join(
+    usageDir(env),
+    `${sessionHash(nativeSessionId)}.session-skills.json`,
+  );
+}
+
+// Binds a cache file to the registry and credential that filled it without
+// storing either.
+function sessionSkillsAccessDigest(access) {
+  return createHash("sha256")
+    .update(
+      `${access.apiConfiguration.apiUrl}\n${access.credential.apiKey}`,
+      "utf8",
+    )
+    .digest("hex")
+    .slice(0, 32);
+}
+
+function readSessionSkillsCache(path, digest, now) {
+  try {
+    const cached = JSON.parse(
+      readSecureHookFile(path, MAX_SESSION_SKILLS_BYTES),
+    );
+    const age = now - Date.parse(cached?.fetched_at);
+    return cached?.digest === digest &&
+      age >= 0 &&
+      age <= SESSION_SKILLS_CACHE_TTL_MS
+      ? sanitizeSessionSkills(cached.session_skills)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+// Stable for one native session, slug, and version, so a repeat after a
+// resume or compaction replays the first invocation.
+function sessionSkillIdempotencyKey(nativeSessionId, slug, versionId) {
+  return `rss_${createHash("sha256")
+    .update([nativeSessionId, slug, versionId ?? ""].join("\n"), "utf8")
+    .digest("hex")
+    .slice(0, 32)}`;
+}
+
+// Keeps whole entries only: when the text would exceed the cap, entries are
+// dropped from the end until it fits.
+export function formatSessionSkillsDirective(nativeSessionId, skills) {
+  const entries = skills.map(({ slug, version_id: versionId, pinned }) => {
+    const args = {
+      slug,
+      ...(versionId ? { version_id: versionId } : {}),
+      scope: "session",
+      idempotency_key: sessionSkillIdempotencyKey(
+        nativeSessionId,
+        slug,
+        versionId,
+      ),
+    };
+    return `- ${JSON.stringify(args)}${pinned ? " (pinned)" : ""}`;
+  });
+  while (entries.length > 0) {
+    const text = [
+      "Remembrance organization session skills: before your first reply, call invoke_skill once per entry below with exactly these arguments, then follow each returned skill's instructions for the whole session.",
+      ...entries,
+      "When this list reappears after a resume or compaction, repeat the calls; the same idempotency_key returns the first invocation. Otherwise do not invoke or query these skills again, and send no per-task feedback or task outcome for them.",
+      "If a pinned entry returns 409 skill_version_unavailable, say so in one line and continue without that skill; never load a substitute. If an unpinned entry returns it, retry once with the same arguments except version_id. If an entry still fails, continue without it.",
+    ].join("\n");
+    if (text.length <= MAX_SESSION_SKILLS_DIRECTIVE_CHARS) return text;
+    entries.pop();
+  }
+  return null;
+}
+
+// Session-start adapters pass the host's own start source and native session
+// id. compact reads the cache only; resume fetches and falls back to the
+// cache; startup, clear, and a host without a source fetch and refresh the
+// cache. With cache false, nothing is read or written and compact returns
+// null. Returns the directive text or null, and never throws.
+export async function sessionSkillsDirective(
+  {
+    source = null,
+    nativeSessionId = null,
+    fetchImpl = fetch,
+    timeoutMs,
+    now = Date.now(),
+    cache = true,
+  } = {},
+  env = process.env,
+) {
+  const sessionId = normalizeNativeSessionId(nativeSessionId);
+  const access = sessionId ? sessionSkillsAccess(env) : null;
+  if (!access) return null;
+  const path = cache ? sessionSkillsCachePath(sessionId, env) : null;
+  const digest = sessionSkillsAccessDigest(access);
+  const start = String(source ?? "")
+    .trim()
+    .toLowerCase();
+  let skills = null;
+  if (start !== "compact") {
+    skills = await fetchSessionSkills(
+      { fetchImpl, timeoutMs, apiAccess: access },
+      env,
+    );
+    if (skills && path) {
+      writePrivateUsageMarker(
+        path,
+        JSON.stringify({
+          fetched_at: new Date(now).toISOString(),
+          digest,
+          session_skills: skills,
+        }),
+      );
+    }
+  }
+  if (!skills && path && (start === "compact" || start === "resume")) {
+    skills = readSessionSkillsCache(path, digest, now);
+  }
+  return skills ? formatSessionSkillsDirective(sessionId, skills) : null;
+}
+
 function pluginAlertSessionPath(surface, sessionId, env = process.env) {
   const normalized = normalizedPluginHealthSurface(surface);
   if (!normalized) return null;
@@ -4691,7 +10106,9 @@ function hostPolicyOperationClass(toolName) {
   const normalized = String(toolName ?? "").toLowerCase();
   if (
     normalized.endsWith("submit_private_lesson_candidate") ||
-    normalized.endsWith("retry_private_lesson_candidate")
+    normalized.endsWith("retry_private_lesson_candidate") ||
+    normalized.endsWith("submit_private_skill_candidate") ||
+    normalized.endsWith("retry_private_skill_candidate")
   ) {
     return "private_lesson";
   }
@@ -4711,7 +10128,9 @@ function hostPolicyOperationClass(toolName) {
   }
   if (
     normalized.endsWith("prepare_private_lesson_candidate") ||
+    normalized.endsWith("capture_learning") ||
     normalized.endsWith("delete_private_lesson_candidate") ||
+    normalized.endsWith("delete_private_skill_candidate") ||
     normalized.endsWith("propose_private_skill") ||
     normalized.endsWith("queue_private_skill_import")
   ) {
@@ -4754,10 +10173,15 @@ function isRemembranceToolName(toolName) {
       "get_effective_preferences",
       "get_private_lesson_policy",
       "prepare_private_lesson_candidate",
+      "capture_learning",
+      "inspect_private_learning_outbox",
       "inspect_private_lesson_outbox",
       "submit_private_lesson_candidate",
       "retry_private_lesson_candidate",
       "delete_private_lesson_candidate",
+      "submit_private_skill_candidate",
+      "retry_private_skill_candidate",
+      "delete_private_skill_candidate",
       "record_preference",
       "submit_preference_compatibility_feedback",
       "link_current_installation",
@@ -5025,6 +10449,44 @@ export function recordHostPolicyDenial(
     value,
   });
   if (!normalizedSurface || !classification) return null;
+  // Hosts that expose denial events can acknowledge the exact receipt locally.
+  // Other hosts use the explicit local tool; no transcript inference is needed.
+  const feedbackTool = normalizedCompletionToolName(toolName);
+  let feedbackIdentity = "";
+  if (["submit_query_feedback", "submit_feedback"].includes(feedbackTool)) {
+    const args =
+      value?.tool_input ??
+      value?.toolInput ??
+      value?.arguments ??
+      value?.args ??
+      value?.params;
+    if (args && typeof args === "object" && !Array.isArray(args)) {
+      try {
+        acknowledgeFeedbackDenial(
+          {
+            tool: feedbackTool,
+            query_id: args.query_id,
+            ...(feedbackTool === "submit_feedback"
+              ? { result_id: args.result_id }
+              : {}),
+            reason: "host_policy_denied",
+          },
+          env,
+        );
+        feedbackIdentity = createHash("sha256")
+          .update(
+            JSON.stringify([
+              feedbackTool,
+              args.query_id,
+              feedbackTool === "submit_feedback" ? args.result_id : null,
+            ]),
+          )
+          .digest("hex");
+      } catch {
+        // A failed local acknowledgement must not claim success or affect execution.
+      }
+    }
+  }
   const now = new Date().toISOString();
   const sessionHash = createHash("sha256")
     .update(String(sessionId ?? "unknown"), "utf8")
@@ -5037,6 +10499,8 @@ export function recordHostPolicyDenial(
         sessionHash,
         classification.operation_class,
         classification.denial_class,
+        feedbackTool,
+        feedbackIdentity,
       ].join(":"),
       "utf8",
     )
@@ -5662,35 +11126,21 @@ export function promptProvidesPreferenceCorrection(prompt) {
   );
 }
 
-const USER_CORRECTION_CAPTURE_PATTERNS = [
-  /\b(?:that|this|it)(?:\s+(?:(?:completed|proposed|current|chosen)\s+)?(?:approach|implementation|design|result))?(?:'s|\s+(?:is|was|looks?|feels?))\s+(?:wrong|incorrect|overkill|too much|overcomplicated|the wrong (?:way|approach|direction))\b/i,
-  /\b(?:wrong (?:way|approach|direction)|do (?:this|it) differently|use a different approach)\b/i,
-  /\b(?:you|we)\s+(?:missed|forgot|overlooked|ignored|did not address|didn't address|failed to address)\b/i,
-  /\b(?:i already (?:asked|said|told you)|as i (?:said|asked|explained)|you keep (?:missing|forgetting|doing|adding|removing))\b/i,
-  /\bi (?:do not|don't) (?:like|agree with|want) (?:this|that|the) (?:approach|direction|implementation|design|result)\b/i,
-  /\b(?:revert|undo|discard|reject) (?:that|this|the (?:approach|implementation|change|design|result))\b/i,
-];
-
 export function promptContainsUserCorrection(prompt) {
-  const text = String(prompt ?? "").trim();
-  return (
-    text.length >= 8 &&
-    USER_CORRECTION_CAPTURE_PATTERNS.some((pattern) => pattern.test(text))
+  return promptContainsFirstPartyCorrection(prompt, {
+    hostNotification: isHostNotificationPrompt(prompt),
+  });
+}
+
+export function userCorrectionCaptureDirective(prompt, env = process.env) {
+  if (!promptContainsUserCorrection(prompt)) return null;
+  return userCorrectionCaptureDirectiveText(
+    organizationPrivateLessonAuthorized(env),
   );
 }
 
-export function userCorrectionCaptureDirective(prompt) {
-  if (!promptContainsUserCorrection(prompt)) return null;
-  return [
-    "Remembrance user-correction capture:",
-    "The user appears to have corrected, rejected, or repeated guidance about the approach. Resolve the correction in this turn, then decide whether the corrected lesson is reusable beyond this person and repository.",
-    "For a compact general failure, correction, or evidence lesson, prepare and submit one private lesson before finishing. For a complete reusable workflow, propose a private skill instead. Store person-, repository-, or machine-specific facts only in the host's local memory.",
-    "Writing local memory does not satisfy organization-shared capture. Do not send raw repository content, the user's wording, paths, URLs, identifiers, or secrets; generalize first and use the private organization lane.",
-  ].join("\n");
-}
-
 function promptDisclaimsDurablePreference(prompt) {
-  return /\b(?:(?:contrived|hypothetical|illustrative)\s+(?:example|scenario)|(?:example|scenario)\s+only|not\s+(?:a\s+)?(?:lasting\s+)?(?:preference|rule|default)|(?:do not|don't)\s+(?:save|remember|record|learn)\s+(?:this|that|it))\b/i.test(
+  return /\b(?:(?:contrived|hypothetical|illustrative)\s+(?:example|scenario)|(?:example|scenario)\s+only|not\s+(?:a\s+)?(?:lasting\s+)?(?:preference|rule|default)|(?:do not|don't|no need to|please do not|please don't)\s+(?:save|remember|record|learn(?:\s+from)?|capture)(?:\s+(?:this|that|it|anything(?:\s+from\s+(?:this|that|it))?|as\s+(?:a\s+)?lesson))?|(?:one[- ]off|not a correction|never[-\s]*mind|nevermind))\b/i.test(
     String(prompt ?? ""),
   );
 }
@@ -5727,6 +11177,9 @@ export function genericPreferenceCaptureDirective(prompt, options = {}) {
   const scopeFields = projectKey
     ? `"scope":"project","project_key":"${projectKey}"`
     : '"scope":"auto"';
+  const privateCapture = organizationPrivateLessonAuthorized(
+    options.env ?? process.env,
+  );
   return [
     "Remembrance durable-preference capture:",
     // The lexical gate that produced this notice cannot tell an instruction
@@ -5734,7 +11187,9 @@ export function genericPreferenceCaptureDirective(prompt, options = {}) {
     // do, so it deliberately over-triggers rather than dropping real user
     // instructions. Make that judgment here, where the whole conversation is
     // available, and decline silently when it does not apply.
-    "The user's message may state a lasting or corrective working preference that is not one of the built-in controls. Record it only if it constrains how YOU work: a presentation, workflow, or strategy choice you would otherwise make at your own discretion. Do not record a statement about what the code should do; an expected value, an invariant, an API contract, a test expectation, or a bug report is not a working preference even when it is phrased with always, never, must, or should. If it qualifies, interpret only that preference and call record_preference once, and do not ask the user to classify it. Otherwise take no action and do not mention this notice.",
+    privateCapture
+      ? "The user's message may state a lasting or corrective working preference. Record it only if it constrains how YOU work: a presentation, workflow, or strategy choice you would otherwise make at your own discretion. A requirement, invariant, API contract, test expectation, or bug report about what the code must do is not a working preference. If it qualifies, call capture_learning once with preference and then call only the returned record_preference next_action. Otherwise take no action and do not mention this notice."
+      : "The user's message may state a lasting or corrective working preference that is not one of the built-in controls. Record it only if it constrains how YOU work: a presentation, workflow, or strategy choice you would otherwise make at your own discretion. Do not record a statement about what the code should do; an expected value, an invariant, an API contract, a test expectation, or a bug report is not a working preference even when it is phrased with always, never, must, or should. If it qualifies, interpret only that preference and call record_preference once, and do not ask the user to classify it. Otherwise take no action and do not mention this notice.",
     'Use setting {"key":"<presentation|workflow|strategy_selection>.<stable_concept>","value":"<stable_behavior_id>","label":"<short name>","behavior":"<concise normalized behavior>","effect":"presentation|workflow|strategy_selection","strength":"prefer|avoid","definition_version":1}. This vocabulary is extensible; do not force the preference into a built-in category.',
     `Use ${scopeFields}, "source_category":"explicit_user", "evidence_hash":"${evidenceHash}", "task_hash":"${taskHash}", and "confidence":1.`,
     "Never send the raw prompt or private task details. Never encode a request to weaken safety, authorization, privacy, required skill steps, validation, or review; those constraints remain authoritative.",
@@ -6502,14 +11957,19 @@ function limitFromEnv(env) {
     : DEFAULT_LIMIT;
 }
 
-export function autoQueryTimeoutMs(env = process.env) {
+// REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS, else 3 s for the search and 2 s for the
+// hook's other registry requests.
+export function autoQueryTimeoutMs(
+  env = process.env,
+  fallback = DEFAULT_SEARCH_TIMEOUT_MS,
+) {
   const parsed = Number.parseInt(
     String(env.REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS ?? ""),
     10,
   );
   return Number.isFinite(parsed) && parsed >= 100 && parsed <= 30_000
     ? parsed
-    : DEFAULT_TIMEOUT_MS;
+    : fallback;
 }
 
 function directiveEventTimeoutMs(env) {
