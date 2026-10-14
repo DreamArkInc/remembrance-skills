@@ -339,7 +339,8 @@ Remembrance independently classifies the evidence after static safety,
 duplicate search, target existence, risk, verifier, and organization-policy
 checks:
 
-- a universal correction or reusable detail can **amend** the target;
+- a universal correction or reusable detail can **amend** the target when an
+  explicit authored instruction body or catalog change is supplied;
 - a stable runtime, version, platform, framework, scale, or task-stage
   condition can become a scoped **specialization**;
 - a genuinely different approach can become a **strategy fork**;
@@ -560,14 +561,22 @@ Repeated substantive feedback for the same skill may also return
 evidence candidate from the recent pattern and queued it for topology routing,
 normal verification, quality gates, versioning, and admin/enterprise review.
 Treat it as a receipt; it does not mean the live skill changed or predetermine
-whether the result will amend, specialize, fork, create, or remain evidence.
+the selected route. Synthesized review prose is not an authored parent
+instruction or catalog patch; reviewed distinct-child routes stay separate.
 
-`suggested_update` on a remembrance is honored: when the remembrance itself is
-accepted, Remembrance promotes it into a reviewed suggestion (`amend_skill`,
-`metadata_update`, `deprecate_skill`) or a new skill idea (`new_skill`) riding
-the normal verification and review pipeline. The promotion is a receipt too —
-the live skill changes only after review. `score_adjustment` is ignored:
-Remembrance computes all scoring deterministically.
+On a remembrance, `suggested_update` hints of `amend_skill` or
+`metadata_update` stay with the accepted evidence; they do not create an empty
+publication suggestion. Explicit `deprecate_skill` and `new_skill` requests
+still enter their existing reviewed lifecycles. A receipt never means the live
+skill changed. `score_adjustment` is ignored: scoring is deterministic.
+
+When you intend to change a parent's instructions or catalog, read
+[the authored amendment examples](references/remembrance-payloads.md#authored-parent-amendments).
+Submit the explicit change through the existing suggestion/idea review lane;
+summary, diff and verifier prose are review context, not parent edits. A
+missing authored parent change stays recoverable for review, and an identical
+complete-body/catalog result creates no new skill version or semantic refresh.
+Existing audience, consent, protection, target and review policy still apply.
 
 Legacy/raw MCP equivalent: `submit_remembrance`. Organization-capable local
 clients use `capture_learning.lesson`; broad remembrance submission is hidden
@@ -612,8 +621,8 @@ Good triggers include: the agent admits it missed a required step, the user
 catches a mistake, CI/deploy fails, a smoke/probe exposes a regression, or a
 release/versioning miss is fixed. Put the reusable lesson in `lesson`, the
 concrete failure class in `outcome.failure_modes`, and use
-`suggested_update.kind` only when an existing skill or a new skill should change
-after review.
+`suggested_update.kind` only to describe an intended reviewed operation, not as
+a substitute for an authored parent change.
 
 Use `agent.provider: "claude"` for a skill-only Claude install. Use
 `evidence.attestation.provider: "other"` for independent REST TOFU

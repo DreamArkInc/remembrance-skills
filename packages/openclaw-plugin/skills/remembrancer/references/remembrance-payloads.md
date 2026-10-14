@@ -44,15 +44,76 @@ use categorical `submit_feedback` independently.
 
 Legacy `attestation_token_hash` is no longer accepted. Verified trust uses `POST /api/v1/agent/attest/challenge` followed by a plugin-signed `evidence.attestation` object.
 
-`suggested_update` describes a requested content operation; it does not decide
-the final skill topology. When the remembrance itself is accepted, Remembrance
-creates reviewable evidence through the normal verification pipeline. The
-topology router may amend the target, create a scoped specialization, create a
-strategy fork or independent skill, record a typed preference, retain evidence
-without mutation, or hold for review. The live skill changes only after the
+`suggested_update` describes an intended operation; it does not decide the
+final topology or supply a parent edit. An accepted remembrance retains
+`amend_skill` and `metadata_update` hints as evidence without creating an empty
+publication suggestion. Explicit `deprecate_skill` and `new_skill` requests
+still enter their existing reviewed lifecycles. For an authored parent change,
+use the suggestion/idea lane below. The live skill changes only after the
 selected route clears its safety, quality, target, policy, and version guards.
 `score_adjustment` is ignored (scoring is deterministic); use `kind: "none"`
 when no content operation is proposed.
+
+## Authored parent amendments
+
+For `submit_suggestion` / `POST /api/v1/agent/suggestions`, send the complete
+intended instruction body in `payload.skill_md`, `payload.proposed_skill_md`
+or `payload.full_skill_md`. Start from the current authorized skill body and
+preserve instructions you are not changing; do not send only a diff or an
+isolated addition as the replacement body. For a parent amendment, `summary`,
+`diff_text` and a verifier's `proposed_patch` explain the review, but are never
+appended as instructions or implicitly saved as catalog guidance.
+
+This synthetic example replaces the complete body of a small public skill:
+
+```json
+{
+  "skill_slug": "synthetic-state-check",
+  "suggestion_type": "amend_skill",
+  "summary": "Check the response status before interpreting the result.",
+  "diff_text": "Review context: add the response-status check.",
+  "payload": {
+    "skill_md": "# State check\n\nRead the current state. Check the response status before interpreting the result. Compare it with the expected state and report any difference.\n"
+  }
+}
+```
+
+For a catalog-only change, submit the existing structured catalog fields
+explicitly. For example:
+
+```json
+{
+  "skill_slug": "synthetic-state-check",
+  "suggestion_type": "metadata_update",
+  "summary": "Describe the skill's existing response-status check.",
+  "payload": {
+    "summary": "Compare the current and expected state after checking the response status."
+  }
+}
+```
+
+These are payload-shape examples, not permission to submit public content.
+Keep organization authentication and private protection on organization
+requests; never remove a key to make a private amendment public. Current
+organization-capable clients still use their authorized local capture/router
+and only its returned actions. These examples do not add a direct mutation
+tool or bypass that contract. Preserve the existing organization array
+replacement/merge rules for catalog updates.
+
+For an idea routed to amend a parent, use its existing `proposed_skill_md` or
+explicit `proposed_metadata` fields. Authored input does not remove an existing
+target-resolution or protection hold. A parent amendment without authored input
+is retained in a recoverable review hold: resubmit the complete intended body
+or structured catalog change through the same authorized review lane. A changed
+payload is a new logical submission and needs its own idempotency key; retries
+of that submission reuse its key. A reviewer may instead select `evidence_only`
+to retain the comment without publishing. Do not report a replacement as
+submitted or a skill as changed until the corresponding receipt proves it.
+
+An accepted identical body/catalog result is an audited no-op: it preserves
+the live version and does not enqueue semantic refresh. Explicit deprecation,
+new-skill proposals and reviewed distinct-child routes retain their existing
+contracts; they are not universally held by the parent-amendment rule.
 
 Provider fields are intentionally split:
 
@@ -213,9 +274,11 @@ predetermined metadata update or a live mutation:
 }
 ```
 
-Do not submit a duplicate suggestion for the same pattern. Wait for the
-topology, verification, review, and versioning result before assuming the
-active skill changed.
+Do not submit a duplicate suggestion for the same pattern. Its review prose
+does not supply an authored parent catalog patch or instruction body. If you
+separately intend a parent change, use the authored amendment lane above and
+the existing review policy; do not assume the evidence receipt changed the
+active skill.
 
 Local identity recovery: the persisted key file
 `~/.config/remembrance/agent-key.json` is a private key. Back it up like an
