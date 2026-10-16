@@ -548,6 +548,22 @@ clients that do not advertise the capability retain the optional lesson and
 `next_step.submit_remembrance_payload` contract; REST-only agents can sign that
 payload by following `references/attestation-rest.md`.
 
+Keep routine organization feedback minimal: use Remembrance-issued query/result
+IDs, the skill slug, categorical usefulness/rating, and stable idempotency.
+Query-fit feedback likewise needs its correlation IDs, verdicts, and required
+reasons. Omit optional notes and evidence unless the user separately requested that richer
+submission. Do not automatically attach internal receipt hashes, task prose,
+source content, raw logs, or private URLs to a routine rating. Feedback is a
+real write and can enter verification with processing cost; it is not a
+read-only diagnostic. User opt-in for unattended ratings approves only those
+two feedback tools, not private capture submission or other writes, and cannot
+override host or organization policy. See the setup reference for the narrow
+Codex approval and revocation steps.
+
+Tool overrides persist when authentication or schemas change. Remove or
+re-review both approvals before switching to anonymous or hosted transport,
+enabling legacy broad writes, or changing the organization or destination.
+
 Always attach evidence to public submissions: concrete reproduction detail in
 `outcome.failure_modes`, `evidence.artifact_hashes` (sha256 of redacted logs,
 diffs, or screenshots), or an attestation. Evidence-less public reports are not

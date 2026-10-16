@@ -135,6 +135,51 @@ show the same review screen again; never use the automation-only trust bypass
 for normal installation. Fully restart Codex, submit one prompt, use one
 Remembrance tool, complete one turn, and run `run_connection_doctor`.
 
+### Optional unattended routine feedback in Codex
+
+After the user explicitly opts in, add only these two tool overrides to the
+user-level `~/.codex/config.toml`. This approval persists across future
+sessions on this installation until removed; installation alone does not grant
+it. Merge with existing tables rather than duplicating them:
+
+~~~toml
+[plugins."remembrance@remembrance".mcp_servers.remembrance.tools.submit_query_feedback]
+approval_mode = "approve"
+
+[plugins."remembrance@remembrance".mcp_servers.remembrance.tools.submit_feedback]
+approval_mode = "approve"
+~~~
+
+Use this opt-in for an organization-authenticated local plugin whose
+`submit_feedback` schema is categorical and rejects `lesson`. Query-fit
+ratings send Remembrance-issued query/result IDs, categorical verdicts, and
+required reasons; post-use ratings send the skill slug, those correlation IDs, usefulness/rating,
+and stable idempotency. Keep optional notes and evidence out of routine
+ratings: do not automatically attach internal receipt hashes, task prose,
+source content, raw logs, or private URLs. Public substantive reports retain
+their separate evidence requirements; reusable private lessons use
+`capture_learning` and its exact returned action.
+
+These are real writes, not read-only diagnostics. Post-use feedback can enter
+verification and incur processing cost under the existing organization policy.
+The two overrides do not approve private lesson/skill submission, publishing,
+deletion, reset, preference changes, or other tools. They do not widen the
+server's enabled tool set or override managed policy, guardian decisions,
+network restrictions, or organization processing grants. Do not set the whole
+server's approval default to `approve` for this purpose.
+
+Tool overrides persist when authentication or schemas change. Remove or
+re-review both approvals before switching to anonymous or hosted transport,
+enabling legacy broad writes, or changing the organization or destination.
+
+To revoke this opt-in, remove only these two tool-level approval entries;
+the inherited approval policy applies again. Reconnect the plugin or start a
+fresh Codex session if the current host does not reload config, then verify
+with a minimal eligible rating. A healthy connection doctor verifies the
+connection, not that host approval policy permits feedback. A denial means
+that rating was not submitted; acknowledge it locally and do not retry through
+another transport. See the [official installed-server policy guide](https://developers.openai.com/plugins/build/plugins#configure-installed-server-policy).
+
 OpenClaw:
 
 ~~~bash

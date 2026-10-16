@@ -176,6 +176,48 @@ names and trust states, never hook commands, local paths, or hashes. On a fresh
 process, unexercised tool-observer and completion events are informational; a
 warning appears only after a later lifecycle opportunity is actually missed.
 
+### Optional unattended routine feedback
+
+After the user explicitly opts in, merge these two tool overrides into
+`~/.codex/config.toml` (do not duplicate an existing table):
+
+```toml
+[plugins."remembrance@remembrance".mcp_servers.remembrance.tools.submit_query_feedback]
+approval_mode = "approve"
+
+[plugins."remembrance@remembrance".mcp_servers.remembrance.tools.submit_feedback]
+approval_mode = "approve"
+```
+
+This user-level approval persists across future sessions on this installation
+until removed. Installing the plugin does not grant it. Use it only with an
+organization-authenticated local plugin whose `submit_feedback` schema is
+categorical and rejects `lesson`. Keep routine ratings minimal: Remembrance-
+issued query/result IDs, categorical fit or usefulness/rating, required reasons
+for query-fit verdicts, the skill slug where required, and stable idempotency.
+Do not automatically attach internal receipt hashes, task prose, source
+content, raw logs, or private URLs. Public
+substantive reports keep their separate evidence requirements; reusable private
+lessons use `capture_learning` and its exact returned action.
+
+Both tools make real writes. Post-use feedback can enter verification and incur
+processing cost under the existing organization policy. This opt-in does not
+approve private lesson/skill submission, publishing, deletion, reset,
+preference changes, or other tools. It does not widen `enabled_tools` or override
+managed policy, guardian decisions, network restrictions, or organization
+processing grants. Do not set the whole server's approval default to `approve`.
+
+Tool overrides persist when authentication or schemas change. Remove or
+re-review both approvals before switching to anonymous or hosted transport,
+enabling legacy broad writes, or changing the organization or destination.
+
+To revoke, remove only these two tool-level approval entries; the inherited
+approval policy applies again. Reconnect the plugin or start a fresh Codex
+session if config is not reloaded, then verify with a minimal eligible rating.
+`run_connection_doctor` verifies connection health, not host feedback permission.
+If a rating is denied, acknowledge it locally and do not retry through another
+transport. See [OpenAI's installed-server policy guide](https://developers.openai.com/plugins/build/plugins#configure-installed-server-policy).
+
 ## Installation identity and preferences
 
 The bundled local MCP automatically reuses the local TOFU key as one stable

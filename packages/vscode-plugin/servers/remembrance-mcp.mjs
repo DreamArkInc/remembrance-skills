@@ -8622,7 +8622,7 @@ var MCP_CORE_INSTRUCTIONS = "Remembrance is shared operational memory for agents
 - Send summaries and hashes, never secrets, credentials, private URLs, raw logs, or proprietary content.
 - If the host blocks a Remembrance action, report it once as not submitted and do not retry it another way.
 ` + LEGACY_CORE_FINISH_RULE;
-var REMEMBRANCE_MCP_SERVER_INSTRUCTIONS = MCP_CORE_INSTRUCTIONS + MCP_DETAILS_HEADING + "Before claiming that Remembrance is anonymous, unconfigured, partially active, or missing an organization key, call run_connection_doctor for the transport you will actually use. It performs a safe catalog read and returns exact bounded remediation without submitting content. Use get_connection_status only when you need the underlying transport and lifecycle fields. An unset REMEMBRANCE_API_KEY does not prove that a local plugin is anonymous because local hooks and bundled MCP may read ~/.config/remembrance/config.json. Conversely, hosted MCP cannot read that local file. Anonymous curl or browser probes describe only those requests, not plugin authentication. Never print or request the raw key. When the user explicitly names an authorized Remembrance skill or supplies a remembrance://skills/{slug} URI, resolve ambiguous names with list_skills using its normalized slug-prefix filter, then call invoke_skill with an exact returned slug. Never guess a slug. list_skills is catalog resolution, not relevance search; use query_skills when the user wants relevant candidates rather than a known selection. invoke_skill rechecks authorization and organization policy, resolves the current reviewed version, and returns the only full instruction body. Catalog listings and MCP resource reads are lightweight handles, not skill use. Do not run query_skills merely to rediscover that explicit selection, and do not submit query-fit feedback for it. After meaningful direct use, follow the returned task-outcome and post-use feedback instructions once. BEFORE non-trivial service/API/tool/library/workflow/UI/review/test/security/deployment work, call query_skills to reuse proven skills and resources instead of rediscovering them. A local repository change still qualifies when it involves a reusable workflow or lesson; skip only genuinely trivial throwaway edits and one-off facts. For short follow-ups such as 'fix these issues', 'continue', or 'try again', infer the concrete task, domain, and constraints from the full conversation and still call query_skills; do not wait for the current prompt to repeat trigger keywords. Treat match_tier as a decision aid, then inspect why_matched and applicability before opening a result. These fields show bounded matched terms/capabilities, constraint text overlap, qualitative lexical/semantic evidence, declared scope, use conditions, and exclusions without exposing unstable raw ranking scores. satisfied_constraints and missed_constraints describe textual overlap only, not verified compliance or proven capability gaps. Discard an unlikely or irrelevant corner-case result and report fit: poor; do not force its use. For a remaining high match, call get_skill or get_resource before custom work and pass the returned query_id/result_id so the surfaced-to-fetch funnel closes; possible and exploratory matches are optional. The response also includes approximate context tokens, verified uses, risk, tags, permissions, dependencies, and contraindications so you can weigh the detour safely. Honor query_skills.skill_access on every response. When policy is org_only, use only returned organization skills and never substitute bundled or live public skill references; if an organization key is configured and the query is unavailable, fail closed because the policy cannot be confirmed. AFTER query_skills, call submit_query_feedback once with one complete set of explicit good/partial/poor judgments using the returned query_id and result_id values; leave unrated results neutral, and remember that a poor query match is not the same as a globally bad skill. Reuse the same organization or anonymous auth scope as the query. AFTER you actually use a skill or resource, close the post-use loop with submit_feedback (useful true/false plus a one-line lesson and the originating query_id/result_id; it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable. If nothing fit and you built a new workflow, use propose_private_skill for an organization-private candidate. With an organization key, propose_skill_idea also remains organization-private. Never remove, suppress, or bypass that key to force a public submission; submit privately, then use the reviewed public-propagation flow when the organization chooses to share it. When delegating, pass the selected slug, exact version, query_id, and result_id to the subagent; it should invoke/fetch that result or run its own full-context query. The parent reports the terminal outcome unless the subagent creates its own invocation. Route memory deliberately: host-local memory is for facts about this human, repository, or machine; Remembrance is for generalized lessons another approved organization agent would otherwise rediscover. A local-memory write does not satisfy organization-shared capture. Before finishing any reusable task, self-check for a missed query. If you catch your own mistake, the user catches one, CI/deploy fails, a security issue appears, or you fix a release/versioning miss, submit a failure_report remembrance even if no skill was used; raw MCP clients have no plugin Stop hook to remind you later. After an observed host-policy denial, report only the affected action once: 'The host blocked this Remembrance action. Do not treat it as submitted. Earlier successful actions are unaffected; querying remains available.' Do not retry the blocked content through another transport or claim submission. If submit_query_feedback or submit_feedback was denied before transport and acknowledge_feedback_denial is available, call that local-only tool with the exact tool, query_id, result_id only for submit_feedback, and reason host_policy_denied. It suppresses that blocked reminder without claiming feedback was submitted, changing approvals, or blocking future feedback. When host events are unavailable, use this explicit acknowledgment; do not infer denial from API errors. Do not repeat warnings already reported. Attach evidence (reproduction detail, artifact hashes, or an attestation); evidence-less public reports wait in unverified intake until corroborated. Redact secrets, private URLs, credentials, raw logs, and proprietary content; submit summaries and hashes, not raw traces.";
+var REMEMBRANCE_MCP_SERVER_INSTRUCTIONS = MCP_CORE_INSTRUCTIONS + MCP_DETAILS_HEADING + "Before claiming that Remembrance is anonymous, unconfigured, partially active, or missing an organization key, call run_connection_doctor for the transport you will actually use. It performs a safe catalog read and returns exact bounded remediation without submitting content. Use get_connection_status only when you need the underlying transport and lifecycle fields. An unset REMEMBRANCE_API_KEY does not prove that a local plugin is anonymous because local hooks and bundled MCP may read ~/.config/remembrance/config.json. Conversely, hosted MCP cannot read that local file. Anonymous curl or browser probes describe only those requests, not plugin authentication. Never print or request the raw key. When the user explicitly names an authorized Remembrance skill or supplies a remembrance://skills/{slug} URI, resolve ambiguous names with list_skills using its normalized slug-prefix filter, then call invoke_skill with an exact returned slug. Never guess a slug. list_skills is catalog resolution, not relevance search; use query_skills when the user wants relevant candidates rather than a known selection. invoke_skill rechecks authorization and organization policy, resolves the current reviewed version, and returns the only full instruction body. Catalog listings and MCP resource reads are lightweight handles, not skill use. Do not run query_skills merely to rediscover that explicit selection, and do not submit query-fit feedback for it. After meaningful direct use, follow the returned task-outcome and post-use feedback instructions once. BEFORE non-trivial service/API/tool/library/workflow/UI/review/test/security/deployment work, call query_skills to reuse proven skills and resources instead of rediscovering them. A local repository change still qualifies when it involves a reusable workflow or lesson; skip only genuinely trivial throwaway edits and one-off facts. For short follow-ups such as 'fix these issues', 'continue', or 'try again', infer the concrete task, domain, and constraints from the full conversation and still call query_skills; do not wait for the current prompt to repeat trigger keywords. Treat match_tier as a decision aid, then inspect why_matched and applicability before opening a result. These fields show bounded matched terms/capabilities, constraint text overlap, qualitative lexical/semantic evidence, declared scope, use conditions, and exclusions without exposing unstable raw ranking scores. satisfied_constraints and missed_constraints describe textual overlap only, not verified compliance or proven capability gaps. Discard an unlikely or irrelevant corner-case result and report fit: poor; do not force its use. For a remaining high match, call get_skill or get_resource before custom work and pass the returned query_id/result_id so the surfaced-to-fetch funnel closes; possible and exploratory matches are optional. The response also includes approximate context tokens, verified uses, risk, tags, permissions, dependencies, and contraindications so you can weigh the detour safely. Honor query_skills.skill_access on every response. When policy is org_only, use only returned organization skills and never substitute bundled or live public skill references; if an organization key is configured and the query is unavailable, fail closed because the policy cannot be confirmed. AFTER query_skills, call submit_query_feedback once with one complete set of explicit good/partial/poor judgments using the returned query_id and result_id values; leave unrated results neutral, and remember that a poor query match is not the same as a globally bad skill. Reuse the same organization or anonymous auth scope as the query. AFTER you actually use a skill or resource, close the post-use loop with submit_feedback (useful true/false plus a one-line lesson and the originating query_id/result_id; it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable. If nothing fit and you built a new workflow, use propose_private_skill for an organization-private candidate. With an organization key, propose_skill_idea also remains organization-private. Never remove, suppress, or bypass that key to force a public submission; submit privately, then use the reviewed public-propagation flow when the organization chooses to share it. When delegating, pass the selected slug, exact version, query_id, and result_id to the subagent; it should invoke/fetch that result or run its own full-context query. The parent reports the terminal outcome unless the subagent creates its own invocation. Route memory deliberately: host-local memory is for facts about this human, repository, or machine; Remembrance is for generalized lessons another approved organization agent would otherwise rediscover. A local-memory write does not satisfy organization-shared capture. Before finishing any reusable task, self-check for a missed query. If you catch your own mistake, the user catches one, CI/deploy fails, a security issue appears, or you fix a release/versioning miss, submit a failure_report remembrance even if no skill was used; raw MCP clients have no plugin Stop hook to remind you later. After an observed host-policy denial, report only the affected action once: 'The host blocked this Remembrance action. Do not treat it as submitted. Earlier successful actions are unaffected; querying remains available.' Do not retry the blocked content through another transport or claim submission. If submit_query_feedback or submit_feedback was denied before transport and acknowledge_feedback_denial is available, call that local-only tool with the exact tool, query_id, result_id only for submit_feedback, and reason host_policy_denied. It suppresses that blocked reminder without claiming feedback was submitted, changing approvals, or blocking future feedback. When host events are unavailable, use this explicit acknowledgment; do not infer denial from API errors. Do not repeat warnings already reported. Attach evidence (reproduction detail, artifact hashes, or an attestation); evidence-less public reports wait in unverified intake until corroborated. Redact secrets, private URLs, credentials, raw logs, and proprietary content; submit summaries and hashes, not raw traces. Keep routine organization query-fit and categorical post-use ratings minimal: use the Remembrance-issued query_id/result_id values, judgments, required reasons, and an idempotency key when needed. Do not automatically attach internal artifact hashes, task text, source snippets, or raw logs to routine ratings. Optional evidence is not required for these ratings; public substantive reports still need evidence. Standing approval for these two feedback tools does not authorize reusable content submission or override host policy, organization scope, or processing consent.";
 var LEGACY_POST_QUERY_GUIDANCE = "AFTER query_skills, call submit_query_feedback once with one complete set of explicit good/partial/poor judgments using the returned query_id and result_id values; leave unrated results neutral, and remember that a poor query match is not the same as a globally bad skill. Reuse the same organization or anonymous auth scope as the query. AFTER you actually use a skill or resource, close the post-use loop with submit_feedback (useful true/false plus a one-line lesson and the originating query_id/result_id; it returns a ready submit_remembrance payload), then submit_remembrance if the lesson is reusable. If nothing fit and you built a new workflow, use propose_private_skill for an organization-private candidate. With an organization key, propose_skill_idea also remains organization-private. Never remove, suppress, or bypass that key to force a public submission; submit privately, then use the reviewed public-propagation flow when the organization chooses to share it. ";
 var PRIVATE_CAPTURE_POST_QUERY_GUIDANCE = "AFTER query_skills, call submit_query_feedback once with one complete set of explicit good/partial/poor judgments using the returned query_id and result_id values; leave unrated results neutral, and remember that a poor query match is not the same as a globally bad skill. Reuse the same organization scope as the query. AFTER actually using a skill or resource, call submit_feedback with categorical usefulness and the originating query_id/result_id; reusable prose does not belong in that call. Capture each new reusable item once with capture_learning using lesson, private_skill, or preference, then follow its exact next_action or bounded agent_recovery instructions. Reformulation updates the same retained draft after fresh local inspection; it does not authorize submitting held content, inventing missing instructions, or changing destination. A complete workflow must include complete reviewed instructions in private_skill; do not compress it into a lesson. Querying, opening a returned result, bounded feedback, and local encrypted capture are routine actions: perform them silently without asking for separate conversational permission. Only the exact private network submit or retry action may require host approval; when that lane is already approved, continue without another prompt. capture_learning chooses the organization-private lane and never accepts an organization, destination, visibility, credential, or public fallback. Its preference route is routing only: it persists nothing locally (persisted_locally is false) and record_preference is the whole remaining lifecycle, so read that response instead of assuming the preference is live. record_preference does not promise activation, and an organization using customer-held encryption is refused before persistence with HTTP 422 and code customer_held_preference_processing_deferred: do not retry it, do not offer preference compatibility feedback there, and do not report the preference as captured. ";
 var LEGACY_FINISH_GUIDANCE = "Before finishing any reusable task, self-check for a missed query. If you catch your own mistake, the user catches one, CI/deploy fails, a security issue appears, or you fix a release/versioning miss, submit a failure_report remembrance even if no skill was used; raw MCP clients have no plugin Stop hook to remind you later. ";
@@ -23828,7 +23828,7 @@ var seedSkills = [
     summary: "Operational setup and troubleshooting workflow for Remembrance across Claude Code, Codex, OpenClaw, Cursor, Gemini, MCP, REST, skill-only installs, enterprise keys, and local agent identity.",
     status: "active",
     visibility: "public",
-    version: "0.1.37",
+    version: "0.1.38",
     domains: ["agent-skills", "mcp", "resource-discovery"],
     tags: [
       "remembrance",
@@ -23879,7 +23879,7 @@ var seedSkills = [
         "gemini",
         "rest"
       ],
-      version: "0.1.37",
+      version: "0.1.38",
       status: "active",
       visibility: "public",
       providers: ["codex", "claude", "cursor", "openclaw", "generic"],
@@ -24084,6 +24084,51 @@ reusing an existing valid trust decision. Changed hook definitions
 show the same review screen again; never use the automation-only trust bypass
 for normal installation. Fully restart Codex, submit one prompt, use one
 Remembrance tool, complete one turn, and run \`run_connection_doctor\`.
+
+### Optional unattended routine feedback in Codex
+
+After the user explicitly opts in, add only these two tool overrides to the
+user-level \`~/.codex/config.toml\`. This approval persists across future
+sessions on this installation until removed; installation alone does not grant
+it. Merge with existing tables rather than duplicating them:
+
+~~~toml
+[plugins."remembrance@remembrance".mcp_servers.remembrance.tools.submit_query_feedback]
+approval_mode = "approve"
+
+[plugins."remembrance@remembrance".mcp_servers.remembrance.tools.submit_feedback]
+approval_mode = "approve"
+~~~
+
+Use this opt-in for an organization-authenticated local plugin whose
+\`submit_feedback\` schema is categorical and rejects \`lesson\`. Query-fit
+ratings send Remembrance-issued query/result IDs, categorical verdicts, and
+required reasons; post-use ratings send the skill slug, those correlation IDs, usefulness/rating,
+and stable idempotency. Keep optional notes and evidence out of routine
+ratings: do not automatically attach internal receipt hashes, task prose,
+source content, raw logs, or private URLs. Public substantive reports retain
+their separate evidence requirements; reusable private lessons use
+\`capture_learning\` and its exact returned action.
+
+These are real writes, not read-only diagnostics. Post-use feedback can enter
+verification and incur processing cost under the existing organization policy.
+The two overrides do not approve private lesson/skill submission, publishing,
+deletion, reset, preference changes, or other tools. They do not widen the
+server's enabled tool set or override managed policy, guardian decisions,
+network restrictions, or organization processing grants. Do not set the whole
+server's approval default to \`approve\` for this purpose.
+
+Tool overrides persist when authentication or schemas change. Remove or
+re-review both approvals before switching to anonymous or hosted transport,
+enabling legacy broad writes, or changing the organization or destination.
+
+To revoke this opt-in, remove only these two tool-level approval entries;
+the inherited approval policy applies again. Reconnect the plugin or start a
+fresh Codex session if the current host does not reload config, then verify
+with a minimal eligible rating. A healthy connection doctor verifies the
+connection, not that host approval policy permits feedback. A denial means
+that rating was not submitted; acknowledge it locally and do not retry through
+another transport. See the [official installed-server policy guide](https://developers.openai.com/plugins/build/plugins#configure-installed-server-policy).
 
 OpenClaw:
 
@@ -28044,6 +28089,13 @@ var categoricalSubmitFeedbackMaxSerializedBytes = boundedWritePayloadCeilingWith
 categoricalSubmitFeedbackInputSchema[BOUNDED_JSON_BYTES_EXTENSION] = categoricalSubmitFeedbackMaxSerializedBytes;
 var categoricalSubmitFeedbackRuntime = freezeToolRuntime({
   ...canonicalSubmitFeedbackRuntime.definition,
+  description: `${canonicalSubmitFeedbackRuntime.definition.description} Routine organization feedback needs only the skill identity, categorical rating, and Remembrance-issued correlation IDs. Do not automatically attach internal artifact hashes or task prose; include optional richer evidence only when the current task authorizes it.`,
+  // This profile exists only for a configured organization's private feedback.
+  // It remains a networked write; only the public/legacy profile is open-world.
+  annotations: {
+    ...canonicalSubmitFeedbackRuntime.definition.annotations,
+    openWorldHint: false
+  },
   schemaProfile: toolSchemaProfileId(
     "submit_feedback",
     "input",
@@ -28436,18 +28488,32 @@ function inputSchemaFor(schema, name, maxSerializedBytes) {
   const resolved = definitions?.[name] ?? converted;
   normalizeBoundedWriteJsonSchema(resolved, name);
   if (name === "acknowledge_feedback_denial") {
+    const properties = resolved.properties;
     return {
       type: "object",
-      properties: resolved.properties,
+      properties,
       additionalProperties: false,
       oneOf: [
         {
-          properties: { tool: { const: "submit_query_feedback" } },
+          type: "object",
+          properties: {
+            tool: { const: "submit_query_feedback" },
+            query_id: properties.query_id,
+            reason: properties.reason
+          },
+          additionalProperties: false,
           required: ["tool", "query_id", "reason"],
           not: { required: ["result_id"] }
         },
         {
-          properties: { tool: { const: "submit_feedback" } },
+          type: "object",
+          properties: {
+            tool: { const: "submit_feedback" },
+            query_id: properties.query_id,
+            result_id: properties.result_id,
+            reason: properties.reason
+          },
+          additionalProperties: false,
           required: ["tool", "query_id", "result_id", "reason"]
         }
       ]
@@ -67273,7 +67339,7 @@ function inspectPrivateLearningOutbox2(input, dependencies = {}) {
 }
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.2.1" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.2.2" : "0.0.0-dev";
 var tools = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var nativeContextCliRequested = process.argv[2] === "--native-context";
