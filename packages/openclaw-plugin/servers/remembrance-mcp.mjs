@@ -12058,7 +12058,7 @@ function findIndependentlyEncodedPrivateKeyFrameProof(tokens, metrics) {
       const recoverableLength = recoverableProof?.length ?? null;
       const length = completeLength ?? recoverableLength;
       if (length === null) continue;
-      const continuation = recoverableProof?.basis === "factors" ? independentlyEncodedRsaCrtContinuationRanges(
+      const continuation2 = recoverableProof?.basis === "factors" ? independentlyEncodedRsaCrtContinuationRanges(
         tokens,
         frames,
         bytes,
@@ -12073,10 +12073,10 @@ function findIndependentlyEncodedPrivateKeyFrameProof(tokens, metrics) {
         bytes,
         encoding,
         frames,
-        continuationRanges: continuation.ranges,
+        continuationRanges: continuation2.ranges,
         start: frame.start,
         end: frame.start + length,
-        ambiguous: continuation.ambiguous,
+        ambiguous: continuation2.ambiguous,
         complete: completeLength !== null,
         factorBacked: recoverableProof?.basis === "factors",
         recoverable: completeLength === null
@@ -14713,19 +14713,19 @@ function recordCryptographicMatchedTerminalOwnership(tokens, assessment, metrics
 }
 function matchedTerminalSourcePieceRanges(tokens, assessment) {
   const sourceStart = assessment.sourcePieceRanges[0].start;
-  const continuation = assessment.rsaCrtContinuations.filter(
+  const continuation2 = assessment.rsaCrtContinuations.filter(
     (candidate) => candidate.start === sourceStart && candidate.status === "match" && candidate.mismatchAt === null
   ).sort((left, right) => right.matchedEnd - left.matchedEnd)[0];
-  if (!continuation) return [];
+  if (!continuation2) return [];
   const ranges = [];
   for (const [pieceIndex, token] of tokens.entries()) {
     const source = assessment.sourcePieceRanges[pieceIndex];
-    if (source.end <= continuation.matchedEnd) {
+    if (source.end <= continuation2.matchedEnd) {
       ranges.push({ pieceIndex, start: 0, end: token.value.length });
       continue;
     }
-    if (source.start >= continuation.matchedEnd) continue;
-    const matchedLength = continuation.matchedEnd - source.start;
+    if (source.start >= continuation2.matchedEnd) continue;
+    const matchedLength = continuation2.matchedEnd - source.start;
     if (matchedLength > 0 && /^=+$/u.test(token.value.slice(matchedLength))) {
       ranges.push({ pieceIndex, start: 0, end: token.value.length });
     }
@@ -15604,13 +15604,13 @@ function assessEncodedPieceSequence(pieces, textOf, metrics, requireBoundedRecov
         (completeRange) => completeRange.start < end && start < completeRange.end
       );
       const authenticatedFactorRange = scanned.rsaCrtContinuations.some(
-        (continuation) => {
-          const ownedEnd = Math.min(end, continuation.matchedEnd);
-          if (continuation.start >= ownedEnd || start >= continuation.matchedEnd) {
+        (continuation2) => {
+          const ownedEnd = Math.min(end, continuation2.matchedEnd);
+          if (continuation2.start >= ownedEnd || start >= continuation2.matchedEnd) {
             return false;
           }
-          if (position.start < continuation.factorEnd) return true;
-          return ownedEnd - Math.max(position.start, continuation.factorEnd) >= continuation.minimumAuthenticatedCharacters;
+          if (position.start < continuation2.factorEnd) return true;
+          return ownedEnd - Math.max(position.start, continuation2.factorEnd) >= continuation2.minimumAuthenticatedCharacters;
         }
       );
       if (!authoritativeComplete2 && !authenticatedFactorRange) continue;
@@ -15774,7 +15774,7 @@ function encodedAssessmentHasMatchedCrtContinuationThroughEnd(assessment, pieceC
   const sourceStart = assessment.sourcePieceRanges[0].start;
   const sourceEnd = assessment.sourcePieceRanges[pieceCount - 1].end;
   return assessment.rsaCrtContinuations.some(
-    (continuation) => continuation.start === sourceStart && continuation.status === "match" && continuation.mismatchAt === null && continuation.matchedEnd <= sourceEnd && sourceEnd - continuation.matchedEnd <= MAX_ADJACENT_ENCODED_PREFIX_CHARACTERS
+    (continuation2) => continuation2.start === sourceStart && continuation2.status === "match" && continuation2.mismatchAt === null && continuation2.matchedEnd <= sourceEnd && sourceEnd - continuation2.matchedEnd <= MAX_ADJACENT_ENCODED_PREFIX_CHARACTERS
   );
 }
 function encodedAssessmentOwnsEverySourcePiece(assessment, pieceCount) {
@@ -15796,7 +15796,7 @@ function encodedAssessmentOwnsEverySourcePiece(assessment, pieceCount) {
   }
   const terminalSource = assessment.sourcePieceRanges[terminalIndex];
   return assessment.rsaCrtContinuations.some(
-    (continuation) => continuation.status === "match" && continuation.mismatchAt === null && continuation.factorEnd < terminalSource.end && continuation.matchedEnd === terminalSource.end
+    (continuation2) => continuation2.status === "match" && continuation2.mismatchAt === null && continuation2.factorEnd < terminalSource.end && continuation2.matchedEnd === terminalSource.end
   );
 }
 function encodedAssessmentAllowsFactorOmission(assessment, pieceIndex) {
@@ -15807,11 +15807,11 @@ function encodedAssessmentAllowsFactorOmission(assessment, pieceIndex) {
   )) {
     return false;
   }
-  return assessment.rsaCrtContinuations.every((continuation) => {
-    if (piece.end <= continuation.start || piece.start >= continuation.end) {
+  return assessment.rsaCrtContinuations.every((continuation2) => {
+    if (piece.end <= continuation2.start || piece.start >= continuation2.end) {
       return true;
     }
-    return continuation.mismatchAt !== null && continuation.mismatchAt < piece.end && continuation.matchedEnd <= piece.start;
+    return continuation2.mismatchAt !== null && continuation2.mismatchAt < piece.end && continuation2.matchedEnd <= piece.start;
   });
 }
 function encodedAssessmentAllowsRecognizableFactorOmission(assessment, pieceIndex) {
@@ -15819,11 +15819,11 @@ function encodedAssessmentAllowsRecognizableFactorOmission(assessment, pieceInde
     return true;
   }
   const piece = assessment.sourcePieceRanges[pieceIndex];
-  return assessment.rsaCrtContinuations.every((continuation) => {
-    if (piece.end <= continuation.start || piece.start >= continuation.end) {
+  return assessment.rsaCrtContinuations.every((continuation2) => {
+    if (piece.end <= continuation2.start || piece.start >= continuation2.end) {
       return true;
     }
-    return continuation.factorEnd <= piece.start && (continuation.matchedEnd <= piece.start || continuation.mismatchAt !== null && continuation.mismatchAt < piece.end);
+    return continuation2.factorEnd <= piece.start && (continuation2.matchedEnd <= piece.start || continuation2.mismatchAt !== null && continuation2.mismatchAt < piece.end);
   });
 }
 function encodedAssessmentStartsAtSource(assessment) {
@@ -17368,7 +17368,7 @@ function scanEncodedPrivateKeyRanges(value, metrics, allowAdjacentPrefix = true,
           if (recoverableProof?.basis === "factors") {
             const sourceStart = offsets ? offsets[cursor] : cursor;
             const sourceEnd = offsets ? offsets[segment.end - 1] + 1 : segment.end;
-            const continuation = rsaPrivateKeyCrtContinuationConsistency(
+            const continuation2 = rsaPrivateKeyCrtContinuationConsistency(
               recoverableProof,
               text,
               cursor,
@@ -17385,9 +17385,9 @@ function scanEncodedPrivateKeyRanges(value, metrics, allowAdjacentPrefix = true,
               bitOffset
             );
             const sourceFactorEnd = offsets ? offsets[exactEnd - 1] + 1 : exactEnd;
-            const sourceMatchedEnd = offsets ? offsets[continuation.matchedEnd - 1] + 1 : continuation.matchedEnd;
+            const sourceMatchedEnd = offsets ? offsets[continuation2.matchedEnd - 1] + 1 : continuation2.matchedEnd;
             const minimumAuthenticatedCharacters = minimumRsaCrtContinuationSourceCharacters(framing);
-            const authenticatedMatchedEnd = continuation.matchedEnd - exactEnd >= minimumAuthenticatedCharacters ? continuation.matchedEnd : exactEnd;
+            const authenticatedMatchedEnd = continuation2.matchedEnd - exactEnd >= minimumAuthenticatedCharacters ? continuation2.matchedEnd : exactEnd;
             matchedFactorEnd = Math.max(exactEnd, authenticatedMatchedEnd);
             rsaCrtContinuations.push({
               start: sourceStart,
@@ -17395,8 +17395,8 @@ function scanEncodedPrivateKeyRanges(value, metrics, allowAdjacentPrefix = true,
               factorEnd: sourceFactorEnd,
               matchedEnd: sourceMatchedEnd,
               minimumAuthenticatedCharacters,
-              mismatchAt: continuation.mismatchAt === null ? null : offsets ? offsets[continuation.mismatchAt] : continuation.mismatchAt,
-              status: continuation.status
+              mismatchAt: continuation2.mismatchAt === null ? null : offsets ? offsets[continuation2.mismatchAt] : continuation2.mismatchAt,
+              status: continuation2.status
             });
           }
           const exactFactorEnd = recoverableProof?.basis === "factors" && recoverableLength !== null ? encodedPrivateKeyInteriorEnd(
@@ -21891,7 +21891,7 @@ function strictIndependentPrivateSourceRanges(scope, metrics, document) {
           );
         claims.push({ token: frame.token, ...range });
       }
-      const continuation = complete ? completeRsaPrivateKeyCopies(
+      const continuation2 = complete ? completeRsaPrivateKeyCopies(
         scope,
         frames,
         bytes,
@@ -21912,16 +21912,16 @@ function strictIndependentPrivateSourceRanges(scope, metrics, document) {
         tokenIndexes,
         metrics
       ) : completion;
-      if (!continuation) continue;
-      if (continuation.ambiguous || detachedRsaContinuationReadsSpent(metrics) > MAX_DETACHED_RSA_CONTINUATION_READS) {
+      if (!continuation2) continue;
+      if (continuation2.ambiguous || detachedRsaContinuationReadsSpent(metrics) > MAX_DETACHED_RSA_CONTINUATION_READS) {
         for (const frame of frames) {
           metrics.ownershipSteps += 1;
           claims.push(wholeTokenSourceRange(frame.token));
         }
-        claims.push(...continuation.closed);
-        if (continuation.ambiguous) continue;
+        claims.push(...continuation2.closed);
+        if (continuation2.ambiguous) continue;
       }
-      for (const range of continuation.ranges) {
+      for (const range of continuation2.ranges) {
         if (range.token === detached) continue;
         claims.push(range);
       }
@@ -23848,6 +23848,52 @@ ${geminiRule(tool)}`;
     })
   ].join("\n\n")
 });
+
+// ../core/src/private-skill-completion.ts
+var PRIVATE_SKILL_COMPLETION_VERSION = "private-skill-completion-v1";
+var opaqueId = external_exports.string().min(1).max(MAX_SHORT_TEXT_LENGTH);
+var privateSkillCompletionRevisionIdSchema = external_exports.string().regex(/^pscr_[a-f0-9]{18}$/u);
+var privateSkillCompletionRequestIdSchema = external_exports.string().regex(/^pscc_[a-f0-9]{32}$/u);
+var privateSkillCompletionStatusRequestSchema = external_exports.object({
+  contract_version: external_exports.literal(PRIVATE_SKILL_COMPLETION_VERSION),
+  public_id: opaqueId
+}).strict();
+var privateSkillCompletionSourceRequestSchema = privateSkillCompletionStatusRequestSchema.extend({
+  revision_id: privateSkillCompletionRevisionIdSchema
+}).strict();
+var privateSkillCompletionApprovedSourceSchema = privateSkillIdeaRequestSchema.omit({ agent: true, idempotency_key: true, enterprise_encryption: true }).strict();
+var privateSkillCompletionSourceResponseSchema = privateSkillCompletionSourceRequestSchema.extend({
+  capture: privateSkillCompletionApprovedSourceSchema.describe("Current approved submission; proposed_skill_md may be null or absent. New revisions still require a complete skill body.")
+}).strict();
+var privateSkillCompletionRequestStatusSchema = privateSkillCompletionStatusRequestSchema.extend({
+  request_id: privateSkillCompletionRequestIdSchema
+}).strict();
+var continuation = privateSkillCompletionRequestStatusSchema.extend({
+  expected: external_exports.object({
+    completion_id: opaqueId,
+    revision_id: privateSkillCompletionRevisionIdSchema,
+    version: external_exports.number().int().nonnegative()
+  }).strict()
+});
+var revisedCapture = privateSkillCaptureSchema.superRefine((capture2, context) => {
+  const pending = [{ value: capture2.proposed_metadata, path: ["proposed_metadata"] }];
+  while (pending.length) {
+    const { value, path } = pending.pop();
+    if (!value || typeof value !== "object") continue;
+    for (const [key, entry] of Object.entries(value)) {
+      if (key.startsWith("_remembrance_")) {
+        context.addIssue({ code: "custom", path: [...path, key], message: "Server provenance fields are reserved." });
+        return;
+      }
+      pending.push({ value: entry, path: [...path, key] });
+    }
+  }
+});
+var privateSkillCompletionContinuationSchema = external_exports.discriminatedUnion("operation", [
+  continuation.extend({ operation: external_exports.literal("declare_intent"), intent: external_exports.literal("skill_output") }).strict(),
+  continuation.extend({ operation: external_exports.literal("revise"), capture: revisedCapture }).strict(),
+  continuation.extend({ operation: external_exports.literal("resume"), mode: external_exports.literal("changed_revision"), deadline_at: external_exports.number().int().positive() }).strict()
+]);
 
 // ../core/src/seed.ts
 var siteUrl = "https://remembrance.dev";
@@ -26474,6 +26520,34 @@ var verifierOutputSchema = external_exports.object({
   topology_assessment: skillTopologyAssessmentSchema.nullable().default(null).catch(null)
 });
 
+// src/private-skill-protection-recovery.ts
+var PRIVATE_SKILL_CONFIGURATION_REFUSAL = "private_admission_configuration_error";
+var PRIVATE_SKILL_PERMANENT_SERVICE_REFUSAL = "private_skill_permanent_service_refusal";
+function isPrivateSkillConfigurationHold(draft) {
+  return draft.state === "held_validation" && draft.last_error_code === PRIVATE_SKILL_CONFIGURATION_REFUSAL;
+}
+function privateSkillPermanentRefusalGuidance(draft) {
+  if (isPrivateSkillConfigurationHold(draft)) {
+    return {
+      next_action: null,
+      action_required: "Private protection configuration refused this submission. Keep the exact encrypted draft. Ask the organization administrator to correct the selected protection configuration; customer-held submissions require a valid customer-encrypted envelope. Do not change key ownership, protection mode, destination, or consent automatically. Only after an authorized correction, explicitly retry this same draft once with retry_private_skill_candidate. An unchanged refusal remains held; no replacement or acceptance is claimed.",
+      recovery_after_correction: {
+        automatic_retry: false,
+        condition: "organization_administrator_corrected_private_protection_configuration",
+        tool: "retry_private_skill_candidate",
+        arguments: { draft_id: draft.draft_id }
+      }
+    };
+  }
+  if (draft.state === "held_validation" && draft.last_error_code === PRIVATE_SKILL_PERMANENT_SERVICE_REFUSAL) {
+    return {
+      next_action: null,
+      action_required: "The private service explicitly refused unchanged retries. Keep the encrypted draft and inspect this retained hold. No automatic retry, alternate transport, replacement, or successful recovery is authorized by this unknown refusal."
+    };
+  }
+  return {};
+}
+
 // src/server.ts
 import { existsSync as existsSync6 } from "node:fs";
 import { mkdir as mkdir5, writeFile as writeFile2 } from "node:fs/promises";
@@ -28391,7 +28465,7 @@ var declaredToolDefinitions = [
   ),
   localNetworkTool(
     "retry_private_skill_candidate",
-    "Retry one retained private-skill draft through the same private_skill approval lane as submit_private_skill_candidate. Network access is allowed only for authorization-pending or due transient retry states, and for a draft an older server refused only for length: that waits out any delay the server set, then reads its signed capability and resends the exact draft only if it admits it. A fresh ready draft is rejected locally. It never switches transport or visibility.",
+    "Retry one retained private-skill draft through the same private_skill approval lane as submit_private_skill_candidate. Network access is allowed only for authorization-pending or due transient retry states, an explicit same-draft retry after an administrator corrected a private-protection configuration hold, and for a draft an older server refused only for length: that waits out any delay the server set, then reads its signed capability and resends the exact draft only if it admits it. Configuration holds never schedule automatic retries; an unchanged refusal remains held. A fresh ready draft is rejected locally. It never switches transport, visibility, key ownership, or protection mode.",
     "retry_private_skill_candidate",
     privateSkillDraftReferenceSchema,
     "content_write"
@@ -62461,7 +62535,8 @@ async function reinspectPrivateSkillSubmissionCandidate(draftId, options = {}) {
       const resumingReinspectionHold = isPrivateSkillSubmissionReinspectionHold(current);
       const resumingDestinationHold = isPrivateSkillDestinationHold(current) && !isPrivateSkillDestinationRecoveryBlocked(current, destination);
       const resumingResolution = current.delivery_resolution !== null;
-      const resumingHold = resumingReinspectionHold || resumingDestinationHold || resumingResolution;
+      const resumingConfigurationHold = options.resumeConfigurationHold === true && isPrivateSkillConfigurationHold(current);
+      const resumingHold = resumingReinspectionHold || resumingDestinationHold || resumingResolution || resumingConfigurationHold;
       if (resumingReinspectionHold && !resumingResolution && current.inspection?.inspector_digest === PRIVATE_LEARNING_INSPECTOR_DIGEST && current.inspection.outcome !== "unchanged" && current.inspection.outcome !== "redacted") {
         return Object.freeze({ status: "held", draft: current });
       }
@@ -65328,6 +65403,7 @@ async function inspectPrivateLearningOutbox(input, persistence) {
     status: skillResult.value.recovery_items.length > 0 ? "recovery_required" : "ok",
     drafts: skillResult.value.drafts.map((draft) => ({
       ...draft,
+      ...privateSkillPermanentRefusalGuidance(draft),
       recovery_context: { status: "context_unavailable" },
       agent_recovery: privateSkillExactInspectionRecovery(draft)
     })),
@@ -65633,6 +65709,7 @@ function privateSkillSelectedDraftResult(draft) {
       draft,
       PRIVATE_LEARNING_CAPTURE_VERSION
     ),
+    ...privateSkillPermanentRefusalGuidance(draft),
     recovery_context: recoveryContext,
     native_recovery_context: nativeContext ? {
       ...nativeContext,
@@ -67868,7 +67945,7 @@ function inspectPrivateLearningOutbox2(input, dependencies = {}) {
 }
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.2.3" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.2.4" : "0.0.0-dev";
 var tools2 = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var nativeContextCliRequested = process.argv[2] === "--native-context";
@@ -68570,6 +68647,10 @@ async function deliverPrivateSkillDraft(draftId, access, mode, transport) {
     });
   }
   let draft = await readPrivateSkillDraft(draftId);
+  const resumingConfigurationHold = mode === "retry" && isPrivateSkillConfigurationHold(draft);
+  if (isPrivateSkillConfigurationHold(draft) && !resumingConfigurationHold) {
+    return privateSkillDraftActionResult2(draft, { status: "not_submitted" });
+  }
   const destination = privateSkillDestinationForAccess(access);
   const resumingReinspectionHold = isPrivateSkillSubmissionReinspectionHold(draft);
   const resumingDestinationHold = isPrivateSkillDestinationHold(draft) && !isPrivateSkillDestinationRecoveryBlocked(draft, destination);
@@ -68582,10 +68663,10 @@ async function deliverPrivateSkillDraft(draftId, access, mode, transport) {
       next_action: null
     });
   }
-  const resumingLocalHold = resumingReinspectionHold || resumingDestinationHold || resumingResolution;
+  const resumingLocalHold = resumingReinspectionHold || resumingDestinationHold || resumingResolution || resumingConfigurationHold;
   const deferredDestinationProof = draft.state === "retry_scheduled" && draft.last_error_code === "private_skill_destination_audience_proof_unavailable";
   const awaitingDestinationCapability = isPrivateSkillDestinationCapabilityHold(draft) && !resumingResolution;
-  if ((mode === "retry" && !resumingResolution || deferredDestinationProof || resumingResolution && draft.state === "retry_scheduled") && !resumingReinspectionHold && !resumingDestinationHold && !awaitingDestinationCapability) {
+  if ((mode === "retry" && !resumingResolution || deferredDestinationProof || resumingResolution && draft.state === "retry_scheduled") && !resumingReinspectionHold && !resumingDestinationHold && !resumingConfigurationHold && !awaitingDestinationCapability) {
     const retryGate = privateSkillRetryGate(draft);
     if (retryGate) {
       return privateSkillDraftActionResult2(draft, retryGate);
@@ -68614,7 +68695,8 @@ async function deliverPrivateSkillDraft(draftId, access, mode, transport) {
     });
   }
   const reinspection = await reinspectPrivateSkillSubmissionCandidate(draftId, {
-    destination
+    destination,
+    resumeConfigurationHold: resumingConfigurationHold
   });
   draft = reinspection.draft;
   if (reinspection.status === "held") {
@@ -68927,6 +69009,16 @@ async function holdPrivateSkillDestination(draft, errorCode) {
 async function persistPrivateSkillFailure(draft, result, destinationBodyLimit) {
   return updatePrivateSkillDraft(draft.draft_id, (current) => {
     const attempts = current.attempts;
+    const failure = remembranceMcpToolFailure(result, "propose_private_skill");
+    if (failure && failure.http_status >= 500 && failure.http_status <= 599 && !failure.retryable) {
+      return {
+        ...current,
+        state: "held_validation",
+        next_retry_at: null,
+        last_error_code: failure.code === PRIVATE_SKILL_CONFIGURATION_REFUSAL ? PRIVATE_SKILL_CONFIGURATION_REFUSAL : PRIVATE_SKILL_PERMANENT_SERVICE_REFUSAL,
+        updated_at: (/* @__PURE__ */ new Date()).toISOString()
+      };
+    }
     if (destinationBodyLimit !== null) {
       const nextRetryAt = privateSkillRetryAt(attempts);
       return {
@@ -69255,7 +69347,8 @@ function privateSkillDraftActionResult2(draft, extra = {}) {
     last_error_code: draft.last_error_code,
     retained_locally: true,
     next_action: privateSkillDraftNextAction(draft),
-    ...extra
+    ...extra,
+    ...privateSkillPermanentRefusalGuidance(draft)
   };
 }
 function privateSkillDraftNextAction(draft) {
