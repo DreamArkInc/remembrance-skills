@@ -44,13 +44,14 @@ independent verifier, and the quality gate run as a hosted service at
 
 ## Private lesson autopilot for organizations
 
-Organization installs capture routine failures, corrections, and reusable
-workflow lessons through a narrow two-stage path. The local
-`prepare_private_lesson_candidate` tool canonicalizes and redacts in memory and
-stores only an encrypted post-redaction draft. The separately host-visible
-`submit_private_lesson_candidate` action sends those exact bytes only to the
-authenticated organization's private verifier queue. It cannot create or
-automatically propagate public content.
+Organization installs capture routine failures, corrections, reusable workflow
+lessons, and complete private skills through a narrow two-stage path. The local
+`capture_learning` tool canonicalizes and redacts a lesson in memory, or
+safety-screens a complete skill, and stores only an encrypted draft. The
+separately host-visible `submit_private_lesson_candidate` and
+`submit_private_skill_candidate` actions, and their retry actions, send that
+draft only to the authenticated organization's private verifier queue. They
+cannot create or automatically propagate public content.
 
 Unresolved and terminal drafts never expire or auto-delete. Retryable failures
 resume during later lifecycle events; authentication, validation, policy, and
@@ -58,9 +59,10 @@ host-denial states stay held. After a signed submission receipt is verified,
 the encrypted lesson content is removed immediately; its content-free
 completion marker is automatically deleted after 14 days. Admins enable or
 pause the lane under **Dashboard > Settings > Private lesson automation**.
-Persist host approval only for the exact submit action, not every Remembrance
-write tool. `run_connection_doctor` reports policy, signing, encryption,
-outbox, and action readiness without exposing lesson content or local paths.
+Persist host approval only for the four exact submit and retry actions, as in
+the Highly Recommended step below, not every Remembrance write tool.
+`run_connection_doctor` reports policy, signing, encryption, outbox, and action
+readiness without exposing lesson content or local paths.
 
 ## Install
 
@@ -69,6 +71,57 @@ the skill, register tools, query relevant work (including short contextual
 follow-ups), and recover missed queries or contributions at completion. MCP,
 REST, and skill-only paths use the same full-conversation contract but rely on
 the agent to self-check because they have no native completion hook.
+
+### Highly Recommended: approve private submissions
+
+For organizations that use Remembrance with a private organization key, this
+step is required for Remembrance to do its job fully. Without it, on hosts that
+ask before these tools, every private lesson or skill submission stops for a
+manual approval, and unattended or headless runs deny it. Public-only use,
+without an organization key, does not need it; skill-only and REST installs
+have no MCP tools to approve.
+
+After installing below, persist your host's approval for exactly
+`submit_private_lesson_candidate`, `retry_private_lesson_candidate`,
+`submit_private_skill_candidate`, and `retry_private_skill_candidate` (hosted
+MCP exposes only `submit_private_lesson_candidate`). Hosts that also ask before
+`capture_learning`, where every local private submission starts, need it
+approved too, as a local-only entry: it stays on this machine and sends
+nothing. Under managed Codex `writes` that is an optional administrator
+decision, because Auto-review then never sees the lesson content.
+Never pre-approve the `delete_private_*` tools, a whole server,
+`bypassPermissions`, Gemini CLI `trust: true` or `mcp.allowed`, or any global
+auto-approve.
+
+- **Claude Code plugin:** add the four tools and `capture_learning` to
+  `permissions.allow` in `~/.claude/settings.json` as
+  `mcp__plugin_remembrance_remembrance__<tool>`, or `mcp__remembrance__<tool>`
+  for a local server registered as `remembrance` (including `capture_learning`),
+  and only `mcp__remembrance__submit_private_lesson_candidate` on hosted MCP.
+- **Codex plugin:** one
+  `[plugins."remembrance@remembrance".mcp_servers.remembrance.tools.<tool>]`
+  table per tool with `approval_mode = "approve"` in `~/.codex/config.toml`;
+  `approve` also skips Auto-review, so in a managed organization add them only
+  with your administrator.
+- **Cursor:** `remembrance:<tool>` entries, including `capture_learning`,
+  merged into the `mcpAllowlist` of `~/.cursor/permissions.json` without
+  dropping its other entries or keys.
+- **VS Code:** **Chat: Manage Tool Approval**, tick only the four tools and
+  `capture_learning`, and turn off **Configure for this workspace only**.
+- **OpenCode:** `"remembrance_<tool>": "allow"` entries in `permission`,
+  including `capture_learning`, placed after any broader `"*"` or
+  `"remembrance_*"` rule because the last matching rule wins.
+- **OpenClaw:** choose allow-always once for the lesson lane and once for the
+  skill lane.
+- **Gemini CLI:** one `[[rule]]` per tool, including `capture_learning`, in
+  `~/.gemini/policies/remembrance.toml`.
+
+The exact snippets are in
+[`remembrance-setup.md`](skills/remembrancer/references/remembrance-setup.md#highly-recommended-approve-private-submissions)
+and each plugin README. Check the step by behavior: neither the capture nor
+its private submission prompts (where the organization leaves the capture to
+Auto-review or a person, only the capture is reviewed); `run_connection_doctor`
+cannot see a persisted approval.
 
 ### Claude Code — plugin (skill + tools + auto-query hook)
 
@@ -130,11 +183,13 @@ Install from **Cursor > Customize > Plugins** or from your organization's Cursor
 marketplace. Search for **Remembrance** after your marketplace has imported this
 repo's `packages/cursor-plugin` entry.
 
-For local development before marketplace approval, symlink the plugin package:
+For local development before marketplace approval, copy the plugin package
+into its own folder (Cursor skips a symbolic link to a plugin elsewhere on
+disk), then restart Cursor or run **Developer: Reload Window**:
 
 ```bash
-mkdir -p ~/.cursor/plugins/local
-ln -s /abs/path/to/remembrance/packages/cursor-plugin ~/.cursor/plugins/local/remembrance
+mkdir -p ~/.cursor/plugins/local/remembrance
+cp -R /abs/path/to/remembrance/packages/cursor-plugin/. ~/.cursor/plugins/local/remembrance/
 ```
 
 The plugin registers the Remembrance MCP server, installs the Remembrancer skill,

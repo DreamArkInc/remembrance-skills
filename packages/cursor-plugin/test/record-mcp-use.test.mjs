@@ -1,7 +1,16 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { handleStop } from "../scripts/contribute-on-stop.mjs";
 import {
   pendingCompletionRecoveryInstruction,
   readCompletionObligations,
@@ -642,5 +651,120 @@ describe("Cursor afterMCPExecution hook", () => {
         { CURSOR_TRANSCRIPT_PATH: "/tmp/cursor-transcript.json" },
       ),
     ).toBe("/tmp/cursor-transcript.json");
+  });
+
+  // Cursor lists pending actions only in a visible-mode Stop: after the host
+  // denies one exact private submit, that draft is parked and the stop asks
+  // only for the other one.
+  it("parks the denied private draft and a visible-mode stop lists only the rest", async () => {
+    const root = mkdtempSync(join(tmpdir(), "remembrance-cursor-denial-"));
+    try {
+      const env = {
+        XDG_STATE_HOME: join(root, "state"),
+        XDG_CONFIG_HOME: join(root, "config"),
+        REMEMBRANCE_USAGE_DIR: join(root, "usage"),
+        REMEMBRANCE_PLUGIN_ALERT_DIR: join(root, "alerts"),
+        REMEMBRANCE_API_KEY: "rk_synthetic_cursor_denial",
+        REMEMBRANCE_API_URL: "http://127.0.0.1:9",
+        REMEMBRANCE_API_KEY_ORIGIN: "http://127.0.0.1:9",
+        REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY: "1",
+      };
+      const outbox = join(env.XDG_STATE_HOME, "remembrance", "private-lessons");
+      mkdirSync(outbox, { recursive: true, mode: 0o700 });
+      chmodSync(outbox, 0o700);
+      const [denied, kept] = ["pld_cursor_denied", "pld_cursor_kept"];
+      const envelopes = [denied, kept].map((draftId) => {
+        const path = join(outbox, `${draftId}.lesson.json`);
+        writeFileSync(
+          path,
+          JSON.stringify({
+            version: "private-lesson-outbox-envelope-v1",
+            draft_id: draftId,
+            state: "ready",
+            hold_telemetry_status: "not_required",
+            next_retry_at: null,
+            updated_at: "2026-10-01T00:00:00.000Z",
+          }),
+          { mode: 0o600 },
+        );
+        return [path, readFileSync(path)];
+      });
+      const options = { env, recordHealth: vi.fn() };
+      for (const draftId of [denied, kept]) {
+        await handleMcpUse(
+          {
+            tool_name: "capture_learning",
+            conversation_id: "conv-denial",
+            tool_input: "{}",
+            result: {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    capture_route: "private_lesson",
+                    draft_id: draftId,
+                    state: "ready",
+                    next_action: {
+                      tool: "submit_private_lesson_candidate",
+                      arguments: { draft_id: draftId },
+                    },
+                  }),
+                },
+              ],
+            },
+          },
+          options,
+        );
+      }
+      expect(
+        await handleMcpUse(
+          {
+            tool_name: "submit_private_lesson_candidate",
+            conversation_id: "conv-denial",
+            tool_input: JSON.stringify({ draft_id: denied }),
+            error:
+              "Blocked by workspace data-export policy before reaching Remembrance.",
+          },
+          options,
+        ),
+      ).toMatchObject({ kind: "failed" });
+      const parked = (draftId) => {
+        const path = join(
+          env.XDG_STATE_HOME,
+          "remembrance",
+          "private-learning-lifecycle",
+          `${draftId}.parked.json`,
+        );
+        return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : null;
+      };
+      expect(parked(denied)).toMatchObject({ reason: "host_policy_denied" });
+      expect(parked(kept)).toBeNull();
+      const stopOptions = {
+        env,
+        readUseCount: () => 1,
+        readEligibilityCount: () => 0,
+        readPromptedCount: () => 0,
+        readHighMatch: () => null,
+        readDirectSelections: () => [],
+        writePromptedCount: vi.fn(),
+      };
+      // The host-policy alert is delivered first, then the pending actions.
+      expect(
+        handleStop({ conversation_id: "conv-denial", loop_count: 0 }, stopOptions),
+      ).toMatchObject({ allow: false, why: "host_policy_denial" });
+      const stop = handleStop(
+        { conversation_id: "conv-denial", loop_count: 0 },
+        stopOptions,
+      );
+      expect(stop).toMatchObject({ allow: false, why: "prompt_pending_obligations" });
+      const line = (draftId) =>
+        `call submit_private_lesson_candidate with draft_id ${draftId}`;
+      expect(stop.output.followup_message).toContain(line(kept));
+      expect(stop.output.followup_message).not.toContain(line(denied));
+      for (const [path, bytes] of envelopes)
+        expect(readFileSync(path)).toEqual(bytes);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

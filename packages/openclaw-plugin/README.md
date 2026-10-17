@@ -106,6 +106,53 @@ a verified update on their next successful Remembrance query. The API places a
 command-free notice first in the legacy contribution directive; only this
 installed plugin supplies the trusted local update commands.
 
+### Highly Recommended: approve private submissions
+
+For organizations that use Remembrance with a private organization key, this
+step is required for Remembrance to do its job fully. Without it, every private
+lesson or skill submission stops for a manual approval, and unattended or
+headless runs deny it. Public-only use, without an organization key, does not
+need it.
+
+In native runs OpenClaw documents no prompt of its own for MCP tools; this
+plugin asks before each private submission. To persist approval, answer
+**allow-always** once for each lane when it asks to "Submit private Remembrance
+lesson" or "Submit private Remembrance skill", for example with
+`/approve <id> allow-always` in chat or
+`openclaw approvals resolve <id> allow-always`. One decision covers that lane's
+submit and retry actions (`submit_private_lesson_candidate` with
+`retry_private_lesson_candidate`, and `submit_private_skill_candidate` with
+`retry_private_skill_candidate`), and the plugin saves it in its config.
+
+To pre-set both lanes instead, Remembrance for OpenClaw 0.2.3 or later accepts
+this in `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "remembrance": {
+        "config": {
+          "privateLearningEgressApprovals": {
+            "private_lesson": true,
+            "private_skill": true
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Check the installed version first, for example with
+`openclaw plugins inspect remembrance`. Earlier versions reject the key: the
+Gateway then refuses to start until it is removed, and those versions cannot
+keep an allow-always decision across a restart either. On older or
+mixed-version installs, use allow-always. Never approve the confirmed-delete
+tools. Check the step by behavior: capture one disposable private lesson and
+confirm that its submission completes without a prompt. `run_connection_doctor`
+cannot see a persisted approval.
+
 ### Private repository contributions
 
 After the organization approves Remembrance as a destination, a current local
@@ -465,15 +512,29 @@ the same approved action; that telemetry cannot enter verification, review,
 topology, or skill materialization. Disable it with
 `REMEMBRANCE_HEALTH_REPORTING=0`.
 
-Expose the submit and retry tools for both private lanes through
-`tools.allow`/`tools.alsoAllow`, then use the plugin approval flow. Choosing
+The `coding` and `messaging` tool profiles already expose the MCP tools through
+`bundle-mcp`, so the submit and retry tools need no `tools.allow` or
+`tools.alsoAllow` entry (OpenClaw rejects setting both in one scope); a
+sandboxed session needs `bundle-mcp` in `tools.sandbox.tools.alsoAllow`. Then
+use the plugin approval flow from the Highly Recommended step above. Choosing
 `allow-always` persists one semantic lane decision: lesson submit/retry share
 one decision, and skill submit/retry share another. Existing exact-submit
 approvals upgrade lazily. It does not trust other Remembrance or host tools.
 Capture, inspection, and confirmed deletion remain zero-network; a fresh-draft
 retry stops before network access. `submit_query_feedback` remains an
 independent bounded query-fit action. A host denial is never retried through
-another transport.
+another transport: the denied call's own params park only that draft, as a
+decline does. A parked draft returns as a user decision 1, 7 and 30 days later
+(each wait counted from the park or the last showing), whether or not the host
+allows its lane. A client update, and for a host-denied draft the host letting
+that lane through again, makes the next return come right away instead (or
+adds one more, if all three were shown). It is sent only through its exact
+submit or retry action after the user agrees. Drafts no active session is
+handling are offered as a user decision too, until the user delivers, keeps or
+deletes them; a kept draft is parked. These decisions go to the next
+main-session prompt on the machine, at most once a day, including unattended
+runs; the drafts stay listed by `inspect_private_learning_outbox`, and none is
+sent or deleted without the user.
 
 When a person explicitly names a Remembrance skill or supplies a
 `remembrance://skills/{slug}` URI, OpenClaw resolves ambiguous names with

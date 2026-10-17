@@ -38,6 +38,19 @@ as their hooks from `~/.config/remembrance/config.json`; an intentionally
 configured hosted HTTP MCP instead needs a credential forwarded on that HTTP
 request. See `references/remembrance-setup.md` for exact host steps.
 
+With an organization key, raise "Highly Recommended: approve private
+submissions" from `references/remembrance-setup.md` only after the host, in
+this session, denied a private submit or retry call or stopped it to ask for
+approval, or did the same to a `capture_learning` call on a host whose step
+approves `capture_learning`. Codex is not such a host: under its managed
+`writes` mode a reviewed capture is expected, and approving `capture_learning`
+there is an optional administrator decision, never a required step. Tell the
+user once per such event that the step is required for Remembrance to work
+fully with an organization key; do not raise it at other times or in later
+sessions without a new event. Never change host approval settings or answer
+the host's approval yourself; edit a settings file only after the user asks
+you to.
+
 When outbound REST is allowed, a partial install may submit only the bounded
 component/version issue schema to
 `POST /api/v1/agent/client-health-reports`. Never attach prompts, repository

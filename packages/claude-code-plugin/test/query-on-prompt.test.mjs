@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -18,6 +19,10 @@ import {
   redactPrompt,
   shouldQueryPrompt,
 } from "../scripts/query-on-prompt.mjs";
+import {
+  agentLedgerIdFor,
+  observeSuccessfulCompletionTool,
+} from "../scripts/hook-core.mjs";
 import { KEYWORDS_ONLY } from "../../codex-plugin/test/fixtures/task-shape.mjs";
 import {
   HOST_NOTIFICATION_SHAPES,
@@ -1061,5 +1066,102 @@ describe("Remembrance Claude Code prompt hook", () => {
     expect(domainFor("Help me think through an unrelated idea")).toBe(
       "agent-skills",
     );
+  });
+
+  it("acknowledges both user-decision notices on their first delivery in a context over its budget", async () => {
+    const env = testEnv({
+      REMEMBRANCE_API_KEY: "rk_synthetic_prompt_notices",
+      REMEMBRANCE_API_URL: "http://127.0.0.1:9",
+      REMEMBRANCE_API_KEY_ORIGIN: "http://127.0.0.1:9",
+    });
+    const state = join(env.XDG_STATE_HOME, "remembrance");
+    const outbox = join(state, "private-lessons");
+    mkdirSync(outbox, { recursive: true, mode: 0o700 });
+    chmodSync(outbox, 0o700);
+    const envelope = (draftId, envelopeState = "ready", status = "not_required") =>
+      writeFileSync(
+        join(outbox, `${draftId}.lesson.json`),
+        JSON.stringify({
+          version: "private-lesson-outbox-envelope-v1",
+          draft_id: draftId,
+          state: envelopeState,
+          hold_telemetry_status: status,
+          last_error_code: null,
+          next_retry_at: null,
+          created_at: "2026-10-01T00:00:00.000Z",
+          updated_at: "2026-10-01T00:00:00.000Z",
+        }),
+        { mode: 0o600 },
+      );
+    const input = {
+      hook_event_name: "UserPromptSubmit",
+      session_id: "session-notices",
+      prompt: "Review the deploy runbook.",
+    };
+    // One draft of this session's own, one no session holds and one a
+    // safety hold left with nothing to send.
+    const own = "pld_ownbudget001";
+    envelope(own);
+    observeSuccessfulCompletionTool(
+      agentLedgerIdFor(input),
+      "mcp__plugin_remembrance_remembrance__capture_learning",
+      {},
+      {
+        capture_route: "private_lesson",
+        draft_id: own,
+        state: "ready",
+        next_action: { tool: "submit_private_lesson_candidate", arguments: { draft_id: own } },
+      },
+      env,
+    );
+    envelope("pld_noonesbudget");
+    envelope("pld_heldbudget01", "held_safety", "submitted");
+    // Four long skill cards fill most of the 4,000-character budget.
+    const fetchImpl = vi.fn(async (url) =>
+      String(url).endsWith("/api/v1/agent/query")
+        ? Response.json({
+            query_id: "rq_overbudget",
+            skills: Array.from({ length: 4 }, (_, index) => ({
+              slug: `deploy-runbook-review-${index + 1}`,
+              result_id: `qres_overbudget_${index + 1}`,
+              description: `Review deploy runbook step ${index + 1}: ${"check rollback, health checks and staged rollout order. ".repeat(5)}`,
+              match_reason: "Deploy runbook review workflow",
+              trust_tier: "tofu_verified",
+              verified_uses: 7,
+              total_uses: 9,
+            })),
+            resources: [],
+          })
+        : Promise.reject(new TypeError("network disabled in tests")),
+    );
+    const context = async () =>
+      (await handleHookInput(input, { env, fetchImpl })).hookSpecificOutput
+        .additionalContext;
+    const first = await context();
+    // Cut to fit, with each notice kept whole on one line.
+    expect(first.length).toBeLessThanOrEqual(4000);
+    expect(first).toContain("[Additional completion context omitted.]");
+    const lines = first.split("\n");
+    expect(
+      lines.filter(
+        (line) =>
+          line.startsWith("- Retained private drafts awaiting a user decision: 1 lesson") &&
+          line.endsWith("leave them in the outbox."),
+      ),
+    ).toHaveLength(1);
+    expect(
+      lines.filter(
+        (line) =>
+          line.startsWith("- 1 retained private lesson draft was held") &&
+          line.endsWith("leave the outbox as it is."),
+      ),
+    ).toHaveLength(1);
+    const lifecycle = join(state, "private-learning-lifecycle");
+    expect(existsSync(join(lifecycle, "orphan-notice.json"))).toBe(true);
+    expect(existsSync(join(lifecycle, "pld_heldbudget01.held-notice.json"))).toBe(true);
+    const second = await context();
+    expect(second).toContain(`call submit_private_lesson_candidate with draft_id ${own}`);
+    expect(second).not.toContain("awaiting a user decision");
+    expect(second).not.toContain("held by the local safety check");
   });
 });

@@ -21,6 +21,10 @@ claude plugin marketplace add dreamarkinc/remembrance-skills
 claude plugin install remembrance@remembrance
 ```
 
+With an organization key, finish with
+[Highly Recommended: approve private submissions](#highly-recommended-approve-private-submissions)
+below.
+
 **Requirements: Node.js 18.17.0 or newer that the host can find.** A host
 started from the Dock, Finder or an IDE may not have your shell's PATH, so a
 Node.js installed by nvm, fnm, volta, asdf, nodenv or mise can be missing from
@@ -107,12 +111,63 @@ only the Remembrance `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`,
 and `SubagentStop` hooks. If no review screen appears, continue: Codex may be
 reusing an existing valid trust decision. Codex skips untrusted hooks, and
 changed hook definitions show the same review screen again. Fully restart Codex
-before verification.
+before verification. With an organization key, then complete the Codex
+[Highly Recommended step](../codex-plugin/README.md#highly-recommended-approve-private-submissions).
 
 The repository-level `.agents/plugins/marketplace.json` routes Codex to
 `packages/codex-plugin`; this Claude package is never reused as a Codex plugin.
 That separation prevents one host's manifest and plugin-root conventions from
 silently disabling another host's hooks.
+
+## Highly Recommended: approve private submissions
+
+For organizations that use Remembrance with a private organization key, this
+step is required for Remembrance to do its job fully. Without it, every private
+lesson or skill submission stops for a manual approval, and unattended or
+headless runs such as `claude -p` deny it. Public-only use, without an
+organization key, does not need it.
+
+Merge these entries into `permissions.allow` in `~/.claude/settings.json`,
+which applies to every project. The first four are the private submit and
+retry tools, named with the plugin's `mcp__plugin_remembrance_remembrance__`
+prefix. The last, `capture_learning`, is local only: it stays on this machine
+and sends nothing. Every local private submission starts with it, and Claude
+Code asks before every MCP tool, so without it the capture itself prompts:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__plugin_remembrance_remembrance__submit_private_lesson_candidate",
+      "mcp__plugin_remembrance_remembrance__retry_private_lesson_candidate",
+      "mcp__plugin_remembrance_remembrance__submit_private_skill_candidate",
+      "mcp__plugin_remembrance_remembrance__retry_private_skill_candidate",
+      "mcp__plugin_remembrance_remembrance__capture_learning"
+    ]
+  }
+}
+```
+
+Never pre-approve `delete_private_lesson_candidate`,
+`delete_private_skill_candidate`, a whole server (`mcp__<server>` or
+`mcp__<server>__*`), or `bypassPermissions`.
+
+- Choosing "Yes, and don't ask again" at the prompt saves the rule only for the
+  current project, in `.claude/settings.local.json`.
+- A standalone, hosted, or managed server named `remembrance` uses
+  `mcp__remembrance__<tool>` names instead. Hosted MCP exposes only
+  `mcp__remembrance__submit_private_lesson_candidate` of the four and has no
+  `capture_learning`.
+- Headless runs such as `claude -p` deny every tool without an allow rule, so
+  they also need rules for the other Remembrance tools they call, such as
+  `query_skills`.
+- Plan mode still asks before these tools even when a rule allows them.
+- Administrators can ship the same rules in managed settings; see "Approve
+  Claude Code" in `skills/remembrancer/references/remembrance-setup.md`.
+
+Check the step by behavior: capture one disposable private lesson and confirm
+that neither the capture nor its submission prompts. `run_connection_doctor`
+cannot see a persisted approval.
 
 ## Installation identity and preferences
 
@@ -262,17 +317,20 @@ not exposed by default in a current local client. The exact action still
 performs a network write, so the host's own privacy
 and egress policy must allow `https://remembrance.dev` and the Remembrance MCP
 server. Claude Code administrators can allow the specific Remembrance MCP tools
-through managed permissions; managed Codex deployments can allow the exact MCP
-server identity, domain, and matching data-exfiltration action. Keep unrelated
-denials intact.
+through managed permissions; managed Codex deployments can allow the plugin's
+bundled server, the domain, and the matching data-exfiltration action. Keep
+unrelated denials intact.
 
 For managed Claude Code, force-enable `remembrance@remembrance` in
-`enabledPlugins`, allow exact `mcp__remembrance__...` tool names, and match the
-server by `serverUrl`, not only by its user-assigned name. If the organization
-deploys `managed-mcp.json`, it must define
-`https://remembrance.dev/api/mcp` there because that exclusive file suppresses
-plugin-provided MCP servers. Reference `${REMEMBRANCE_API_KEY}` from each
-user's environment; never put a real key in the system-readable managed file.
+`enabledPlugins` and allow exact tool names: `mcp__plugin_remembrance_remembrance__...`
+for the plugin's local server, or `mcp__remembrance__...` when the organization
+serves hosted MCP from `managed-mcp.json`. That exclusive file suppresses
+plugin-provided MCP servers, so it must define `https://remembrance.dev/api/mcp`
+itself; match that server by `serverUrl`, not only by its user-assigned name.
+Do not keep the plugin's local server behind a URL-only `allowedMcpServers`
+list, which blocks every stdio server. Reference `${REMEMBRANCE_API_KEY}` from
+each user's environment; never put a real key in the system-readable managed
+file.
 Hooks from a plugin force-enabled in managed settings remain available when
 `allowManagedHooksOnly` is enabled. The exact managed MCP/settings JSON and
 official documentation links are in
@@ -408,15 +466,32 @@ the same approved action; that telemetry cannot enter verification, review,
 topology, or skill materialization. Disable it with
 `REMEMBRANCE_HEALTH_REPORTING=0`.
 
-Persist approval for the four exact network-capable tools in Claude Code's
-managed permission rules: the submit and retry actions for both private lesson
-and private skill. Remembrance treats each submit/retry pair as one semantic
+Persist approval for the four exact network-capable tools in
+`~/.claude/settings.json` or Claude Code's managed permission rules: the submit
+and retry actions for both private lesson and private skill, named as in
+[Highly Recommended: approve private submissions](#highly-recommended-approve-private-submissions).
+Remembrance treats each submit/retry pair as one semantic
 approval lane and lazily upgrades an existing submit approval. Do not use
 `bypassPermissions` or a server-wide wildcard. Local preparation, inspection,
 and confirmed deletion stay zero-network; a fresh-draft retry also stops before
 network access. Retryable failures resume only when due; a host denial remains
-held and is never retried through another transport. `submit_query_feedback`
-remains independently available for bounded query-fit judgments.
+held and is never retried through another transport. Every private pending line
+can be declined with `decline_pending_action` (reason `host_policy_denied` when
+the host denied its exact action). A host denial parks only that draft, as a
+decline does. A parked draft returns as a user decision 1, 7 and 30 days later
+(each wait counted from the park or the last showing), whether or not the host
+allows its lane. A client update, and for a host-denied draft the host letting
+that lane through again, makes the next return come right away instead (or
+adds one more, if all three were shown). It is sent only through its exact
+submit or retry action after the user agrees. Drafts no active session is
+handling are offered as a user decision too, until the user delivers, keeps or
+deletes them; a kept draft is parked. These decisions go to the next
+main-thread prompt on the machine, at most once a day, including unattended
+runs such as `claude -p`; the drafts stay listed by
+`inspect_private_learning_outbox`, and none is sent or deleted without the
+user.
+`submit_query_feedback` remains independently available for bounded query-fit
+judgments.
 
 Use `/remembrance:use <slug>` when a person explicitly selects a skill. Claude
 resolves ambiguous names with the indexed, normalized slug-prefix filter in

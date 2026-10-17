@@ -51,7 +51,8 @@ For local development against this repo, register the package directory with the
 ```
 
 Reload VS Code, then confirm the plugin's tools appear in agent mode's Tools
-picker.
+picker. With an organization key, finish with
+[Highly Recommended: approve private submissions](#highly-recommended-approve-private-submissions).
 
 At session start, Remembrance checks a credential-free public release manifest.
 If a newer verified plugin exists, the agent tells the user to refresh the
@@ -159,6 +160,34 @@ This paired file binds the key to that destination. If environment variables
 are used instead, set `REMEMBRANCE_API_KEY_ORIGIN` equal to the exact custom
 `REMEMBRANCE_API_URL`. Remote registries require HTTPS; a trusted private or
 link-local self-host also requires `REMEMBRANCE_ALLOW_PRIVATE_REGISTRY=true`.
+
+### Highly Recommended: approve private submissions
+
+For organizations that use Remembrance with a private organization key, this
+step is required for Remembrance to do its job fully. Without it, every private
+lesson or skill submission stops for a manual approval in VS Code. Public-only
+use, without an organization key, does not need it.
+
+VS Code has no settings key or policy that pre-approves a single tool, so use
+its interface:
+
+1. Run **Chat: Manage Tool Approval** and expand the Remembrance server.
+2. Tick only `submit_private_lesson_candidate`,
+   `retry_private_lesson_candidate`, `submit_private_skill_candidate`,
+   `retry_private_skill_candidate`, and the local-only `capture_learning`. It
+   stays on this machine and sends nothing, but VS Code asks before it too,
+   and every local private submission starts with it.
+3. Turn off **Configure for this workspace only** so the approval applies in
+   every workspace.
+
+Do not tick the server's own box or choose **Always Allow Tools from** the
+server: both approve the whole server. Never approve the `delete_private_*`
+tools. Alternatively, choose **Always Allow** in the prompt's Allow menu the
+first time each of those five tools asks.
+
+Check the step by behavior: capture one disposable private lesson and confirm
+that neither the capture nor its submission prompts. `run_connection_doctor`
+cannot see a persisted approval.
 
 ## What the hooks do
 
@@ -272,8 +301,9 @@ topology, or skill materialization. Disable it with
 
 In **Chat: Manage Tool Approval**, approve the Remembrance submit and retry
 tools for both the `private_lesson` and `private_skill` lanes for future
-invocations. Remembrance maps an existing submit approval to its lane. Keep
-broad global auto-approval off. Local capture, inspection, and confirmed
+invocations, with **Configure for this workspace only** turned off, as in the
+Highly Recommended step. Remembrance maps an existing submit approval to its
+lane. Keep broad global auto-approval off. Local capture, inspection, and confirmed
 deletion remain zero-network; a fresh-draft retry stops before network access.
 `submit_query_feedback` remains an independent bounded query-fit action;
 hosted MCP alone reports

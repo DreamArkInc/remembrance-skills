@@ -134,6 +134,18 @@ const COMPLETION_OBLIGATION_GROWN_FIELDS = Object.freeze({
   }),
 });
 const PRIVATE_AUTHORIZATION_RETRY_INTERVAL_MS = 6 * 60 * 60 * 1000;
+// A private draft whose session tree has had no user prompt for this long is
+// offered to other sessions, and only as a user decision (owner decision,
+// 0.2.3). The notice offering such drafts shows at most once per interval on
+// a machine.
+const PRIVATE_ORPHAN_AFTER_MS = 24 * 60 * 60 * 1000;
+const PRIVATE_ORPHAN_NOTICE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+// A declined or host-denied draft returns in that notice after these waits,
+// then not again until its lane is allowed, the user asks for it, or the
+// client updates (owner decision, 0.2.3).
+const PRIVATE_PARKED_NOTICE_DELAYS_MS = [1, 7, 30].map(
+  (days) => days * 24 * 60 * 60 * 1000,
+);
 // Inherited cleanup for a debt record without content (a marker), which a
 // ledger read removes once it is this old. It never applies to a record
 // that keeps an unresolved action's payload: only completing, declining or
@@ -253,6 +265,18 @@ const PENDING_ACTION_DECLINE_REASONS = [
 ];
 const PENDING_ACTION_DECLINE_GUIDANCE =
   "If you cannot complete an action, call local decline_pending_action with the action_id under it and one reason (not_observed_by_this_agent, agent_exited, not_reusable, or duplicate) instead of guessing.";
+// Accepted for a private line or notice only; feedback denials keep
+// acknowledge_feedback_denial.
+const PRIVATE_DECLINE_REASON = "host_policy_denied";
+const PRIVATE_DECLINE_GUIDANCE =
+  "If the host denies a private line's exact action, decline that line with reason host_policy_denied; a declined private draft stays retained, returns later only as a user decision, and is never deleted automatically.";
+// The private notice for drafts awaiting the user is not a ledger record;
+// it has one fixed action_id, which a decline names. The held-safety notice
+// names none: its delivery marks the drafts it showed, and it needs no reply.
+const PRIVATE_ORPHAN_NOTICE_ACTION_ID = createHash("sha256")
+  .update("private_draft_notice:awaiting_user", "utf8")
+  .digest("hex")
+  .slice(0, 16);
 export const PRIVATE_LESSON_AUTHORIZATION_REQUEST_TEXT =
   "Allow Remembrance to submit this retained private lesson or skill candidate to your organization?";
 const PLUGIN_HEALTH_COMPONENTS = new Set([
@@ -2281,6 +2305,7 @@ export async function runPromptHook(prompt, options = {}) {
     acknowledgePrivateAuthorizationReminders(
       result?.context ?? "",
       options.env ?? process.env,
+      options.sessionId ?? null,
     );
   }
   return result;
@@ -2312,8 +2337,14 @@ async function buildPromptHookResult(prompt, options = {}) {
   // Rendered for each prompt context in withContext below.
   const lifecycleRecovery =
     !options.sessionId && privateLearningLifecycleRecoveryInstruction(env);
+  // `subagentSession`: the host runs this session for a subagent, or cannot
+  // show it is a main session, and its ledger names no agent (OpenClaw's
+  // sessions_spawn; on OpenCode, every session but one created with no
+  // parent session, isRecordedMainSession).
   const recovery = options.sessionId
-    ? pendingCompletionRecovery(options.sessionId, env)
+    ? pendingCompletionRecovery(options.sessionId, env, {
+        notices: !options.subagentSession,
+      })
     : lifecycleRecovery && (() => lifecycleRecovery);
   const recoveryAddition = recovery
     ? { id: "private_learning_recovery", kind: "completion" }
@@ -2672,6 +2703,7 @@ export function contributionReason(
     ? privateLessonCompletionGuidance({
         includeLifecycleRecovery: options.includeLifecycleRecovery !== false,
         env: options.env,
+        lifecycleRecovery: options.lifecycleRecovery,
       })
     : null;
   if (directSelections.length > 0) {
@@ -2759,13 +2791,18 @@ function routineContributionVisibilityInstruction(privateCapture = false) {
   return `${visibility} ${FEEDBACK_DENIAL_GUIDANCE}`;
 }
 
+// `lifecycleRecovery`: a caller's session-scoped recovery text, used in place
+// of the machine-wide one.
 export function privateLessonCompletionGuidance({
   includeLifecycleRecovery = true,
   env = process.env,
+  lifecycleRecovery,
 } = {}) {
-  const recovery = includeLifecycleRecovery
-    ? privateLearningLifecycleRecoveryInstruction(env)
-    : null;
+  const recovery = !includeLifecycleRecovery
+    ? null
+    : lifecycleRecovery !== undefined
+      ? lifecycleRecovery
+      : privateLearningLifecycleRecoveryInstruction(env);
   return [
     "Call capture_learning once per new item: lesson for a compact generalized failure/correction, private_skill with complete instructions for a reusable procedure, or preference for a durable working preference. Follow its exact next_action or bounded agent_recovery instructions; reformulation updates the retained draft, not a new item.",
     "The router encrypts lesson and private-skill drafts locally before any network action. Do not substitute a legacy broad write, REST, another destination, or another visibility.",
@@ -2823,7 +2860,10 @@ export function taskClosureReason(signal = null, options = {}) {
       ? `Skills already selected for this session (${options.sessionSkills.join(", ")}) stay active; do not invoke or query them again.`
       : null,
     options.privateLessonAuthorized
-      ? privateLessonCompletionGuidance({ env: options.env })
+      ? privateLessonCompletionGuidance({
+          env: options.env,
+          lifecycleRecovery: options.lifecycleRecovery,
+        })
       : null,
     routineContributionVisibilityInstruction(options.privateLessonAuthorized),
   ]
@@ -2879,7 +2919,9 @@ export function hostPolicyAlertWasReported(input) {
 // eligibility with the last-prompted count. A completed use prompts for a
 // contribution; eligible work with no completed query prompts for full-context
 // recovery. `useCount`/`promptedCount` are injectable so tests never touch the
-// filesystem.
+// filesystem. `subagentSession`: the host runs this session for a subagent,
+// or cannot show it is a main session (runPromptHook), so it gets no user
+// decisions.
 export function decideStop(input, options = {}) {
   const env = options.env ?? process.env;
   if (contributeDisabled(env.REMEMBRANCE_AUTO_CONTRIBUTE)) {
@@ -2920,9 +2962,11 @@ export function decideStop(input, options = {}) {
   const readObligations =
     options.readCompletionObligations ?? readCompletionObligations;
   const obligations = readObligations(sessionId, env);
-  const unpromptedObligations = obligations.filter(
-    (obligation) =>
-      !obligation.prompted_at && completionObligationIsDue(obligation, env),
+  const drafts = readPrivateDrafts(env);
+  const unpromptedObligations = duePendingActions(
+    obligations.filter((obligation) => !obligation.prompted_at),
+    env,
+    drafts,
   );
   const overflow = readCompletionObligationOverflow(sessionId, env);
   const highValueSignal = detectHighValueLessonSignal(input);
@@ -2996,8 +3040,16 @@ export function decideStop(input, options = {}) {
     eligibilityCount > readClosed(sessionId, env) &&
     newDirectSelections.length === 0;
   const privateLessonAuthorized = organizationPrivateLessonAuthorized(env);
+  // Scoped to this ledger's session tree: another session's drafts appear
+  // only as a user decision, never as silent recovery.
   const privateLessonRecovery = privateLessonAuthorized
-    ? privateLessonLifecycleRecoveryInstruction(env)
+    ? privateLearningSessionRecovery(
+        sessionId,
+        privateHintsOnMachine(sessionId, env),
+        drafts,
+        env,
+        { notices: !options.subagentSession },
+      )
     : null;
   if (
     newDirectSelections.length > 0 &&
@@ -3069,6 +3121,7 @@ export function decideStop(input, options = {}) {
               env,
               privateLessonAuthorized,
               sessionSkills,
+              lifecycleRecovery: privateLessonRecovery,
             })
           : contributionReason(
               highValueSignal,
@@ -3080,6 +3133,7 @@ export function decideStop(input, options = {}) {
                 env,
                 privateLessonAuthorized,
                 includeLifecycleRecovery: true,
+                lifecycleRecovery: privateLessonRecovery,
               },
             ),
     ]
@@ -3131,6 +3185,9 @@ function highMatchClosureInstruction(match) {
 //                               record, since when, and of which kinds.
 //   <hash>.user-prompts — the user prompts the agent received (host text and
 //                         a subagent's task are not counted).
+//   <hash>.main-session — the host created this session with no parent.
+//   <hash>.parent-session — the parent session id the host created this
+//                           child session with.
 //   <hash>.rated.json — results the ledger paid post-use feedback for, each
 //                               with the user prompt (.user-prompts count) it
 //                               was paid in.
@@ -3411,13 +3468,29 @@ function privateAuthorizationMarker(draftId, env) {
   }
 }
 
-function clearPrivateAuthorizationOpportunity(draftId, env) {
-  const path = privateAuthorizationMarkerPath(draftId, env);
-  if (!path) return;
-  try {
-    rmSync(path, { force: true });
-  } catch {
-    // Content-free scheduling state never controls draft acceptance/deletion.
+// A draft's content-free markers beside its hint: authorization backoff,
+// parking (a decline or host denial), and its one held-safety notice.
+const PRIVATE_DRAFT_MARKERS = ["authorization", "parked", "held-notice"];
+
+function privateDraftMarkerPath(draftId, marker, env) {
+  return /^(pld|psd)_[A-Za-z0-9_-]{8,96}$/.test(draftId ?? "")
+    ? join(privateLearningLifecycleDirectory(env), `${draftId}.${marker}.json`)
+    : null;
+}
+
+function clearPrivateDraftMarkers(
+  draftId,
+  env,
+  markers = PRIVATE_DRAFT_MARKERS,
+) {
+  for (const marker of markers) {
+    const path = privateDraftMarkerPath(draftId, marker, env);
+    if (!path) return;
+    try {
+      rmSync(path, { force: true });
+    } catch {
+      // Content-free scheduling state never controls draft acceptance/deletion.
+    }
   }
 }
 
@@ -3481,18 +3554,19 @@ function clearKnownTerminalAuthorizationOpportunities(env) {
     assertSecureHookDirectory(lstatSync(directory));
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const match = entry.name.match(
-        /^((?:pld|psd)_[A-Za-z0-9_-]{8,96})\.authorization\.json$/,
+        /^((?:pld|psd)_[A-Za-z0-9_-]{8,96})\.(authorization|parked|held-notice)\.json$/,
       );
       if (
         !match ||
         entry.isSymbolicLink() ||
         !entry.isFile() ||
-        !privateAuthorizationMarker(match[1], env) ||
+        (match[2] === "authorization" &&
+          !privateAuthorizationMarker(match[1], env)) ||
         !privateAuthorizationTerminalIsKnown(match[1], env)
       ) {
         continue;
       }
-      clearPrivateAuthorizationOpportunity(match[1], env);
+      clearPrivateDraftMarkers(match[1], env, [match[2]]);
     }
   } catch {
     // Terminal cleanup is best-effort and never controls retained draft state.
@@ -3541,17 +3615,23 @@ function privateAuthorizationRetryIsDue(draftId, lastFailureAt, env) {
   );
 }
 
+// `ledgerId`: the ledger the delivered context was composed for. Where
+// another session of the same process can compose between a composition and
+// its delivery (OpenCode's turns, OpenClaw's prompts through runPromptHook),
+// the host names it, so that session's notice in the same words is not
+// acknowledged with this delivery's; without it, the newest composition is
+// (acknowledgePrivateDraftNotices).
 export function acknowledgePrivateAuthorizationReminders(
   context,
   env = process.env,
+  ledgerId = null,
 ) {
   clearKnownTerminalAuthorizationOpportunities(env);
   retireKnownTerminalPrivateObligations(env);
-  if (
-    !organizationPrivateLessonAuthorized(env) ||
-    recentPrivateLessonHostDenial(env)
-  )
-    return;
+  // Per-draft parking, not the lane-wide denial, now holds a denied draft's
+  // line; an acknowledged retry still backs off.
+  if (!organizationPrivateLessonAuthorized(env)) return;
+  acknowledgePrivateDraftNotices(String(context ?? ""), env, ledgerId);
   const references = String(context ?? "").matchAll(
     /\bcall retry_private_(lesson|skill)_candidate with draft_id ((?:pld|psd)_[A-Za-z0-9_-]{8,96})(?![A-Za-z0-9_-])/g,
   );
@@ -3634,7 +3714,9 @@ function feedbackObligationDenied(obligation, env) {
   );
 }
 
-function completionObligationIsDue(obligation, env) {
+// `drafts` (readPrivateDrafts), when the caller has read the outboxes once
+// for this prompt; without it a private hint reads its own draft's state.
+function completionObligationIsDue(obligation, env, drafts = null) {
   if (feedbackObligationDenied(obligation, env)) return false;
   if (!["private_lesson", "private_skill"].includes(obligation.kind))
     return true;
@@ -3642,12 +3724,37 @@ function completionObligationIsDue(obligation, env) {
   // an older content-free obligation after best-effort retirement.
   if (privateAuthorizationTerminalIsKnown(obligation.draft_id, env))
     return false;
-  if (obligation.delivery_blocked) return false;
+  if (!organizationPrivateLessonAuthorized(env)) return false;
+  // A parked draft returns only as a user decision, never as a silent line.
   if (
-    !organizationPrivateLessonAuthorized(env) ||
-    recentPrivateLessonHostDenial(env)
+    drafts
+      ? drafts.parked.has(obligation.draft_id)
+      : readPrivateParkedMarker(obligation.draft_id, env)
   )
     return false;
+  // A lesson's own envelope says what is due now; the hint's recorded
+  // fields decide only when its outbox cannot answer. Only the hint knows
+  // which credential an authorization refusal named: a changed one is due.
+  if (obligation.kind === "private_lesson") {
+    const known = privateLessonHintAction(
+      obligation.draft_id,
+      env,
+      drafts?.lessons,
+    );
+    if (
+      known?.action?.count === "awaiting_authorization" &&
+      !known.action.due &&
+      obligation.failed_credential_digest &&
+      !privateAuthorizationMarker(obligation.draft_id, env)
+    ) {
+      return (
+        obligation.failed_credential_digest !==
+        privateObligationCredentialDigest(env)
+      );
+    }
+    if (known) return Boolean(known.action?.due);
+  }
+  if (obligation.delivery_blocked) return false;
   if (obligation.next_retry_at && !retryIsDue(obligation.next_retry_at))
     return false;
   if (!obligation.failed_credential_digest) return true;
@@ -3808,6 +3915,7 @@ function normalizeCompletionObligation(value) {
     ...(value.subagent_identity === "unavailable"
       ? { subagent_identity: "unavailable" }
       : {}),
+    ...privateHintOwnerFields(value),
     ...normalizedAliasQueryIds(value),
     // The subagent that left this debt unpaid when it exited.
     transferred_from: normalizeNativeSessionId(value.transferred_from?.agent_id)
@@ -3850,6 +3958,82 @@ function normalizeCompletionObligation(value) {
   };
 }
 
+// Who a private hint belongs to: the session tree that captured or last
+// acted on its draft (owner_session, the main session's ledger), and the
+// ledger and agent that did (captured_by_*). A hint without them (written
+// by an earlier client) belongs to no session. All are content-free.
+function privateHintOwnerFields(value) {
+  if (
+    !["private_lesson", "private_skill"].includes(value.kind) ||
+    !/^[a-f0-9]{16}$/.test(value.owner_session ?? "") ||
+    !/^[a-f0-9]{16}$/.test(value.captured_by_ledger ?? "")
+  ) {
+    return {};
+  }
+  const agent = normalizeNativeSessionId(value.captured_by_agent);
+  return {
+    owner_session: value.owner_session,
+    captured_by_ledger: value.captured_by_ledger,
+    ...(agent ? { captured_by_agent: agent } : {}),
+  };
+}
+
+// The owner fields for a hint `sessionId` (a ledger id, agentLedgerIdFor's
+// form) records.
+function privateHintOwner(sessionId) {
+  const ledger = String(sessionId ?? "unknown");
+  const split = ledger.indexOf(":agent:");
+  const agent =
+    split >= 0 ? normalizeNativeSessionId(ledger.slice(split + 7)) : null;
+  return {
+    owner_session: sessionHash(split >= 0 ? ledger.slice(0, split) : ledger),
+    captured_by_ledger: sessionHash(ledger),
+    ...(agent ? { captured_by_agent: agent } : {}),
+  };
+}
+
+// A main thread holds the private hints of its whole session tree, a
+// subagent only those it captured.
+function privateHintOwnedBy(hint, sessionId) {
+  if (sessionId !== null && typeof sessionId === "object") return false;
+  const ledger = String(sessionId ?? "unknown");
+  return ledger.includes(":agent:")
+    ? hint.captured_by_ledger === sessionHash(ledger)
+    : hint.owner_session === sessionHash(ledger);
+}
+
+function isPrivateHint(obligation) {
+  return ["private_lesson", "private_skill"].includes(obligation?.kind);
+}
+
+// Rewrites a private hint where it is held with `to` as its owner; nothing
+// else of it changes, and its draft is never touched. When the session
+// whose tree `to` is in has handed over itself (OpenClaw: a nested subagent
+// that ends after the one that spawned it), the hint goes on, as that
+// session's debts went, to the session its forwarding markers lead to
+// (resolveCompletionRecipient), which is the one that reads it.
+function adoptPrivateHint(hint, to, env) {
+  if (typeof to !== "string" || !lifecycleDirectoryUsable(env)) return false;
+  const owner = privateHintOwner(to);
+  const { recipient } = resolveCompletionRecipient(
+    { ledger: owner.owner_session },
+    to,
+    env,
+  );
+  const adopted = normalizeCompletionObligation({
+    ...hint,
+    ...owner,
+    owner_session: sessionHash(recipient),
+  });
+  return Boolean(
+    adopted &&
+    writePrivateUsageMarker(
+      completionObligationPath(to, adopted.id, env),
+      `${JSON.stringify(adopted)}\n`,
+    ),
+  );
+}
+
 function normalizedAliasQueryIds(value) {
   if (
     value.kind !== "post_use_feedback" ||
@@ -3885,7 +4069,9 @@ function transferTranscriptPath(value) {
 
 // `pointers: false` reads only the ledger's own records, for a decision that
 // needs nothing else (is it held, is it full): no pointer entry is examined,
-// and such a read never counts the ledger as drained.
+// and such a read never counts the ledger as drained. `privateHints: "all"`
+// shows every private hint on this machine, not only the reader's
+// (privateHintOwnedBy): for a removal, retirement, or the orphan scan.
 export function readCompletionObligations(
   sessionId,
   env = process.env,
@@ -3926,6 +4112,7 @@ function readCompletionLedger(
     associations = "expand",
     settle = false,
     ask = true,
+    privateHints = "own",
   } = {},
 ) {
   const obligations = new Map();
@@ -4073,6 +4260,7 @@ function readCompletionLedger(
   // Non-expiring private hints must never occupy the session feedback budget.
   // Records another ledger keeps for this one come after its own; they never
   // count against its own bound.
+  const hints = ordered.filter((item) => privateKinds.includes(item.kind));
   return {
     complete,
     obligations: [
@@ -4080,9 +4268,11 @@ function readCompletionLedger(
         .filter((item) => !privateKinds.includes(item.kind))
         .slice(0, COMPLETION_OBLIGATION_LIMIT),
       ...pointed,
-      ...ordered
-        .filter((item) => privateKinds.includes(item.kind))
-        .slice(0, COMPLETION_OBLIGATION_LIMIT),
+      ...(privateHints === "all"
+        ? hints
+        : hints
+            .filter((item) => privateHintOwnedBy(item, sessionId))
+            .slice(0, COMPLETION_OBLIGATION_LIMIT)),
     ],
   };
 }
@@ -4686,6 +4876,28 @@ function completionLedgerIsFull(existing, obligation) {
   );
 }
 
+// A full machine-wide bound of private hints makes room for the writer's by
+// dropping the oldest hint whose draft is already the user's to decide
+// (privateDraftsAwaitingUser): a parked draft's, or one with no owner or an
+// owner outside the writer's tree that is idle (privateHintIdle). That
+// draft is offered as before; only its pointer goes. When every hint
+// belongs to an active session, none goes, and the new draft, with no hint,
+// reaches the user as one of those decisions.
+function evictUserGatedPrivateHint(sessionId, existing, env) {
+  const writer = privateHintOwner(sessionId).owner_session;
+  const gated = existing.find(
+    (hint) =>
+      isPrivateHint(hint) &&
+      !hint.ledger &&
+      (readPrivateParkedMarker(hint.draft_id, env) ||
+        (hint.owner_session !== writer &&
+          (!hint.owner_session ||
+            privateHintIdle(hint, (ledger) => privateSessionIdle(ledger, env))))),
+  );
+  if (gated) dropPrivateHint(gated.draft_id, env);
+  return Boolean(gated);
+}
+
 // Debts a full ledger could not record are counted, never dropped silently:
 // every demand for that ledger reports them until it has drained.
 function readCompletionObligationOverflow(sessionId, env) {
@@ -4758,12 +4970,17 @@ function writeCompletionObligation(sessionId, obligation, env, { kept = false } 
   const ledger = /^[a-f0-9]{16}$/.test(obligation?.ledger ?? "")
     ? obligation.ledger
     : own;
-  if (
+  // Private hints are bounded per machine, whoever owns them.
+  const existing =
     ledger === own &&
-    completionLedgerIsFull(
-      readCompletionObligations(sessionId, env, { pointers: false }),
-      normalized,
-    )
+    readCompletionObligations(sessionId, env, {
+      pointers: false,
+      privateHints: "all",
+    });
+  if (
+    existing &&
+    completionLedgerIsFull(existing, normalized) &&
+    !(isPrivateHint(normalized) && evictUserGatedPrivateHint(sessionId, existing, env))
   ) {
     // A private hint only points into the private-learning outbox, which
     // stays authoritative; any other debt not kept elsewhere is counted.
@@ -4864,15 +5081,21 @@ function writeRetainedRecord(ledger, name, serialized, normalized, env) {
   return true;
 }
 
+// A private hint is (re)stamped with the recording ledger as its owner: the
+// session tree that captured its draft, or acted on it last (an observed
+// submit or retry adopts another session's draft).
 function addCompletionObligation(sessionId, obligation, env = process.env) {
-  const existing = heldCompletionObligations(sessionId, env).find(
-    (item) => item.id === obligation.id,
-  );
+  const existing = readCompletionObligations(sessionId, env, {
+    ask: false,
+    privateHints: "all",
+  }).find((item) => item.id === obligation.id);
+  const owner = isPrivateHint(obligation) ? privateHintOwner(sessionId) : {};
   return writeCompletionObligation(
     sessionId,
     {
       version: COMPLETION_OBLIGATION_VERSION,
       ...obligation,
+      ...owner,
       agent_keyed: true,
       ...(subagentIdentityUnavailable
         ? { subagent_identity: "unavailable" }
@@ -4882,7 +5105,8 @@ function addCompletionObligation(sessionId, obligation, env = process.env) {
         existing?.action_tool === (obligation.action_tool ?? null) &&
         existing?.next_retry_at === (obligation.next_retry_at ?? null) &&
         existing?.failed_credential_digest ===
-          (obligation.failed_credential_digest ?? null)
+          (obligation.failed_credential_digest ?? null) &&
+        existing?.captured_by_ledger === owner.captured_by_ledger
           ? (existing?.prompted_at ?? null)
           : null,
     },
@@ -4905,7 +5129,8 @@ function addCompletionObligation(sessionId, obligation, env = process.env) {
 // points to. One stop hands over one page; the parent's reads reach the rest
 // through one association (handOverLedger). A kept debt is never counted.
 // Private-learning hints are held per machine, not per agent, and stay where
-// they are.
+// they are; the subagent's session tree, its parent's, already owns them
+// (privateHintOwner).
 export function transferSubagentObligations(
   input,
   env = process.env,
@@ -5014,7 +5239,11 @@ function handOverLedger(
   let moved = 0;
   let handed = complete;
   // Records of `from`'s own that this page leaves in its homes: kept records
-  // `to` now points to. (Private hints are held per machine, not there.)
+  // `to` now points to. (Private hints are held per machine, not there, and
+  // stay where they are: a subagent's already belong to `to`'s session tree,
+  // an OpenClaw subagent session's went to the session that reads `to`'s
+  // tree when its fold began (foldTurnLedgerIntoSession), and a Codex turn
+  // records none.)
   let left = 0;
   for (const obligation of obligations) {
     if (obligation.association) {
@@ -5041,7 +5270,7 @@ function handOverLedger(
       }
       continue;
     }
-    if (["private_lesson", "private_skill"].includes(obligation.kind)) continue;
+    if (isPrivateHint(obligation)) continue;
     const result = handOverCompletionObligation(
       from,
       to,
@@ -5465,12 +5694,22 @@ function removeCompletionObligationRecord(sessionId, obligation, env, durable) {
   return ledger;
 }
 
-function removeCompletionObligations(sessionId, predicate, env) {
+// A private hint any session holds can be removed (its draft was accepted,
+// deleted or is no longer actionable); a decline passes `privateHints:
+// "own"`, closing only what the caller was shown, and `keepAuthorization`,
+// since its draft is only parked.
+function removeCompletionObligations(
+  sessionId,
+  predicate,
+  env,
+  { privateHints = "all", keepAuthorization = false } = {},
+) {
   const removed = [];
   const durable = retainedRootsUsable(env);
   const emptied = new Set();
   for (const obligation of readCompletionObligations(sessionId, env, {
     settle: true,
+    privateHints,
   })) {
     if (!predicate(obligation)) continue;
     try {
@@ -5496,7 +5735,9 @@ function removeCompletionObligations(sessionId, predicate, env) {
           join(legacyPrivateCompletionObligationDir(env), `${hash}.json`),
           { force: true },
         );
-        const marker = privateAuthorizationMarkerPath(obligation.draft_id, env);
+        const marker =
+          !keepAuthorization &&
+          privateAuthorizationMarkerPath(obligation.draft_id, env);
         if (marker) rmSync(marker, { force: true });
       }
       removed.push(obligation);
@@ -5726,7 +5967,14 @@ export function recordPrivateLessonObligation(
   const body = responseBodyFromToolResponse(response);
   const draftId = completionIdentifier(body?.draft_id);
   if (!/^pld_[A-Za-z0-9_-]{8,96}$/.test(draftId)) return null;
-  if (["submitted", "superseded_redactor"].includes(body?.state)) return null;
+  // The draft's own envelope says which exact action is due; the response's
+  // exact next_action stands in only while the envelope cannot be read.
+  // Nothing an agent can do (null): no hint, and the caller retires one.
+  const envelope = readPrivateLessonEnvelope(draftId, env);
+  const actionTool = envelope
+    ? (privateLessonDraftAction(envelope, env)?.tool ?? null)
+    : privateLessonSubmissionAction(body, draftId);
+  if (!actionTool) return null;
   if (
     body?.state === "awaiting_authorization" &&
     body?.status === "not_submitted"
@@ -5740,21 +5988,8 @@ export function recordPrivateLessonObligation(
       kind: "private_lesson",
       engagement_count: Math.max(1, engagementCount),
       draft_id: draftId,
-      action_tool: [
-        "retry_scheduled",
-        "awaiting_authorization",
-        "awaiting_compatible_profile",
-      ].includes(body?.state)
-        ? "retry_private_lesson_candidate"
-        : "submit_private_lesson_candidate",
+      action_tool: actionTool,
       next_retry_at: body?.next_retry_at ?? null,
-      delivery_blocked:
-        body?.status === "not_submitted" &&
-        ![
-          "retry_scheduled",
-          "awaiting_authorization",
-          "awaiting_compatible_profile",
-        ].includes(body?.state),
       failed_credential_digest:
         body?.state === "awaiting_authorization" &&
         body?.status === "not_submitted"
@@ -5812,29 +6047,41 @@ export function recordPrivateSkillObligation(
   );
 }
 
-function privateSkillSubmissionAction(value, draftId) {
+// A response's exact next_action for one draft: the named lane's submit or
+// retry tool with exactly { draft_id }.
+function exactPrivateDraftAction(value, draftId, lane) {
   const action = value?.next_action;
+  return action &&
+    typeof action === "object" &&
+    !Array.isArray(action) &&
+    [
+      `submit_private_${lane}_candidate`,
+      `retry_private_${lane}_candidate`,
+    ].includes(action.tool) &&
+    action.arguments &&
+    typeof action.arguments === "object" &&
+    !Array.isArray(action.arguments) &&
+    Object.keys(action.arguments).join(",") === "draft_id" &&
+    action.arguments.draft_id === draftId
+    ? action.tool
+    : null;
+}
+
+function privateLessonSubmissionAction(value, draftId) {
+  return exactPrivateDraftAction(value, draftId, "lesson");
+}
+
+function privateSkillSubmissionAction(value, draftId) {
+  const tool = exactPrivateDraftAction(value, draftId, "skill");
   if (
-    !action ||
-    typeof action !== "object" ||
-    Array.isArray(action) ||
-    ![
-      "submit_private_skill_candidate",
-      "retry_private_skill_candidate",
-    ].includes(action.tool) ||
-    !action.arguments ||
-    typeof action.arguments !== "object" ||
-    Array.isArray(action.arguments) ||
-    Object.keys(action.arguments).join(",") !== "draft_id" ||
-    action.arguments.draft_id !== draftId ||
-    (action.tool === "submit_private_skill_candidate" &&
-      value?.state !== "ready") ||
-    (action.tool === "retry_private_skill_candidate" &&
+    !tool ||
+    (tool === "submit_private_skill_candidate" && value?.state !== "ready") ||
+    (tool === "retry_private_skill_candidate" &&
       !["retry_scheduled", "awaiting_authorization"].includes(value?.state))
   ) {
     return null;
   }
-  return action.tool;
+  return tool;
 }
 
 function recordCaptureLearningObligation(
@@ -6187,10 +6434,17 @@ function retainedPayloadOpener(env) {
   };
 }
 
+// A private hint counts as pending only while its action is due.
+function completionObligationPending(obligation, env) {
+  return isPrivateHint(obligation)
+    ? completionObligationIsDue(obligation, env)
+    : !feedbackObligationDenied(obligation, env);
+}
+
 function markEngagementHandledWhenClear(sessionId, env) {
   const count = currentEngagementCount(sessionId, env);
   const hasPending = heldCompletionObligations(sessionId, env).some(
-    (obligation) => !feedbackObligationDenied(obligation, env),
+    (obligation) => completionObligationPending(obligation, env),
   );
   if (!hasPending && count > 0) {
     writePromptedCount(sessionId, count, env);
@@ -6304,7 +6558,7 @@ export function observeSuccessfulCompletionTool(
         (body?.version === "private-lesson-outbox-deletion-v1" &&
           body?.reason === "explicit_confirmed_deletion"))
     ) {
-      clearPrivateAuthorizationOpportunity(input.draft_id, env);
+      clearPrivateDraftMarkers(input.draft_id, env);
       closed = removeCompletionObligations(
         sessionId,
         (obligation) =>
@@ -6347,17 +6601,34 @@ export function observeSuccessfulCompletionTool(
     if (followup) opened.push(followup);
   } else if (tool === "decline_pending_action") {
     // Only the observed call closes an action, in the caller's own ledger;
-    // nothing in a message can.
+    // nothing in a message can. A declined private line parks its draft
+    // (keeping its authorization backoff), a declined notice for drafts
+    // awaiting the user the drafts it offered; host_policy_denied is for
+    // private lines and notices only. The held-safety notice names no
+    // action to decline (an earlier client's did, and its decline changes
+    // nothing): its delivery marked the drafts it showed.
     const actionId = String(input.action_id ?? "");
-    closed = PENDING_ACTION_DECLINE_REASONS.includes(input.reason)
-      ? removeCompletionObligations(
-          sessionId,
-          (obligation) =>
-            completionActionDeclinable(obligation) &&
-            completionActionId(obligation) === actionId,
-          env,
-        )
-      : [];
+    const reason = String(input.reason ?? "");
+    const privateOnly = reason === PRIVATE_DECLINE_REASON;
+    if (PENDING_ACTION_DECLINE_REASONS.includes(reason) || privateOnly) {
+      closed = removeCompletionObligations(
+        sessionId,
+        (obligation) =>
+          (!privateOnly || isPrivateHint(obligation)) &&
+          completionActionId(obligation) === actionId,
+        env,
+        { privateHints: "own", keepAuthorization: true },
+      );
+      for (const hint of closed.filter(isPrivateHint)) {
+        parkPrivateDraft(hint.draft_id, reason, env);
+      }
+      if (
+        actionId === PRIVATE_ORPHAN_NOTICE_ACTION_ID &&
+        organizationPrivateLessonAuthorized(env)
+      ) {
+        parkPrivateDraftsAwaitingUser(sessionId, reason, env);
+      }
+    }
   } else if (tool === "submit_remembrance") {
     const digest = completionPayloadDigest(input);
     const queryId = completionIdentifier(input?.interaction?.query_id);
@@ -6396,6 +6667,10 @@ export function observeSuccessfulCompletionTool(
   ) {
     const body = responseBodyFromToolResponse(response);
     const draftId = completionIdentifier(input.draft_id ?? body?.draft_id);
+    // The host let this exact call through, whatever the server answered:
+    // the lane is allowed again, and this explicit request unparks the draft.
+    allowPrivateLane("pld_", env);
+    clearPrivateDraftMarkers(draftId, env, ["parked"]);
     if (body?.retained_locally === true) {
       const retained = recordPrivateLessonObligation(
         sessionId,
@@ -6430,13 +6705,15 @@ export function observeSuccessfulCompletionTool(
         obligation.draft_id === draftId,
       env,
     );
-    clearPrivateAuthorizationOpportunity(draftId, env);
+    clearPrivateDraftMarkers(draftId, env);
   } else if (
     tool === "submit_private_skill_candidate" ||
     tool === "retry_private_skill_candidate"
   ) {
     const body = responseBodyFromToolResponse(response);
     const draftId = completionIdentifier(input.draft_id ?? body?.draft_id);
+    allowPrivateLane("psd_", env);
+    clearPrivateDraftMarkers(draftId, env, ["parked"]);
     if (body?.retained_locally === true) {
       const retained = recordPrivateSkillObligation(
         sessionId,
@@ -6469,7 +6746,7 @@ export function observeSuccessfulCompletionTool(
         obligation.draft_id === draftId,
       env,
     );
-    clearPrivateAuthorizationOpportunity(draftId, env);
+    clearPrivateDraftMarkers(draftId, env);
   }
 
   const handled = COMPLETION_CONTRIBUTION_TOOLS.has(tool)
@@ -6547,13 +6824,8 @@ function preferenceOfferPointer(obligation, directSelections) {
   return `; offered ${label}${tail}`;
 }
 
-// A reminder lists each declinable action with this id, which
-// decline_pending_action echoes back. Private-learning hints point into the
-// private-learning outbox and are handled there, not declined.
-function completionActionDeclinable(obligation) {
-  return !["private_lesson", "private_skill"].includes(obligation.kind);
-}
-
+// A reminder lists each action with this id, which decline_pending_action
+// echoes back. A declined private line parks its draft (parkPrivateDraft).
 function completionActionId(obligation) {
   return createHash("sha256")
     .update(obligation.id, "utf8")
@@ -6593,7 +6865,8 @@ function completionObligationInstruction(
   const shown = obligations.slice(0, 12);
   // The first line with each tag carries the tag's explanation, so the
   // context allocator keeps or drops the two together. Private-learning
-  // lines, which name no provenance, always come after the others.
+  // lines always come after the others; one a subagent of this session
+  // captured says which.
   const explained = new Set(
     [...PROVENANCE_TAG_EXPLANATIONS.keys()].map((tag) =>
       shown.find((obligation) => provenanceLabel(obligation) === tag),
@@ -6633,17 +6906,22 @@ function completionObligationInstruction(
         ? `- Reusable evidence${ids}${from}: ${unretained}; call submit_remembrance with the payload submit_feedback returned only if you still hold it verbatim.`
         : `- Reusable evidence${ids}${from}: submit the exact next_step.submit_remembrance_payload returned by the preceding feedback call.`;
     }
+    const by =
+      obligation.captured_by_agent &&
+      obligation.captured_by_ledger !== retained.ledger
+        ? ` (captured by subagent ${obligation.captured_by_agent})`
+        : "";
     if (obligation.kind === "private_lesson") {
-      return `- Private lesson: call ${obligation.action_tool ?? "submit_private_lesson_candidate"} with draft_id ${obligation.draft_id}.`;
+      return `- Private lesson${by}${from}: call ${obligation.action_tool ?? "submit_private_lesson_candidate"} with draft_id ${obligation.draft_id}.`;
     }
     if (obligation.kind === "private_skill") {
       if (obligation.action_tool === "inspect_private_learning_outbox") {
-        return `- Recoverable private skill: call inspect_private_learning_outbox with private_skill_draft_id ${obligation.draft_id}, then follow its bounded agent reformulation instructions. Do not submit the held original.`;
+        return `- Recoverable private skill${by}${from}: call inspect_private_learning_outbox with private_skill_draft_id ${obligation.draft_id}, then follow its bounded agent reformulation instructions. Do not submit the held original.`;
       }
       if (obligation.action_tool === "retry_private_skill_candidate") {
-        return `- Retry private skill: call retry_private_skill_candidate with draft_id ${obligation.draft_id}.`;
+        return `- Retry private skill${by}${from}: call retry_private_skill_candidate with draft_id ${obligation.draft_id}.`;
       }
-      return `- Complete private skill: call submit_private_skill_candidate with draft_id ${obligation.draft_id}.`;
+      return `- Complete private skill${by}${from}: call submit_private_skill_candidate with draft_id ${obligation.draft_id}.`;
     }
     if (obligation.local_resupply_envelope) {
       return `- Durable preference${from}: arguments kept on this machine (${retainedPayloadBytes(obligation)} bytes, ${obligation.payload_digest}); call local get_pending_action_payload with action_id ${completionActionId(obligation)} and ledger ${obligation.ledger ?? retained.ledger}, then record_preference with exactly the arguments it returns.`;
@@ -6658,9 +6936,7 @@ function completionObligationInstruction(
       : `- Durable preference${from}: call record_preference with the exact next_action returned by capture_learning.`;
   });
   shown.forEach((obligation, index) => {
-    if (completionActionDeclinable(obligation)) {
-      lines[index] += `\n  action_id ${completionActionId(obligation)}`;
-    }
+    lines[index] += `\n  action_id ${completionActionId(obligation)}`;
   });
   if (obligations.length > lines.length) {
     lines.push(
@@ -6696,9 +6972,8 @@ function completionObligationInstruction(
   return [
     "Before finishing, silently complete only these pending Remembrance actions:",
     ...lines,
-    shown.some(completionActionDeclinable)
-      ? PENDING_ACTION_DECLINE_GUIDANCE
-      : null,
+    PENDING_ACTION_DECLINE_GUIDANCE,
+    shown.some(isPrivateHint) ? PRIVATE_DECLINE_GUIDANCE : null,
     FEEDBACK_DENIAL_GUIDANCE,
     "Do not mention routine hook, tool, or receipt output. Surface only a failure or required user action.",
   ]
@@ -6762,11 +7037,44 @@ export function pendingCompletionRecoveryInstruction(
 // of more bytes than the cap is not opened, since its line cannot fit. A
 // durable preference's arguments are never opened here: only its handle is
 // shown.
-export function pendingCompletionRecovery(sessionId, env = process.env) {
-  const obligations = readCompletionObligations(sessionId, env).filter(
-    (obligation) => completionObligationIsDue(obligation, env),
+// The outboxes are read once for the whole prompt (readPrivateDrafts); the
+// ledger once, with every private hint on the machine, of which this session
+// tree's own become lines and the rest only feed the user decisions, which
+// a session the host runs for a subagent does not get (`notices: false`).
+export function pendingCompletionRecovery(
+  sessionId,
+  env = process.env,
+  { notices = true } = {},
+) {
+  const drafts = readPrivateDrafts(env);
+  const held = readCompletionObligations(sessionId, env, {
+    privateHints: "all",
+  });
+  const retired = retireUnactionablePrivateLessonHints(
+    held.filter(isPrivateHint),
+    drafts,
+    env,
   );
-  const lifecycle = privateLearningLifecycleRecoveryInstruction(env);
+  const hints = held.filter(
+    (obligation) => isPrivateHint(obligation) && !retired.has(obligation.id),
+  );
+  const obligations = duePendingActions(
+    [
+      ...held.filter((obligation) => !isPrivateHint(obligation)),
+      ...hints
+        .filter((hint) => privateHintOwnedBy(hint, sessionId))
+        .slice(0, COMPLETION_OBLIGATION_LIMIT),
+    ],
+    env,
+    drafts,
+  );
+  const lifecycle = privateLearningSessionRecovery(
+    sessionId,
+    hints,
+    drafts,
+    env,
+    { notices },
+  );
   if (obligations.length === 0 && !lifecycle) return null;
   const directSelections = readDirectSelectionSurfaces(sessionId, env);
   const overflow = readCompletionObligationOverflow(sessionId, env);
@@ -6868,8 +7176,8 @@ export function markCurrentEngagementHandled(sessionId, env = process.env) {
   );
   if (
     count > 0 &&
-    !heldCompletionObligations(sessionId, env).some(
-      (obligation) => !feedbackObligationDenied(obligation, env),
+    !heldCompletionObligations(sessionId, env).some((obligation) =>
+      completionObligationPending(obligation, env),
     )
   ) {
     writePromptedCount(sessionId, count, env);
@@ -6907,6 +7215,79 @@ export function recordUserPrompt(sessionId, env = process.env) {
 
 export function readUserPromptCount(sessionId, env = process.env) {
   return readCountFile(userPromptCountPath(sessionId, env));
+}
+
+// A session the host showed to be a main session, not one it runs for a
+// subagent: OpenCode's session.created names no parent session. Kept,
+// content-free, with the session's other usage markers, so the host's next
+// process still knows a session it resumes. On such a host only these get
+// the user decisions about retained drafts (`subagentSession`).
+function mainSessionPath(sessionId, env) {
+  return join(usageDir(env), `${sessionHash(sessionId)}.main-session`);
+}
+
+export function recordMainSession(sessionId, env = process.env) {
+  return writePrivateUsageMarker(mainSessionPath(sessionId, env), "main\n");
+}
+
+export function isRecordedMainSession(sessionId, env = process.env) {
+  try {
+    return readSecureHookFile(mainSessionPath(sessionId, env), 16) === "main\n";
+  } catch {
+    return false;
+  }
+}
+
+// A child session's parent, as the host named it when it created the child
+// (OpenCode's session.created parentID): the parent's session id, kept
+// beside the main-session marker, so every later hook of the child, in any
+// process, finds the root of its session tree (sessionTreeRoot).
+const SESSION_TREE_DEPTH_LIMIT = 8;
+
+function sessionParentPath(sessionId, env) {
+  return join(usageDir(env), `${sessionHash(sessionId)}.parent-session`);
+}
+
+export function recordSessionParent(sessionId, parentId, env = process.env) {
+  const parent = normalizeNativeSessionId(parentId);
+  return Boolean(
+    parent &&
+      writePrivateUsageMarker(sessionParentPath(sessionId, env), `${parent}\n`),
+  );
+}
+
+// The ledger a session's usage, debts and drafts are kept under. A child
+// session's is its tree root's agent ledger (<root>:agent:<child>), as a
+// subagent's is, so its drafts belong to the root's session tree: listed
+// silently there and to the child itself, never as a user decision to the
+// child. Any other session's, a child whose root is not proven among them,
+// is its own id.
+export function sessionTreeLedgerId(sessionId, env = process.env) {
+  const root = sessionTreeRoot(sessionId, env);
+  return root && normalizeNativeSessionId(sessionId)
+    ? agentLedgerIdFor({ session_id: root, agent_id: sessionId })
+    : sessionId;
+}
+
+// The root of a child session's tree, its recorded parent links followed at
+// most SESSION_TREE_DEPTH_LIMIT times. Null for a session with no recorded
+// parent, and for a chain that does not end within the bound, which proves
+// nothing.
+function sessionTreeRoot(sessionId, env) {
+  let current = sessionId;
+  for (let depth = 0; depth <= SESSION_TREE_DEPTH_LIMIT; depth += 1) {
+    let parent = null;
+    try {
+      parent = normalizeNativeSessionId(
+        readSecureHookFile(sessionParentPath(current, env), 512).trim(),
+      );
+    } catch {
+      // No recorded parent: `current` is the root.
+    }
+    if (!parent) return depth === 0 ? null : current;
+    current = parent;
+  }
+  return null;
 }
 
 export function recordDirectiveSurface(
@@ -7524,18 +7905,6 @@ export function clearHighMatchSurfaceIfOpened(
   const normalizedTool = String(toolName ?? "")
     .trim()
     .toLowerCase();
-  if (
-    normalizedTool.endsWith("submit_private_lesson_candidate") ||
-    normalizedTool.endsWith("retry_private_lesson_candidate") ||
-    normalizedTool.endsWith("submit_private_skill_candidate") ||
-    normalizedTool.endsWith("retry_private_skill_candidate")
-  ) {
-    // The PostToolUse adapter calls this function only after a successful tool
-    // response. Clear the content-free denial suppression so future retained
-    // drafts can resume normal lifecycle recovery after exact-action approval.
-    clearPrivateLessonHostPolicyDenials(env);
-    return false;
-  }
   const targetType = normalizedTool.endsWith("get_resource")
     ? "resource"
     : normalizedTool.endsWith("get_skill")
@@ -8094,8 +8463,17 @@ export function foldTurnLedgerIntoSession(
   const overflowPath = completionObligationOverflowPath(turn, env);
   // OpenClaw hands a subagent's session ledger up through here, `forward`:
   // it leaves its marker even when it holds nothing, so a nested subagent
-  // whose end comes later still reaches where it went.
-  if (forward) writeCompletionObligationForward(turn, session, null, env);
+  // whose end comes later still reaches where it went. Its private hints are
+  // held per machine, not in its homes, so the ones it owns become the
+  // session's tree's here (adoptPrivateHint), whatever else it holds.
+  if (forward) {
+    writeCompletionObligationForward(turn, session, null, env);
+    for (const hint of privateHintsOnMachine(turn, env)) {
+      if (privateHintOwnedBy(hint, turn) && !privateHintOwnedBy(hint, session)) {
+        adoptPrivateHint(hint, session, env);
+      }
+    }
+  }
   // Once folded, a turn leaves nothing behind: one check per home per hook.
   // A ledger that only points to debts (an OpenClaw subagent's whose own
   // subagent left them) is folded too.
@@ -8196,139 +8574,224 @@ function privateSkillOutboxDirectoryForHook(env = process.env) {
   );
 }
 
-export function readPrivateLessonLifecycleState(env = process.env) {
-  if (!organizationPrivateLessonAuthorized(env)) return null;
-  const directory = privateLessonOutboxDirectoryForHook(env);
+const PRIVATE_LESSON_STATES = [
+  "ready",
+  "awaiting_authorization",
+  "retry_scheduled",
+  "awaiting_compatible_profile",
+  "held_safety",
+  "held_policy",
+  "held_validation",
+  "submitted",
+  "superseded_redactor",
+];
+const PRIVATE_HOLD_TELEMETRY_STATUSES = [
+  "not_required",
+  "pending",
+  "awaiting_authorization",
+  "retry_scheduled",
+  "awaiting_compatible_profile",
+  "submitted",
+  "disabled",
+];
+// The held_policy codes a retry refreshes, as the server's retry gate allows.
+const PRIVATE_POLICY_REFRESH_CODES = [
+  "policy_expired",
+  "policy_changed",
+  "policy_sequence_conflict",
+  "unsupported_redaction_version",
+  "unsupported_redactor_digest",
+];
+
+function privateLessonEnvelopeValid(value, draftId) {
+  return (
+    value?.version === "private-lesson-outbox-envelope-v1" &&
+    value.draft_id === draftId &&
+    PRIVATE_LESSON_STATES.includes(value.state) &&
+    (value.last_error_code == null ||
+      typeof value.last_error_code === "string") &&
+    PRIVATE_HOLD_TELEMETRY_STATUSES.includes(value.hold_telemetry_status)
+  );
+}
+
+// The one exact agent action a lesson draft's content-free envelope allows
+// now, as the server's retry gate permits it: { tool, count, due }, where
+// `count` names the lifecycle tally it adds to. Null when only inspection, a
+// user decision or nothing is left: held_validation, a classified safety
+// hold (or any safety hold while health reporting is off), a policy hold a
+// retry cannot refresh, a terminal state. A line, a notice and the lifecycle
+// counts all come from this one rule.
+function privateLessonDraftAction(envelope, env) {
+  const submit = "submit_private_lesson_candidate";
+  const retry = "retry_private_lesson_candidate";
+  const whenDue = (count) => ({
+    tool: retry,
+    count,
+    due: retryIsDue(envelope.next_retry_at),
+  });
+  const authorization = () => ({
+    tool: retry,
+    count: "awaiting_authorization",
+    due: privateAuthorizationRetryIsDue(
+      envelope.draft_id,
+      envelope.updated_at,
+      env,
+    ),
+  });
+  const { state } = envelope;
+  if (state === "ready") return { tool: submit, count: "ready", due: true };
+  if (state === "retry_scheduled" || state === "awaiting_compatible_profile")
+    return whenDue(state);
+  if (state === "awaiting_authorization") return authorization();
+  if (state === "held_policy") {
+    return PRIVATE_POLICY_REFRESH_CODES.includes(envelope.last_error_code)
+      ? { tool: retry, count: "held_policy_refresh", due: true }
+      : null;
+  }
+  if (state !== "held_safety" || !privateLessonHealthReportingEnabledForHook(env))
+    return null;
+  const status = envelope.hold_telemetry_status;
+  if (status === "pending")
+    return { tool: submit, count: "hold_telemetry_pending", due: true };
+  if (status === "retry_scheduled" || status === "awaiting_compatible_profile")
+    return whenDue(`hold_telemetry_${status}`);
+  return status === "awaiting_authorization" ? authorization() : null;
+}
+
+// One read of an outbox, bounded by its directory: each draft named there
+// with what `evaluate` makes of its envelope ({ envelope: null } when it
+// cannot be read or trusted). `readable` is false when no organization
+// credential applies or the directory itself is refused; nothing is then
+// known about any draft.
+function scanPrivateOutbox(env, directory, pattern, maxBytes, evaluate) {
+  const drafts = new Map();
+  if (!privateOutboxReadable(env, directory)) return { readable: false, drafts };
   try {
-    const directoryMetadata = lstatSync(directory);
-    if (
-      directoryMetadata.isSymbolicLink() ||
-      !directoryMetadata.isDirectory() ||
-      (isPosixHookRuntime() && (directoryMetadata.mode & 0o077) !== 0)
-    ) {
-      return null;
-    }
-    assertCurrentHookUser(directoryMetadata.uid);
-    const entries = readdirSync(directory, { withFileTypes: true });
-    const counts = {
-      ready: 0,
-      retry_scheduled: 0,
-      awaiting_authorization: 0,
-      awaiting_compatible_profile: 0,
-      held_policy_refresh: 0,
-      hold_telemetry_pending: 0,
-      hold_telemetry_retry_scheduled: 0,
-      hold_telemetry_awaiting_compatible_profile: 0,
-    };
-    const authorizationIds = [];
-    for (const entry of entries) {
-      if (!entry.name.endsWith(".lesson.json")) continue;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const draftId = entry.name.match(pattern)?.[1];
+      if (!draftId) continue;
+      let known = null;
       try {
-        if (entry.isSymbolicLink() || !entry.isFile()) continue;
-        const expectedDraftId = entry.name.slice(0, -".lesson.json".length);
-        if (!/^pld_[A-Za-z0-9_-]{8,96}$/.test(expectedDraftId)) continue;
-        const parsed = JSON.parse(
-          readSecureHookFile(
-            join(directory, entry.name),
-            MAX_PRIVATE_LESSON_ENVELOPE_BYTES,
-          ),
-        );
-        if (
-          parsed?.version !== "private-lesson-outbox-envelope-v1" ||
-          parsed?.draft_id !== expectedDraftId ||
-          ![
-            "ready",
-            "awaiting_authorization",
-            "retry_scheduled",
-            "awaiting_compatible_profile",
-            "held_safety",
-            "held_policy",
-            "held_validation",
-            "submitted",
-            "superseded_redactor",
-          ].includes(parsed?.state) ||
-          (parsed?.last_error_code !== undefined &&
-            parsed?.last_error_code !== null &&
-            typeof parsed?.last_error_code !== "string") ||
-          ![
-            "not_required",
-            "pending",
-            "awaiting_authorization",
-            "retry_scheduled",
-            "awaiting_compatible_profile",
-            "submitted",
-            "disabled",
-          ].includes(parsed?.hold_telemetry_status)
-        ) {
-          continue;
-        }
-        if (
-          parsed.state === "ready" ||
-          ((parsed.state === "retry_scheduled" ||
-            parsed.state === "awaiting_compatible_profile") &&
-            retryIsDue(parsed.next_retry_at))
-        ) {
-          counts[parsed.state] += 1;
-        }
-        if (
-          (parsed.state === "awaiting_authorization" ||
-            (parsed.state === "held_safety" &&
-              parsed.hold_telemetry_status === "awaiting_authorization" &&
-              privateLessonHealthReportingEnabledForHook(env))) &&
-          privateAuthorizationRetryIsDue(
-            parsed.draft_id,
-            parsed.updated_at,
-            env,
-          )
-        ) {
-          counts.awaiting_authorization += 1;
-          authorizationIds.push(parsed.draft_id);
-        }
-        if (
-          parsed.state === "held_policy" &&
-          [
-            "policy_expired",
-            "policy_changed",
-            "policy_sequence_conflict",
-            "unsupported_redaction_version",
-            "unsupported_redactor_digest",
-          ].includes(parsed.last_error_code)
-        ) {
-          counts.held_policy_refresh += 1;
-        }
-        if (
-          privateLessonHealthReportingEnabledForHook(env) &&
-          parsed.state === "held_safety" &&
-          parsed.hold_telemetry_status === "pending"
-        ) {
-          counts.hold_telemetry_pending += 1;
-        }
-        if (
-          privateLessonHealthReportingEnabledForHook(env) &&
-          parsed.state === "held_safety" &&
-          (parsed.hold_telemetry_status === "retry_scheduled" ||
-            parsed.hold_telemetry_status === "awaiting_compatible_profile") &&
-          retryIsDue(parsed.next_retry_at)
-        ) {
-          counts[
-            parsed.hold_telemetry_status === "awaiting_compatible_profile"
-              ? "hold_telemetry_awaiting_compatible_profile"
-              : "hold_telemetry_retry_scheduled"
-          ] += 1;
+        if (!entry.isSymbolicLink() && entry.isFile()) {
+          known = evaluate(
+            JSON.parse(readSecureHookFile(join(directory, entry.name), maxBytes)),
+            draftId,
+          );
         }
       } catch {
         // An interrupted or unreadable entry must not hide independent drafts.
       }
+      drafts.set(draftId, known ?? { envelope: null });
     }
-    if (Object.values(counts).every((count) => count === 0)) return null;
-    return {
-      ...counts,
-      next_authorization_draft_id: authorizationIds.sort()[0] ?? null,
-      host_denial_active: recentPrivateLessonHostDenial(env),
-    };
+    return { readable: true, drafts };
+  } catch {
+    return { readable: false, drafts: new Map() };
+  }
+}
+
+// Whether an outbox can answer for its drafts: an organization credential
+// applies and its directory is the current user's own, private one.
+function privateOutboxReadable(env, directory) {
+  if (!organizationPrivateLessonAuthorized(env)) return false;
+  try {
+    const metadata = lstatSync(directory);
+    if (
+      metadata.isSymbolicLink() ||
+      !metadata.isDirectory() ||
+      (isPosixHookRuntime() && (metadata.mode & 0o077) !== 0)
+    ) {
+      return false;
+    }
+    assertCurrentHookUser(metadata.uid);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function scanPrivateLessonOutbox(env) {
+  return scanPrivateOutbox(
+    env,
+    privateLessonOutboxDirectoryForHook(env),
+    /^(pld_[A-Za-z0-9_-]{8,96})\.lesson\.json$/,
+    MAX_PRIVATE_LESSON_ENVELOPE_BYTES,
+    (envelope, draftId) =>
+      privateLessonEnvelopeValid(envelope, draftId)
+        ? { envelope, action: privateLessonDraftAction(envelope, env) }
+        : null,
+  );
+}
+
+// One draft's envelope, or null when it cannot be read or trusted.
+function readPrivateLessonEnvelope(draftId, env) {
+  try {
+    const envelope = JSON.parse(
+      readSecureHookFile(
+        join(privateLessonOutboxDirectoryForHook(env), `${draftId}.lesson.json`),
+        MAX_PRIVATE_LESSON_ENVELOPE_BYTES,
+      ),
+    );
+    return privateLessonEnvelopeValid(envelope, draftId) ? envelope : null;
   } catch {
     return null;
   }
+}
+
+// What a lesson hint's draft allows, as its outbox answers: { action } (null
+// when no agent action is due from it, or no such draft is retained), or
+// null when the outbox cannot answer and the hint's recorded fields decide.
+// `scan` is this prompt's scanPrivateLessonOutbox; without it, one read.
+function privateLessonHintAction(draftId, env, scan = null) {
+  if (!scan) {
+    const envelope = readPrivateLessonEnvelope(draftId, env);
+    if (envelope) return { action: privateLessonDraftAction(envelope, env) };
+    // A readable outbox without the draft has nothing to act on, as a scan
+    // finds it.
+    const directory = privateLessonOutboxDirectoryForHook(env);
+    try {
+      lstatSync(join(directory, `${draftId}.lesson.json`));
+      return null;
+    } catch (error) {
+      return error?.code === "ENOENT" && privateOutboxReadable(env, directory)
+        ? { action: null }
+        : null;
+    }
+  }
+  if (!scan.readable) return null;
+  const entry = scan.drafts.get(draftId);
+  if (!entry) return { action: null };
+  return entry.envelope ? { action: entry.action } : null;
+}
+
+// `scan` (scanPrivateLessonOutbox) may hold only some drafts: the counts are
+// theirs.
+export function readPrivateLessonLifecycleState(
+  env = process.env,
+  scan = scanPrivateLessonOutbox(env),
+) {
+  if (!scan.readable) return null;
+  const counts = {
+    ready: 0,
+    retry_scheduled: 0,
+    awaiting_authorization: 0,
+    awaiting_compatible_profile: 0,
+    held_policy_refresh: 0,
+    hold_telemetry_pending: 0,
+    hold_telemetry_retry_scheduled: 0,
+    hold_telemetry_awaiting_compatible_profile: 0,
+  };
+  const authorizationIds = [];
+  for (const [draftId, { action }] of scan.drafts) {
+    if (!action?.due) continue;
+    counts[action.count] += 1;
+    if (action.count === "awaiting_authorization") authorizationIds.push(draftId);
+  }
+  if (Object.values(counts).every((count) => count === 0)) return null;
+  return {
+    ...counts,
+    next_authorization_draft_id: authorizationIds.sort()[0] ?? null,
+    host_denial_active: recentPrivateLessonHostDenial(env),
+  };
 }
 
 function retryIsDue(value) {
@@ -8730,159 +9193,150 @@ export async function bindPrivateSkillNativeCapture(
   }
 }
 
-export function readPrivateSkillLifecycleState(env = process.env) {
-  if (!organizationPrivateLessonAuthorized(env)) return null;
-  const directory = privateSkillOutboxDirectoryForHook(env);
-  try {
-    const directoryMetadata = lstatSync(directory);
-    if (
-      directoryMetadata.isSymbolicLink() ||
-      !directoryMetadata.isDirectory() ||
-      (isPosixHookRuntime() && (directoryMetadata.mode & 0o077) !== 0)
-    ) {
-      return null;
-    }
-    assertCurrentHookUser(directoryMetadata.uid);
-    const counts = {
-      ready: 0,
-      retry_scheduled: 0,
-      awaiting_authorization: 0,
-      retry_delivery: 0,
-      retry_resolution: 0,
-      reformulation_available: 0,
-      operational_retry: 0,
-      native_context_needed: 0,
-      native_context_pending: 0,
-      inspector_refresh: 0,
-    };
-    const recoveryIds = [];
-    const authorizationIds = [];
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      if (!/^psd_[A-Za-z0-9_-]{8,96}\.json$/.test(entry.name)) continue;
-      try {
-        if (entry.isSymbolicLink() || !entry.isFile()) continue;
-        const expectedDraftId = entry.name.slice(0, -".json".length);
-        const parsed = JSON.parse(
-          readSecureHookFile(
-            join(directory, entry.name),
-            MAX_PRIVATE_SKILL_ENVELOPE_BYTES,
-          ),
-        );
-        if (
-          parsed?.version !== "private-skill-outbox-envelope-v1" ||
-          parsed?.draft_id !== expectedDraftId ||
-          ![
-            "ready",
-            "awaiting_authorization",
-            "retry_scheduled",
-            "held_safety",
-            "held_validation",
-          ].includes(parsed?.state)
-        ) {
-          continue;
-        }
-        const action = privateSkillRecoveryAction(parsed, true);
-        if (
-          parsed.state === "awaiting_authorization" &&
-          privateAuthorizationRetryIsDue(
-            parsed.draft_id,
-            parsed.updated_at,
-            env,
-          )
-        ) {
-          counts.awaiting_authorization += 1;
-          authorizationIds.push(parsed.draft_id);
-          continue;
-        }
-        const staleInspectorAction =
-          action &&
-          typeof action.inspector_digest === "string" &&
-          action.inspector_digest !== PRIVATE_LEARNING_INSPECTOR_DIGEST &&
-          ((action.kind === "submit_candidate" && parsed.state === "ready") ||
-            ([
-              "reformulate",
-              "retry_operational",
-              "capture_native_context",
-            ].includes(action.kind) &&
-              parsed.state === "held_validation"));
-        const staleInspectorBlockedRecovery =
-          action === null &&
-          parsed.next_action === null &&
-          typeof parsed.inspector_digest === "string" &&
-          parsed.inspector_digest !== PRIVATE_LEARNING_INSPECTOR_DIGEST &&
-          parsed.state === "held_validation" &&
-          parsed.reformulation_available === false &&
-          typeof parsed.reformulation_reason === "string" &&
-          Number.isSafeInteger(parsed.reformulation_attempt_count) &&
-          Number.isSafeInteger(parsed.recovery_epoch_attempt_count) &&
-          parsed.reformulation_attempt_count -
-            parsed.recovery_epoch_attempt_count >=
-            3;
-        if (staleInspectorAction || staleInspectorBlockedRecovery) {
-          counts.inspector_refresh += 1;
-          recoveryIds.push(parsed.draft_id);
-        } else if (action?.kind === "submit_candidate") {
-          counts.ready += 1;
-        } else if (
-          action?.kind === "retry_delivery" &&
-          retryIsDue(parsed.next_retry_at)
-        ) {
-          counts.retry_delivery += 1;
-        } else if (
-          action?.kind === "retry_resolution" &&
-          (parsed.state === "held_validation" ||
-            (parsed.state === "retry_scheduled" &&
-              retryIsDue(parsed.next_retry_at)))
-        ) {
-          counts.retry_resolution += 1;
-        } else if (action?.kind === "reformulate") {
-          counts.reformulation_available += 1;
-          recoveryIds.push(parsed.draft_id);
-        } else if (action?.kind === "retry_operational") {
-          counts.operational_retry += 1;
-          recoveryIds.push(parsed.draft_id);
-        } else if (action?.kind === "reinspect") {
-          counts.inspector_refresh += 1;
-          recoveryIds.push(parsed.draft_id);
-        } else if (action?.kind === "capture_native_context") {
-          counts.native_context_needed += 1;
-        }
-      } catch {
-        // One unsafe or malformed entry cannot hide independent due drafts.
-      }
-    }
-    recoveryIds.sort();
-    let cursor = "";
-    try {
-      const value = readSecureHookFile(
-        join(usageDir(env), "private-skill-recovery-cursor"),
-        104,
-      );
-      if (/^psd_[A-Za-z0-9_-]{8,96}$/.test(value)) cursor = value;
-    } catch {
-      // A missing/stale hint cannot withhold recoverable drafts.
-    }
-    return Object.values(counts).every((count) => count === 0)
-      ? null
-      : {
-          ...counts,
-          next_authorization_draft_id: authorizationIds.sort()[0] ?? null,
-          next_reformulation_draft_id:
-            recoveryIds.find((id) => id > cursor) ?? recoveryIds[0] ?? null,
-          host_denial_active: recentPrivateLessonHostDenial(env),
-        };
-  } catch {
-    return null;
+// The lifecycle tally a private skill draft adds to now (a count key of
+// readPrivateSkillLifecycleState), from its content-free envelope and
+// recovery action; null when nothing is due from it.
+function privateSkillDraftCategory(parsed, env) {
+  const action = privateSkillRecoveryAction(parsed, true);
+  if (
+    parsed.state === "awaiting_authorization" &&
+    privateAuthorizationRetryIsDue(parsed.draft_id, parsed.updated_at, env)
+  ) {
+    return "awaiting_authorization";
   }
+  const staleInspectorAction =
+    action &&
+    typeof action.inspector_digest === "string" &&
+    action.inspector_digest !== PRIVATE_LEARNING_INSPECTOR_DIGEST &&
+    ((action.kind === "submit_candidate" && parsed.state === "ready") ||
+      (["reformulate", "retry_operational", "capture_native_context"].includes(
+        action.kind,
+      ) &&
+        parsed.state === "held_validation"));
+  const staleInspectorBlockedRecovery =
+    action === null &&
+    parsed.next_action === null &&
+    typeof parsed.inspector_digest === "string" &&
+    parsed.inspector_digest !== PRIVATE_LEARNING_INSPECTOR_DIGEST &&
+    parsed.state === "held_validation" &&
+    parsed.reformulation_available === false &&
+    typeof parsed.reformulation_reason === "string" &&
+    Number.isSafeInteger(parsed.reformulation_attempt_count) &&
+    Number.isSafeInteger(parsed.recovery_epoch_attempt_count) &&
+    parsed.reformulation_attempt_count - parsed.recovery_epoch_attempt_count >=
+      3;
+  if (staleInspectorAction || staleInspectorBlockedRecovery)
+    return "inspector_refresh";
+  if (action?.kind === "submit_candidate") return "ready";
+  if (action?.kind === "retry_delivery" && retryIsDue(parsed.next_retry_at))
+    return "retry_delivery";
+  if (
+    action?.kind === "retry_resolution" &&
+    (parsed.state === "held_validation" ||
+      (parsed.state === "retry_scheduled" && retryIsDue(parsed.next_retry_at)))
+  ) {
+    return "retry_resolution";
+  }
+  return (
+    {
+      reformulate: "reformulation_available",
+      retry_operational: "operational_retry",
+      reinspect: "inspector_refresh",
+      capture_native_context: "native_context_needed",
+    }[action?.kind] ?? null
+  );
+}
+
+function scanPrivateSkillOutbox(env) {
+  return scanPrivateOutbox(
+    env,
+    privateSkillOutboxDirectoryForHook(env),
+    /^(psd_[A-Za-z0-9_-]{8,96})\.json$/,
+    MAX_PRIVATE_SKILL_ENVELOPE_BYTES,
+    (envelope, draftId) =>
+      envelope?.version === "private-skill-outbox-envelope-v1" &&
+      envelope.draft_id === draftId &&
+      [
+        "ready",
+        "awaiting_authorization",
+        "retry_scheduled",
+        "held_safety",
+        "held_validation",
+      ].includes(envelope.state)
+        ? { envelope, category: privateSkillDraftCategory(envelope, env) }
+        : null,
+  );
+}
+
+// `scan` (scanPrivateSkillOutbox) may hold only some drafts: the counts are
+// theirs.
+export function readPrivateSkillLifecycleState(
+  env = process.env,
+  scan = scanPrivateSkillOutbox(env),
+) {
+  if (!scan.readable) return null;
+  const counts = {
+    ready: 0,
+    retry_scheduled: 0,
+    awaiting_authorization: 0,
+    retry_delivery: 0,
+    retry_resolution: 0,
+    reformulation_available: 0,
+    operational_retry: 0,
+    native_context_needed: 0,
+    native_context_pending: 0,
+    inspector_refresh: 0,
+  };
+  const recoveryIds = [];
+  const authorizationIds = [];
+  for (const [draftId, { category }] of scan.drafts) {
+    if (!category) continue;
+    counts[category] += 1;
+    if (category === "awaiting_authorization") authorizationIds.push(draftId);
+    if (
+      ["inspector_refresh", "reformulation_available", "operational_retry"].includes(
+        category,
+      )
+    ) {
+      recoveryIds.push(draftId);
+    }
+  }
+  if (Object.values(counts).every((count) => count === 0)) return null;
+  recoveryIds.sort();
+  let cursor = "";
+  try {
+    const value = readSecureHookFile(
+      join(usageDir(env), "private-skill-recovery-cursor"),
+      104,
+    );
+    if (/^psd_[A-Za-z0-9_-]{8,96}$/.test(value)) cursor = value;
+  } catch {
+    // A missing/stale hint cannot withhold recoverable drafts.
+  }
+  return {
+    ...counts,
+    next_authorization_draft_id: authorizationIds.sort()[0] ?? null,
+    next_reformulation_draft_id:
+      recoveryIds.find((id) => id > cursor) ?? recoveryIds[0] ?? null,
+    host_denial_active: recentPrivateLessonHostDenial(env),
+  };
 }
 
 export function privateSkillNativeContextCaptureNeeded(env = process.env) {
   return (readPrivateSkillLifecycleState(env)?.native_context_needed ?? 0) > 0;
 }
 
+// The machine-wide recovery, for a caller that names no session.
 export function privateLearningLifecycleRecoveryInstruction(env = process.env) {
-  const lessons = readPrivateLessonLifecycleState(env);
-  const skills = readPrivateSkillLifecycleState(env);
+  return privateLearningLifecycleText(
+    readPrivateLessonLifecycleState(env),
+    readPrivateSkillLifecycleState(env),
+  );
+}
+
+// `own` (privateLearningSessionRecovery): the reading session tree's due
+// drafts, the only ones its silent recovery may act on.
+function privateLearningLifecycleText(lessons, skills, own = null) {
   const hostDenialActive = Boolean(
     lessons?.host_denial_active || skills?.host_denial_active,
   );
@@ -8925,7 +9379,18 @@ export function privateLearningLifecycleRecoveryInstruction(env = process.env) {
     return null;
   return [
     `Private learning recovery: ${lessonCandidates} lesson candidate${lessonCandidates === 1 ? "" : "s"}, ${skillCandidates} complete skill candidate${skillCandidates === 1 ? "" : "s"}, ${skillDeliveryRetries} private skill delivery retr${skillDeliveryRetries === 1 ? "y" : "ies"}${authorizationRetries > 0 ? `, ${authorizationRetries} authorization retr${authorizationRetries === 1 ? "y" : "ies"}` : ""}, and ${lessonTelemetry} content-free hold event${lessonTelemetry === 1 ? "" : "s"} are due.`,
-    "Silently call inspect_private_learning_outbox. Submit ready lessons with submit_private_lesson_candidate and ready complete skills with submit_private_skill_candidate. Use the matching retry tool only for a due retry.",
+    ...(!own
+      ? [
+          "Silently call inspect_private_learning_outbox. Submit ready lessons with submit_private_lesson_candidate and ready complete skills with submit_private_skill_candidate. Use the matching retry tool only for a due retry.",
+        ]
+      : own.length > 0
+        ? [
+            // One directive unit each, so the context allocator keeps the
+            // drafts with the instruction that names them.
+            `Silently call inspect_private_learning_outbox only for this session's due private drafts (${own.slice(0, 12).join(", ")}${own.length > 12 ? `, and ${own.length - 12} more named in a later prompt` : ""}): submit a ready lesson with submit_private_lesson_candidate and a ready complete skill with submit_private_skill_candidate, and use the matching retry tool only for a due retry.`,
+            "Do not submit or retry, on your own, any other draft inspect_private_learning_outbox lists.",
+          ]
+        : []),
     ...(authorizationReminder ? [authorizationReminder] : []),
     ...(reformulations > 0
       ? [
@@ -8939,6 +9404,543 @@ export function privateLearningLifecycleRecoveryInstruction(env = process.env) {
       : []),
     "Do not ask the user to inspect files or repeat an existing lane approval. Do not retry authorization, policy, validation, safety, or terminal holds through another transport. Never delete an unresolved draft automatically. Hide routine receipts; surface only a concrete failure or required user action.",
   ].join("\n");
+}
+
+// --- Private drafts: ownership, parking and the user decisions ---------------
+//
+// Silent recovery names only drafts the reading session tree holds a hint
+// for. Every other due draft (captured by another session, or by one with no
+// user prompt for PRIVATE_ORPHAN_AFTER_MS, or by an earlier client, or with
+// no hint at all) and every parked one reaches a main thread only as one
+// user decision. Parking (a decline, or a host's denial of that exact draft)
+// is a content-free marker beside the hints; neither touches a draft, and
+// only the confirmed delete tool removes one.
+
+// This prompt's one read of both outboxes and of the drafts' markers.
+function readPrivateDrafts(env) {
+  const parked = new Map();
+  const held = new Set();
+  const directory = privateLearningLifecycleDirectory(env);
+  if (organizationPrivateLessonAuthorized(env)) {
+    try {
+      assertSecureHookDirectory(lstatSync(directory));
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const match = entry.name.match(
+          /^((?:pld|psd)_[A-Za-z0-9_-]{8,96})\.(parked|held-notice)\.json$/,
+        );
+        if (!match || entry.isSymbolicLink() || !entry.isFile()) continue;
+        if (match[2] === "held-notice") held.add(match[1]);
+        const marker =
+          match[2] === "parked" && readPrivateParkedMarker(match[1], env);
+        if (marker) parked.set(match[1], marker);
+      }
+    } catch {
+      // No lifecycle directory yet: nothing is parked or noticed.
+    }
+  }
+  return {
+    lessons: scanPrivateLessonOutbox(env),
+    skills: scanPrivateSkillOutbox(env),
+    parked,
+    held,
+  };
+}
+
+// The obligations due now; a private lesson's line names the exact tool its
+// envelope allows when its outbox answers.
+function duePendingActions(obligations, env, drafts) {
+  return obligations
+    .filter((obligation) => completionObligationIsDue(obligation, env, drafts))
+    .map((obligation) => {
+      const tool =
+        obligation.kind === "private_lesson" &&
+        drafts.lessons.drafts.get(obligation.draft_id)?.action?.tool;
+      return tool && tool !== obligation.action_tool
+        ? { ...obligation, action_tool: tool }
+        : obligation;
+    });
+}
+
+// A lesson hint whose readable envelope allows no agent action points at
+// nothing to do, so it goes, and its draft stays. An earlier client's hints
+// for such drafts (a classified safety hold kept asking for a submit) go on
+// the first prompt that reads them.
+function retireUnactionablePrivateLessonHints(hints, drafts, env) {
+  const stale = new Set(
+    hints
+      .filter((hint) => {
+        const entry = drafts.lessons.drafts.get(hint.draft_id);
+        return hint.kind === "private_lesson" && entry?.envelope && !entry.action;
+      })
+      .map((hint) => hint.id),
+  );
+  if (stale.size > 0) {
+    removeCompletionObligations(null, (item) => stale.has(item.id), env);
+  }
+  return stale;
+}
+
+function privateHintsOnMachine(sessionId, env) {
+  return readCompletionObligations(sessionId, env, {
+    pointers: false,
+    ask: false,
+    privateHints: "all",
+  }).filter(isPrivateHint);
+}
+
+// This ledger's share of the lifecycle recovery for one prompt or stop: its
+// silent lines count and name only drafts its own session tree holds an
+// unparked hint for; a main thread also gets the user decisions
+// (privateDraftNotices), unless the host says it runs this session for a
+// subagent (`notices: false`). `hints` are every private hint on the
+// machine. Null when nothing is due.
+function privateLearningSessionRecovery(
+  sessionId,
+  hints,
+  drafts,
+  env,
+  { notices = true } = {},
+) {
+  const own = new Set(
+    hints
+      .filter(
+        (hint) =>
+          privateHintOwnedBy(hint, sessionId) && !drafts.parked.has(hint.draft_id),
+      )
+      .map((hint) => hint.draft_id),
+  );
+  const only = (scan) => ({
+    readable: scan.readable,
+    drafts: new Map([...scan.drafts].filter(([draftId]) => own.has(draftId))),
+  });
+  return (
+    [
+      privateLearningLifecycleText(
+        readPrivateLessonLifecycleState(env, only(drafts.lessons)),
+        readPrivateSkillLifecycleState(env, only(drafts.skills)),
+        // In hint order (created_at, then id), the order of their lines.
+        [...own].filter((draftId) => privateDraftDue(draftId, drafts)),
+      ),
+      ...(notices ? privateDraftNotices(sessionId, hints, drafts, env) : []),
+    ]
+      .filter(Boolean)
+      .join("\n") || null
+  );
+}
+
+// The draft ids each notice sentence this process composed for a ledger
+// names, until a delivery of that exact sentence acknowledges it
+// (acknowledgePrivateDraftNotices): a delivery marks and advances only what
+// it showed. Composition and delivery run in one process on every host; two
+// sessions of one long-lived process (OpenCode, OpenClaw) can compose the
+// same sentence from different drafts, so each entry is the ledger's. At
+// most 16, newest last.
+const privateNoticesShown = new Map();
+
+function rememberPrivateNotice(sessionId, text, shown) {
+  const ledger = sessionHash(sessionId);
+  const key = `${ledger}\n${text}`;
+  privateNoticesShown.delete(key);
+  privateNoticesShown.set(key, { ...shown, ledger, text });
+  if (privateNoticesShown.size > 16) {
+    privateNoticesShown.delete(privateNoticesShown.keys().next().value);
+  }
+  return text;
+}
+
+// The two user decisions, each one bounded, content-free sentence: one
+// directive unit, which the context allocator keeps whole or drops, so its
+// exact text in the delivered context acknowledges it
+// (acknowledgePrivateDraftNotices). Retained drafts awaiting the user
+// (privateDraftsAwaitingUser), at most once per
+// PRIVATE_ORPHAN_NOTICE_INTERVAL_MS on this machine, with the action_id that
+// keeps them; and lesson drafts a safety hold left with nothing to send,
+// once per draft, with no reply asked. Main threads only.
+function privateDraftNotices(sessionId, hints, drafts, env) {
+  if (String(sessionId ?? "").includes(":agent:")) return [];
+  const notices = [];
+  const awaiting = privateDraftsAwaitingUser(sessionId, hints, drafts, env);
+  if (awaiting.length > 0 && privateOrphanNoticeDue(env)) {
+    const lessons = awaiting.filter((id) => id.startsWith("pld_")).length;
+    const skills = awaiting.length - lessons;
+    notices.push(
+      rememberPrivateNotice(
+        sessionId,
+        `- Retained private drafts awaiting a user decision: ${lessons} lesson${lessons === 1 ? "" : "s"} and ${skills} skill${skills === 1 ? "" : "s"} that no active session is handling; do not submit them on your own, but ask the user once whether to deliver them (inspect_private_learning_outbox, then each draft's exact submit or retry action), keep them (local decline_pending_action with action_id ${PRIVATE_ORPHAN_NOTICE_ACTION_ID} and any reason), or delete them (the matching delete tool with confirm=true); if no user can answer in this run, leave them in the outbox.`,
+        {
+          awaiting,
+          parked: awaiting.filter((draftId) => drafts.parked.has(draftId)),
+        },
+      ),
+    );
+  }
+  const held = privateHeldDrafts(drafts);
+  if (held.length > 0) {
+    notices.push(
+      rememberPrivateNotice(
+        sessionId,
+        `- ${held.length} retained private lesson draft${held.length === 1 ? " was" : "s were"} held by the local safety check and will not be sent: ask the user once whether to re-capture a safe version with a new capture_learning call or delete ${held.length === 1 ? "it" : "them"} with delete_private_lesson_candidate and confirm=true (inspect_private_learning_outbox lists each draft_id), and never resubmit the held content; this notice is shown once and needs no reply, and if no user can answer in this run, leave the outbox as it is.`,
+        { held },
+      ),
+    );
+  }
+  return notices;
+}
+
+// Due drafts no session of the reader's tree holds a hint for: none or an
+// earlier client's, another session's whose hint is idle
+// (privateHintIdle), and parked drafts, whoever holds them, whose next
+// notice is due. In draft id order, whatever order the file system lists
+// them in.
+function privateDraftsAwaitingUser(sessionId, hints, drafts, env) {
+  const own = sessionHash(sessionId);
+  const held = new Map(hints.map((hint) => [hint.draft_id, hint]));
+  const idle = new Map();
+  const isIdle = (ledger) => {
+    if (!idle.has(ledger)) idle.set(ledger, privateSessionIdle(ledger, env));
+    return idle.get(ledger);
+  };
+  const awaiting = [];
+  for (const draftId of [...drafts.lessons.drafts.keys(), ...drafts.skills.drafts.keys()]) {
+    if (!privateDraftDue(draftId, drafts)) continue;
+    const parked = drafts.parked.get(draftId);
+    const hint = held.get(draftId);
+    const owner = hint?.owner_session;
+    if (
+      parked
+        ? privateParkedNoticeDue(parked)
+        : owner !== own && (!owner || privateHintIdle(hint, isIdle))
+    ) {
+      awaiting.push(draftId);
+    }
+  }
+  return awaiting.sort();
+}
+
+// Whether a draft allows an agent action now (the native-context wait asks
+// for none).
+function privateDraftDue(draftId, drafts) {
+  if (draftId.startsWith("pld_"))
+    return Boolean(drafts.lessons.drafts.get(draftId)?.action?.due);
+  const category = drafts.skills.drafts.get(draftId)?.category;
+  return Boolean(category && category !== "native_context_needed");
+}
+
+// A hint's draft is still being handled while its owner's session or the
+// ledger that captured it has had a user prompt within
+// PRIVATE_ORPHAN_AFTER_MS: an OpenCode child's own prompts (its tree ledger)
+// keep its drafts while its root is idle. A ledger with no count, such as a
+// Claude Code subagent's, is idle, so there the owner decides as before.
+// One more stat at most, only when the owner is idle.
+function privateHintIdle(hint, isIdle) {
+  return (
+    isIdle(hint.owner_session) &&
+    (hint.captured_by_ledger === hint.owner_session ||
+      isIdle(hint.captured_by_ledger))
+  );
+}
+
+function privateSessionIdle(owner, env) {
+  try {
+    return (
+      lstatSync(join(usageDir(env), `${owner}.user-prompts`)).mtimeMs +
+        PRIVATE_ORPHAN_AFTER_MS <=
+      Date.now()
+    );
+  } catch {
+    return true;
+  }
+}
+
+// Lesson drafts a safety hold left with no agent action (classified, or
+// health reporting off) that have not had their one notice.
+function privateHeldDrafts(drafts) {
+  return [...drafts.lessons.drafts]
+    .filter(
+      ([draftId, { envelope, action }]) =>
+        envelope?.state === "held_safety" && !action && !drafts.held.has(draftId),
+    )
+    .map(([draftId]) => draftId);
+}
+
+function privateOrphanNoticePath(env) {
+  return join(privateLearningLifecycleDirectory(env), "orphan-notice.json");
+}
+
+// The last delivered notice for drafts awaiting the user: when, and the
+// draft ids it offered while they are at most PRIVATE_ORPHAN_NOTICE_DRAFT_LIMIT,
+// so the record stays within the bytes read back; a longer offer is recorded
+// without them. Content-free.
+const PRIVATE_ORPHAN_NOTICE_DRAFT_LIMIT = 256;
+
+function readPrivateOrphanNotice(env) {
+  try {
+    const value = JSON.parse(
+      readSecureHookFile(privateOrphanNoticePath(env), 32 * 1024),
+    );
+    return {
+      shown_at: Date.parse(value?.shown_at ?? ""),
+      drafts: Array.isArray(value?.drafts)
+        ? value.drafts.filter((draftId) =>
+            /^(?:pld|psd)_[A-Za-z0-9_-]{8,96}$/.test(draftId ?? ""),
+          )
+        : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function privateOrphanNoticeDue(env) {
+  const shown = readPrivateOrphanNotice(env)?.shown_at;
+  // A future time cannot strand the notice.
+  return (
+    !Number.isFinite(shown) ||
+    shown > Date.now() ||
+    shown + PRIVATE_ORPHAN_NOTICE_INTERVAL_MS <= Date.now()
+  );
+}
+
+function readPrivateParkedMarker(draftId, env) {
+  const path = privateDraftMarkerPath(draftId, "parked", env);
+  if (!path) return null;
+  try {
+    const marker = JSON.parse(readSecureHookFile(path, 1024));
+    return marker?.version === 1 &&
+      Number.isFinite(Date.parse(marker.parked_at)) &&
+      Number.isSafeInteger(marker.notices) &&
+      marker.notices >= 0
+      ? marker
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePrivateParkedMarker(draftId, marker, env) {
+  const path = privateDraftMarkerPath(draftId, "parked", env);
+  return Boolean(
+    path &&
+    writePrivateUsageMarker(path, `${JSON.stringify({ version: 1, ...marker })}\n`),
+  );
+}
+
+// When a parked draft's notice is next due after `notices` deliveries: on
+// the PRIVATE_PARKED_NOTICE_DELAYS_MS schedule, then never on its own.
+function privateParkedNoticeAt(notices, now = Date.now()) {
+  return notices < PRIVATE_PARKED_NOTICE_DELAYS_MS.length
+    ? new Date(now + PRIVATE_PARKED_NOTICE_DELAYS_MS[notices]).toISOString()
+    : null;
+}
+
+// A parked draft's notice is due on its schedule, and once after a client
+// update.
+function privateParkedNoticeDue(marker) {
+  const next = Date.parse(marker.next_notice_at ?? "");
+  const installed = installedClientVersion();
+  return (
+    (Number.isFinite(next) && next <= Date.now()) ||
+    Boolean(
+      installed &&
+      marker.client_version &&
+      compareStableClientVersions(installed, marker.client_version) > 0,
+    )
+  );
+}
+
+// The client version a parked marker records: the newest that showed or
+// parked its draft. A host of an older version on the machine never moves
+// it back, so a newer host does not take its notice or park for an update.
+function newerClientVersion(recorded) {
+  const installed = installedClientVersion();
+  return compareStableClientVersions(recorded, installed) > 0
+    ? recorded
+    : (installed ?? recorded ?? null);
+}
+
+// Parks one draft: its line stops and it returns only in the user-decision
+// notice, on its schedule. A repeated park keeps the count already shown.
+// The parked marker now holds the draft, so its hint goes, whoever held it,
+// and leaves room in the machine's bound; its authorization backoff stays,
+// and an explicit submit or retry records a hint again.
+function parkPrivateDraft(
+  draftId,
+  reason,
+  env,
+  prior = readPrivateParkedMarker(draftId, env),
+) {
+  const notices = prior?.notices ?? 0;
+  const parked = writePrivateParkedMarker(
+    draftId,
+    {
+      reason,
+      parked_at: new Date().toISOString(),
+      notices,
+      next_notice_at: privateParkedNoticeAt(notices),
+      client_version: newerClientVersion(prior?.client_version),
+    },
+    env,
+  );
+  if (parked) dropPrivateHint(draftId, env);
+  return parked;
+}
+
+// Removes a draft's hint where any client kept it, and nothing else of it:
+// not its draft, not its markers.
+function dropPrivateHint(draftId, env) {
+  const id = `${draftId.startsWith("pld_") ? "private_lesson" : "private_skill"}:${draftId}`;
+  try {
+    if (lifecycleDirectoryUsable(env)) {
+      rmSync(completionObligationPath(null, id, env), { force: true });
+    }
+    rmSync(
+      join(
+        legacyPrivateCompletionObligationDir(env),
+        completionObligationFileName(id),
+      ),
+      { force: true },
+    );
+  } catch {
+    // A hint left behind is only a pointer; its parked draft stays parked.
+  }
+}
+
+// An observed submit or retry the host let through allows its lane again:
+// the lane-wide denial observations go, and each draft of that lane parked
+// for a host denial returns once, as a user decision.
+function allowPrivateLane(prefix, env) {
+  clearPrivateLessonHostPolicyDenials(env);
+  try {
+    for (const name of readdirSync(privateLearningLifecycleDirectory(env))) {
+      const draftId = name.match(/^((?:pld|psd)_[A-Za-z0-9_-]{8,96})\.parked\.json$/)?.[1];
+      if (!draftId?.startsWith(prefix)) continue;
+      const marker = readPrivateParkedMarker(draftId, env);
+      if (marker?.reason !== PRIVATE_DECLINE_REASON || marker.lane_allowed_at)
+        continue;
+      const now = new Date().toISOString();
+      writePrivateParkedMarker(
+        draftId,
+        { ...marker, next_notice_at: now, lane_allowed_at: now },
+        env,
+      );
+    }
+  } catch {
+    // Nothing parked yet.
+  }
+}
+
+// A notice counts as shown once its sentence reached the agent, as a retry
+// reference does, and only for the drafts that sentence was composed from
+// (privateNoticesShown): the delivering ledger's composition, or, where the
+// host names none (one session per process), the newest. Nothing else is
+// read. The orphan interval restarts with the drafts it offered recorded,
+// each parked draft it named moves to its next wait, once: one another
+// delivery already moved, or a park restarted, is no longer due. Each held
+// draft it counted has had its one notice.
+function acknowledgePrivateDraftNotices(context, env, ledgerId) {
+  const ledger = ledgerId == null ? null : sessionHash(ledgerId);
+  const delivered = new Set();
+  for (const [key, shown] of [...privateNoticesShown].reverse()) {
+    if (
+      !context.includes(shown.text) ||
+      (ledger ? shown.ledger !== ledger : delivered.has(shown.text))
+    ) {
+      continue;
+    }
+    delivered.add(shown.text);
+    privateNoticesShown.delete(key);
+    const now = new Date().toISOString();
+    for (const draftId of shown.held ?? []) {
+      writePrivateUsageMarker(
+        privateDraftMarkerPath(draftId, "held-notice", env),
+        `${JSON.stringify({ version: 1, shown_at: now })}\n`,
+      );
+    }
+    if (!shown.awaiting) continue;
+    writePrivateUsageMarker(
+      privateOrphanNoticePath(env),
+      `${JSON.stringify({
+        version: 1,
+        shown_at: now,
+        ...(shown.awaiting.length <= PRIVATE_ORPHAN_NOTICE_DRAFT_LIMIT
+          ? { drafts: shown.awaiting }
+          : {}),
+      })}\n`,
+    );
+    for (const draftId of shown.parked) {
+      const marker = readPrivateParkedMarker(draftId, env);
+      if (!marker || !privateParkedNoticeDue(marker)) continue;
+      const notices = marker.notices + 1;
+      writePrivateParkedMarker(
+        draftId,
+        {
+          ...marker,
+          notices,
+          next_notice_at: privateParkedNoticeAt(notices),
+          client_version: newerClientVersion(marker.client_version),
+        },
+        env,
+      );
+    }
+  }
+}
+
+// A decline of the notice for drafts awaiting the user parks the drafts it
+// offered that still await the user; a draft that reached the user after it
+// was delivered, or one the user had delivered meanwhile, is not parked.
+// Without a recorded offer (none was delivered, or it offered more drafts
+// than the record keeps), every draft awaiting the user now that is not
+// parked yet is: one that began awaiting after the delivery then returns as
+// a user decision a day later, about when the next notice would have
+// offered it. A parked draft keeps its own schedule and comes with the next
+// notice: a delivery moves on each parked draft it shows, so one due now was
+// not in the offer.
+function parkPrivateDraftsAwaitingUser(sessionId, reason, env) {
+  const drafts = readPrivateDrafts(env);
+  const offered = readPrivateOrphanNotice(env)?.drafts;
+  for (const draftId of privateDraftsAwaitingUser(
+    sessionId,
+    privateHintsOnMachine(sessionId, env),
+    drafts,
+    env,
+  )) {
+    if (offered ? !offered.includes(draftId) : drafts.parked.has(draftId)) continue;
+    parkPrivateDraft(draftId, reason, env, drafts.parked.get(draftId));
+  }
+}
+
+// The draft a host denied, when its event names the exact private submit or
+// retry tool and that call's own draft_id.
+function privateDeniedDraftId(toolName, value) {
+  const prefix = {
+    submit_private_lesson_candidate: "pld_",
+    retry_private_lesson_candidate: "pld_",
+    submit_private_skill_candidate: "psd_",
+    retry_private_skill_candidate: "psd_",
+  }[normalizedCompletionToolName(toolName)];
+  if (!prefix || !value || typeof value !== "object") return null;
+  let args =
+    value.tool_input ??
+    value.toolInput ??
+    value.arguments ??
+    value.args ??
+    value.params;
+  if (typeof args === "string") {
+    try {
+      args = JSON.parse(args);
+    } catch {
+      return null;
+    }
+  }
+  const draftId =
+    args && typeof args === "object" && !Array.isArray(args)
+      ? args.draft_id
+      : null;
+  return typeof draftId === "string" &&
+    draftId.startsWith(prefix) &&
+    /^(?:pld|psd)_[A-Za-z0-9_-]{8,96}$/.test(draftId)
+    ? draftId
+    : null;
 }
 
 export function privateLessonLifecycleRecoveryInstruction(env = process.env) {
@@ -10448,6 +11450,13 @@ export function recordHostPolicyDenial(
     toolName,
     value,
   });
+  // The exact private submit or retry denied parks that one draft, by the
+  // tool and its own draft_id rather than by wording: always for a host
+  // permission denial, and for a generic failure the classifier accepted.
+  const deniedDraft = privateDeniedDraftId(toolName, value);
+  if (deniedDraft && (classification || eventType === "PermissionDenied")) {
+    parkPrivateDraft(deniedDraft, PRIVATE_DECLINE_REASON, env);
+  }
   if (!normalizedSurface || !classification) return null;
   // Hosts that expose denial events can acknowledge the exact receipt locally.
   // Other hosts use the explicit local tool; no transcript inference is needed.

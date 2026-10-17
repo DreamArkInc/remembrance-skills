@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -16,6 +24,7 @@ import {
   pendingCompletionRecoveryInstruction,
   readCompletionObligations,
   readDirectSelectionSurfaces,
+  recordPrivateLessonObligation,
   readPluginLifecycleHealth,
   readValueEpisodeSurfaces,
   readRegistryUseCount,
@@ -116,6 +125,25 @@ function toastClient() {
       },
     },
   };
+}
+
+// The session that captured a draft holds its hint: only then is its
+// recovery silent rather than a user decision.
+function captureAuthorizationDraft(sessionId, draftId) {
+  writeAuthorizationEnvelope(draftId);
+  recordPrivateLessonObligation(
+    sessionId,
+    {
+      draft_id: draftId,
+      state: "awaiting_authorization",
+      retained_locally: true,
+      next_action: {
+        tool: "retry_private_lesson_candidate",
+        arguments: { draft_id: draftId },
+      },
+    },
+    process.env,
+  );
 }
 
 function writeAuthorizationEnvelope(draftId) {
@@ -354,7 +382,7 @@ describe("opencode completion nudge (session.idle)", () => {
   it("does not consume visible recovery when both notification sinks fail", async () => {
     process.env.REMEMBRANCE_API_KEY = "rk_opencode_delivery_failure";
     const draftId = "pld_delivery_failure";
-    writeAuthorizationEnvelope(draftId);
+    captureAuthorizationDraft("s-delivery-failure", draftId);
     recordRegistryUse("s-delivery-failure", process.env);
     let toastAttempts = 0;
     let logAttempts = 0;
@@ -406,7 +434,7 @@ describe("opencode completion nudge (session.idle)", () => {
   it("acknowledges visible recovery after the logging fallback succeeds", async () => {
     process.env.REMEMBRANCE_API_KEY = "rk_opencode_delivery_fallback";
     const draftId = "pld_delivery_fallback";
-    writeAuthorizationEnvelope(draftId);
+    captureAuthorizationDraft("s-delivery-fallback", draftId);
     recordRegistryUse("s-delivery-fallback", process.env);
     const messages = [];
     const hooks = await Remembrance({
@@ -519,6 +547,85 @@ describe("opencode tool observer (tool.execute.after)", () => {
       toasts.filter((toast) => toast.message === HOST_POLICY_ALERT_TEXT),
     ).toHaveLength(1);
   });
+  // The failed call's own arguments reach the denial observer, so a host
+  // denial parks exactly that draft and leaves the others listed.
+  it("parks the exact private draft whose submit the host denied", async () => {
+    process.env.REMEMBRANCE_API_KEY = "rk_synthetic_opencode_denial";
+    const sessionID = "s-denied-draft";
+    const outbox = join(
+      process.env.XDG_STATE_HOME,
+      "remembrance",
+      "private-lessons",
+    );
+    mkdirSync(outbox, { recursive: true, mode: 0o700 });
+    chmodSync(outbox, 0o700);
+    const [denied, kept] = ["pld_opencode_denied", "pld_opencode_kept"];
+    const envelopes = [denied, kept].map((draftId) => {
+      const path = join(outbox, `${draftId}.lesson.json`);
+      writeFileSync(
+        path,
+        JSON.stringify({
+          version: "private-lesson-outbox-envelope-v1",
+          draft_id: draftId,
+          state: "ready",
+          hold_telemetry_status: "not_required",
+          next_retry_at: null,
+          updated_at: "2026-10-01T00:00:00.000Z",
+        }),
+        { mode: 0o600 },
+      );
+      return [path, readFileSync(path)];
+    });
+    const { client } = toastClient();
+    const hooks = await Remembrance({ client });
+    for (const draftId of [denied, kept]) {
+      await hooks["tool.execute.after"](
+        { tool: "remembrance_capture_learning", sessionID, args: {} },
+        {
+          body: {
+            capture_route: "private_lesson",
+            draft_id: draftId,
+            state: "ready",
+            next_action: {
+              tool: "submit_private_lesson_candidate",
+              arguments: { draft_id: draftId },
+            },
+          },
+        },
+      );
+    }
+    await hooks["tool.execute.after"](
+      {
+        tool: "remembrance_submit_private_lesson_candidate",
+        sessionID,
+        args: { draft_id: denied },
+      },
+      {
+        isError: true,
+        error:
+          "Blocked by workspace data-export policy before reaching Remembrance.",
+      },
+    );
+    const parked = (draftId) => {
+      const path = join(
+        process.env.XDG_STATE_HOME,
+        "remembrance",
+        "private-learning-lifecycle",
+        `${draftId}.parked.json`,
+      );
+      return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : null;
+    };
+    expect(parked(denied)).toMatchObject({ reason: "host_policy_denied" });
+    expect(parked(kept)).toBeNull();
+    const pending = pendingCompletionRecoveryInstruction(sessionID, process.env);
+    const line = (draftId) =>
+      `call submit_private_lesson_candidate with draft_id ${draftId}`;
+    expect(pending).toContain(line(kept));
+    expect(pending).not.toContain(line(denied));
+    for (const [path, bytes] of envelopes)
+      expect(readFileSync(path)).toEqual(bytes);
+  });
+
   it("correlates a matched query and ignores empty query consumption", async () => {
     const { client } = loggingClient();
     const hooks = await Remembrance({ client });

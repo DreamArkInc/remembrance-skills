@@ -1709,7 +1709,11 @@ describe("F2: kept transferred work stays discoverable after saturation", () => 
     const childStop = stopOf(parent, childId(0x7c0));
     const child = agentLedgerIdFor(childStop);
     recordQueryFeedbackObligation(child, { available: true, query_id: "rq_own_child" }, env);
-    const draft = { draft_id: "pld_racehint0001", state: "ready" };
+    const draft = {
+      draft_id: "pld_racehint0001",
+      state: "ready",
+      next_action: { tool: "submit_private_lesson_candidate", arguments: { draft_id: "pld_racehint0001" } },
+    };
     if (hint) {
       expect(recordPrivateLessonObligation(child, { body: draft }, env)).toMatchObject({ kind: "private_lesson" });
     }
@@ -1741,6 +1745,18 @@ describe("F2: kept transferred work stays discoverable after saturation", () => 
     ]);
     expect(durablePointers(env, parent)).toEqual([associationFileName(ledgerOf(child))]);
     if (hint) {
+      // The child's session tree, the parent's, owns its draft, which names
+      // the subagent that captured it; the parent completes it.
+      expect(
+        readCompletionObligations(parent, env, { pointers: false, ask: false }).filter((item) => item.kind === "private_lesson"),
+      ).toEqual([
+        expect.objectContaining({
+          draft_id: draft.draft_id,
+          owner_session: ledgerOf(parent),
+          captured_by_ledger: ledgerOf(child),
+          captured_by_agent: childId(0x7c0),
+        }),
+      ]);
       observeSuccessfulCompletionTool(parent, "submit_private_lesson_candidate", { draft_id: draft.draft_id }, { body: { accepted_private_candidate: true } }, env);
     }
     payOwn(env, parent);
@@ -2860,7 +2876,7 @@ describe("F2: kept transferred work stays discoverable after saturation", () => 
       // candidate kept on this machine, and the hint it opens shows that the
       // call took that return, not the end of the tool call.
       ["a private lesson kept on this machine (submit_private_lesson_candidate)", (env, top) => {
-        const result = observeSuccessfulCompletionTool(top, "submit_private_lesson_candidate", {}, { body: { draft_id: "pld_r3heldlesson01", state: "retry_scheduled", status: "not_submitted", retained_locally: true } }, env);
+        const result = observeSuccessfulCompletionTool(top, "submit_private_lesson_candidate", {}, { body: { draft_id: "pld_r3heldlesson01", state: "retry_scheduled", status: "not_submitted", retained_locally: true, next_action: { tool: "retry_private_lesson_candidate", arguments: { draft_id: "pld_r3heldlesson01" } } } }, env);
         expect(result.opened.map((item) => `${item.kind}:${item.draft_id}`)).toEqual(["private_lesson:pld_r3heldlesson01"]);
         return result;
       }],

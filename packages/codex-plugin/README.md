@@ -166,6 +166,9 @@ plugin is active:
    `submit_feedback`. For reusable learning, confirm it separately calls
    `capture_learning` with exactly one compact lesson, complete private skill,
    or durable preference and invokes only the returned exact action.
+6. With an organization key, complete
+   [Highly Recommended: approve private submissions](#highly-recommended-approve-private-submissions)
+   below, then confirm one private submission completes without a prompt.
 
 If Codex can see the plugin skill but not the MCP tools, or the CLI review shows
 any Remembrance hook as **Needs review**, treat the installation as degraded
@@ -175,6 +178,58 @@ Remembrance hook that needs review. The health marker stores only bounded event
 names and trust states, never hook commands, local paths, or hashes. On a fresh
 process, unexercised tool-observer and completion events are informational; a
 warning appears only after a later lifecycle opportunity is actually missed.
+
+### Highly Recommended: approve private submissions
+
+For organizations that use Remembrance with a private organization key, this
+step is required for Remembrance to do its job fully. Current Codex source does
+not ask before these tools under the default `auto` tool approval mode, so
+there the tables are a safeguard. Under the managed `writes` mode, the `prompt`
+mode, or older releases, every private lesson or skill submission otherwise
+stops for approval, and a run that cannot ask denies it. Public-only use,
+without an organization key, does not need it.
+
+Merge one table per private submit and retry tool into the user-level
+`~/.codex/config.toml` (do not duplicate an existing table). Keep them separate
+from the optional routine-feedback opt-in below:
+
+```toml
+[plugins."remembrance@remembrance".mcp_servers.remembrance.tools.submit_private_lesson_candidate]
+approval_mode = "approve"
+
+[plugins."remembrance@remembrance".mcp_servers.remembrance.tools.retry_private_lesson_candidate]
+approval_mode = "approve"
+
+[plugins."remembrance@remembrance".mcp_servers.remembrance.tools.submit_private_skill_candidate]
+approval_mode = "approve"
+
+[plugins."remembrance@remembrance".mcp_servers.remembrance.tools.retry_private_skill_candidate]
+approval_mode = "approve"
+```
+
+- Under the managed `default_tools_approval_mode = "writes"`, Codex asks
+  before every call, from a person or from Auto-review where it is the
+  reviewer, and cannot remember the answer, so a per-tool `approve` entry is
+  the only way to persist approval.
+- `approve` also skips Auto-review for that tool, so the organization's
+  guardian policy no longer evaluates it. In a managed organization, add these
+  tables only with your administrator.
+- That mode also asks before `capture_learning`, which every local private
+  submission starts with. It is local only: it stays on this machine and sends
+  nothing. Approving it lets runs that cannot ask capture, but then Auto-review
+  never sees the lesson content; the managed Codex recipe in
+  `skills/remembrancer/references/remembrance-setup.md` gives that optional
+  table.
+- Never approve `delete_private_lesson_candidate`,
+  `delete_private_skill_candidate`, or the whole server.
+- A manually registered server uses `mcp_servers.remembrance` tables instead;
+  see [Manual install](#manual-install-configtoml).
+
+Check the step by behavior: capture one disposable private lesson and confirm
+that neither the capture nor its submission prompts. Where the organization
+leaves the capture to Auto-review or a person under `writes`, only the capture
+is reviewed; its submission still must not prompt. `run_connection_doctor`
+cannot see a persisted approval.
 
 ### Optional unattended routine feedback
 
@@ -202,10 +257,12 @@ lessons use `capture_learning` and its exact returned action.
 
 Both tools make real writes. Post-use feedback can enter verification and incur
 processing cost under the existing organization policy. This opt-in does not
-approve private lesson/skill submission, publishing, deletion, reset,
-preference changes, or other tools. It does not widen `enabled_tools` or override
-managed policy, guardian decisions, network restrictions, or organization
-processing grants. Do not set the whole server's approval default to `approve`.
+approve private lesson/skill submission (the Highly Recommended step above
+covers that), publishing, deletion, reset, preference changes, or other tools.
+It does not widen `enabled_tools` or override managed policy, network
+restrictions, or organization processing grants. It does skip the Codex
+approval prompt and its Auto-review (guardian) evaluation for these two tools.
+Do not set the whole server's approval default to `approve`.
 
 Tool overrides persist when authentication or schemas change. Remove or
 re-review both approvals before switching to anonymous or hosted transport,
@@ -301,6 +358,23 @@ env = { REMEMBRANCE_PLUGIN_HOST = "codex" }
 
 ```
 
+With an organization key, this manually registered server named `remembrance`
+takes the Highly Recommended approval as `mcp_servers.remembrance` tables:
+
+```toml
+[mcp_servers.remembrance.tools.submit_private_lesson_candidate]
+approval_mode = "approve"
+
+[mcp_servers.remembrance.tools.retry_private_lesson_candidate]
+approval_mode = "approve"
+
+[mcp_servers.remembrance.tools.submit_private_skill_candidate]
+approval_mode = "approve"
+
+[mcp_servers.remembrance.tools.retry_private_skill_candidate]
+approval_mode = "approve"
+```
+
 The bundled local MCP server and native hooks both resolve
 `REMEMBRANCE_API_KEY` first, then `~/.config/remembrance/config.json`. This
 removes the Codex Desktop environment split: one mode-0600 config file covers
@@ -328,12 +402,27 @@ rules.
 
 For managed Codex, configure both policy layers before rollout:
 
-- in `requirements.toml`, allow the exact plugin MCP identity
-  `https://remembrance.dev/api/mcp` under
-  `plugins."remembrance@remembrance".mcp_servers.remembrance`;
+- in `requirements.toml`, restrict the marketplace source to the Remembrance
+  repository. Never give the bundled local server the hosted URL as its
+  identity: Codex matches a stdio server by its command (`sh`) and disables a
+  server whose identity does not match an approved entry;
 - in managed config, set `enabled_tools` to the bounded organization tool set
   in the bundled setup reference and use
-  `default_tools_approval_mode = "writes"`;
+  `default_tools_approval_mode = "writes"`. That mode asks before every call of
+  every tool not marked read-only, including `query_skills`, `get_skill`,
+  `invoke_skill`, `capture_learning`, and feedback, from a person or from
+  Auto-review where it is the reviewer, and Codex cannot remember those
+  answers. The four private submit and retry `approve` tables of the Highly
+  Recommended step, shipped in the same managed config, let those calls run
+  without that review. The trade-off: Auto-review never evaluates a tool set
+  to `approve`, so the guardian policy no longer covers those four calls (they
+  normally carry only a draft ID, so the content passes through
+  `capture_learning`, which is still reviewed, but the lesson submit also
+  accepts a lesson candidate written into the call, which then skips
+  Auto-review). Leave them out if every private submission must pass
+  Auto-review. The setup reference also gives an optional `capture_learning`
+  table, local only, for runs that cannot ask; with it Auto-review never sees
+  the lesson content;
 - merge the Remembrance destination clause into `guardian_policy_config` and
   allow `remembrance.dev` for command networking only when stdio/REST fallback
   needs it; and
@@ -474,8 +563,9 @@ approved action when health reporting is enabled; this content-free telemetry
 cannot enter verification, review, topology, or skill materialization. Disable
 it with `REMEMBRANCE_HEALTH_REPORTING=0`.
 
-Codex should persist one approval for each private egress lane when the host
-offers that choice. The `private_lesson` lane covers
+Codex approves tools, not Remembrance lanes, and a prompt answer under
+`writes` is never remembered, so persist approval with one `approve` table per
+tool as in the Highly Recommended step. The `private_lesson` lane covers
 `submit_private_lesson_candidate` and `retry_private_lesson_candidate`; the
 `private_skill` lane covers `submit_private_skill_candidate` and
 `retry_private_skill_candidate`. Existing submit approvals upgrade lazily to

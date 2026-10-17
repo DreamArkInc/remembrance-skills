@@ -12,8 +12,10 @@
 // host's event surface allows:
 //
 //   SESSION START  (event -> session.created): records lifecycle health under the
-//     "opencode" surface and logs the activation notice, so a user can see the
-//     plugin loaded and knows to call run_connection_doctor.
+//     "opencode" surface, records a session created without a parent session
+//     as a main session and a child session's parent (the child belongs to its
+//     root session's tree), and logs the activation notice, so a user can see
+//     the plugin loaded and knows to call run_connection_doctor.
 //
 //   PROMPT (chat.message -> experimental.chat.system.transform): queries from
 //     the current user turn, then injects the bounded result into the system
@@ -49,12 +51,14 @@ import {
   acknowledgePrivateAuthorizationReminders,
   directSelectionFromResponse,
   highMatchFromResponse,
+  isRecordedMainSession,
   markHostPolicyAlertDelivered,
   observeSuccessfulCompletionTool,
   recordDirectiveFollowThroughForTool,
   recordDirectSelectionUse,
   recordDirectiveSurface,
   recordHighMatchSurface,
+  recordMainSession,
   recordPluginLifecycleHealth,
   recordHostPolicyDenial,
   recordQueryFeedbackObligation,
@@ -65,7 +69,9 @@ import {
   reportDirectiveEvent,
   reportTaskOutcomesOnStop,
   resolveApiCredential,
+  recordSessionParent,
   runPromptHook,
+  sessionTreeLedgerId,
   toolResponseIndicatesFailure,
   valueEpisodeFromResponse,
   writePromptedCount,
@@ -354,6 +360,21 @@ export const Remembrance = async (context = {}) => {
     try {
       const sessionId = sessionIdFromEvent(event, event);
       recordLifecycle("session_start", sessionId);
+      // OpenCode runs a task subagent in a child session, created with its
+      // parent's id (properties.info.parentID), and that session's
+      // chat.message reads like a user prompt. Only a session created with no
+      // parent is a main session. Any other one, a child or a session no
+      // process of this plugin saw created, gets no user decision about
+      // retained drafts; they wait, unacknowledged, for a main session. A
+      // child's recorded parent puts it in its root session's tree
+      // (sessionTreeLedgerId); a child whose link was never seen keeps its
+      // drafts as its own, and they reach the user once it has been idle.
+      const info = event?.properties?.info;
+      if (info?.id === sessionId && !info.parentID) {
+        recordMainSession(sessionId, env);
+      } else if (info?.id === sessionId) {
+        recordSessionParent(sessionId, info.parentID, env);
+      }
       const [, clientUpdate] = await Promise.all([
         (context.warmSession ?? warmPrincipalSession)(
           {
@@ -396,6 +417,7 @@ export const Remembrance = async (context = {}) => {
     messageSessions.set(messageKey, sessionId);
     turnContext.delete(sessionId);
     recordLifecycle("prompt_hook", sessionId);
+    const ledgerId = sessionTreeLedgerId(sessionId, env);
     const result = await (context.runPromptHook ?? runPromptHook)(prompt, {
       env,
       contextAdditions: pendingClientUpdates.has(sessionId)
@@ -410,13 +432,14 @@ export const Remembrance = async (context = {}) => {
       identity: { provider: SURFACE, model: "opencode" },
       reportDirectiveShown: false,
       deferReminderAcknowledgement: true,
-      sessionId,
+      sessionId: ledgerId,
+      subagentSession: !isRecordedMainSession(sessionId, env),
       nativeSessionId,
       nativeContextBridge: context.nativeContextBridge,
       userAgent: "@remembrance-ai/opencode-plugin",
     });
     if (result?.eligible) {
-      recordTaskEligibility(sessionId, env);
+      recordTaskEligibility(ledgerId, env);
     }
     const guidance = result?.context ?? "";
     if (guidance.trim()) {
@@ -431,6 +454,7 @@ export const Remembrance = async (context = {}) => {
       // injection observable as an absence of use rather than as silent
       // over-reporting.
       pendingGuidance.set(sessionId, {
+        ledgerId,
         directive: result?.directive ?? null,
         highMatch: result?.highMatch ?? null,
         text: guidance.trim(),
@@ -442,7 +466,7 @@ export const Remembrance = async (context = {}) => {
     } else if (result?.consumed) {
       // An empty task-shape search delivers nothing (owner decision 34C);
       // like any completed search it still ends an earlier directive.
-      recordDirectiveSurface(sessionId, null, env);
+      recordDirectiveSurface(ledgerId, null, env);
     }
   }
 
@@ -485,7 +509,11 @@ export const Remembrance = async (context = {}) => {
       if (delivered.length > 0) turnContext.set(sessionId, delivered);
       output.system.push(...delivered);
       if (!guidance) return;
-      acknowledgePrivateAuthorizationReminders(guidance.text, env);
+      acknowledgePrivateAuthorizationReminders(
+        guidance.text,
+        env,
+        guidance.ledgerId,
+      );
       pendingGuidance.delete(sessionId);
       if (guidance.deliveredContextAdditionIds.includes("client_update")) {
         pendingClientUpdates.delete(sessionId);
@@ -493,12 +521,20 @@ export const Remembrance = async (context = {}) => {
       // Delivery happened: only now is the guidance actually in the model's
       // context, so only now does it count as registry use.
       if (guidance.countsAsUse) {
-        recordRegistryUse(sessionId, env);
-        recordHighMatchSurface(sessionId, guidance.highMatch, env);
-        recordValueEpisodeSurface(sessionId, guidance.valueEpisode, env);
+        recordRegistryUse(guidance.ledgerId, env);
+        recordHighMatchSurface(guidance.ledgerId, guidance.highMatch, env);
+        recordValueEpisodeSurface(
+          guidance.ledgerId,
+          guidance.valueEpisode,
+          env,
+        );
       }
-      recordQueryFeedbackObligation(sessionId, guidance.queryFeedback, env);
-      recordDirectiveSurface(sessionId, guidance.directive, env);
+      recordQueryFeedbackObligation(
+        guidance.ledgerId,
+        guidance.queryFeedback,
+        env,
+      );
+      recordDirectiveSurface(guidance.ledgerId, guidance.directive, env);
       if (guidance.directive) {
         await reportDirectiveEvent(
           {
@@ -577,16 +613,20 @@ export const Remembrance = async (context = {}) => {
     try {
       sessionId = sessionIdFromEvent(event, event);
       recordLifecycle("completion_hook", sessionId);
-      await reportTaskOutcomesOnStop(sessionId, event, {
+      const ledgerId = sessionTreeLedgerId(sessionId, env);
+      await reportTaskOutcomesOnStop(ledgerId, event, {
         env,
         userAgent: "@remembrance-ai/opencode-plugin",
       });
-      const decision = decideStop({ session_id: sessionId }, { env });
+      const decision = decideStop(
+        { session_id: ledgerId },
+        { env, subagentSession: !isRecordedMainSession(sessionId, env) },
+      );
       if (decision?.allow !== false || !decision?.reason) return;
       const delivered = await notify(client, decision.reason);
       if (!delivered) return;
-      writePromptedCount(sessionId, decision.useCount ?? 1, env);
-      acknowledgePrivateAuthorizationReminders(decision.reason, env);
+      writePromptedCount(ledgerId, decision.useCount ?? 1, env);
+      acknowledgePrivateAuthorizationReminders(decision.reason, env, ledgerId);
     } catch (error) {
       debugLog(env, "opencode_completion_hook_failed", {
         error: String(error),
@@ -659,33 +699,38 @@ export const Remembrance = async (context = {}) => {
         const normalizedTool = tool.toLowerCase();
         const toolArguments = toolArgumentsFromEvent(input);
         if (toolResponseIndicatesFailure(output)) {
+          // The call's own arguments let a denial park that exact draft.
           await observeHostPolicyDenial({
             eventType: "tool.execute.after",
             sessionId,
             toolName: tool,
-            value: output,
+            value: {
+              ...(output && typeof output === "object" ? output : { output }),
+              tool_input: toolArguments,
+            },
           });
           return;
         }
         recordLifecycle("tool_observer", sessionId);
+        const ledgerId = sessionTreeLedgerId(sessionId, env);
         if (normalizedTool.endsWith("query_skills")) {
           if (queryResponseHasMatches(output)) {
-            recordRegistryUse(sessionId, env);
+            recordRegistryUse(ledgerId, env);
           }
-          recordHighMatchSurface(sessionId, highMatchFromResponse(output), env);
+          recordHighMatchSurface(ledgerId, highMatchFromResponse(output), env);
           recordValueEpisodeSurface(
-            sessionId,
+            ledgerId,
             valueEpisodeFromResponse(output),
             env,
           );
           observeSuccessfulCompletionTool(
-            sessionId,
+            ledgerId,
             tool,
             toolArguments,
             output,
             env,
           );
-          await recordDirectiveFollowThroughForTool(sessionId, tool, output, {
+          await recordDirectiveFollowThroughForTool(ledgerId, tool, output, {
             env,
           });
           return;
@@ -693,19 +738,19 @@ export const Remembrance = async (context = {}) => {
         if (normalizedTool.endsWith("invoke_skill")) {
           const selection = directSelectionFromResponse(output);
           if (!selection) return;
-          recordDirectSelectionUse(sessionId, selection, env);
+          recordDirectSelectionUse(ledgerId, selection, env);
           recordValueEpisodeSurface(
-            sessionId,
+            ledgerId,
             valueEpisodeFromResponse(output),
             env,
           );
           clearHighMatchSurfaceForExplicitSelection(
-            sessionId,
+            ledgerId,
             selection.slug,
             env,
           );
           observeSuccessfulCompletionTool(
-            sessionId,
+            ledgerId,
             tool,
             toolArguments,
             output,
@@ -715,7 +760,7 @@ export const Remembrance = async (context = {}) => {
         }
         if (normalizedTool.endsWith("prepare_private_lesson_candidate")) {
           observeSuccessfulCompletionTool(
-            sessionId,
+            ledgerId,
             tool,
             toolArguments,
             output,
@@ -742,7 +787,7 @@ export const Remembrance = async (context = {}) => {
             nativeSessionId: nativeSessionIdFromEvent(input, null),
           });
           observeSuccessfulCompletionTool(
-            sessionId,
+            ledgerId,
             tool,
             toolArguments,
             output,
@@ -750,9 +795,9 @@ export const Remembrance = async (context = {}) => {
           );
           return;
         }
-        clearHighMatchSurfaceIfOpened(sessionId, tool, toolArguments, env);
+        clearHighMatchSurfaceIfOpened(ledgerId, tool, toolArguments, env);
         observeSuccessfulCompletionTool(
-          sessionId,
+          ledgerId,
           tool,
           toolArguments,
           output,

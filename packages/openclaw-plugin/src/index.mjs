@@ -497,6 +497,9 @@ export async function handlePrePrompt(event, options = {}) {
           ]
         : [],
       sessionId: ledgerId,
+      // A subagent's session names no agent in its ledger: the user
+      // decisions about retained drafts are for main sessions only.
+      subagentSession: Boolean(ownKey),
       nativeSessionId:
         nativePrompt === null ? null : nativeSessionIdFromEvent(event),
       nativeContextBridge: options.nativeContextBridge,
@@ -786,6 +789,7 @@ export function handleCompletion(event, options = {}) {
           readPromptedCount: options.readPromptedCount,
           readCompletionObligations: options.readCompletionObligations,
           readHighMatch: options.readHighMatch,
+          subagentSession: Boolean(subagentKeyFromEvent(event)),
         },
       );
     // A subagent that is not thread-bound is decided as master decides it,

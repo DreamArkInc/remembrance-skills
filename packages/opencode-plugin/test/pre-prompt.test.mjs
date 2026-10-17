@@ -19,6 +19,7 @@ import {
   readUserPromptCount,
   readValueEpisodeSurfaces,
   pendingCompletionRecoveryInstruction,
+  recordPrivateLessonObligation,
 } from "../scripts/hook-core.mjs";
 import {
   noResultResponse,
@@ -219,6 +220,20 @@ describe("opencode prompt context injection", () => {
     const { client } = loggingClient();
     const hooks = await Remembrance({ client });
     const sessionID = "s-authorization";
+    // This session captured the draft, so its recovery is silent.
+    recordPrivateLessonObligation(
+      sessionID,
+      {
+        draft_id: draftId,
+        state: "awaiting_authorization",
+        retained_locally: true,
+        next_action: {
+          tool: "retry_private_lesson_candidate",
+          arguments: { draft_id: draftId },
+        },
+      },
+      process.env,
+    );
     await hooks["chat.message"](
       { sessionID, messageID: "m-authorization" },
       {

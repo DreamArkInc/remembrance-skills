@@ -1916,10 +1916,20 @@ describe("debts earned inside a subagent", () => {
       },
       { env, recordHealth: vi.fn() },
     );
-    // A private-learning hint is held per machine, not per agent.
+    // A private-learning hint is held per machine, not per agent; the
+    // subagent's session tree owns it.
     recordPrivateLessonObligation(
       agentLedger,
-      { body: { draft_id: "pld_subagentlesson", state: "ready" } },
+      {
+        body: {
+          draft_id: "pld_subagentlesson",
+          state: "ready",
+          next_action: {
+            tool: "submit_private_lesson_candidate",
+            arguments: { draft_id: "pld_subagentlesson" },
+          },
+        },
+      },
       env,
     );
     expect(pendingIds(agentLedger, env).sort()).toEqual([

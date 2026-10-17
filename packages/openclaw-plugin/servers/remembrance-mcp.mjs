@@ -738,8 +738,8 @@ var ZodIssueCode = util.arrayToEnum([
   "not_finite"
 ]);
 var quotelessJson = (obj) => {
-  const json = JSON.stringify(obj, null, 2);
-  return json.replace(/"([^"]+)":/g, "$1:");
+  const json2 = JSON.stringify(obj, null, 2);
+  return json2.replace(/"([^"]+)":/g, "$1:");
 };
 var ZodError = class _ZodError extends Error {
   get errors() {
@@ -20857,8 +20857,8 @@ function formattedEncodedPrivateKeyRanges(value, metrics, directStrongRanges, ha
   ranges.push(
     ...subtractTextRanges(jsonArrays.failClosed, excludedAssemblyRanges)
   );
-  for (const json of jsonArrays.groups) {
-    const candidates = assemblyPieces(json, true);
+  for (const json2 of jsonArrays.groups) {
+    const candidates = assemblyPieces(json2, true);
     append(
       strongFormattedPieceRanges(
         candidates,
@@ -23727,23 +23727,151 @@ function remembranceMcpToolSecurity(name) {
   return REMEMBRANCE_MCP_TOOL_SECURITY[name];
 }
 
+// ../core/src/private-submission-approval.ts
+var tools = REMEMBRANCE_MCP_PRIVATE_LEARNING_NETWORK_ACTIONS;
+var PRIVATE_SUBMISSION_LOCAL_CAPTURE_TOOL = "capture_learning";
+var PRIVATE_SUBMISSION_LOCAL_CAPTURE_NOTE = "capture_learning stays on this machine and sends nothing";
+var capture = PRIVATE_SUBMISSION_LOCAL_CAPTURE_TOOL;
+var withCapture = [...tools, capture];
+var hostedTools = tools.filter(
+  (tool) => !REMEMBRANCE_MCP_LOCAL_ONLY_TOOLS.includes(tool)
+);
+var localOnlyComment = `# Local only: ${PRIVATE_SUBMISSION_LOCAL_CAPTURE_NOTE}.`;
+var PRIVATE_SUBMISSION_CONFIRMED_DELETE_TOOLS = Object.freeze([
+  "delete_private_lesson_candidate",
+  "delete_private_skill_candidate"
+]);
+var isConfirmedDelete = (tool) => PRIVATE_SUBMISSION_CONFIRMED_DELETE_TOOLS.includes(
+  tool
+);
+var GEMINI_ADMIN_ALLOWED_TOOLS = Object.freeze(
+  REMEMBRANCE_MCP_RECOMMENDED_LOCAL_ORG_TOOLS.filter(
+    (tool) => !isConfirmedDelete(tool)
+  )
+);
+var json = (value) => JSON.stringify(value, null, 2);
+var approveTables = (server, names = tools) => names.map((tool) => `[${server}.tools.${tool}]
+approval_mode = "approve"`).join("\n\n");
+var geminiRule = (tool, decision = "allow") => `[[rule]]
+mcpName = "remembrance"
+toolName = "${tool}"
+decision = "${decision}"
+priority = 200`;
+var claudeCodePluginTools = withCapture.map(
+  (tool) => `mcp__plugin_remembrance_remembrance__${tool}`
+);
+var codexPluginServer = 'plugins."remembrance@remembrance".mcp_servers.remembrance';
+var PRIVATE_SUBMISSION_APPROVAL_SNIPPETS = Object.freeze({
+  claudeCodePlugin: json({ permissions: { allow: claudeCodePluginTools } }),
+  // Managed approval for the plugin's local server: the force-enable and the
+  // allow rules only. The optional lockdown keys are separate because they
+  // change much more than approval.
+  claudeCodeManagedPlugin: json({
+    enabledPlugins: { "remembrance@remembrance": true },
+    permissions: { allow: claudeCodePluginTools }
+  }),
+  claudeCodeManagedLockdown: json({
+    strictKnownMarketplaces: [
+      { source: "github", repo: "dreamarkinc/remembrance-skills" }
+    ],
+    allowManagedHooksOnly: true
+  }),
+  // A local standalone server named `remembrance`.
+  claudeCodeServer: json({
+    permissions: {
+      allow: withCapture.map((tool) => `mcp__remembrance__${tool}`)
+    }
+  }),
+  // Hosted MCP, including the managed-mcp.json path.
+  claudeCodeHosted: json({
+    permissions: {
+      allow: hostedTools.map((tool) => `mcp__remembrance__${tool}`)
+    }
+  }),
+  codexPlugin: approveTables(codexPluginServer),
+  codexManualServer: approveTables("mcp_servers.remembrance"),
+  // Optional and separate: Codex asks before capture_learning only under the
+  // managed `writes` mode, and an `approve` table skips Auto-review.
+  codexPluginCapture: [
+    localOnlyComment,
+    "# Approving it also skips Auto-review for the lesson it captures.",
+    approveTables(codexPluginServer, [capture])
+  ].join("\n"),
+  cursorIde: json({
+    mcpAllowlist: withCapture.map((tool) => `remembrance:${tool}`)
+  }),
+  cursorCli: json({
+    permissions: {
+      allow: withCapture.map((tool) => `Mcp(remembrance:${tool})`)
+    }
+  }),
+  openCode: json({
+    permission: Object.fromEntries(
+      withCapture.map((tool) => [`remembrance_${tool}`, "allow"])
+    )
+  }),
+  openClaw: json({
+    plugins: {
+      entries: {
+        remembrance: {
+          config: {
+            privateLearningEgressApprovals: Object.fromEntries(
+              tools.map((tool) => [
+                REMEMBRANCE_MCP_TOOL_SECURITY[tool].consent_class,
+                true
+              ])
+            )
+          }
+        }
+      }
+    }
+  }),
+  geminiCli: [
+    ...tools.map((tool) => geminiRule(tool)),
+    `${localOnlyComment}
+${geminiRule(capture)}`
+  ].join("\n\n"),
+  // The managed recipe's admin policy file. It holds the step's own rules
+  // above exactly once, so administrators use it instead of them.
+  geminiCliAdmin: [
+    [
+      "# One exact rule per tool in includeTools: allow, except the two",
+      "# confirmed-delete tools, which ask. To make a tool ask, change its",
+      '# decision to "ask_user" rather than deleting its rule: an admin ask',
+      "# outranks users' own allow rules, and without one a user's allow decides."
+    ].join("\n"),
+    ...REMEMBRANCE_MCP_RECOMMENDED_LOCAL_ORG_TOOLS.map((tool) => {
+      if (isConfirmedDelete(tool)) return geminiRule(tool, "ask_user");
+      if (tool === capture) return `${localOnlyComment}
+${geminiRule(tool)}`;
+      return geminiRule(tool);
+    })
+  ].join("\n\n")
+});
+
 // ../core/src/seed.ts
 var siteUrl = "https://remembrance.dev";
 var feedbackUrl = `${siteUrl}/api/v1/agent/remembrances`;
-var recommendedOrganizationToolToml = REMEMBRANCE_MCP_RECOMMENDED_ORG_TOOLS.map(
-  (tool) => `  ${JSON.stringify(tool)},`
-).join("\n");
-var recommendedOrganizationToolJson = REMEMBRANCE_MCP_RECOMMENDED_ORG_TOOLS.map(
-  (tool) => `      ${JSON.stringify(tool)},`
-).join("\n");
-var recommendedClaudeToolJson = REMEMBRANCE_MCP_RECOMMENDED_ORG_TOOLS.map(
-  (tool) => `      ${JSON.stringify(`mcp__remembrance__${tool}`)},`
-).join("\n");
+var jsonItems = (values, indent) => values.map((value) => `${indent}${JSON.stringify(value)}`).join(",\n");
+var recommendedClaudeToolJson = jsonItems(
+  REMEMBRANCE_MCP_RECOMMENDED_ORG_TOOLS.map(
+    (tool) => `mcp__remembrance__${tool}`
+  ),
+  "      "
+);
 var recommendedLocalOrganizationToolToml = REMEMBRANCE_MCP_RECOMMENDED_LOCAL_ORG_TOOLS.map(
   (tool) => `  ${JSON.stringify(tool)},`
 ).join("\n");
-var recommendedLocalOrganizationToolJson = REMEMBRANCE_MCP_RECOMMENDED_LOCAL_ORG_TOOLS.map(
-  (tool) => `      ${JSON.stringify(tool)},`
+var geminiIncludeToolJson = jsonItems(
+  REMEMBRANCE_MCP_RECOMMENDED_LOCAL_ORG_TOOLS,
+  "        "
+);
+var openClawToolFilterJson = jsonItems(
+  REMEMBRANCE_MCP_RECOMMENDED_LOCAL_ORG_TOOLS,
+  "            "
+);
+var privateSubmissionToolList = REMEMBRANCE_MCP_PRIVATE_LEARNING_NETWORK_ACTIONS.map(
+  (tool) => `- \`${tool}\``
 ).join("\n");
 var SKILL_INSTALL_COMMAND = "npx skills add dreamarkinc/remembrance-skills --skill remembrancer";
 var skillInstallCommand = SKILL_INSTALL_COMMAND;
@@ -23828,7 +23956,7 @@ var seedSkills = [
     summary: "Operational setup and troubleshooting workflow for Remembrance across Claude Code, Codex, OpenClaw, Cursor, Gemini, MCP, REST, skill-only installs, enterprise keys, and local agent identity.",
     status: "active",
     visibility: "public",
-    version: "0.1.38",
+    version: "0.1.39",
     domains: ["agent-skills", "mcp", "resource-discovery"],
     tags: [
       "remembrance",
@@ -23879,7 +24007,7 @@ var seedSkills = [
         "gemini",
         "rest"
       ],
-      version: "0.1.38",
+      version: "0.1.39",
       status: "active",
       visibility: "public",
       providers: ["codex", "claude", "cursor", "openclaw", "generic"],
@@ -23922,7 +24050,8 @@ var seedSkills = [
       },
       contraindications: [
         "Do not ask the user to paste raw API keys, private key material, tokens, cookies, or full config files containing secrets.",
-        "Do not store org keys in public project files or submit them back to Remembrance."
+        "Do not store org keys in public project files or submit them back to Remembrance.",
+        "Do not change host approval or permission settings, or answer the host's approval of your own pending action, without the user's consent; ask the user (for managed settings, the administrator) first."
       ],
       feedback_url: feedbackUrl,
       install_command: skillInstallCommand,
@@ -23942,7 +24071,9 @@ var seedSkills = [
       "OpenClaw ClawHub search can return unrelated remembrance-named packages; verify the official package points to dreamarkinc/remembrance-skills before installing.",
       "Until allowConversationAccess is enabled, OpenClaw holds only the plugin's completion hook; the prompt, tool and subagent-end hooks already run, and the prompt hook can query the registry.",
       "Cursor local and cloud distribution are separate: configure the team plugin and Team MCP, then verify hook and receipt behavior on each enabled surface.",
-      "MCP tools can be missing when the client uses the wrong config shape for its runtime."
+      "MCP tools can be missing when the client uses the wrong config shape for its runtime.",
+      "Without persisted host approval for the four private submit and retry tools, an organization install on a host that asks before them stops every private lesson or skill submission for a manual approval, and unattended or headless runs deny it.",
+      "On hosts that also ask before the local-only capture_learning, a headless run denies the capture itself unless its entry is approved, so no draft reaches the submit tools."
     ],
     suggested_patches: [
       "Add runtime-specific screenshots once each agent's plugin manager UI stabilizes.",
@@ -23969,6 +24100,8 @@ REST/HTTPS, skill-only installs, enterprise org keys, local identity, and common
   propose_private_skill because it has no durable device outbox.
 - A native plugin appears installed but hooks, trust prompts, or MCP tools do
   not work.
+- An organization install stops for approval at every private lesson or skill
+  submission, or an unattended or headless run denies it.
 - A request fails with 401, 403, 404, 413, 422, 429, or a missing-key error.
 
 ## First decision
@@ -23981,6 +24114,11 @@ REST/HTTPS, skill-only installs, enterprise org keys, local identity, and common
 4. Use REST/HTTPS instructions when the agent has no plugin or MCP support.
 5. Use the skills.sh entry skill only when the runtime can load filesystem
    skills but not native plugins.
+
+With an organization key, a plugin or MCP install also needs the step in
+"Highly Recommended: approve private submissions" below; ask the user to apply
+it rather than changing host settings yourself. REST and skill-only installs
+have no MCP tools to approve.
 
 Raw MCP, REST, and skill-only paths do not have native Stop hooks. They must
 self-check before finishing and submit \`type: "failure_report"\` remembrances
@@ -24085,51 +24223,6 @@ show the same review screen again; never use the automation-only trust bypass
 for normal installation. Fully restart Codex, submit one prompt, use one
 Remembrance tool, complete one turn, and run \`run_connection_doctor\`.
 
-### Optional unattended routine feedback in Codex
-
-After the user explicitly opts in, add only these two tool overrides to the
-user-level \`~/.codex/config.toml\`. This approval persists across future
-sessions on this installation until removed; installation alone does not grant
-it. Merge with existing tables rather than duplicating them:
-
-~~~toml
-[plugins."remembrance@remembrance".mcp_servers.remembrance.tools.submit_query_feedback]
-approval_mode = "approve"
-
-[plugins."remembrance@remembrance".mcp_servers.remembrance.tools.submit_feedback]
-approval_mode = "approve"
-~~~
-
-Use this opt-in for an organization-authenticated local plugin whose
-\`submit_feedback\` schema is categorical and rejects \`lesson\`. Query-fit
-ratings send Remembrance-issued query/result IDs, categorical verdicts, and
-required reasons; post-use ratings send the skill slug, those correlation IDs, usefulness/rating,
-and stable idempotency. Keep optional notes and evidence out of routine
-ratings: do not automatically attach internal receipt hashes, task prose,
-source content, raw logs, or private URLs. Public substantive reports retain
-their separate evidence requirements; reusable private lessons use
-\`capture_learning\` and its exact returned action.
-
-These are real writes, not read-only diagnostics. Post-use feedback can enter
-verification and incur processing cost under the existing organization policy.
-The two overrides do not approve private lesson/skill submission, publishing,
-deletion, reset, preference changes, or other tools. They do not widen the
-server's enabled tool set or override managed policy, guardian decisions,
-network restrictions, or organization processing grants. Do not set the whole
-server's approval default to \`approve\` for this purpose.
-
-Tool overrides persist when authentication or schemas change. Remove or
-re-review both approvals before switching to anonymous or hosted transport,
-enabling legacy broad writes, or changing the organization or destination.
-
-To revoke this opt-in, remove only these two tool-level approval entries;
-the inherited approval policy applies again. Reconnect the plugin or start a
-fresh Codex session if the current host does not reload config, then verify
-with a minimal eligible rating. A healthy connection doctor verifies the
-connection, not that host approval policy permits feedback. A denial means
-that rating was not submitted; acknowledge it locally and do not retry through
-another transport. See the [official installed-server policy guide](https://developers.openai.com/plugins/build/plugins#configure-installed-server-policy).
-
 OpenClaw:
 
 ~~~bash
@@ -24177,25 +24270,300 @@ Cursor plugin installs this Remembrancer skill, an always-apply Cursor rule, a
 plugin-managed MCP server config, and hooks that ask for feedback only after
 actual Remembrance MCP use.
 
-For local plugin testing before marketplace approval:
+For local plugin testing before marketplace approval, copy the plugin into its
+own folder under Cursor's local plugin folder, then restart Cursor or run
+**Developer: Reload Window**:
 
 ~~~bash
-mkdir -p ~/.cursor/plugins/local
-ln -s /absolute/path/to/remembrance/packages/cursor-plugin ~/.cursor/plugins/local/remembrance
+mkdir -p ~/.cursor/plugins/local/remembrance
+cp -R /absolute/path/to/remembrance/packages/cursor-plugin/. ~/.cursor/plugins/local/remembrance/
 ~~~
+
+Copy the files rather than linking them: Cursor skips a symbolic link that
+points to a plugin elsewhere on disk. On Teams and Enterprise, local plugins
+load only when an administrator allows **Allow Local Plugin Imports**, which is
+off by default on Enterprise.
 
 Cursor now documents conversation hooks for cloud agents, but a local plugin
 install does not automatically provision the cloud surface. Distribute the
-plugin through the team marketplace, register Remembrance under **Dashboard >
-Integrations & MCP**, and verify query, invocation, feedback, and contribution
-receipts in both local and cloud runs.
+plugin through the team marketplace, register Remembrance as a Team MCP server
+under **Dashboard > Plugins & MCPs**, and verify query, invocation, feedback,
+and contribution receipts in both local and cloud runs.
 
 After installing any native plugin, restart the agent app/session and approve
 the runtime's trust request when one appears. For Codex, complete the hook
 review above if Codex requests it; unchanged, previously trusted definitions
 may not show another review screen. Changed hook definitions show the review
 screen again. A currently running Codex or Claude thread usually cannot
-hot-load newly installed plugin tools.
+hot-load newly installed plugin tools. With an organization key, then ask the
+user to complete the Highly Recommended step below.
+
+### Optional unattended routine feedback in Codex
+
+After the user explicitly opts in, add only these two tool overrides to the
+user-level \`~/.codex/config.toml\`. This approval persists across future
+sessions on this installation until removed; installation alone does not grant
+it. Merge with existing tables rather than duplicating them:
+
+~~~toml
+[plugins."remembrance@remembrance".mcp_servers.remembrance.tools.submit_query_feedback]
+approval_mode = "approve"
+
+[plugins."remembrance@remembrance".mcp_servers.remembrance.tools.submit_feedback]
+approval_mode = "approve"
+~~~
+
+Use this opt-in for an organization-authenticated local plugin whose
+\`submit_feedback\` schema is categorical and rejects \`lesson\`. Query-fit
+ratings send Remembrance-issued query/result IDs, categorical verdicts, and
+required reasons; post-use ratings send the skill slug, those correlation IDs, usefulness/rating,
+and stable idempotency. Keep optional notes and evidence out of routine
+ratings: do not automatically attach internal receipt hashes, task prose,
+source content, raw logs, or private URLs. Public substantive reports retain
+their separate evidence requirements; reusable private lessons use
+\`capture_learning\` and its exact returned action.
+
+These are real writes, not read-only diagnostics. Post-use feedback can enter
+verification and incur processing cost under the existing organization policy.
+The two overrides do not approve private lesson/skill submission (the Highly
+Recommended step below covers that), publishing, deletion, reset, preference
+changes, or other tools. They do not widen the server's enabled tool set or
+override managed policy, network restrictions, or organization processing
+grants. They do skip the Codex approval prompt and its Auto-review (guardian)
+evaluation for these two tools. Do not set the whole server's approval default
+to \`approve\` for this purpose.
+
+Tool overrides persist when authentication or schemas change. Remove or
+re-review both approvals before switching to anonymous or hosted transport,
+enabling legacy broad writes, or changing the organization or destination.
+
+To revoke this opt-in, remove only these two tool-level approval entries;
+the inherited approval policy applies again. Reconnect the plugin or start a
+fresh Codex session if the current host does not reload config, then verify
+with a minimal eligible rating. A healthy connection doctor verifies the
+connection, not that host approval policy permits feedback. A denial means
+that rating was not submitted; acknowledge it locally and do not retry through
+another transport. See the [official installed-server policy guide](https://developers.openai.com/plugins/build/plugins#configure-installed-server-policy).
+
+## Highly Recommended: approve private submissions
+
+For organizations that use Remembrance with a private organization key, this
+step is required for Remembrance to do its job fully. Without it, on hosts that
+ask before these tools, every private lesson or skill submission stops for a
+manual approval, and unattended or headless runs deny it. Public-only use,
+without an organization key, does not need it.
+
+Ask the user (for managed settings, the administrator) before applying this
+step. An agent never edits host permission or settings files without the
+user's consent, and never answers the host's approval of its own pending
+action.
+
+Persist the host's approval for exactly these four local tools, the private
+submit and retry actions:
+
+${privateSubmissionToolList}
+
+Hosted MCP exposes only \`submit_private_lesson_candidate\` of the four, so
+approve only that one there. Each approval lets the agent send to the
+organization's private review queue without asking. On a local server that is
+normally a draft that \`capture_learning\` already prepared, although the
+lesson submit also accepts a lesson candidate the agent writes into the call;
+on hosted MCP, which has no \`capture_learning\`, the approved submit sends the
+lesson candidate the agent writes. These actions cannot publish public content.
+Never pre-approve \`delete_private_lesson_candidate\` or
+\`delete_private_skill_candidate\`, a whole server (\`mcp__<server>\` or
+\`mcp__<server>__*\`), \`bypassPermissions\`, Gemini CLI \`trust: true\` or
+\`mcp.allowed\`, or any global auto-approve.
+
+Every local private submission starts with \`capture_learning\`, which writes
+the encrypted draft. It is local only: it stays on this machine and sends
+nothing. On hosts that ask before it (Claude Code, which asks before every MCP
+tool; Gemini CLI; VS Code; and Cursor, depending on its Run Mode), the steps
+below add it as a labelled local-only entry, which is not one of the four
+submit and retry tools. Without it the capture prompts, and a headless run
+denies it before any draft exists. Codex under the managed \`writes\` mode also
+asks before it, but there approving it is an optional administrator decision:
+with it, Auto-review never sees the lesson content (see "Approve private
+repository contributions in managed Codex"). On these hosts a run that nobody
+can answer, such as a headless run, denies every tool that has no approval, so
+it also needs approvals for the other Remembrance tools it calls, such as
+\`query_skills\`; this step covers only private learning.
+
+Check the step by behavior: capture one disposable private lesson and confirm
+that neither the capture nor its submission prompts. Where the organization
+leaves \`capture_learning\` to Auto-review or a person, as managed Codex may,
+only the capture is reviewed; its submission still must not prompt.
+\`run_connection_doctor\` cannot see a persisted approval; its \`host_approval\`
+field reports only recent denials.
+
+### Claude Code
+
+Merge these entries into \`permissions.allow\` in \`~/.claude/settings.json\`,
+which applies to every project. The first four are the plugin's private submit
+and retry tools; the last is the local-only \`capture_learning\` entry:
+
+~~~json
+${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.claudeCodePlugin}
+~~~
+
+Choosing "Yes, and don't ask again" at the prompt saves the rule only for the
+current project, in \`.claude/settings.local.json\`. A local standalone server
+named \`remembrance\`, whether a user or the organization registers it, uses
+\`mcp__remembrance__<tool>\` names instead:
+
+~~~json
+${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.claudeCodeServer}
+~~~
+
+Hosted MCP, including the \`managed-mcp.json\` path in "Approve Claude Code",
+exposes only \`submit_private_lesson_candidate\` of these and has no
+\`capture_learning\`, so a hosted server named \`remembrance\` needs only this
+entry:
+
+~~~json
+${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.claudeCodeHosted}
+~~~
+
+Headless runs such as \`claude -p\` deny every tool without an allow rule, so
+they also need rules for the other Remembrance tools they call. Plan mode still
+asks before these tools even when a rule allows them. When managed settings set
+\`allowManagedPermissionRulesOnly\`, Claude Code ignores user rules, so an
+administrator must ship them (see "Approve Claude Code").
+
+### Codex
+
+Add one table per tool to the user-level \`~/.codex/config.toml\`, separate from
+the optional routine-feedback opt-in above:
+
+~~~toml
+${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.codexPlugin}
+~~~
+
+Current Codex source does not prompt for these four tools, or for
+\`capture_learning\`, under the default \`auto\` tool approval mode, because
+Remembrance marks them non-destructive and closed-world; older releases and
+other modes can, so add the tables anyway. Under the managed
+\`default_tools_approval_mode = "writes"\`, Codex asks before every call, from a
+person or from Auto-review where it is the reviewer, and cannot remember the
+answer, so a per-tool \`approve\` entry is the only way to persist approval.
+\`approve\` also skips Auto-review for that tool, so in a managed organization
+add these tables only with your administrator ("Approve private repository
+contributions in managed Codex" covers the trade-off and \`capture_learning\`).
+For a manually registered server named \`remembrance\`, use the same tables
+under \`mcp_servers.remembrance\`:
+
+~~~toml
+${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.codexManualServer}
+~~~
+
+### Cursor
+
+In the IDE, merge these entries into the \`mcpAllowlist\` array of
+\`~/.cursor/permissions.json\` (create the file if it is missing); the last is
+the local-only \`capture_learning\` entry:
+
+~~~json
+${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.cursorIde}
+~~~
+
+\`mcpAllowlist\` replaces the whole in-app MCP allowlist, so keep the entries
+you already rely on in the same array, keep the file's other keys such as
+\`terminalAllowlist\`, \`approvalMode\`, and \`autoReview\`, and use this
+user-level file. Cursor applies it under its Run Modes (Auto-review is the
+default); a team Run Mode configuration from an administrator overrides it. For
+the Cursor CLI, merge the same tools into \`permissions.allow\` in
+\`~/.cursor/cli-config.json\`:
+
+~~~json
+${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.cursorCli}
+~~~
+
+If Cursor shows the plugin's server under a name other than \`remembrance\`, use
+that exact name instead. Do not replace the server name with \`*\`, which
+approves the tool on every server.
+
+### VS Code
+
+VS Code has no settings key or policy that pre-approves a single tool; use its
+interface. Run **Chat: Manage Tool Approval**, expand the Remembrance server,
+tick only the four tools and the local-only \`capture_learning\`, and turn off
+**Configure for this workspace only** so the approval applies in every
+workspace. Do not tick the server's own box or choose **Always Allow Tools
+from** the server: both approve the whole server. Alternatively, choose
+**Always Allow** in the prompt's Allow menu the first time each of those tools
+asks.
+
+### OpenCode
+
+OpenCode runs MCP tools without asking by default, so private submissions
+already complete. Add explicit entries to the \`permission\` map in
+\`~/.config/opencode/opencode.json\` so the four tools and the local-only
+\`capture_learning\` keep working under a broader ask rule that comes before
+them, which would otherwise stop every private lesson or skill submission:
+
+~~~json
+${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.openCode}
+~~~
+
+Put them after any broader \`"*"\` or \`"remembrance_*"\` rule in the same
+\`permission\` map, because OpenCode applies the last matching rule. A broader ask
+rule set elsewhere, such as in an agent's own \`permission\` map or, depending on
+the OpenCode version, in another configuration file, can still take precedence;
+if the capture or its submission still prompts, find that rule and make sure the
+same entries come after it. In OpenCode 2.x, answering "always" at a prompt
+saves an allow rule for the current project across sessions (1.x keeps it until
+OpenCode restarts); never answer "always" on a \`delete_private_*\` prompt.
+
+### OpenClaw
+
+In native runs OpenClaw documents no prompt of its own for MCP tools; the
+Remembrance plugin asks before each private submission. To persist approval,
+answer **allow-always** once for each lane when it asks to "Submit private
+Remembrance lesson" or "Submit private Remembrance skill", for example with
+\`/approve <id> allow-always\` in chat or
+\`openclaw approvals resolve <id> allow-always\`. One decision covers that lane's
+submit and retry actions, and the plugin saves it in its config.
+
+To pre-set both lanes instead, Remembrance for OpenClaw 0.2.3 or later accepts
+this in \`~/.openclaw/openclaw.json\`:
+
+~~~json
+${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.openClaw}
+~~~
+
+Check the installed version first, for example with
+\`openclaw plugins inspect remembrance\`. Earlier versions reject the key: the
+Gateway then refuses to start until it is removed, and those versions cannot
+keep an allow-always decision across a restart either. On older or
+mixed-version installs, use allow-always.
+
+### Gemini CLI
+
+Create \`~/.gemini/policies/remembrance.toml\` with one rule per tool; the last
+rule is the local-only \`capture_learning\` entry:
+
+~~~toml
+${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.geminiCli}
+~~~
+
+Gemini CLI asks before every MCP tool without an allow rule, and
+non-interactive runs treat that prompt as a denial. These rules cover private
+learning only, so a headless run also needs rules for the other Remembrance
+tools it calls, such as \`query_skills\`. Keep \`trust\` false and do not list
+the server in \`mcp.allowed\`: Gemini CLI turns \`trust: true\` and an
+\`mcp.allowed\` entry alike into an allow rule for every tool of the server.
+Administrators use the admin policy file in "Approve Gemini CLI" instead, which
+already contains these rules.
+
+### Claude Desktop and other MCP clients
+
+Claude Desktop offers a per-tool **Always allow**, in the approval prompt or in
+the connector's tool permissions, but it has no config key and users report
+that it resets when the app updates, so do not rely on it for unattended runs.
+For other MCP clients, use the client's per-tool approval for the four exact
+tool names (only \`submit_private_lesson_candidate\` on hosted MCP), plus the
+local-only \`capture_learning\` on a local server that asks before it. If a
+client can approve only a whole server, keep its prompts.
 
 ## Enterprise/org key setup
 
@@ -24282,8 +24650,10 @@ while malformed or privacy-sensitive tags hold the draft instead of being
 silently removed.
 
 The plugin then calls \`submit_private_lesson_candidate\` with that draft ID.
-This is the only host-visible network action in the flow. Approve or persist
-approval for this exact action, not every Remembrance write. The server derives
+This is the host-visible network action in the flow, and
+\`retry_private_lesson_candidate\` later resends a retained draft through the
+same lane. Persist approval for these exact actions, as in "Highly Recommended:
+approve private submissions", not for every Remembrance write. The server derives
 the organization and private visibility from the authenticated key, verifies a
 signed organization policy plus purpose-bound attestation, and returns a signed
 content-free receipt. The action always submits privately and never falls back
@@ -24341,16 +24711,17 @@ agent task remain available when capture or submission is blocked.
 ### Approve private repository contributions in managed Codex
 
 An API key authorizes Remembrance; it does not authorize Codex to export
-repository-derived content. Codex Auto-review separately evaluates MCP and
-network actions for data exfiltration. A chat approval may not override an
-enterprise deny rule, and no Remembrance plugin setting can weaken that host
-boundary.
+repository-derived content. Codex Auto-review evaluates the approval requests
+that would otherwise pause for a person, including MCP calls that need approval
+under their annotations or configured approval mode; a tool set to \`approve\`
+never reaches it. A chat approval may not override an enterprise deny rule, and
+no Remembrance plugin setting can weaken that host boundary.
 
 For an organization that has approved Remembrance as an operational-memory
 processor, a Codex administrator should do all of the following:
 
-1. Allow the exact Remembrance MCP server identity and
-   \`https://remembrance.dev/api/mcp\` in managed Codex requirements.
+1. Allow the Remembrance marketplace source in managed Codex requirements and
+   enable the plugin's bundled \`remembrance\` server in managed configuration.
 2. Merge a narrow Remembrance destination rule into the existing
    \`guardian_policy_config\`. Do not replace the rest of the tenant policy or
    remove its credential, secret, raw-log, or unrelated-source-code denies.
@@ -24371,18 +24742,18 @@ key to force a public candidate. Submit privately, then use the reviewed public-
 propagation flow for a redacted public-safe version when the organization wants
 to share it.
 
-The exact plugin MCP identity belongs in managed \`requirements.toml\`. The
-tool allowlist belongs in managed configuration. This keeps reads and normal
-skill use available while prompting for non-read-only writes:
+Managed \`requirements.toml\` restricts the marketplace source; the tool
+allowlist and approval mode belong in managed configuration. The bundled server
+is a local stdio server, so never give it the hosted URL as its identity. If the
+requirements also carry an \`mcp_servers\` allowlist, approve this server by its
+configured command (\`sh\`): Codex disables a server whose name and identity do
+not match an approved entry.
 
 Add these entries to \`requirements.toml\`:
 
 ~~~toml
 [features]
 hooks = true
-
-[plugins."remembrance@remembrance".mcp_servers.remembrance]
-identity = { url = "https://remembrance.dev/api/mcp" }
 
 [marketplaces]
 restrict_to_allowed_sources = true
@@ -24401,7 +24772,36 @@ enabled_tools = [
 ${recommendedLocalOrganizationToolToml}
 ]
 default_tools_approval_mode = "writes"
+
+${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.codexPlugin}
 ~~~
+
+\`default_tools_approval_mode = "writes"\` asks before every call of every tool
+that is not marked read-only, including \`query_skills\`, \`get_skill\`,
+\`get_resource\`, \`invoke_skill\`, \`capture_learning\`, and the feedback tools.
+The answer comes from a person, or from Auto-review where it is the reviewer;
+Codex cannot remember it, and a run that cannot ask denies the call.
+
+The four \`approve\` tables are the Highly Recommended step: they let the
+private submit and retry calls run without that per-call review. The trade-off
+is that Auto-review never evaluates a tool set to \`approve\`, so the guardian
+policy's denies no longer apply to those four calls. They normally carry only a
+draft ID, so the lesson or skill content passes through \`capture_learning\`,
+which a person or Auto-review still reviews; but the lesson submit also accepts
+a lesson candidate written into the call, which then reaches the
+organization's private review queue without that review. Leave the tables out
+if the organization wants Auto-review to evaluate every private submission.
+
+Runs that cannot ask can capture only if \`capture_learning\` is approved too.
+This optional table is local only, but with it Auto-review never sees the
+lesson content at all:
+
+~~~toml
+${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.codexPluginCapture}
+~~~
+
+Those runs also need approval for every other tool they call, so unattended
+work under \`writes\` usually relies on Auto-review as the reviewer instead.
 
 If \`allow_managed_hooks_only = true\`, Codex skips plugin hooks. Either leave
 the vetted Remembrance plugin hooks permitted or deploy equivalent managed
@@ -24512,10 +24912,45 @@ optional local-only tools and never belong in a hosted MCP allowlist.
 ### Approve Claude Code
 
 Force-enable \`remembrance@remembrance\` in managed settings so its vetted hooks
-still run when \`allowManagedHooksOnly\` is enabled. If the organization deploys
-\`managed-mcp.json\`, define Remembrance there because exclusive managed MCP
-suppresses every plugin-provided MCP server. Use the exact URL as the security
-boundary; a server name alone is not sufficient.
+still run when \`allowManagedHooksOnly\` is enabled. Then choose one MCP path.
+
+To keep the plugin's local server, with all four private submit and retry tools
+and the encrypted device outbox, deploy neither \`managed-mcp.json\` nor the
+URL-only \`allowedMcpServers\` list of the hosted path below. Exclusive managed
+MCP suppresses every plugin-provided server, and Claude Code also checks plugin
+servers against \`allowedMcpServers\`, where a list with only \`serverUrl\`
+entries blocks every stdio server. Merge this approval into managed settings;
+the plugin's tool names carry the \`mcp__plugin_remembrance_remembrance__\`
+prefix, and the last entry is the local-only \`capture_learning\`:
+
+~~~json
+${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.claudeCodeManagedPlugin}
+~~~
+
+Managed rules also cover organizations that set
+\`allowManagedPermissionRulesOnly\`, which makes Claude Code ignore user rules.
+For command or REST fallbacks under a sandbox, also merge \`remembrance.dev\`
+into \`sandbox.network.allowedDomains\`.
+
+Optional lockdown, separate from that approval: Remembrance needs neither of
+these keys, and both restrict much more than Remembrance.
+\`allowManagedHooksOnly\` makes Claude Code ignore every user, project, and
+local hook, and turns off \`/goal\` and command-sourced plugins.
+\`strictKnownMarketplaces\` blocks plugins from every marketplace it does not
+list, and also the \`~/.claude/skills\` auto-load unless the list includes
+\`{"source": "skills-dir"}\`. Add them only when the organization wants that
+lockdown; the hosted path below carries the same two keys:
+
+~~~json
+${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.claudeCodeManagedLockdown}
+~~~
+
+To use hosted MCP instead, define Remembrance in \`managed-mcp.json\`, because
+exclusive managed MCP suppresses every plugin-provided MCP server. The plugin
+keeps its hooks and skills, but its tools then come from the hosted server named
+\`remembrance\`, which exposes only \`submit_private_lesson_candidate\` of the four
+private actions. Use the exact URL as the security boundary; a server name alone
+is not sufficient.
 
 Do not put a real key directly in \`managed-mcp.json\`; every local user can read
 that file. Reference each user's process environment instead:
@@ -24534,7 +24969,7 @@ that file. Reference each user's process environment instead:
 }
 ~~~
 
-Merge this into managed settings:
+Merge this into managed settings for the hosted path:
 
 ~~~json
 {
@@ -24575,13 +25010,11 @@ work. See the official
 ### Approve Gemini CLI
 
 Define the canonical server and its tool allowlist in the system override
-settings, not only user or workspace settings. Leave \`trust\` false unless the
-organization has deliberately chosen to bypass every confirmation for this
-narrow server/tool set:
+settings, not only user or workspace settings. Keep \`trust\` false;
+\`trust: true\` bypasses every confirmation for the server:
 
 ~~~json
 {
-  "mcp": { "allowed": ["remembrance"] },
   "mcpServers": {
     "remembrance": {
       "command": "npx",
@@ -24591,12 +25024,51 @@ narrow server/tool set:
         "REMEMBRANCE_API_KEY": "\${REMEMBRANCE_API_KEY}"
       },
       "includeTools": [
-${recommendedLocalOrganizationToolJson}
+${geminiIncludeToolJson}
       ],
       "trust": false
     }
   }
 }
+~~~
+
+Approve tools only with exact per-tool policy rules. Do not list the server in
+\`mcp.allowed\`: the server runs without it, and current Gemini CLI source turns
+each \`mcp.allowed\` entry into an allow rule for every tool of that server.
+Instead, save this file as \`remembrance.toml\` in the admin policy folder:
+\`/Library/Application Support/GeminiCli/policies\` on macOS,
+\`/etc/gemini-cli/policies\` on Linux, or \`C:\\ProgramData\\gemini-cli\\policies\`
+on Windows. Gemini CLI ignores admin policy files that are not root-owned.
+
+~~~toml
+${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.geminiCliAdmin}
+~~~
+
+The file has one exact rule for every tool in \`includeTools\`: an allow rule
+for each tool except the two confirmed-delete tools, whose admin \`ask_user\`
+rules keep them asking even where a user allowed them, so a headless run denies
+them. Apart from those two, this reproduces the earlier behavior of this
+recipe, whose \`mcp.allowed\` entry let every included tool run, with exact
+rules instead of a whole-server rule. The file already contains the rules from
+"Highly Recommended: approve private submissions" for the four private submit
+and retry tools and the local-only \`capture_learning\`, so do not add those
+again. To make a tool ask, change its rule to \`decision = "ask_user"\` instead
+of deleting the rule: an admin-tier ask outranks users' own allow rules, while
+without an admin rule a user's allow rule decides. A headless run then denies
+that tool.
+
+If the organization already restricts servers with \`mcp.allowed\`, Remembrance
+must be listed there to run, and that entry creates the whole-server allow rule.
+Then also place this rule in the admin policy folder. It creates no allow rule:
+admin rules outrank the one \`mcp.allowed\` creates, so a Remembrance tool
+without its own admin rule asks again, while the per-tool rules above, at
+priority 200, still win over it for their tools:
+
+~~~toml
+[[rule]]
+mcpName = "remembrance"
+decision = "ask_user"
+priority = 100
 ~~~
 
 System settings live at \`/Library/Application Support/GeminiCli/settings.json\`
@@ -24605,8 +25077,9 @@ on macOS, \`/etc/gemini-cli/settings.json\` on Linux, and
 \`remembrance.dev\` in the organization's egress policy. Restart Gemini CLI,
 inspect the registered server, then run \`run_connection_doctor\` and require
 organization scope before contribution work. See the official
-[enterprise configuration](https://google-gemini.github.io/gemini-cli/docs/cli/enterprise.html)
-and [MCP settings](https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html).
+[enterprise configuration](https://geminicli.com/docs/cli/enterprise/),
+[MCP settings](https://geminicli.com/docs/tools/mcp-server/), and
+[policy engine](https://geminicli.com/docs/reference/policy-engine/).
 
 ### Approve OpenClaw
 
@@ -24632,7 +25105,7 @@ MCP tools, and \`tools.deny: ["bundle-mcp"]\` disables them:
       "remembrance": {
         "toolFilter": {
           "include": [
-${recommendedLocalOrganizationToolJson}
+${openClawToolFilterJson}
           ]
         }
       }
@@ -24641,8 +25114,17 @@ ${recommendedLocalOrganizationToolJson}
 }
 ~~~
 
-Use a normal \`coding\` or \`messaging\` tool profile. Then verify cold config,
-the active Gateway plugin, and live MCP capabilities separately:
+Use a normal \`coding\` or \`messaging\` tool profile; both already include
+\`bundle-mcp\`, so the MCP tools need no \`tools.allow\` or \`tools.alsoAllow\`
+entry. The plugin asks before each private submission. For unattended runs,
+have each user answer allow-always once per lane. On Remembrance for OpenClaw
+0.2.3 or later only, you can instead pre-set both private lanes by merging the
+\`privateLearningEgressApprovals\` object from "Highly Recommended: approve
+private submissions" into \`plugins.entries.remembrance.config\`. Earlier
+versions reject that key and the Gateway then refuses to start, so check the
+installed version first and keep allow-always on older or mixed-version
+fleets. Then verify cold config, the active Gateway plugin, and live MCP
+capabilities separately:
 
 ~~~bash
 openclaw plugins inspect remembrance --runtime --json
@@ -24677,18 +25159,27 @@ approved secret source, not in \`policy.jsonc\`. After the probes, run
 
 For local agents, publish Remembrance in the team marketplace and choose
 \`Required\` or \`Default On\`. For cloud agents, also register the exact
-Remembrance endpoint under **Dashboard > Integrations & MCP** so the same Team
-MCP is distributed across cloud agents, the Agents window, IDE, and CLI. Add
-\`remembrance.dev\` to the enterprise sandbox network allowlist for command-
-based fallback paths.
+Remembrance endpoint as a Team MCP server under **Dashboard > Plugins & MCPs**
+so the same Team MCP is distributed across cloud agents, the Agents window,
+IDE, and CLI. Add \`remembrance.dev\` to the enterprise sandbox network
+allowlist for command-based fallback paths.
 
-Cursor's current public enterprise documentation does not define a managed
-per-MCP-tool allowlist equivalent to Codex, Claude Code, Gemini CLI, or
-OpenClaw. Keep Cursor's normal tool approvals enabled and do not claim an
-undocumented control exists. Run \`run_connection_doctor\` and require
-organization scope on every enabled surface, then verify query, invocation,
-feedback, and private-contribution receipts; local plugin hooks and cloud-agent
-hooks can differ. See the official
+Cursor's managed per-tool allowlist is \`~/.cursor/permissions.json\`,
+distributed through MDM: ship the five \`mcpAllowlist\` entries from "Highly
+Recommended: approve private submissions", the four private submit and retry
+tools and the local-only \`capture_learning\`. A distributed file replaces each
+user's file and its in-app MCP allowlist, so merge these entries with every
+other entry and key the organization relies on, such as \`terminalAllowlist\`,
+\`approvalMode\`, and \`autoReview\`. A team Run Mode configuration overrides
+local \`permissions.json\` files, and the per-server tools field under
+**Team Settings > MCP Configuration** limits which tools may run but does not
+run them without asking. Keep the Auto-review or Allowlist Run Mode rather
+than Run Everything. Run \`run_connection_doctor\` and
+require organization scope on every enabled surface, then verify query,
+invocation, feedback, and private-contribution receipts; local plugin hooks and
+cloud-agent hooks can differ. See the official
+[permissions file](https://cursor.com/docs/reference/permissions),
+[Run Modes](https://cursor.com/docs/agent/security/run-modes),
 [team plugin modes](https://cursor.com/changelog/05-01-26),
 [Team MCP distribution](https://cursor.com/changelog/team-marketplace-updates),
 [sandbox network controls](https://cursor.com/changelog/2-5), and
@@ -24698,12 +25189,15 @@ hooks can differ. See the official
 
 Register exactly \`https://remembrance.dev/api/mcp\` or the exact local
 \`npx @remembrance-ai/mcp-server\` command. Use the recommended organization
-tool list above when the client supports tool filtering. Keep normal approval
-behavior for non-read-only calls unless unattended organization-private
-contribution is explicitly approved. A client with no server/tool policy must
-use its existing destination control or the zero-network handoff. Supply the
+tool list above when the client supports tool filtering. Supply the
 organization key through the client's secret/header mechanism, then run
 \`run_connection_doctor\` and require organization scope before private writes.
+Keep normal approval behavior for other non-read-only calls, and persist
+approval only for the four private submit and retry tools (on hosted MCP, the
+lesson submit), plus the local-only \`capture_learning\` on a local server that
+asks before it, as in the Highly Recommended step. A client with no
+server/tool policy must use its existing destination control or the
+zero-network handoff.
 
 If any host still denies the export, that denial remains authoritative. The
 portable local handoff and dashboard import work identically for Codex, Claude
@@ -24813,6 +25307,13 @@ not inherit shell exports:
 }
 ~~~
 
+A server you register yourself under the name \`remembrance\`, local or hosted,
+takes the standalone approval forms from "Highly Recommended: approve private
+submissions": \`[mcp_servers.remembrance.tools.<tool>]\` tables in Codex,
+\`mcp__remembrance__<tool>\` rules in Claude Code (for example after
+\`claude mcp add\`), and \`remembrance:<tool>\` entries in Cursor. A hosted server
+needs only \`submit_private_lesson_candidate\`.
+
 ## Skill-only install
 
 For skills.sh-compatible runtimes (or any Agent Skills provider) that can load
@@ -24895,14 +25396,20 @@ session skills.
    \`capture_learning.lesson\` followed by the exact returned action and a
    private draft receipt. On hosted/legacy MCP, require a \`failure_report\`
    through submit_remembrance. This validates both capability states without
-   mixing their schemas.
+   mixing their schemas. With an organization key and the Highly Recommended
+   approval in place, neither the capture nor the private submission may
+   prompt. A prompt for a submit or retry tool means its approval is missing or
+   uses the wrong tool names; one for \`capture_learning\` means only that its
+   local-only entry is missing, and is expected where the organization leaves
+   the capture to Auto-review or a person, as managed Codex may.
 12. If using an org key, list and invoke an org-only skill or private overlay
    that should not appear anonymously.
 13. With an organization submission key, submit one disposable redacted skill.
    Current local MCP must use \`capture_learning.private_skill\` followed by
    submit_private_skill_candidate; hosted/legacy MCP must use
    propose_private_skill. Verify it appears only in that organization's review
-   queue. In a separate negative scenario, simulate a
+   queue and, on local MCP with the approval in place, that it needed no host
+   prompt. In a separate negative scenario, simulate a
    host-policy denial and verify the plugin reports the fixed content-free alert
    once, persists no blocked content, performs no retry, and creates no handoff.
    Test queue_private_skill_import only as a separate administrator-requested
@@ -24962,6 +25469,27 @@ session skills.
   --probe", and restart OpenClaw after plugin install/config changes.
 - "Claude desktop ignores env vars": put env in the user-scoped Claude settings
   that the desktop app reads, then fully quit and relaunch.
+- "Every private submission asks for approval" or "a headless run denies
+  private submissions": report the blocked submission once as not submitted.
+  Then ask the user (for managed settings, the administrator) to apply or fix
+  the Highly Recommended approval; never change host settings or answer the
+  host's approval yourself, and only after they confirm, send the retained
+  draft through its exact submit or retry action.
+  \`inspect_private_learning_outbox\` lists each draft with its \`state\`,
+  \`attempts\`, and \`next_retry_at\`: a draft the host stopped before sending,
+  a lesson still \`awaiting_authorization\` with 0 attempts or a skill still
+  \`ready\`, needs its submit action, and a \`retry_scheduled\` draft its retry
+  action once \`next_retry_at\` has passed. A prompt or denial naming a
+  submit or retry tool means its approval is missing or names the wrong tools:
+  a Claude Code plugin install needs
+  \`mcp__plugin_remembrance_remembrance__<tool>\` rules, not
+  \`mcp__remembrance__<tool>\`. One naming \`capture_learning\` means only that
+  its local-only entry is missing, and is expected where the organization
+  leaves the capture to Auto-review or a person, as managed Codex may: under
+  managed Codex \`writes\`, approving \`capture_learning\` is an optional
+  administrator decision (with it, Auto-review never sees the lesson content),
+  not a fix to ask for. \`run_connection_doctor\` cannot see a persisted
+  approval.
 - "Host policy denied private repository export": this is not a Remembrance
   API failure. An administrator must narrowly approve the Remembrance MCP
   server, destination, and private contribution action. Otherwise use the
@@ -27658,7 +28186,8 @@ var pendingActionDeclineSchema = external_exports.object({
     "not_observed_by_this_agent",
     "agent_exited",
     "not_reusable",
-    "duplicate"
+    "duplicate",
+    "host_policy_denied"
   ]).describe("Why this agent cannot complete the action.")
 }).strict();
 var pendingActionPayloadSchema = external_exports.object({
@@ -27793,7 +28322,7 @@ var declaredToolDefinitions = [
   ),
   localTool(
     "decline_pending_action",
-    "Decline one pending Remembrance action that a hook reminder listed and you cannot complete. Pass the action_id shown under it and one reason: not_observed_by_this_agent (you never received the result or payload it refers to), agent_exited (the subagent that earned it has exited), not_reusable (it holds nothing reusable), or duplicate (it was already completed another way). It is local-only: it sends nothing, stores nothing, grants no approval, and never counts as feedback. The local completion hook closes that action in your own pending list when it observes this call.",
+    "Decline one pending Remembrance action that a hook reminder listed and you cannot complete. Pass the action_id shown under it and one reason: not_observed_by_this_agent (you never received the result or payload it refers to), agent_exited (the subagent that earned it has exited), not_reusable (it holds nothing reusable), or duplicate (it was already completed another way); host_policy_denied only for a private-learning line or notice whose exact action the host denied. It is local-only: it sends nothing, stores nothing, grants no approval, and never counts as feedback. The local completion hook closes that action in your own pending list when it observes this call; a declined private draft stays retained and returns later only as a user decision.",
     "decline_pending_action",
     pendingActionDeclineSchema
   ),
@@ -42844,27 +43373,27 @@ var require_stringifyString = __commonJS({
       return true;
     }
     function doubleQuotedString(value, ctx) {
-      const json = JSON.stringify(value);
+      const json2 = JSON.stringify(value);
       if (ctx.options.doubleQuotedAsJSON)
-        return json;
+        return json2;
       const { implicitKey } = ctx;
       const minMultiLineLength = ctx.options.doubleQuotedMinMultiLineLength;
       const indent = ctx.indent || (containsDocumentMarker(value) ? "  " : "");
       let str = "";
       let start = 0;
-      for (let i = 0, ch = json[i]; ch; ch = json[++i]) {
-        if (ch === " " && json[i + 1] === "\\" && json[i + 2] === "n") {
-          str += json.slice(start, i) + "\\ ";
+      for (let i = 0, ch = json2[i]; ch; ch = json2[++i]) {
+        if (ch === " " && json2[i + 1] === "\\" && json2[i + 2] === "n") {
+          str += json2.slice(start, i) + "\\ ";
           i += 1;
           start = i;
           ch = "\\";
         }
         if (ch === "\\")
-          switch (json[i + 1]) {
+          switch (json2[i + 1]) {
             case "u":
               {
-                str += json.slice(start, i);
-                const code = json.substr(i + 2, 4);
+                str += json2.slice(start, i);
+                const code = json2.substr(i + 2, 4);
                 switch (code) {
                   case "0000":
                     str += "\\0";
@@ -42894,23 +43423,23 @@ var require_stringifyString = __commonJS({
                     if (code.substr(0, 2) === "00")
                       str += "\\x" + code.substr(2);
                     else
-                      str += json.substr(i, 6);
+                      str += json2.substr(i, 6);
                 }
                 i += 5;
                 start = i + 1;
               }
               break;
             case "n":
-              if (implicitKey || json[i + 2] === '"' || json.length < minMultiLineLength) {
+              if (implicitKey || json2[i + 2] === '"' || json2.length < minMultiLineLength) {
                 i += 1;
               } else {
-                str += json.slice(start, i) + "\n\n";
-                while (json[i + 2] === "\\" && json[i + 3] === "n" && json[i + 4] !== '"') {
+                str += json2.slice(start, i) + "\n\n";
+                while (json2[i + 2] === "\\" && json2[i + 3] === "n" && json2[i + 4] !== '"') {
                   str += "\n";
                   i += 2;
                 }
                 str += indent;
-                if (json[i + 2] === " ")
+                if (json2[i + 2] === " ")
                   str += "\\";
                 i += 1;
                 start = i + 1;
@@ -42920,7 +43449,7 @@ var require_stringifyString = __commonJS({
               i += 1;
           }
       }
-      str = start ? str + json.slice(start) : json;
+      str = start ? str + json2.slice(start) : json2;
       return implicitKey ? str : foldFlowLines.foldFlowLines(str, indent, foldFlowLines.FOLD_QUOTED, getFoldOptions(ctx, false));
     }
     function singleQuotedString(value, ctx) {
@@ -45278,11 +45807,11 @@ var require_Document = __commonJS({
           throw new Error(`With a null YAML version, the { schema: Schema } option is required`);
       }
       // json & jsonArg are only used from toJSON()
-      toJS({ json, jsonArg, mapAsMap, maxAliasCount, onAnchor, reviver } = {}) {
+      toJS({ json: json2, jsonArg, mapAsMap, maxAliasCount, onAnchor, reviver } = {}) {
         const ctx = {
           anchors: /* @__PURE__ */ new Map(),
           doc: this,
-          keep: !json,
+          keep: !json2,
           mapAsMap: mapAsMap === true,
           mapKeyWarned: false,
           maxAliasCount: typeof maxAliasCount === "number" ? maxAliasCount : 100
@@ -67339,8 +67868,8 @@ function inspectPrivateLearningOutbox2(input, dependencies = {}) {
 }
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.2.2" : "0.0.0-dev";
-var tools = toolDefinitions;
+var SERVER_VERSION = true ? "0.2.3" : "0.0.0-dev";
+var tools2 = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var nativeContextCliRequested = process.argv[2] === "--native-context";
 function legacyBroadWritesEnabled(env = process.env) {
@@ -71183,7 +71712,7 @@ function boundedLocalProfileField(value) {
   return normalized2 ? normalized2.slice(0, 512) : null;
 }
 function mustFindTool(name) {
-  const tool = tools.find((item) => item.name === name);
+  const tool = tools2.find((item) => item.name === name);
   if (!tool) {
     throw new Error(`Missing internal tool definition: ${name}`);
   }

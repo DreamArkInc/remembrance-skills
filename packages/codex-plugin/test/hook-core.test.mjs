@@ -22,6 +22,7 @@ import {
   verify as verifySignature,
 } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { handlePostToolUse as handleCodexPostToolUse } from "../scripts/record-detail-open.mjs";
 import {
   agentLedgerIdFor,
   autoQueryTimeoutMs,
@@ -169,6 +170,25 @@ function markerEnv(extra = {}) {
     XDG_CONFIG_HOME: join(tempRoot, `marker-config-${counter}`),
     REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY: "1",
     ...extra,
+  };
+}
+
+// A lesson capture or retained response as the MCP server returns it, with
+// the draft's exact next action; the hook takes it only while the draft's
+// own envelope cannot be read.
+function lessonResponse(draftId, state = "ready") {
+  return {
+    body: {
+      draft_id: draftId,
+      state,
+      next_action: {
+        tool:
+          state === "ready"
+            ? "submit_private_lesson_candidate"
+            : "retry_private_lesson_candidate",
+        arguments: { draft_id: draftId },
+      },
+    },
   };
 }
 
@@ -1961,39 +1981,71 @@ describe("policy-approved private lesson hook behavior", () => {
     );
     expect(fetchImpl).not.toHaveBeenCalled();
 
+    const stopOptions = (prompted) => ({
+      env,
+      readUseCount: () => 0,
+      readEligibilityCount: () => 0,
+      readPromptedCount: () => prompted,
+      readHighMatch: () => null,
+      readDirectSelections: () => [],
+    });
+    // No session holds this draft: a stop offers it only as a user decision,
+    // never as a silent retry.
+    const orphan = decideStop(
+      { turn_id: "private-lesson-recovery" },
+      stopOptions(0),
+    );
+    expect(orphan).toMatchObject({
+      allow: false,
+      why: "prompt_private_lesson_retry",
+      useCount: 1,
+    });
+    expect(orphan.reason).toContain(
+      "Retained private drafts awaiting a user decision: 1 lesson and 0 skills that no active session is handling;",
+    );
+    expect(orphan.reason).not.toContain("Silently call");
+    expect(orphan.reason).not.toContain("pld_lifecycle1");
+
+    // Once this session captured it, its stop recovers it silently, once.
+    observeSuccessfulCompletionTool(
+      "private-lesson-recovery",
+      "capture_learning",
+      {},
+      {
+        capture_route: "private_lesson",
+        draft_id: "pld_lifecycle1",
+        state: "retry_scheduled",
+      },
+      env,
+    );
+    markCompletionObligationsPrompted("private-lesson-recovery", null, env);
     const first = decideStop(
       { turn_id: "private-lesson-recovery" },
-      {
-        env,
-        readUseCount: () => 0,
-        readEligibilityCount: () => 0,
-        readPromptedCount: () => 0,
-        readHighMatch: () => null,
-        readDirectSelections: () => [],
-      },
+      stopOptions(0),
     );
     expect(first).toMatchObject({
       allow: false,
       why: "prompt_private_lesson_retry",
       useCount: 1,
     });
+    // Only the draft this session captured, by its draft_id.
+    expect(first.reason).toContain(
+      "Silently call inspect_private_learning_outbox only for this session's due private drafts (pld_lifecycle1):",
+    );
     expect(first.reason).toContain("matching retry tool only for a due retry");
+    expect(first.reason).toContain(
+      "Do not submit or retry, on your own, any other draft inspect_private_learning_outbox lists.",
+    );
+    expect(first.reason).not.toContain(
+      "Silently call inspect_private_learning_outbox. Submit ready lessons",
+    );
+    expect(first.reason).not.toContain("awaiting a user decision");
     expect(
-      decideStop(
-        { turn_id: "private-lesson-recovery" },
-        {
-          env,
-          readUseCount: () => 0,
-          readEligibilityCount: () => 0,
-          readPromptedCount: () => 1,
-          readHighMatch: () => null,
-          readDirectSelections: () => [],
-        },
-      ),
+      decideStop({ turn_id: "private-lesson-recovery" }, stopOptions(1)),
     ).toEqual({ allow: true, why: "no_new_usage" });
   });
 
-  it("suppresses automatic retry after host denial until the exact action succeeds", () => {
+  it("suppresses automatic retry after host denial until the host lets the exact action through", async () => {
     const env = privateLessonEnv();
     writePrivateLessonEnvelope(env, "pld_hostdeny1", "ready");
     recordHostPolicyDenial(
@@ -2014,14 +2066,43 @@ describe("policy-approved private lesson hook behavior", () => {
     });
     expect(privateLessonLifecycleRecoveryInstruction(env)).toBeNull();
 
-    expect(
-      clearHighMatchSurfaceIfOpened(
-        "private-lesson-denied",
-        "mcp__remembrance__submit_private_lesson_candidate",
-        { draft_id: "pld_hostdeny1" },
-        env,
-      ),
-    ).toBe(false);
+    // Through the Codex tool observer, as a host reports each call: a failed
+    // submit and an unrelated success prove nothing about the private lane.
+    const observe = (tool, toolInput, response) =>
+      handleCodexPostToolUse(
+        {
+          session_id: "private-lesson-denied",
+          hook_event_name: "PostToolUse",
+          tool_name: `mcp__remembrance__${tool}`,
+          tool_input: toolInput,
+          tool_response: response,
+        },
+        { env, recordHealth: () => {} },
+      );
+    await observe(
+      "submit_private_lesson_candidate",
+      { draft_id: "pld_hostdeny1" },
+      { isError: true, content: [{ type: "text", text: "Tool failed." }] },
+    );
+    await observe("get_skill", { slug: "unrelated" }, { slug: "unrelated" });
+    expect(readPrivateLessonLifecycleState(env)).toMatchObject({
+      host_denial_active: true,
+    });
+    // The host let the exact call through; the server kept it retained.
+    await observe(
+      "submit_private_lesson_candidate",
+      { draft_id: "pld_hostdeny1" },
+      {
+        draft_id: "pld_hostdeny1",
+        state: "ready",
+        status: "not_submitted",
+        retained_locally: true,
+        next_action: {
+          tool: "submit_private_lesson_candidate",
+          arguments: { draft_id: "pld_hostdeny1" },
+        },
+      },
+    );
     expect(readPrivateLessonLifecycleState(env)).toMatchObject({
       host_denial_active: false,
     });
@@ -5213,7 +5294,7 @@ describe("hook-core marker round-trip", () => {
     expect(
       recordPrivateLessonObligation(
         sessionId,
-        { body: { draft_id: "pld_mixedlesson", state: "ready" } },
+        lessonResponse("pld_mixedlesson"),
         env,
       ),
     ).toMatchObject({
@@ -6651,9 +6732,7 @@ describe("hook-core marker round-trip", () => {
         sessionId: "observe-private-lesson",
         tool: "prepare_private_lesson_candidate",
         args: {},
-        response: {
-          body: { draft_id: "pld_observedlesson", state: "ready" },
-        },
+        response: lessonResponse("pld_observedlesson"),
         expected: {
           kind: "private_lesson",
           draft_id: "pld_observedlesson",
@@ -6788,7 +6867,7 @@ describe("hook-core marker round-trip", () => {
     );
     recordPrivateLessonObligation(
       caller,
-      { body: { draft_id: "pld_declinehint", state: "ready" } },
+      lessonResponse("pld_declinehint"),
       env,
     );
 
@@ -6836,27 +6915,30 @@ describe("hook-core marker round-trip", () => {
         .map((item) => `${item.kind}:${item.query_id}`)
         .sort();
 
-    // An unknown reason, an unknown id, or a private-learning hint's id
-    // closes nothing.
+    // An unknown reason or id closes nothing, and host_policy_denied is
+    // for private lines only: feedback keeps acknowledge_feedback_denial.
     decline(caller, { action_id: queryAction, reason: "host_policy_denied" });
+    decline(caller, { action_id: queryAction, reason: "not_a_reason" });
     decline(caller, { action_id: "0000000000000000", reason: "duplicate" });
+    // Another session cannot decline the caller's private line.
     const hint = readCompletionObligations(caller, env).find(
       (item) => item.kind === "private_lesson",
     );
-    decline(caller, {
-      action_id: createHash("sha256")
-        .update(hint.id, "utf8")
-        .digest("hex")
-        .slice(0, 16),
-      reason: "not_reusable",
-    });
+    const hintAction = createHash("sha256")
+      .update(hint.id, "utf8")
+      .digest("hex")
+      .slice(0, 16);
+    expect(
+      decline(other, { action_id: hintAction, reason: "not_reusable" }).closed,
+    ).toEqual([]);
     expect(held(caller)).toEqual([
       "post_use_feedback:rq_keep",
       "private_lesson:null",
       "query_feedback:rq_decline",
     ]);
 
-    // The id closes exactly that action, and only in the caller's ledger.
+    // The id closes exactly that action, and only in the caller's ledger;
+    // the other session holds only its own debts.
     expect(
       decline(caller, {
         action_id: queryAction,
@@ -6867,29 +6949,62 @@ describe("hook-core marker round-trip", () => {
       "post_use_feedback:rq_keep",
       "private_lesson:null",
     ]);
-    expect(held(other)).toEqual([
-      "private_lesson:null",
-      "query_feedback:rq_decline",
-    ]);
+    expect(held(other)).toEqual(["query_feedback:rq_decline"]);
   });
 
-  it("offers no decline for a private-learning hint, which has its own outbox path", () => {
+  it("lists a private-learning hint with an action_id whose decline parks only its draft", () => {
     const env = markerEnv({ REMEMBRANCE_API_KEY: "rk_hook_org_test" });
-    recordPrivateLessonObligation(
-      "decline-hints-only",
-      { body: { draft_id: "pld_declinehint", state: "ready" } },
-      env,
-    );
+    const session = "decline-hints-only";
+    recordPrivateLessonObligation(session, lessonResponse("pld_declinehint"), env);
+    const [hint] = readCompletionObligations(session, env);
+    const actionId = createHash("sha256")
+      .update(hint.id, "utf8")
+      .digest("hex")
+      .slice(0, 16);
 
-    const recovery = pendingCompletionRecoveryInstruction(
-      "decline-hints-only",
-      env,
+    const recovery = pendingCompletionRecoveryInstruction(session, env).split(
+      "\n",
     );
-    expect(recovery).toContain(
+    const line = recovery.indexOf(
       "- Private lesson: call submit_private_lesson_candidate with draft_id pld_declinehint.",
     );
-    expect(recovery).not.toContain("action_id");
-    expect(recovery).not.toContain("decline_pending_action");
+    expect(line).toBeGreaterThan(-1);
+    expect(recovery[line + 1]).toBe(`  action_id ${actionId}`);
+    expect(recovery).toContain(
+      "If you cannot complete an action, call local decline_pending_action with the action_id under it and one reason (not_observed_by_this_agent, agent_exited, not_reusable, or duplicate) instead of guessing.",
+    );
+    expect(recovery).toContain(
+      "If the host denies a private line's exact action, decline that line with reason host_policy_denied; a declined private draft stays retained, returns later only as a user decision, and is never deleted automatically.",
+    );
+
+    const declined = observeSuccessfulCompletionTool(
+      session,
+      "mcp__remembrance__decline_pending_action",
+      { action_id: actionId, reason: "host_policy_denied" },
+      { status: "declined" },
+      env,
+    );
+    expect(declined.closed).toEqual([
+      expect.objectContaining({ kind: "private_lesson", draft_id: "pld_declinehint" }),
+    ]);
+    // The hint is gone and the draft is parked, content-free.
+    expect(readCompletionObligations(session, env)).toEqual([]);
+    const lifecycle = join(
+      env.XDG_STATE_HOME,
+      "remembrance",
+      "private-learning-lifecycle",
+    );
+    expect(
+      JSON.parse(readFileSync(join(lifecycle, "pld_declinehint.parked.json"), "utf8")),
+    ).toEqual({
+      version: 1,
+      reason: "host_policy_denied",
+      parked_at: expect.any(String),
+      notices: 0,
+      next_notice_at: expect.any(String),
+      client_version: installedClientVersion(),
+    });
+    expect(pendingCompletionRecoveryInstruction(session, env)).toBeNull();
   });
 
   it("counts debts a full ledger cannot record and reports them until it drains", () => {
@@ -6981,12 +7096,7 @@ describe("hook-core marker round-trip", () => {
     for (let index = 0; index < 65; index += 1) {
       recordPrivateLessonObligation(
         "overflow-private",
-        {
-          body: {
-            draft_id: `pld_overflow${String(index).padStart(4, "0")}`,
-            state: "ready",
-          },
-        },
+        lessonResponse(`pld_overflow${String(index).padStart(4, "0")}`),
         env,
       );
     }
@@ -7220,7 +7330,7 @@ describe("hook-core marker round-trip", () => {
     );
     recordPrivateLessonObligation(
       sessionId,
-      { body: { draft_id: "pld_selectedlesson", state: "ready" } },
+      lessonResponse("pld_selectedlesson"),
       env,
     );
     observeSuccessfulCompletionTool(
@@ -7390,7 +7500,7 @@ describe("hook-core marker round-trip", () => {
 
     recordPrivateLessonObligation(
       sessionId,
-      { body: { draft_id: "pld_responsefallback", state: "ready" } },
+      lessonResponse("pld_responsefallback"),
       env,
     );
     expect(
@@ -9288,7 +9398,7 @@ describe("unresolved retained records: resolution, transfer, capacity, promotion
       // while the lifecycle directory itself is.
       const hint = recordPrivateLessonObligation(
         session,
-        { body: { draft_id: "pld_r13linkedroot", state: "ready" } },
+        lessonResponse("pld_r13linkedroot"),
         env,
       );
       if (linked === "retained") {
@@ -9399,6 +9509,7 @@ describe("unresolved retained records: resolution, transfer, capacity, promotion
     expect(tree()).toEqual(before);
   });
 
+  // About 1.3 s locally but over the 5 s default on CircleCI's Docker executor (65 stops write many small files).
   it("gives a full parent that already holds 64 pointers a 65th for the next subagent's kept debt, counts nothing, and names it once the named ones are resolved", async () => {
     const env = markerEnv();
     const parent = "r2-1-pointer-cap";
@@ -9459,7 +9570,7 @@ describe("unresolved retained records: resolution, transfer, capacity, promotion
         { readKey: readKey(env) },
       ),
     ).toMatchObject({ status: "retrieved", payload_digest: kept.digest });
-  });
+  }, 30_000);
 
   // Review R2-1 (round 2, the round-1 "failed parent write" item): a parent
   // whose ledger cannot be written still gets a pointer, and the debt is
@@ -9794,6 +9905,7 @@ describe("unresolved retained records: resolution, transfer, capacity, promotion
     ).toMatchObject({ version: "completion-resupply-envelope-v1" });
   });
 
+  // Six hook processes in three rounds: about 1.2 s locally, near the 5 s default on CircleCI's Docker executor.
   it("makes one key when two hook processes seal their first payloads at once, and loses no record", async () => {
     const { spawn } = await import("node:child_process");
     const hookCore = new URL("../scripts/hook-core.mjs", import.meta.url).href;
@@ -9854,5 +9966,5 @@ describe("unresolved retained records: resolution, transfer, capacity, promotion
         expect(retrieved).toMatchObject({ status: "retrieved", payload_digest: digest });
       }
     }
-  });
+  }, 30_000);
 });

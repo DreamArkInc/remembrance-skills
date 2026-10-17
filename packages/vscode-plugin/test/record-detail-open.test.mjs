@@ -1,9 +1,18 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { pendingCompletionRecoveryInstruction } from "../scripts/hook-core.mjs";
 import { handlePostToolUse } from "../scripts/record-detail-open.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -217,6 +226,97 @@ describe("VS Code post-tool detail tracking", () => {
         `exit ${result.code} for stdin ${JSON.stringify(stdin)}`,
       ).toBe(0);
     }
+  });
+
+  // VS Code reports no denial events, so the agent's explicit decline of a
+  // private line is what parks its draft; the draft itself is never touched.
+  it("parks only the private draft whose line the agent declines", async () => {
+    const env = {
+      XDG_STATE_HOME: join(tempRoot, "decline-state"),
+      XDG_CONFIG_HOME: join(tempRoot, "decline-config"),
+      REMEMBRANCE_USAGE_DIR: join(tempRoot, "decline-usage"),
+      REMEMBRANCE_API_KEY: "rk_synthetic_vscode_decline",
+      REMEMBRANCE_API_URL: "http://127.0.0.1:9",
+      REMEMBRANCE_API_KEY_ORIGIN: "http://127.0.0.1:9",
+    };
+    const outbox = join(env.XDG_STATE_HOME, "remembrance", "private-lessons");
+    mkdirSync(outbox, { recursive: true, mode: 0o700 });
+    chmodSync(outbox, 0o700);
+    const [declined, kept] = ["pld_vscode_declined", "pld_vscode_kept"];
+    const envelopes = [declined, kept].map((draftId) => {
+      const path = join(outbox, `${draftId}.lesson.json`);
+      writeFileSync(
+        path,
+        JSON.stringify({
+          version: "private-lesson-outbox-envelope-v1",
+          draft_id: draftId,
+          state: "ready",
+          hold_telemetry_status: "not_required",
+          next_retry_at: null,
+          updated_at: "2026-10-01T00:00:00.000Z",
+        }),
+        { mode: 0o600 },
+      );
+      return [path, readFileSync(path)];
+    });
+    const observe = (tool, toolInput, body) =>
+      handlePostToolUse(
+        {
+          session_id: "vscode-decline",
+          tool_name: `mcp__remembrance__${tool}`,
+          tool_input: toolInput,
+          tool_response: {
+            content: [{ type: "text", text: JSON.stringify(body) }],
+          },
+        },
+        { env, recordHealth: vi.fn() },
+      );
+    for (const draftId of [declined, kept]) {
+      await observe(
+        "capture_learning",
+        {},
+        {
+          capture_route: "private_lesson",
+          draft_id: draftId,
+          state: "ready",
+          next_action: {
+            tool: "submit_private_lesson_candidate",
+            arguments: { draft_id: draftId },
+          },
+        },
+      );
+    }
+    const line = (draftId) =>
+      `call submit_private_lesson_candidate with draft_id ${draftId}`;
+    expect(
+      pendingCompletionRecoveryInstruction("vscode-decline", env),
+    ).toContain(line(declined));
+    const actionId = createHash("sha256")
+      .update(`private_lesson:${declined}`, "utf8")
+      .digest("hex")
+      .slice(0, 16);
+    await observe(
+      "decline_pending_action",
+      { action_id: actionId, reason: "not_reusable" },
+      { status: "declined", action_id: actionId, reason: "not_reusable" },
+    );
+    expect(
+      JSON.parse(
+        readFileSync(
+          join(
+            env.XDG_STATE_HOME,
+            "remembrance",
+            "private-learning-lifecycle",
+            `${declined}.parked.json`,
+          ),
+          "utf8",
+        ),
+      ),
+    ).toMatchObject({ version: 1, reason: "not_reusable", notices: 0 });
+    const after = pendingCompletionRecoveryInstruction("vscode-decline", env);
+    expect(after).toContain(line(kept));
+    expect(after).not.toContain(line(declined));
+    for (const [path, bytes] of envelopes) expect(readFileSync(path)).toEqual(bytes);
   });
 });
 

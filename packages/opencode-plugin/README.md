@@ -19,7 +19,9 @@ settings and creates a new config with mode `0600` when none exists.
 
 Restart opencode. Remembrance then appears in its tools list, adds bounded
 matching guidance to eligible model turns, observes completed use, and silently
-queues any missing feedback or capture action for the next real prompt.
+queues any missing feedback or capture action for the next real prompt. With an
+organization key, finish with
+[Highly Recommended: approve private submissions](#highly-recommended-approve-private-submissions).
 
 **Node.js runtime.** The MCP entry that setup writes runs `npx`, so Node.js
 18.17.0 or newer and npm must be on the PATH opencode starts with. A host
@@ -138,6 +140,47 @@ are used instead, set `REMEMBRANCE_API_KEY_ORIGIN` equal to the exact custom
 `REMEMBRANCE_API_URL`. Remote registries require HTTPS; a trusted private or
 link-local self-host also requires `REMEMBRANCE_ALLOW_PRIVATE_REGISTRY=true`.
 
+### Highly Recommended: approve private submissions
+
+For organizations that use Remembrance with a private organization key, this
+step is required for Remembrance to do its job fully: private lesson and skill
+submissions must run without a manual approval. OpenCode runs MCP tools without
+asking by default, so they already do. The entries below keep it that way
+under a broader ask rule that comes before them, which would otherwise stop
+every private lesson or skill submission for a manual approval. Public-only
+use, without an organization key, does not need it.
+
+Add the four private submit and retry tools and the local-only
+`capture_learning` to the `permission` map in
+`~/.config/opencode/opencode.json`. `capture_learning` stays on this machine
+and sends nothing; every local private submission starts with it:
+
+```json
+{
+  "permission": {
+    "remembrance_submit_private_lesson_candidate": "allow",
+    "remembrance_retry_private_lesson_candidate": "allow",
+    "remembrance_submit_private_skill_candidate": "allow",
+    "remembrance_retry_private_skill_candidate": "allow",
+    "remembrance_capture_learning": "allow"
+  }
+}
+```
+
+Put them after any broader `"*"` or `"remembrance_*"` rule in the same
+`permission` map, because OpenCode applies the last matching rule. A broader ask
+rule set elsewhere, such as in an agent's own `permission` map or, depending on
+the OpenCode version, in another configuration file, can still take precedence;
+if the capture or its submission still prompts, find that rule and make sure the
+same entries come after it. Never allow the `delete_private_*` tools this way.
+In OpenCode 2.x, answering "always" at a prompt saves an allow rule for the
+current project across sessions (1.x keeps it until OpenCode restarts), so never
+answer "always" on a `delete_private_*` prompt; the
+`~/.config/opencode/opencode.json` entries are the form that applies to every
+project. Check the step by behavior: capture one disposable private lesson and
+confirm that neither the capture nor its submission prompts.
+`run_connection_doctor` cannot see a persisted approval.
+
 ## What the plugin does
 
 | Event                                | Behavior                                                        |
@@ -240,16 +283,31 @@ the same approved action; that telemetry cannot enter verification, review,
 topology, or skill materialization. Disable it with
 `REMEMBRANCE_HEALTH_REPORTING=0`.
 
-OpenCode permission keys match MCP tool names. Allow the submit and retry tools
-for the `private_lesson` and `private_skill` lanes; broader Remembrance write
-tools can remain `ask` or `deny`. Remembrance maps an existing submit approval
-to its lane. Local capture, inspection, and confirmed deletion remain
+OpenCode permission keys are `remembrance_<tool>`, and OpenCode allows tools
+that no rule covers. The setup command writes no `permission` entries, so every
+visible Remembrance tool, including other writes, runs without asking until you
+add rules. Allow the submit and retry tools for the `private_lesson` and
+`private_skill` lanes as in the Highly Recommended step, and set broader
+Remembrance write tools to `ask` or `deny` when they should stay reviewable.
+Remembrance maps an existing submit approval to its lane. Local capture, inspection, and confirmed deletion remain
 zero-network; a fresh-draft retry stops before network access. Broad `submit_remembrance` and
 `propose_private_skill` are legacy/hosted/raw compatibility routes and are
 unavailable by default locally. `submit_query_feedback` remains independently
 available for one complete good/partial/poor query-fit verdict set;
 `submit_feedback` is categorical post-use feedback. A host denial is held and
-is never retried through another transport.
+is never retried through another transport: the denied call's own arguments
+park only that draft, as a decline does. A parked draft returns as a user
+decision 1, 7 and 30 days later (each wait counted from the park or the last
+showing), whether or not the host allows its lane. A client update, and for a
+host-denied draft the host letting that lane through again, makes the next
+return come right away instead (or adds one more, if all three were shown). It
+is sent only through its exact submit or retry action after the user agrees.
+Drafts no active session is handling are offered as a user decision too, until
+the user delivers, keeps or deletes them; a kept draft is parked. These
+decisions go to the next main-session prompt on the machine, at most once a
+day, including unattended runs such as `opencode run`; the drafts stay listed
+by `inspect_private_learning_outbox`, and none is sent or deleted without the
+user.
 
 ### Routing metadata on complete skill proposals
 

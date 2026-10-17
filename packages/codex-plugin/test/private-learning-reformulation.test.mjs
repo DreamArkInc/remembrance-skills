@@ -401,6 +401,14 @@ describe("bounded agent reformulation lifecycle", () => {
     const env = fixture();
     envelope(env, held());
     const session = "recovery-combined-budget";
+    // This session captured the draft, so its recovery stays silent.
+    observeSuccessfulCompletionTool(
+      session,
+      "capture_learning",
+      {},
+      { capture_route: "private_skill", retained_locally: true, ...held() },
+      env,
+    );
     const identities = [];
     for (let index = 0; index < 3; index++) {
       const query_id = `rq_${index}_${"q".repeat(85)}`;

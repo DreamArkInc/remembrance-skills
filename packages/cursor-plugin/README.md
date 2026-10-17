@@ -14,15 +14,21 @@ Cursor plugins are installed from **Cursor > Customize > Plugins** or from an
 organization/team marketplace. Search for **Remembrance** after the plugin is
 published to your Cursor marketplace.
 
-For local development against this repo, copy or symlink the package into
-Cursor's local plugin directory:
+For local development against this repo, copy the package into its own folder
+under Cursor's local plugin directory:
 
 ```sh
-mkdir -p ~/.cursor/plugins/local
-ln -s /abs/path/to/remembrance/packages/cursor-plugin ~/.cursor/plugins/local/remembrance
+mkdir -p ~/.cursor/plugins/local/remembrance
+cp -R /abs/path/to/remembrance/packages/cursor-plugin/. ~/.cursor/plugins/local/remembrance/
 ```
 
-Restart Cursor, then open **Customize > Plugins** and enable Remembrance.
+Copy rather than link: Cursor skips a symbolic link that points to a plugin
+elsewhere on disk. On Teams and Enterprise, local plugins load only when an
+administrator allows **Allow Local Plugin Imports**, which is off by default on
+Enterprise. Restart Cursor or run **Developer: Reload Window**, then open
+**Customize > Plugins** and enable Remembrance. With an organization key,
+finish with
+[Highly Recommended: approve private submissions](#highly-recommended-approve-private-submissions).
 
 **Node.js runtime.** The hooks need Node.js 18.17.0 or newer that Cursor can
 find, and the plugin's MCP entry runs `npx -y @remembrance-ai/mcp-server`, which
@@ -137,6 +143,62 @@ live public skill references. A query failure does not block the user's work,
 but it fails closed for public-skill fallback until the organization policy can
 be confirmed.
 
+### Highly Recommended: approve private submissions
+
+For organizations that use Remembrance with a private organization key, this
+step is required for Remembrance to do its job fully. Without it, depending on
+Cursor's Run Mode, every private lesson or skill submission stops for a manual
+approval (the Allowlist mode always asks). Public-only use, without an
+organization key, does not need it.
+
+In the IDE, merge these entries into the `mcpAllowlist` array of
+`~/.cursor/permissions.json` (create the file if it is missing). The last,
+`capture_learning`, is local only: it stays on this machine and sends nothing,
+and every local private submission starts with it:
+
+```json
+{
+  "mcpAllowlist": [
+    "remembrance:submit_private_lesson_candidate",
+    "remembrance:retry_private_lesson_candidate",
+    "remembrance:submit_private_skill_candidate",
+    "remembrance:retry_private_skill_candidate",
+    "remembrance:capture_learning"
+  ]
+}
+```
+
+- `mcpAllowlist` replaces the whole in-app MCP allowlist, so keep the entries
+  you already rely on in the same array, keep the file's other keys such as
+  `terminalAllowlist`, `approvalMode`, and `autoReview`, and use this
+  user-level file.
+- Cursor applies it under its Run Modes (Auto-review is the default); a team
+  Run Mode configuration from an administrator overrides it.
+- If Cursor shows the plugin's server under a name other than `remembrance`,
+  use that exact name. Do not replace the server name with `*`, which approves
+  the tool on every server, and never approve the `delete_private_*` tools.
+
+For the Cursor CLI, merge the same tools into `permissions.allow` in
+`~/.cursor/cli-config.json`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Mcp(remembrance:submit_private_lesson_candidate)",
+      "Mcp(remembrance:retry_private_lesson_candidate)",
+      "Mcp(remembrance:submit_private_skill_candidate)",
+      "Mcp(remembrance:retry_private_skill_candidate)",
+      "Mcp(remembrance:capture_learning)"
+    ]
+  }
+}
+```
+
+Check the step by behavior: capture one disposable private lesson and confirm
+that neither the capture nor its submission prompts. `run_connection_doctor`
+cannot see a persisted approval.
+
 ### Private repository contributions
 
 When the organization has approved Remembrance as a destination, a current
@@ -150,14 +212,20 @@ Remembrance receives it; that denial is not an API failure and must not be
 worked around with another network transport.
 
 For managed Cursor rollout, publish Remembrance through a team marketplace as
-`Required` or `Default On`. Register the same Remembrance MCP endpoint under
-**Dashboard > Integrations & MCP** for cloud agents, the Agents window, IDE,
-and CLI, and allow `remembrance.dev` in the enterprise sandbox network policy
-for command-based fallback paths. Cursor's current public enterprise docs do
-not define a managed per-MCP-tool allowlist equivalent to Codex, Claude Code,
-Gemini CLI, or OpenClaw, so keep normal tool approvals enabled rather than
-claiming a nonexistent control. Verify query, invocation, feedback, and private
-contribution receipts separately on local and cloud surfaces.
+`Required` or `Default On`. Register the same Remembrance MCP endpoint as a
+Team MCP server under **Dashboard > Plugins & MCPs** for cloud agents, the
+Agents window, IDE, and CLI, and allow `remembrance.dev` in the enterprise
+sandbox network policy for command-based fallback paths. Cursor's managed
+per-tool allowlist is `~/.cursor/permissions.json` distributed through MDM:
+ship the five `mcpAllowlist` entries above, the four private submit and retry
+tools and the local-only `capture_learning`, merged with every other entry and
+key the organization relies on, such as `terminalAllowlist`, `approvalMode`,
+and `autoReview`, because a distributed file replaces each user's file and its
+in-app MCP allowlist. A team Run Mode configuration overrides local files, and
+the per-server tools field under **Team Settings > MCP Configuration** limits
+which tools may run but does not run them without asking. Verify query,
+invocation, feedback, and private contribution receipts separately on local
+and cloud surfaces.
 The shared organization tool inventory and host-by-host policy references are
 in `skills/remembrancer/references/remembrance-setup.md` and the live guide at
 <https://remembrance.dev/docs/remembrancer#private-repository-policy>.
@@ -289,10 +357,11 @@ the same approved action; that telemetry cannot enter verification, review,
 topology, or skill materialization. Disable it with
 `REMEMBRANCE_HEALTH_REPORTING=0`.
 
-Cursor asks before MCP writes by default. Approve the submit and retry actions
-for the `private_lesson` and `private_skill` lanes when those exact tools are
-shown; do not enable broad Auto-run solely for Remembrance. Remembrance lazily
-maps an existing submit approval to its lane. Local capture, inspection, and
+Cursor's default Auto-review Run Mode runs allowlisted MCP tools and sends
+other calls to its classifier, which may ask. Allow the submit and retry
+actions for the `private_lesson` and `private_skill` lanes as in the Highly
+Recommended step; do not switch to Run Everything solely for Remembrance.
+Remembrance lazily maps an existing submit approval to its lane. Local capture, inspection, and
 confirmed deletion remain zero-network, and a fresh-draft retry stops before
 network access. `submit_query_feedback` remains an independent bounded
 query-fit action.
@@ -423,9 +492,9 @@ This package follows Cursor's documented plugin structure:
   Cursor agent hooks.
 - Cursor now documents conversation hooks for cloud agents, but a local plugin
   install does not automatically provision cloud agents. Distribute the plugin
-  through a team marketplace, register Remembrance under **Dashboard >
-  Integrations & MCP**, and verify query, invocation, feedback, and contribution
-  receipts on both local and cloud surfaces.
+  through a team marketplace, register Remembrance as a Team MCP server under
+  **Dashboard > Plugins & MCPs**, and verify query, invocation, feedback, and
+  contribution receipts on both local and cloud surfaces.
 
 References:
 

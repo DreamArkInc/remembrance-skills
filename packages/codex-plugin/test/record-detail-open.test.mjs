@@ -1,5 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { pendingCompletionRecoveryInstruction } from "../scripts/hook-core.mjs";
 import { handlePostToolUse } from "../scripts/record-detail-open.mjs";
+
+const tempRoot = mkdtempSync(join(tmpdir(), "remembrance-codex-posttool-"));
+afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
 
 describe("native post-tool detail tracking", () => {
   it("clears the current high match after the correlated detail opens", async () => {
@@ -372,5 +387,100 @@ describe("native post-tool detail tracking", () => {
       why: "remembrance_followup_pending",
     });
     expect(observeCompletionTool).toHaveBeenCalledOnce();
+  });
+
+  // A failed private submit parks its own draft only when the classifier
+  // recognizes a host denial; an API refusal parks nothing.
+  it("parks the draft of a failed private submit the host denied, and only that draft", async () => {
+    const env = {
+      XDG_STATE_HOME: join(tempRoot, "state"),
+      XDG_CONFIG_HOME: join(tempRoot, "config"),
+      REMEMBRANCE_USAGE_DIR: join(tempRoot, "usage"),
+      REMEMBRANCE_PLUGIN_ALERT_DIR: join(tempRoot, "alerts"),
+      REMEMBRANCE_API_KEY: "rk_synthetic_codex_denial",
+      REMEMBRANCE_API_URL: "http://127.0.0.1:9",
+      REMEMBRANCE_API_KEY_ORIGIN: "http://127.0.0.1:9",
+    };
+    const outbox = join(env.XDG_STATE_HOME, "remembrance", "private-lessons");
+    mkdirSync(outbox, { recursive: true, mode: 0o700 });
+    chmodSync(outbox, 0o700);
+    const ids = ["pld_codex_denied", "pld_codex_refused", "pld_codex_kept"];
+    const envelopes = ids.map((draftId) => {
+      const path = join(outbox, `${draftId}.lesson.json`);
+      writeFileSync(
+        path,
+        JSON.stringify({
+          version: "private-lesson-outbox-envelope-v1",
+          draft_id: draftId,
+          state: "ready",
+          hold_telemetry_status: "not_required",
+          next_retry_at: null,
+          updated_at: "2026-10-01T00:00:00.000Z",
+        }),
+        { mode: 0o600 },
+      );
+      return [path, readFileSync(path)];
+    });
+    const observe = (tool, toolInput, response) =>
+      handlePostToolUse(
+        {
+          session_id: "codex-denial",
+          hook_event_name: "PostToolUse",
+          tool_name: `mcp__remembrance__${tool}`,
+          tool_input: toolInput,
+          tool_response: response,
+        },
+        { env, recordHealth: () => {} },
+      );
+    for (const draftId of ids) {
+      await observe(
+        "capture_learning",
+        {},
+        {
+          capture_route: "private_lesson",
+          draft_id: draftId,
+          state: "ready",
+          next_action: {
+            tool: "submit_private_lesson_candidate",
+            arguments: { draft_id: draftId },
+          },
+        },
+      );
+    }
+    const fail = (draftId, error) =>
+      handlePostToolUse(
+        {
+          session_id: "codex-denial",
+          hook_event_name: "PostToolUse",
+          tool_name: "mcp__remembrance__submit_private_lesson_candidate",
+          tool_input: { draft_id: draftId },
+          error,
+        },
+        { env, recordHealth: () => {} },
+      );
+    expect(await fail(ids[0], "Tool execution denied by host policy.")).toEqual({
+      cleared: false,
+      why: "tool_failed",
+    });
+    await fail(ids[1], "Request failed: HTTP 403 Forbidden.");
+    const parked = (draftId) => {
+      const path = join(
+        env.XDG_STATE_HOME,
+        "remembrance",
+        "private-learning-lifecycle",
+        `${draftId}.parked.json`,
+      );
+      return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : null;
+    };
+    expect(parked(ids[0])).toMatchObject({ reason: "host_policy_denied" });
+    expect(parked(ids[1])).toBeNull();
+    expect(parked(ids[2])).toBeNull();
+    const pending = pendingCompletionRecoveryInstruction("codex-denial", env);
+    const line = (draftId) =>
+      `call submit_private_lesson_candidate with draft_id ${draftId}`;
+    expect(pending).not.toContain(line(ids[0]));
+    expect(pending).toContain(line(ids[1]));
+    expect(pending).toContain(line(ids[2]));
+    for (const [path, bytes] of envelopes) expect(readFileSync(path)).toEqual(bytes);
   });
 });
