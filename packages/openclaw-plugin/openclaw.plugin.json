@@ -1,7 +1,7 @@
 {
   "id": "remembrance",
   "name": "Remembrance",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Discover or directly invoke authorized Remembrance skills in OpenClaw, then close the outcome and feedback loop.",
   "activation": {
     "onStartup": true
@@ -20,6 +20,11 @@
         "additionalProperties": false,
         "description": "Saved allow-always decisions, one per Remembrance egress lane. The plugin sets a lane to true when the user chooses allow-always; that decision covers only the actions of that lane, such as the private_lesson submit and retry actions.",
         "properties": {
+          "admin_review_repair": {
+            "type": "boolean",
+            "default": false,
+            "description": "Explicit allow-always for repair_review_draft only. Requires organization admin:review authority; creates a complete protected replacement while retaining the original for a separate normal decision. Other private-learning approvals do not cover this lane."
+          },
           "private_lesson": {
             "type": "boolean"
           },

@@ -218,6 +218,101 @@ function approvalAwareExecutor(beforeToolCall, approvalRequests) {
 }
 
 describe("OpenClaw private learning egress approval", () => {
+  it("asks separately for administrator repair despite every existing learning approval", () => {
+    const manifest = localRequire("../openclaw.plugin.json");
+    expect(manifest.configSchema.properties.privateLearningEgressApprovals.properties.admin_review_repair)
+      .toMatchObject({ type: "boolean", default: false });
+    const approvedLanes = privateLearningSubmitApprovals({
+      pluginConfig: {
+        privateLessonSubmitApproval: true,
+        privateLearningEgressApprovals: {
+          private_lesson: true,
+          private_skill: true,
+          conditional_feedback: true,
+          remembrance_submission: true,
+          private_skill_proposal: true,
+          skill_candidate: true,
+          skill_suggestion: true,
+          resource_submission: true,
+          resource_review: true,
+        },
+        privateLearningSubmitApprovals: {
+          submit_private_skill_candidate: true,
+          retry_private_skill_candidate: true,
+        },
+      },
+    });
+    expect(approvedLanes.has("admin_review_repair")).toBe(false);
+    for (const toolName of ["repair_review_draft", "mcp_remembrance_repair_review_draft"]) {
+      const onAllowAlways = vi.fn();
+      const gate = handlePrivateLessonSubmitApproval(
+        { toolName },
+        { approved: true, approvedLanes, onAllowAlways },
+      );
+      expect(gate).toMatchObject({ requireApproval: {
+        title: "Create protected Remembrance review replacement",
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+        severity: "warning",
+      } });
+      const description = gate.requireApproval.description;
+      for (const phrase of ["admin:review", "complete new protected skill replacement", "normal verification and review", "original draft is retained unchanged", "separate normal explicit decision", "accepted, tenant-readable active replacement"])
+        expect(description).toContain(phrase);
+      gate.requireApproval.onResolution("deny");
+      gate.requireApproval.onResolution("allow-once");
+      expect(onAllowAlways).not.toHaveBeenCalled();
+      expect(handlePrivateLessonSubmitApproval({ toolName }, { approvedLanes }))
+        .toHaveProperty("requireApproval");
+      gate.requireApproval.onResolution("allow-always");
+      expect(onAllowAlways).toHaveBeenCalledExactlyOnceWith("admin_review_repair");
+    }
+    expect(handlePrivateLessonSubmitApproval({ toolName: "get_review_comparison" }))
+      .toBeUndefined();
+  });
+
+  it("persists only explicit repair authority and restores it independently", async () => {
+    const config = { plugins: { entries: { remembrance: { config: {
+      privateLearningEgressApprovals: { private_skill: true },
+    } } } } };
+    const api = { runtime: { config: {
+      mutateConfigFile: vi.fn(async ({ mutate }) => mutate(config)),
+    } } };
+    await persistPrivateLearningSubmitApproval(api, "repair_review_draft");
+    expect(config.plugins.entries.remembrance.config.privateLearningEgressApprovals)
+      .toEqual({ private_skill: true, admin_review_repair: true });
+    const approvedLanes = privateLearningSubmitApprovals({ pluginConfig:
+      structuredClone(config.plugins.entries.remembrance.config),
+    });
+    expect(handlePrivateLessonSubmitApproval({ toolName: "repair_review_draft" }, { approvedLanes }))
+      .toBeUndefined();
+    const repairOnly = privateLearningSubmitApprovals({ pluginConfig: {
+      privateLearningEgressApprovals: { admin_review_repair: true },
+    } });
+    expect(repairOnly).toEqual(new Set(["admin_review_repair"]));
+    expect(handlePrivateLessonSubmitApproval({ toolName: "submit_private_skill_candidate" }, { approvedLanes: repairOnly }))
+      .toHaveProperty("requireApproval");
+    expect(privateLearningSubmitApprovals({ pluginConfig: {
+      privateLearningEgressApprovals: { admin_review_repair: false },
+    } }).has("admin_review_repair")).toBe(false);
+  });
+
+  it("keeps a denied administrator repair unapproved through the registered host hook", async () => {
+    const configFile = { plugins: { entries: { remembrance: { config: {
+      privateLearningEgressApprovals: { private_skill: true },
+    } } } } };
+    const host = registerApprovalHook(configFile.plugins.entries.remembrance.config, configFile);
+    const event = { toolName: "repair_review_draft", arguments: {
+      job_id: "job_000000000000000001",
+      request_id: "psrr_00000000000000000000000000000001",
+    } };
+    const gate = await host.beforeToolCall(event);
+    expect(gate).toHaveProperty("requireApproval");
+    gate.requireApproval.onResolution("deny");
+    expect(host.mutateConfigFile).not.toHaveBeenCalled();
+    expect(configFile.plugins.entries.remembrance.config.privateLearningEgressApprovals)
+      .toEqual({ private_skill: true });
+    expect(await host.beforeToolCall(event)).toHaveProperty("requireApproval");
+  });
+
   it("reuses the saved skill-lane approval after reformulation and host restart", async () => {
     const config = { plugins: { entries: { remembrance: { config: {} } } } };
     const api = {

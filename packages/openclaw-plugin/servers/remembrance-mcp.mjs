@@ -4798,8 +4798,8 @@ function parseSurfaceReleases(value) {
   );
 }
 function isCanonicalIsoTimestamp(value) {
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+  const timestamp2 = Date.parse(value);
+  return Number.isFinite(timestamp2) && new Date(timestamp2).toISOString() === value;
 }
 
 // ../core/src/client-health-alerts.ts
@@ -9900,6 +9900,9 @@ var MAX_RSA_FACTOR_SEARCH_MODULUS = 1n << 4096n;
 var MAX_RSA_ARITHMETIC_WORK = 2 ** 32;
 var MAX_REQUEST_RSA_ARITHMETIC_WORK = 2 ** 34;
 var currentRedactionRequest = () => void 0;
+function trackRedactionRequests(current) {
+  currentRedactionRequest = current;
+}
 var MIN_DETACHED_RSA_CONTINUATION_BYTES = 16;
 var MAX_DETACHED_RSA_CONTINUATION_READS = 1 << 20;
 var detachedRsaContinuationReads = /* @__PURE__ */ new WeakMap();
@@ -10506,8 +10509,136 @@ function serializedPublicRsaKeyValueIsValid2(value, metrics) {
 function rsaPublicNumbersArePlausible2(modulus, exponent, metrics) {
   return rsaPublicNumbersArePlausible(modulus, exponent, metrics);
 }
+function redactPayload(payload) {
+  const analysis = analyzeSensitivePayload(payload);
+  return redactAnalyzedPayload(payload, analysis);
+}
+function redactAnalyzedPayload(payload, analysis) {
+  if (!payload || typeof payload !== "object") {
+    if (typeof payload !== "string") return payload;
+    const baseline = redactStringValue(payload, analysis.metrics);
+    const ranges = lateStringOverlapRanges(payload, analysis.metrics);
+    analysis.sensitiveMaterial ||= ranges.length > 0;
+    return applyLateOverlapRanges(baseline, ranges, analysis.metrics);
+  }
+  const valuePlans = /* @__PURE__ */ new Map();
+  const keyPlans = /* @__PURE__ */ new Map();
+  const outputKeys = /* @__PURE__ */ new Map();
+  const clones = analysis.graph.containers.map(
+    (container) => analysis.numericPrivateContainers.has(container) ? "[redacted]" : container.kind === "array" ? new Array(container.value.length) : {}
+  );
+  for (const container of analysis.graph.containers) {
+    if (analysis.numericPrivateContainers.has(container)) continue;
+    const target = clones[container.id];
+    if (container.kind === "array") {
+      for (const edge of container.edges) {
+        target[edge.index] = redactedEdgeValue(
+          edge,
+          analysis,
+          clones,
+          valuePlans
+        );
+      }
+      continue;
+    }
+    const objectTarget = target;
+    const redactedKeys = analysis.sensitiveObjectKeys.get(container.value);
+    const reservedKeys = new Set(
+      container.edges.filter((edge) => !redactedKeys?.has(edge.key)).map((edge) => edge.key)
+    );
+    const usedKeys = /* @__PURE__ */ new Set();
+    const nextSuffix = /* @__PURE__ */ new Map();
+    for (const edge of container.edges) {
+      const keyPlan = redactedKeys?.has(edge.key) ? redactStringValue(edge.key, analysis.metrics) : unchangedStringProjection(edge.key);
+      const forcedKey = redactedKeys?.has(edge.key) && !keyPlan.changed;
+      keyPlans.set(edge, forcedKey ? fullyRedactedStringProjection() : keyPlan);
+      const outputKey = redactedKeys?.has(edge.key) ? uniqueRedactedObjectKey(
+        reservedKeys,
+        usedKeys,
+        nextSuffix,
+        forcedKey ? "[redacted]" : keyPlan.value
+      ) : edge.key;
+      outputKeys.set(edge, outputKey);
+      usedKeys.add(outputKey);
+      const value = isSensitiveKey(edge.key) && edge.value !== null && edge.value !== void 0 ? "[redacted]" : redactedEdgeValue(edge, analysis, clones, valuePlans);
+      Object.defineProperty(objectTarget, outputKey, {
+        value,
+        enumerable: true,
+        configurable: true,
+        writable: true
+      });
+    }
+  }
+  const claims = latePayloadOverlapRanges(analysis, valuePlans, keyPlans);
+  for (const container of analysis.graph.containers) {
+    if (analysis.numericPrivateContainers.has(container)) continue;
+    const target = clones[container.id];
+    const renamed = /* @__PURE__ */ new Map();
+    for (const edge of container.edges) {
+      const valuePlan = valuePlans.get(edge);
+      const valueRanges = edge.valueToken && claims.get(edge.valueToken);
+      if (valuePlan && valueRanges) {
+        const key = container.kind === "array" ? edge.index : outputKeys.get(edge);
+        target[key] = applyLateOverlapRanges(
+          valuePlan,
+          valueRanges,
+          analysis.metrics
+        );
+      }
+      const keyPlan = keyPlans.get(edge);
+      const keyRanges = edge.keyToken && claims.get(edge.keyToken);
+      if (keyPlan && keyRanges) {
+        const oldKey = outputKeys.get(edge);
+        const candidate = applyLateOverlapRanges(
+          { ...keyPlan, value: oldKey },
+          keyRanges,
+          analysis.metrics
+        );
+        if (candidate !== oldKey) renamed.set(edge, candidate);
+      }
+    }
+    if (renamed.size === 0) continue;
+    const reserved = new Set(
+      container.edges.filter((edge) => !renamed.has(edge)).map((edge) => outputKeys.get(edge))
+    );
+    const used = /* @__PURE__ */ new Set();
+    const suffixes = /* @__PURE__ */ new Map();
+    const entries = container.edges.map((edge) => {
+      const oldKey = outputKeys.get(edge);
+      const candidate = renamed.get(edge);
+      const key = candidate === void 0 ? oldKey : uniqueRedactedObjectKey(reserved, used, suffixes, candidate);
+      used.add(key);
+      return { oldKey, key, value: target[oldKey] };
+    });
+    for (const { oldKey } of entries) delete target[oldKey];
+    for (const { key, value } of entries)
+      Object.defineProperty(target, key, {
+        value,
+        enumerable: true,
+        configurable: true,
+        writable: true
+      });
+  }
+  return clones[analysis.graph.root.id];
+}
 function containsSensitiveMaterial(payload) {
   return inspectPayloadForSensitiveMaterial(payload).sensitiveMaterial;
+}
+function redactedEdgeValue(edge, analysis, clones, plans) {
+  if (edge.child) return clones[edge.child.id];
+  if (typeof edge.value !== "string") return edge.value;
+  const ranges = analysis.privateKeyBodyRanges.get(edge.owner.value)?.get(edge.key);
+  const native = ranges ? projectedTextRanges(edge.value, ranges, analysis.metrics) : unchangedStringProjection(edge.value);
+  const lexical = redactStringValue(native.value, analysis.metrics);
+  plans.set(edge, {
+    ...lexical,
+    retained: composeRetainedSourceSpans(
+      native.retained,
+      lexical.retained,
+      analysis.metrics
+    )
+  });
+  return lexical.value;
 }
 function inspectPayloadForSensitiveMaterial(payload) {
   const analysis = analyzeSensitivePayload(payload);
@@ -20513,6 +20644,16 @@ function isShortPemBoundaryFragment(value) {
   if (isCompletePemBoundary(trimmed)) return true;
   return trimmed.length <= 32 && /^-{5}(?:BEGIN|END)[A-Z0-9_-]{0,18}$/iu.test(trimmed) && exactPrivateKeyMarker2(trimmed) === null;
 }
+function uniqueRedactedObjectKey(reserved, used, nextSuffixByBase, candidate) {
+  const base = candidate === "[redacted]" ? "[redacted-key]" : candidate;
+  if (!reserved.has(base) && !used.has(base)) return base;
+  let suffix = nextSuffixByBase.get(base) ?? 2;
+  while (reserved.has(`${base}-${suffix}`) || used.has(`${base}-${suffix}`)) {
+    suffix += 1;
+  }
+  nextSuffixByBase.set(base, suffix + 1);
+  return `${base}-${suffix}`;
+}
 function createRedactionWorkMetrics() {
   return {
     nodesVisited: 0,
@@ -22612,6 +22753,9 @@ function unchangedStringProjection(value) {
     retained: value.length ? [{ start: 0, end: value.length, outputStart: 0 }] : []
   };
 }
+function fullyRedactedStringProjection() {
+  return { value: "[redacted]", changed: true, retained: [] };
+}
 function appendRetainedSourceSpan(spans, span) {
   spans.push(span);
 }
@@ -22650,6 +22794,67 @@ function retainedAfterRedactionRanges(retained, ranges, metrics, replacementLeng
       });
   }
   return result;
+}
+function projectedTextRanges(value, ranges, metrics) {
+  if (ranges.length === 1 && ranges[0].start === 0 && ranges[0].end === value.length) {
+    return fullyRedactedStringProjection();
+  }
+  const original = unchangedStringProjection(value);
+  return {
+    value: redactTextRanges(value, ranges),
+    changed: ranges.length > 0,
+    retained: retainedAfterRedactionRanges(original.retained, ranges, metrics)
+  };
+}
+function composeRetainedSourceSpans(first, second, metrics) {
+  if (first.length === 0 || second.length === 0) return [];
+  const result = [];
+  let leftIndex = 0;
+  let rightIndex = 0;
+  while (leftIndex < first.length && rightIndex < second.length) {
+    metrics.ownershipSteps += 1;
+    const left = first[leftIndex];
+    const right = second[rightIndex];
+    const leftEnd = left.outputStart + left.end - left.start;
+    const start = Math.max(left.outputStart, right.start);
+    const end = Math.min(leftEnd, right.end);
+    if (start < end)
+      appendRetainedSourceSpan(result, {
+        start: left.start + start - left.outputStart,
+        end: left.start + end - left.outputStart,
+        outputStart: right.outputStart + start - right.start
+      });
+    if (leftEnd <= right.end) leftIndex += 1;
+    if (right.end <= leftEnd) rightIndex += 1;
+  }
+  return result;
+}
+function applyLateOverlapRanges(baseline, claims, metrics) {
+  if (claims.length === 0 || baseline.retained.length === 0)
+    return baseline.value;
+  const projected = [];
+  let claimIndex = 0;
+  for (const [index, span] of baseline.retained.entries()) {
+    metrics.ownershipSteps += 1;
+    while (claimIndex < claims.length && claims[claimIndex].end <= span.start) {
+      metrics.ownershipSteps += 1;
+      claimIndex += 1;
+    }
+    let current = claimIndex;
+    while (current < claims.length && claims[current].start < span.end) {
+      metrics.ownershipSteps += 1;
+      const claim = claims[current++];
+      const start = Math.max(span.start, claim.start);
+      const end = Math.min(span.end, claim.end);
+      const previous = baseline.retained[index - 1];
+      const next = baseline.retained[index + 1];
+      projected.push({
+        start: start === span.start ? previous ? previous.outputStart + previous.end - previous.start : 0 : span.outputStart + start - span.start,
+        end: end === span.end ? next ? next.outputStart : baseline.value.length : span.outputStart + end - span.start
+      });
+    }
+  }
+  return projected.length === 0 ? baseline.value : redactTextRanges(baseline.value, mergeOrderedTextRanges([], projected));
 }
 function latePayloadOverlapRanges(analysis, valuePlans, keyPlans) {
   const { graph, metrics } = analysis;
@@ -23446,7 +23651,8 @@ var remembrance_mcp_consent_lanes_default = {
   propose_skill_idea: "skill_candidate",
   submit_suggestion: "skill_suggestion",
   submit_resource: "resource_submission",
-  submit_resource_review: "resource_review"
+  submit_resource_review: "resource_review",
+  repair_review_draft: "admin_review_repair"
 };
 
 // ../core/src/remembrance-mcp-policy.ts
@@ -23487,6 +23693,10 @@ var REMEMBRANCE_MCP_OPTIONAL_SHARED_CONTRIBUTION_TOOLS = Object.freeze(
     "register_agent_key"
   ]
 );
+var REMEMBRANCE_MCP_OPTIONAL_ADMIN_REVIEW_TOOLS = Object.freeze([
+  "get_review_comparison",
+  "repair_review_draft"
+]);
 var REMEMBRANCE_MCP_LOCAL_ONLY_TOOLS = Object.freeze([
   "bootstrap_agent_identity",
   "acknowledge_feedback_denial",
@@ -23526,6 +23736,7 @@ var REMEMBRANCE_MCP_RECOMMENDED_LOCAL_ORG_TOOLS = Object.freeze([
 var REMEMBRANCE_MCP_ALL_TOOLS = Object.freeze([
   ...REMEMBRANCE_MCP_RECOMMENDED_ORG_TOOLS,
   ...REMEMBRANCE_MCP_OPTIONAL_SHARED_CONTRIBUTION_TOOLS,
+  ...REMEMBRANCE_MCP_OPTIONAL_ADMIN_REVIEW_TOOLS,
   ...REMEMBRANCE_MCP_LOCAL_ONLY_TOOLS
 ]);
 var REMEMBRANCE_MCP_BOUNDED_WRITE_POLICY_MAX_BYTES_BY_PAYLOAD_CLASS = Object.freeze({
@@ -23621,6 +23832,8 @@ var REMEMBRANCE_MCP_TOOL_SECURITY = freezeMcpToolSecurityManifest({
   link_current_installation: bounded("bounded_metadata"),
   get_skill: read(),
   get_resource: read(),
+  get_review_comparison: read(),
+  repair_review_draft: content("repair_review_draft", "private_skill"),
   bootstrap_agent_identity: bounded("bounded_metadata"),
   acknowledge_feedback_denial: local("bounded_feedback"),
   decline_pending_action: local("bounded_metadata"),
@@ -23894,6 +24107,455 @@ var privateSkillCompletionContinuationSchema = external_exports.discriminatedUni
   continuation.extend({ operation: external_exports.literal("revise"), capture: revisedCapture }).strict(),
   continuation.extend({ operation: external_exports.literal("resume"), mode: external_exports.literal("changed_revision"), deadline_at: external_exports.number().int().positive() }).strict()
 ]);
+
+// ../core/src/verifier.ts
+var duplicateCandidateSchema = external_exports.object({
+  type: external_exports.enum(["skill", "resource", "remembrance"]),
+  id: external_exports.string().min(1).max(MAX_SHORT_TEXT_LENGTH),
+  slug: external_exports.string().min(1).max(MAX_SHORT_TEXT_LENGTH).optional(),
+  similarity: external_exports.number().min(0).max(1)
+});
+var PROPOSED_METADATA_MAX_KEYWORDS = 25;
+var PROPOSED_METADATA_MAX_TAGS = 15;
+var PROPOSED_METADATA_MAX_DOMAINS = 8;
+var PROPOSED_METADATA_MAX_TERM_LENGTH = 64;
+var PROPOSED_METADATA_MAX_RATIONALE_LENGTH = 2e3;
+var PROPOSED_METADATA_MAX_MODEL_LENGTH = MAX_SHORT_TEXT_LENGTH;
+var LOW_VALUE_PROPOSED_METADATA_EXACT_TERMS = /* @__PURE__ */ new Set([
+  "agent",
+  "agents",
+  "agent-skill",
+  "agent-skills",
+  "backfill",
+  "candidate",
+  "candidates",
+  "leaderboard",
+  "import",
+  "imported",
+  "rank",
+  "ranking",
+  "skill",
+  "skills",
+  "skills-sh",
+  "skill-candidate",
+  "skill-candidates"
+]);
+var LOW_VALUE_PROPOSED_METADATA_PATTERNS = [
+  /\bagent\s+skills?\b/i,
+  /\bagentspace\b/i,
+  /\bskill\s+candidates?\b/i,
+  /\bskills?[\s.-]*sh\b/i,
+  /\bleaderboard\s+rank\b/i,
+  /\bnpx\s+skills\s+add\b/i
+];
+function sanitizeProposedMetadataTerm(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim().slice(0, PROPOSED_METADATA_MAX_TERM_LENGTH);
+  if (!trimmed) {
+    return null;
+  }
+  const normalized2 = trimmed.toLowerCase().replace(/[_/.]+/g, "-").replace(/\s+/g, " ").replace(/^-+|-+$/g, "");
+  if (LOW_VALUE_PROPOSED_METADATA_EXACT_TERMS.has(normalized2)) {
+    return null;
+  }
+  if (LOW_VALUE_PROPOSED_METADATA_PATTERNS.some(
+    (pattern) => pattern.test(trimmed)
+  )) {
+    return null;
+  }
+  return trimmed;
+}
+var proposedMetadataTermArraySchema = (max) => external_exports.preprocess(
+  (value) => {
+    if (!Array.isArray(value)) {
+      return value;
+    }
+    const seen = /* @__PURE__ */ new Set();
+    const terms = [];
+    for (const entry of value) {
+      const trimmed = sanitizeProposedMetadataTerm(entry);
+      if (!trimmed) {
+        continue;
+      }
+      const key = trimmed.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      terms.push(trimmed);
+    }
+    return terms.slice(0, max);
+  },
+  external_exports.array(external_exports.string().min(1).max(PROPOSED_METADATA_MAX_TERM_LENGTH)).max(max)
+);
+var proposedSkillMetadataSchema = external_exports.object({
+  keywords: proposedMetadataTermArraySchema(PROPOSED_METADATA_MAX_KEYWORDS),
+  tags: proposedMetadataTermArraySchema(PROPOSED_METADATA_MAX_TAGS),
+  domains: proposedMetadataTermArraySchema(PROPOSED_METADATA_MAX_DOMAINS),
+  rationale: external_exports.string().trim().min(1).max(PROPOSED_METADATA_MAX_RATIONALE_LENGTH),
+  model: external_exports.string().trim().min(1).max(PROPOSED_METADATA_MAX_MODEL_LENGTH)
+});
+var verifierOutputSchema = external_exports.object({
+  recommended_action: verifierActionSchema,
+  confidence: external_exports.number().min(0).max(1),
+  duplicate_candidates: external_exports.array(duplicateCandidateSchema).max(20).default([]),
+  safety_flags: external_exports.array(external_exports.string().min(1).max(MAX_SHORT_TEXT_LENGTH)).max(40).default([]),
+  summary: external_exports.string().min(1).max(MAX_LONG_TEXT_LENGTH),
+  proposed_patch: external_exports.string().max(MAX_LONG_TEXT_LENGTH).nullable().default(null),
+  score_updates: external_exports.record(external_exports.unknown()).superRefine((value, ctx) => {
+    if (serializedJsonBytes(value) > MAX_JSON_FIELD_BYTES) {
+      addSerializedJsonBytesIssue(
+        ctx,
+        MAX_JSON_FIELD_BYTES,
+        `score_updates must be ${MAX_JSON_FIELD_BYTES} bytes or smaller`
+      );
+    }
+  }).nullable().default(null),
+  // Advisory retrieval enrichment (see proposedSkillMetadataSchema). Optional
+  // and defaults to null so existing verifier outputs remain valid.
+  proposed_metadata: proposedSkillMetadataSchema.nullable().default(null),
+  // Advisory evidence-routing assessment. Deterministic routing and the
+  // existing safety/review gates decide whether it can create a candidate.
+  // Topology is advisory and newer than the base verifier contract. A legacy
+  // or malformed topology fragment must not discard an otherwise valid safety
+  // verdict; it degrades to null, which the topology router retains as
+  // evidence-only rather than allowing an unclassified mutation.
+  topology_assessment: skillTopologyAssessmentSchema.nullable().default(null).catch(null)
+});
+
+// ../core/src/verification-policy.ts
+var verificationReviewReasonCodeSchema = external_exports.enum([
+  "safe_useful",
+  "insufficient_evidence",
+  "duplicate",
+  "strategy_divergence",
+  "quality_regression",
+  "out_of_scope",
+  "policy_preference",
+  "sensitive_data",
+  "prompt_injection",
+  "malware_or_phishing",
+  "spam",
+  "invalid_submission",
+  "unsupported_operation",
+  "other"
+]);
+var verifierAssessmentSchema = external_exports.object({
+  evidence_quality: external_exports.number().min(0).max(1),
+  safety_risk: external_exports.number().min(0).max(1),
+  quality_confidence: external_exports.number().min(0).max(1),
+  duplicate_likelihood: external_exports.number().min(0).max(1),
+  applicability: external_exports.number().min(0).max(1),
+  novelty: external_exports.number().min(0).max(1)
+}).strict();
+var verificationRubricPackSchema = external_exports.object({
+  version: external_exports.string().min(1).max(MAX_SHORT_TEXT_LENGTH),
+  evidence_standard: external_exports.enum(["strict", "balanced", "permissive"]),
+  duplicate_strategy: external_exports.enum(["human", "merge_when_clear"]),
+  quality_regression_tolerance: external_exports.enum(["none", "minor"]),
+  external_dependency_handling: external_exports.enum(["human", "verified_only"])
+}).strict();
+var verificationPolicyVerifierOutputSchema = verifierOutputSchema.extend({
+  // Existing and external approvers remain compatible when this is absent.
+  assessment: verifierAssessmentSchema.nullable().default(null)
+});
+var verificationAdminReviewActionSchema = adminReviewActionSchema.extend({
+  reason_code: verificationReviewReasonCodeSchema.optional(),
+  topology_action: skillTopologyActionSchema.optional()
+}).superRefine((value, ctx) => {
+  if (value.reason_code === "other" && !value.note) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "A note is required when the review reason is other",
+      path: ["note"]
+    });
+  }
+  if (value.topology_action && value.action !== "accept" && value.action !== "merge" && value.action !== "fork") {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "A topology route may be selected only when accepting, merging, or forking the reviewed evidence",
+      path: ["topology_action"]
+    });
+  }
+});
+var BENIGN_REVIEW_FLAGS = /* @__PURE__ */ new Set([
+  "public_skill_change_requires_human_review",
+  "public_skill_change_duplicate_requires_human_review",
+  "public_evidence_requires_human_review",
+  "score_updates_discarded"
+]);
+var SAFE_VERIFICATION_POLICY_FLAG_CATEGORIES = /* @__PURE__ */ new Set([
+  ...BENIGN_REVIEW_FLAGS,
+  "verification_unavailable",
+  "prompt_injection",
+  "sensitive_data",
+  "malware_or_phishing",
+  "spam",
+  "other_safety_signal"
+]);
+
+// ../core/src/admin-review-decision-contract.ts
+var identifier = external_exports.string().min(1).max(MAX_SHORT_TEXT_LENGTH);
+var nullableIdentifier = identifier.nullable();
+var timestamp = external_exports.string().datetime();
+var targetTypes = external_exports.enum([
+  "remembrance",
+  "resource",
+  "resource_review",
+  "skill_idea",
+  "suggestion"
+]);
+var reviewDecisionPreviewSelectorSchema = external_exports.object({
+  action: adminReviewActionValueSchema.nullable().default(null),
+  topology_action: skillTopologyActionSchema.nullable().default(null),
+  reason_code: verificationReviewReasonCodeSchema.nullable().default(null)
+}).strict().superRefine((value, ctx) => {
+  if (value.topology_action && !["accept", "merge", "fork"].includes(value.action ?? "")) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["topology_action"],
+      message: "A topology route requires an accepting, merging, or forking preview."
+    });
+  }
+});
+var overlayRevisionSchema = external_exports.object({
+  id: identifier,
+  status: identifier,
+  version: identifier,
+  revision: external_exports.number().int().nonnegative().nullable(),
+  updated_at: timestamp,
+  private_content_ref: nullableIdentifier,
+  private_catalog_ref: nullableIdentifier,
+  private_catalog_revision_id: nullableIdentifier,
+  private_catalog_version_id: nullableIdentifier,
+  evolution_mode: nullableIdentifier
+}).strict();
+var skillRevisionSchema = external_exports.object({
+  id: identifier,
+  slug: identifier,
+  status: identifier,
+  visibility: identifier,
+  version: identifier,
+  current_version_id: nullableIdentifier,
+  updated_at: timestamp
+}).strict();
+var versionRevisionSchema = external_exports.object({
+  id: identifier,
+  skill_id: identifier,
+  version: identifier,
+  status: identifier,
+  updated_at: timestamp,
+  private_content_ref: nullableIdentifier,
+  private_content_revision_id: nullableIdentifier,
+  private_content_org_id: nullableIdentifier
+}).strict();
+var consumedBaselineSchema = external_exports.object({
+  kind: external_exports.enum(["bundled_seed", "skill_metadata", "public_sync"]),
+  digest: identifier
+}).strict();
+var reviewDecisionSnapshotSchema = external_exports.object({
+  schema_version: external_exports.literal("admin-review-decision-snapshot-v1"),
+  org_id: identifier,
+  public_skill_access_policy: external_exports.enum(["allow", "org_only"]),
+  selected_route: reviewDecisionPreviewSelectorSchema,
+  actor: external_exports.object({
+    type: identifier,
+    id: identifier,
+    org_id: identifier,
+    api_key_id: nullableIdentifier,
+    token_id: nullableIdentifier
+  }).strict(),
+  job: external_exports.object({
+    id: identifier,
+    target_type: targetTypes,
+    target_id: identifier,
+    status: identifier,
+    updated_at: timestamp,
+    verifier_input_hash: nullableIdentifier,
+    private_verification_artifact_id: nullableIdentifier,
+    private_verification_result_digest: nullableIdentifier,
+    private_semantic_context_ref: nullableIdentifier,
+    private_context_ref: nullableIdentifier,
+    private_context_revision_id: nullableIdentifier
+  }).strict(),
+  target: external_exports.object({
+    id: identifier,
+    updated_at: timestamp,
+    payload_ref: nullableIdentifier,
+    superseded_by_submission_id: nullableIdentifier,
+    disposition_job_id: nullableIdentifier
+  }).strict(),
+  private_payload: external_exports.object({
+    id: identifier,
+    updated_at: timestamp,
+    encryption_mode: identifier,
+    inspection_status: nullableIdentifier,
+    inspection_updated_at: timestamp.nullable(),
+    inspection_projection_digest: nullableIdentifier,
+    inspection_inspector_digest: nullableIdentifier
+  }).strict().nullable(),
+  protected_source_binding: external_exports.object({
+    schema_version: external_exports.literal("protected-submission-source-v1"),
+    source_type: external_exports.enum(["skill_idea", "suggestion", "remembrance"]),
+    source_id: identifier,
+    source_public_id: identifier,
+    content_digest: identifier,
+    inline_job_digest: identifier.nullable()
+  }).strict().optional(),
+  legacy_public_payload: external_exports.object({
+    schema_version: external_exports.literal("legacy-public-remembrance-payload-v1"),
+    id: identifier,
+    updated_at: timestamp,
+    source_public_id: identifier,
+    raw_digest: identifier,
+    redacted_digest: identifier,
+    target_digest: identifier,
+    inline_job_digest: identifier.nullable()
+  }).strict().optional(),
+  current_skill: external_exports.object({
+    slug: identifier,
+    overlay: overlayRevisionSchema.nullable(),
+    version: versionRevisionSchema.nullable(),
+    consumed_baseline: consumedBaselineSchema.nullable()
+  }).strict().nullable(),
+  source_skill: external_exports.object({
+    skill: skillRevisionSchema,
+    version: versionRevisionSchema.nullable(),
+    consumed_baseline: consumedBaselineSchema.nullable()
+  }).strict().nullable(),
+  parent_skill: external_exports.object({
+    skill: skillRevisionSchema,
+    version: versionRevisionSchema,
+    overlay: overlayRevisionSchema.nullable()
+  }).strict().nullable()
+}).strict();
+
+// ../core/src/review-workflows.ts
+var PRIVATE_SKILL_REVIEW_REPAIR_VERSION = "private-skill-review-repair-v1";
+var REVIEW_COMPARISON_TOOL_DESCRIPTION = "Organization admin:review only. Read complete exact source, parent and current skill versions already linked to one pending review job. Supply no action, route, organization or arbitrary skill ID. This does not select a route or grant decision authority: inspect the current review detail and its fresh snapshot separately before any decision. An unavailable, held, changed or foreign reference refuses the whole comparison; nothing is truncated or silently substituted.";
+var REVIEW_DRAFT_REPAIR_TOOL_DESCRIPTION = "Organization admin:review only; explicit delegated AI review authority, not routine learning permission. Create one complete protected replacement for a pending private skill draft using its current unselected review snapshot. Use a stable psrr_ plus 32 lowercase hex request_id; the transport sets Idempotency-Key to that exact ID. Exact replay returns the original replacement receipt; changed input under that ID conflicts. All normal secret inspection, protection, routing, verification and review checks apply. The local client requires inspection to leave the authored capture unchanged before sending. A local hold returns content-free recovery, never an alternate transport or a rewritten original. Creation preserves the original and never approves, rejects or supersedes it. Review the replacement normally, then close the original separately only after proving an accepted, tenant-readable active replacement skill. No public or cross-organization fallback.";
+var REVIEW_DRAFT_REPAIR_NEXT_INSTRUCTION = "Review the replacement normally. Keep the original open until an accepted, tenant-readable active skill version proves the replacement usable.";
+var reviewWorkflowJobIdSchema = external_exports.string().regex(/^job_[a-f0-9]{18}$/u);
+var privateSkillReviewRepairRequestIdSchema = external_exports.string().regex(/^psrr_[a-f0-9]{32}$/u);
+var referenceIdentifier = external_exports.string().min(1).max(MAX_SHORT_TEXT_LENGTH);
+var MAX_REVIEW_REFERENCE_BODY_BYTES = 1048576;
+var reviewReferenceSkillSchema = external_exports.object({
+  skill_id: referenceIdentifier,
+  slug: referenceIdentifier,
+  version_id: referenceIdentifier,
+  version: referenceIdentifier,
+  skill_md: external_exports.string().min(1).max(MAX_REVIEW_REFERENCE_BODY_BYTES).refine((value) => new TextEncoder().encode(value).length <= MAX_REVIEW_REFERENCE_BODY_BYTES),
+  content_hash: referenceIdentifier
+}).strict();
+var reviewReferenceComparisonSchema = external_exports.object({
+  schema_version: external_exports.literal("review-reference-comparison-v1"),
+  job_id: reviewWorkflowJobIdSchema,
+  source_skill: reviewReferenceSkillSchema.nullable(),
+  parent_skill: reviewReferenceSkillSchema.nullable(),
+  current_skill: reviewReferenceSkillSchema.nullable()
+}).strict();
+function reviewWorkflowResponseBound(tool, body, request) {
+  if (tool === "get_review_comparison") {
+    const parsed2 = reviewReferenceComparisonSchema.safeParse(body);
+    return parsed2.success && parsed2.data.job_id === request.job_id;
+  }
+  if (tool !== "repair_review_draft") return false;
+  const parsed = external_exports.object({
+    contract_version: external_exports.literal(PRIVATE_SKILL_REVIEW_REPAIR_VERSION),
+    request_id: privateSkillReviewRepairRequestIdSchema,
+    original_job_id: reviewWorkflowJobIdSchema,
+    replacement: external_exports.object({
+      public_id: external_exports.string().regex(/^ipub_[a-f0-9]{18}$/u),
+      job_id: reviewWorkflowJobIdSchema,
+      status: external_exports.enum(["submitted", "duplicate", "accepted", "rejected", "merged", "forked", "needs_review", "quarantined"]),
+      visibility: external_exports.literal("organization_private")
+    }).strict(),
+    replayed: external_exports.boolean(),
+    original_disposition: external_exports.literal("unchanged"),
+    verification: external_exports.object({
+      verification_job: external_exports.object({
+        id: reviewWorkflowJobIdSchema,
+        status: verificationJobStatusSchema,
+        target_type: external_exports.literal("skill_idea"),
+        target_id: external_exports.string().regex(/^idea_[a-f0-9]{18}$/u)
+      }).strict(),
+      queue: external_exports.object({ queued: external_exports.boolean(), queueJobId: reviewWorkflowJobIdSchema.nullable() }).strict()
+    }).strict().nullable(),
+    verification_status: verificationJobStatusSchema,
+    dispatch_state: external_exports.enum(["existing_persisted_job", "queued", "mongo_poll_fallback"]),
+    next_action: external_exports.object({
+      method: external_exports.literal("GET"),
+      path: external_exports.literal("/api/v1/admin/review-queue"),
+      query: external_exports.object({ job_id: reviewWorkflowJobIdSchema, review_provenance: external_exports.literal("delegated_ai") }).strict(),
+      instruction: external_exports.literal(REVIEW_DRAFT_REPAIR_NEXT_INSTRUCTION)
+    }).strict()
+  }).strict().safeParse(body);
+  if (!parsed.success) return false;
+  const receipt = parsed.data;
+  if (receipt.request_id !== request.request_id || receipt.original_job_id !== request.job_id || receipt.replacement.job_id === receipt.original_job_id || receipt.next_action.query.job_id !== receipt.replacement.job_id) return false;
+  if (receipt.replayed) return receipt.verification === null && receipt.dispatch_state === "existing_persisted_job";
+  const verification = receipt.verification;
+  return verification !== null && verification.verification_job.id === receipt.replacement.job_id && verification.verification_job.status === receipt.verification_status && (verification.queue.queued ? receipt.dispatch_state === "queued" && verification.queue.queueJobId === receipt.replacement.job_id : receipt.dispatch_state === "mongo_poll_fallback" && verification.queue.queueJobId === null);
+}
+var reviewReferenceComparisonRequestSchema = external_exports.object({
+  job_id: reviewWorkflowJobIdSchema,
+  review_provenance: external_exports.literal("delegated_ai").default("delegated_ai")
+}).strict();
+function checkJsonGraph(value, context, reservedKeys) {
+  const pending = [{ value, depth: 0 }];
+  const seen = /* @__PURE__ */ new Set();
+  let nodes = 0;
+  while (pending.length) {
+    const entry = pending.pop();
+    if (++nodes > 1e4 || entry.depth > 32) {
+      context.addIssue({ code: "custom", message: "JSON structure exceeds the bounded review request limits." });
+      return false;
+    }
+    const current = entry.value;
+    if (current === null || typeof current === "string" || typeof current === "boolean" || typeof current === "number" && Number.isFinite(current)) continue;
+    if (typeof current !== "object" || seen.has(current)) {
+      context.addIssue({ code: "custom", message: "Review requests must contain finite, acyclic JSON values." });
+      return false;
+    }
+    seen.add(current);
+    for (const [key, child] of Object.entries(current)) {
+      if (reservedKeys && key.startsWith("_remembrance_")) {
+        context.addIssue({ code: "custom", message: "Server provenance fields are reserved." });
+        return false;
+      }
+      pending.push({ value: child, depth: entry.depth + 1 });
+    }
+  }
+  return true;
+}
+var reviewSnapshot = reviewDecisionSnapshotSchema.superRefine((value, context) => {
+  if (!checkJsonGraph(value, context, false)) return;
+  if (serializedJsonBytes(value) > MAX_JSON_FIELD_BYTES) {
+    addSerializedJsonBytesIssue(context, MAX_JSON_FIELD_BYTES, "Review snapshot exceeds its JSON byte limit.");
+  }
+});
+var repairCapture = privateSkillCaptureSchema.superRefine((capture2, context) => {
+  checkJsonGraph(capture2.proposed_metadata, context, true);
+});
+var privateSkillReviewRepairRequest = external_exports.object({
+  contract_version: external_exports.literal(PRIVATE_SKILL_REVIEW_REPAIR_VERSION),
+  job_id: reviewWorkflowJobIdSchema,
+  request_id: privateSkillReviewRepairRequestIdSchema,
+  review_provenance: external_exports.literal("delegated_ai").default("delegated_ai"),
+  expected_review_snapshot: reviewSnapshot,
+  capture: repairCapture
+}).strict().superRefine((value, context) => {
+  if (!checkJsonGraph(value, context, false)) return;
+  if (serializedJsonBytes(value) > DEFAULT_MUTATION_BODY_LIMIT_BYTES) {
+    addSerializedJsonBytesIssue(context, DEFAULT_MUTATION_BODY_LIMIT_BYTES, "Review repair exceeds its JSON byte limit; nothing is truncated.");
+  }
+});
+var privateSkillReviewRepairRequestSchema = external_exports.preprocess((value, context) => {
+  if (!checkJsonGraph(value, context, false)) return external_exports.NEVER;
+  return value;
+}, privateSkillReviewRepairRequest);
 
 // ../core/src/seed.ts
 var siteUrl = "https://remembrance.dev";
@@ -26403,123 +27065,6 @@ function invalidToolArgumentsMessage(error, schema) {
   ).join("; ")}${more > 0 ? ` (+${more} more)` : ""}.`;
 }
 
-// ../core/src/verifier.ts
-var duplicateCandidateSchema = external_exports.object({
-  type: external_exports.enum(["skill", "resource", "remembrance"]),
-  id: external_exports.string().min(1).max(MAX_SHORT_TEXT_LENGTH),
-  slug: external_exports.string().min(1).max(MAX_SHORT_TEXT_LENGTH).optional(),
-  similarity: external_exports.number().min(0).max(1)
-});
-var PROPOSED_METADATA_MAX_KEYWORDS = 25;
-var PROPOSED_METADATA_MAX_TAGS = 15;
-var PROPOSED_METADATA_MAX_DOMAINS = 8;
-var PROPOSED_METADATA_MAX_TERM_LENGTH = 64;
-var PROPOSED_METADATA_MAX_RATIONALE_LENGTH = 2e3;
-var PROPOSED_METADATA_MAX_MODEL_LENGTH = MAX_SHORT_TEXT_LENGTH;
-var LOW_VALUE_PROPOSED_METADATA_EXACT_TERMS = /* @__PURE__ */ new Set([
-  "agent",
-  "agents",
-  "agent-skill",
-  "agent-skills",
-  "backfill",
-  "candidate",
-  "candidates",
-  "leaderboard",
-  "import",
-  "imported",
-  "rank",
-  "ranking",
-  "skill",
-  "skills",
-  "skills-sh",
-  "skill-candidate",
-  "skill-candidates"
-]);
-var LOW_VALUE_PROPOSED_METADATA_PATTERNS = [
-  /\bagent\s+skills?\b/i,
-  /\bagentspace\b/i,
-  /\bskill\s+candidates?\b/i,
-  /\bskills?[\s.-]*sh\b/i,
-  /\bleaderboard\s+rank\b/i,
-  /\bnpx\s+skills\s+add\b/i
-];
-function sanitizeProposedMetadataTerm(value) {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim().slice(0, PROPOSED_METADATA_MAX_TERM_LENGTH);
-  if (!trimmed) {
-    return null;
-  }
-  const normalized2 = trimmed.toLowerCase().replace(/[_/.]+/g, "-").replace(/\s+/g, " ").replace(/^-+|-+$/g, "");
-  if (LOW_VALUE_PROPOSED_METADATA_EXACT_TERMS.has(normalized2)) {
-    return null;
-  }
-  if (LOW_VALUE_PROPOSED_METADATA_PATTERNS.some(
-    (pattern) => pattern.test(trimmed)
-  )) {
-    return null;
-  }
-  return trimmed;
-}
-var proposedMetadataTermArraySchema = (max) => external_exports.preprocess(
-  (value) => {
-    if (!Array.isArray(value)) {
-      return value;
-    }
-    const seen = /* @__PURE__ */ new Set();
-    const terms = [];
-    for (const entry of value) {
-      const trimmed = sanitizeProposedMetadataTerm(entry);
-      if (!trimmed) {
-        continue;
-      }
-      const key = trimmed.toLowerCase();
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      terms.push(trimmed);
-    }
-    return terms.slice(0, max);
-  },
-  external_exports.array(external_exports.string().min(1).max(PROPOSED_METADATA_MAX_TERM_LENGTH)).max(max)
-);
-var proposedSkillMetadataSchema = external_exports.object({
-  keywords: proposedMetadataTermArraySchema(PROPOSED_METADATA_MAX_KEYWORDS),
-  tags: proposedMetadataTermArraySchema(PROPOSED_METADATA_MAX_TAGS),
-  domains: proposedMetadataTermArraySchema(PROPOSED_METADATA_MAX_DOMAINS),
-  rationale: external_exports.string().trim().min(1).max(PROPOSED_METADATA_MAX_RATIONALE_LENGTH),
-  model: external_exports.string().trim().min(1).max(PROPOSED_METADATA_MAX_MODEL_LENGTH)
-});
-var verifierOutputSchema = external_exports.object({
-  recommended_action: verifierActionSchema,
-  confidence: external_exports.number().min(0).max(1),
-  duplicate_candidates: external_exports.array(duplicateCandidateSchema).max(20).default([]),
-  safety_flags: external_exports.array(external_exports.string().min(1).max(MAX_SHORT_TEXT_LENGTH)).max(40).default([]),
-  summary: external_exports.string().min(1).max(MAX_LONG_TEXT_LENGTH),
-  proposed_patch: external_exports.string().max(MAX_LONG_TEXT_LENGTH).nullable().default(null),
-  score_updates: external_exports.record(external_exports.unknown()).superRefine((value, ctx) => {
-    if (serializedJsonBytes(value) > MAX_JSON_FIELD_BYTES) {
-      addSerializedJsonBytesIssue(
-        ctx,
-        MAX_JSON_FIELD_BYTES,
-        `score_updates must be ${MAX_JSON_FIELD_BYTES} bytes or smaller`
-      );
-    }
-  }).nullable().default(null),
-  // Advisory retrieval enrichment (see proposedSkillMetadataSchema). Optional
-  // and defaults to null so existing verifier outputs remain valid.
-  proposed_metadata: proposedSkillMetadataSchema.nullable().default(null),
-  // Advisory evidence-routing assessment. Deterministic routing and the
-  // existing safety/review gates decide whether it can create a candidate.
-  // Topology is advisory and newer than the base verifier contract. A legacy
-  // or malformed topology fragment must not discard an otherwise valid safety
-  // verdict; it degrades to null, which the topology router retains as
-  // evidence-only rather than allowing an unclassified mutation.
-  topology_assessment: skillTopologyAssessmentSchema.nullable().default(null).catch(null)
-});
-
 // src/private-skill-protection-recovery.ts
 var PRIVATE_SKILL_CONFIGURATION_REFUSAL = "private_admission_configuration_error";
 var PRIVATE_SKILL_PERMANENT_SERVICE_REFUSAL = "private_skill_permanent_service_refusal";
@@ -28304,6 +28849,19 @@ var remembranceToolSchema = remembrancePayloadSchema.extend({
 });
 var declaredToolDefinitions = [
   readTool(
+    "get_review_comparison",
+    REVIEW_COMPARISON_TOOL_DESCRIPTION,
+    "/api/v1/admin/review-queue/comparison",
+    reviewReferenceComparisonRequestSchema,
+    "GET"
+  ),
+  contentWriteTool(
+    "repair_review_draft",
+    REVIEW_DRAFT_REPAIR_TOOL_DESCRIPTION,
+    "/api/v1/admin/review-queue/repairs",
+    privateSkillReviewRepairRequestSchema
+  ),
+  readTool(
     "get_connection_status",
     REMEMBRANCE_CONNECTION_STATUS_TOOL_DESCRIPTION,
     "/api/v1/agent/connection-status",
@@ -29052,13 +29610,13 @@ function validateServedToolDefinition(definition) {
   canonicalToolDefinitionForDispatch(definition);
 }
 function annotationsForTool(name) {
-  const readOnly = name === "list_skills" || name === "get_effective_preferences" || name === "get_value_proof" || name === "run_connection_doctor" || name === "get_private_lesson_policy" || name === "inspect_private_lesson_outbox" || name === "inspect_private_learning_outbox" || name === "get_pending_action_payload";
+  const readOnly = name === "get_review_comparison" || name === "list_skills" || name === "get_effective_preferences" || name === "get_value_proof" || name === "run_connection_doctor" || name === "get_private_lesson_policy" || name === "inspect_private_lesson_outbox" || name === "inspect_private_learning_outbox" || name === "get_pending_action_payload";
   const openWorld = name === "submit_feedback" || name === "submit_remembrance" || name === "propose_skill_idea" || name === "submit_suggestion" || name === "submit_resource" || name === "submit_resource_review";
   return {
     readOnlyHint: readOnly,
     openWorldHint: openWorld,
     destructiveHint: name === "delete_private_lesson_candidate" || name === "delete_private_skill_candidate",
-    ...readOnly || name === "queue_private_skill_import" || name === "acknowledge_feedback_denial" || name === "decline_pending_action" || name === "submit_private_lesson_candidate" || name === "retry_private_lesson_candidate" || name === "submit_private_skill_candidate" || name === "retry_private_skill_candidate" ? { idempotentHint: true } : {}
+    ...readOnly || name === "queue_private_skill_import" || name === "acknowledge_feedback_denial" || name === "decline_pending_action" || name === "submit_private_lesson_candidate" || name === "retry_private_lesson_candidate" || name === "submit_private_skill_candidate" || name === "retry_private_skill_candidate" || name === "repair_review_draft" ? { idempotentHint: true } : {}
   };
 }
 var ROUTINE_PRIVATE_CAPTURE_REPLACED_TOOLS = /* @__PURE__ */ new Set([
@@ -45344,7 +45902,7 @@ var require_timestamp = __commonJS({
       resolve: (str) => parseSexagesimal(str, false),
       stringify: stringifySexagesimal
     };
-    var timestamp = {
+    var timestamp2 = {
       identify: (value) => value instanceof Date,
       default: true,
       tag: "tag:yaml.org,2002:timestamp",
@@ -45353,7 +45911,7 @@ var require_timestamp = __commonJS({
       // assumed to be 00:00:00Z (start of day, UTC).
       test: RegExp("^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})(?:(?:t|T|[ \\t]+)([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2}(\\.[0-9]+)?)(?:[ \\t]*(Z|[-+][012]?[0-9](?::[0-9]{2})?))?)?$"),
       resolve(str) {
-        const match = str.match(timestamp.test);
+        const match = str.match(timestamp2.test);
         if (!match)
           throw new Error("!!timestamp expects a date, starting with yyyy-mm-dd");
         const [, year, month, day, hour, minute, second] = match.map(Number);
@@ -45372,7 +45930,7 @@ var require_timestamp = __commonJS({
     };
     exports.floatTime = floatTime;
     exports.intTime = intTime;
-    exports.timestamp = timestamp;
+    exports.timestamp = timestamp2;
   }
 });
 var require_schema3 = __commonJS({
@@ -45390,7 +45948,7 @@ var require_schema3 = __commonJS({
     var omap = require_omap();
     var pairs = require_pairs();
     var set = require_set();
-    var timestamp = require_timestamp();
+    var timestamp2 = require_timestamp();
     var schema = [
       map.map,
       seq.seq,
@@ -45410,9 +45968,9 @@ var require_schema3 = __commonJS({
       omap.omap,
       pairs.pairs,
       set.set,
-      timestamp.intTime,
-      timestamp.floatTime,
-      timestamp.timestamp
+      timestamp2.intTime,
+      timestamp2.floatTime,
+      timestamp2.timestamp
     ];
     exports.schema = schema;
   }
@@ -45435,7 +45993,7 @@ var require_tags = __commonJS({
     var pairs = require_pairs();
     var schema$2 = require_schema3();
     var set = require_set();
-    var timestamp = require_timestamp();
+    var timestamp2 = require_timestamp();
     var schemas = /* @__PURE__ */ new Map([
       ["core", schema.schema],
       ["failsafe", [map.map, seq.seq, string.string]],
@@ -45449,11 +46007,11 @@ var require_tags = __commonJS({
       float: float.float,
       floatExp: float.floatExp,
       floatNaN: float.floatNaN,
-      floatTime: timestamp.floatTime,
+      floatTime: timestamp2.floatTime,
       int: int.int,
       intHex: int.intHex,
       intOct: int.intOct,
-      intTime: timestamp.intTime,
+      intTime: timestamp2.intTime,
       map: map.map,
       merge: merge.merge,
       null: _null.nullTag,
@@ -45461,7 +46019,7 @@ var require_tags = __commonJS({
       pairs: pairs.pairs,
       seq: seq.seq,
       set: set.set,
-      timestamp: timestamp.timestamp
+      timestamp: timestamp2.timestamp
     };
     var coreKnownTags = {
       "tag:yaml.org,2002:binary": binary.binary,
@@ -45469,7 +46027,7 @@ var require_tags = __commonJS({
       "tag:yaml.org,2002:omap": omap.omap,
       "tag:yaml.org,2002:pairs": pairs.pairs,
       "tag:yaml.org,2002:set": set.set,
-      "tag:yaml.org,2002:timestamp": timestamp.timestamp
+      "tag:yaml.org,2002:timestamp": timestamp2.timestamp
     };
     function getTags(customTags, schemaName, addMergeTag) {
       const schemaTags = schemas.get(schemaName);
@@ -66230,9 +66788,68 @@ function createLocalPersistenceCapabilities(dependencies = {}) {
   });
 }
 
-// src/network-transport.ts
+// ../core/src/redaction-request-budget.ts
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
-var networkExecutionAuthority = new AsyncLocalStorage2();
+var requests = new AsyncLocalStorage2();
+trackRedactionRequests(() => requests.getStore());
+function withRedactionRequestBudget(run) {
+  return requests.getStore() ? run() : requests.run({}, run);
+}
+
+// src/review-repair-inspection.ts
+function inspectReviewRepairForTransport(value) {
+  const request = privateSkillReviewRepairRequestSchema.parse(value);
+  const inspection = inspectPrivateSkillCandidate(request.capture);
+  if (inspection.status === "complete" && inspection.decision.outcome === "unchanged") {
+    const values = [];
+    const pending = [request.expected_review_snapshot];
+    while (pending.length) {
+      const entry = pending.pop();
+      if (entry !== null && typeof entry === "object") pending.push(...Object.values(entry));
+      else values.push(entry);
+    }
+    try {
+      if (canonicalJson(withRedactionRequestBudget(() => redactPayload(values))) !== canonicalJson(values)) {
+        return { ready: false, refusal: {
+          status: "held",
+          code: "review_repair_wire_inspection_hold",
+          delivery: "not_delivered",
+          candidate_sent: false,
+          candidate_stored: false,
+          original_disposition: "unchanged",
+          next_action: "Retain the original. Read a fresh normal content-free review snapshot; do not send suspected secrets, rewrite the held request, or use another transport."
+        } };
+      }
+    } catch {
+      return { ready: false, refusal: {
+        status: "held",
+        code: "review_repair_wire_inspection_failure",
+        delivery: "not_delivered",
+        candidate_sent: false,
+        candidate_stored: false,
+        original_disposition: "unchanged",
+        next_action: "Retain the original. Correct the local inspection failure before retrying; do not reformulate around an operational failure."
+      } };
+    }
+    return { ready: true, request };
+  }
+  const reason = inspection.status === "complete" ? "authored_capture_changed_by_inspection" : inspection.status === "incomplete" ? inspection.reason : inspection.error_code;
+  return { ready: false, refusal: {
+    status: "held",
+    code: "review_repair_local_inspection_hold",
+    delivery: "not_delivered",
+    candidate_sent: false,
+    candidate_stored: false,
+    original_disposition: "unchanged",
+    reason_code: reason,
+    inspection: inspection.decision,
+    next_action: inspection.status === "invalid" ? "Retain the original. Correct the local inspection failure before retrying the same unchanged request; do not reformulate around an operational failure or use another transport." : "Retain the original. Prepare a complete safe replacement from authenticated task context and inspect it again. Do not recover suspected secrets, invent missing instructions, or bypass a host denial."
+  } };
+}
+
+// src/network-transport.ts
+import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
+var networkExecutionAuthority = new AsyncLocalStorage3();
 var guardedFetches = /* @__PURE__ */ new WeakSet();
 function installRuntimeFetchGuard() {
   const delegate = globalThis.fetch;
@@ -67945,7 +68562,7 @@ function inspectPrivateLearningOutbox2(input, dependencies = {}) {
 }
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.2.4" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.2.5" : "0.0.0-dev";
 var tools2 = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var nativeContextCliRequested = process.argv[2] === "--native-context";
@@ -68304,6 +68921,11 @@ async function callToolWithinExecution(runtimeDefinition, rawArguments, dependen
   );
 }
 async function callNetworkToolWithinExecution(definition, payload, access, transport) {
+  if (definition.name === "repair_review_draft") {
+    const inspection = inspectReviewRepairForTransport(payload);
+    if (!inspection.ready) return inspection.refusal;
+    payload = inspection.request;
+  }
   if (definition.local === "bootstrap_agent_identity") {
     return bootstrapAgentIdentity(payload, access, transport);
   }
@@ -68365,7 +68987,11 @@ async function callNetworkToolWithinExecution(definition, payload, access, trans
     access.credential.source,
     access.configuration.issue
   );
-  const result = definition.name === "get_connection_status" && localConfigurationError ? { ok: false, status: 0, error: localConfigurationError } : await callRemembrance(definition, payload, { access, transport });
+  const result = definition.name === "get_connection_status" && localConfigurationError ? { ok: false, status: 0, error: localConfigurationError } : await callRemembrance(definition, payload, {
+    access,
+    transport,
+    ...["get_review_comparison", "repair_review_draft"].includes(definition.name) ? { redirect: "manual" } : {}
+  });
   if (definition.name === "get_connection_status") {
     const status = localConnectionStatus(result, {
       apiBase: access.configuration.baseUrl,
@@ -68580,11 +69206,11 @@ function retryAfterDelayMs(value, nowMs = Date.now()) {
       Number(trimmed) * 1e3
     );
   }
-  const timestamp = Date.parse(trimmed);
-  if (!Number.isFinite(timestamp)) return null;
+  const timestamp2 = Date.parse(trimmed);
+  if (!Number.isFinite(timestamp2)) return null;
   return Math.min(
     PRIVATE_LEARNING_MAX_RETRY_DELAY_MS,
-    Math.max(0, timestamp - nowMs)
+    Math.max(0, timestamp2 - nowMs)
   );
 }
 function privateLessonDestinationForAccess(access) {
@@ -69786,8 +70412,8 @@ function privateLessonRetryGate(draft) {
 }
 function retryDue(nextRetryAt) {
   if (!nextRetryAt) return true;
-  const timestamp = Date.parse(nextRetryAt);
-  return !Number.isFinite(timestamp) || timestamp <= Date.now();
+  const timestamp2 = Date.parse(nextRetryAt);
+  return !Number.isFinite(timestamp2) || timestamp2 <= Date.now();
 }
 async function submitPrivateLessonHoldTelemetry(initialDraft, access, allowPolicyRefresh, transport) {
   let draft = initialDraft;
@@ -70949,6 +71575,9 @@ async function callRemembrance(definition, rawArguments, options) {
     throw new McpPublicError(configurationError);
   }
   const apiKey = credential.apiKey;
+  if (definition.name === "repair_review_draft") {
+    headers["Idempotency-Key"] = String(parsed.request_id);
+  }
   if (apiKey) {
     headers["x-remembrance-api-key"] = apiKey;
   }
@@ -70992,6 +71621,7 @@ async function callRemembrance(definition, rawArguments, options) {
   let response;
   let body;
   let redirectRejected = false;
+  let reviewWorkflowStatus = 0;
   try {
     const execute = async () => {
       const nextResponse = await transport.request(
@@ -71004,6 +71634,7 @@ async function callRemembrance(definition, rawArguments, options) {
           signal: controller.signal
         }
       );
+      reviewWorkflowStatus = nextResponse.status;
       if (options.redirect === "manual" && (nextResponse.redirected || nextResponse.status >= 300 && nextResponse.status < 400)) {
         void nextResponse.body?.cancel().catch(() => void 0);
         return {
@@ -71018,7 +71649,13 @@ async function callRemembrance(definition, rawArguments, options) {
       let nextBody;
       try {
         nextBody = await readBoundedResponseJson(nextResponse);
+        if (nextResponse.ok && ["get_review_comparison", "repair_review_draft"].includes(definition.name) && !reviewWorkflowResponseBound(definition.name, nextBody, parsed)) {
+          throw new McpPublicError("The review response did not match this request.");
+        }
       } catch {
+        if (["get_review_comparison", "repair_review_draft"].includes(definition.name)) {
+          throw new McpPublicError("The review response is unreadable or unbound.");
+        }
         if (controller.signal.aborted) {
           throw new DOMException("Request timed out", "AbortError");
         }
@@ -71057,6 +71694,26 @@ async function callRemembrance(definition, rawArguments, options) {
       }
     }
   } catch (error) {
+    if (definition.name === "repair_review_draft") {
+      return {
+        ok: false,
+        status: reviewWorkflowStatus,
+        error: "The review repair outcome is unknown. Reconcile by repeating only this exact request with the same request_id; do not create another replacement.",
+        body: {
+          code: "review_repair_outcome_unknown",
+          delivery: "unknown",
+          request_id: parsed.request_id,
+          next_action: "Keep the original and repeat only the identical request_id, capture and snapshot to recover the committed receipt. Do not change input or use a new ID while this outcome is unknown."
+        }
+      };
+    }
+    if (definition.name === "get_review_comparison") {
+      return {
+        ok: false,
+        status: reviewWorkflowStatus,
+        body: { code: "review_comparison_unreadable", error: "No valid comparison was returned for this exact review job. Keep it unchanged and read its current references again." }
+      };
+    }
     return {
       ok: false,
       status: 0,
@@ -71064,6 +71721,25 @@ async function callRemembrance(definition, rawArguments, options) {
     };
   } finally {
     clearTimeout(timeout);
+  }
+  if (["get_review_comparison", "repair_review_draft"].includes(definition.name) && (!response.ok || redirectRejected)) {
+    const failure = remembranceMcpToolFailure({
+      ok: false,
+      status: response.status,
+      body,
+      retry_after: response.headers.get("retry-after"),
+      redirect_rejected: redirectRejected
+    }, definition.name);
+    body = {
+      error: failure?.message ?? "The review operation failed.",
+      code: failure?.code ?? "review_workflow_failed",
+      retryable: failure?.retryable ?? false,
+      delivery: failure?.delivery ?? "unknown",
+      ...definition.name === "repair_review_draft" ? {
+        request_id: parsed.request_id,
+        next_action: "If delivery is unknown, repeat only the identical request_id, capture and snapshot to reconcile it. Never create a new replacement for an unresolved write."
+      } : {}
+    };
   }
   const verifiedBody = definition.name === "get_value_proof" && response.ok ? await verifySignedValueProofWithKeyRefresh(
     body,
@@ -71583,7 +72259,7 @@ function endpointFor(definition, payload) {
     const query2 = privateLessonPolicyQuery(payload);
     return query2 ? `${endpoint}?${query2}` : endpoint;
   }
-  const queryKeys = definition.name === "list_skills" ? ["q", "slug", "cursor", "limit"] : ["query_id", "result_id"];
+  const queryKeys = definition.name === "list_skills" ? ["q", "slug", "cursor", "limit"] : definition.name === "get_review_comparison" ? ["job_id", "review_provenance"] : ["query_id", "result_id"];
   for (const key of queryKeys) {
     const value = payload[key];
     if (typeof value === "string" && value || typeof value === "number" && Number.isFinite(value)) {

@@ -53,6 +53,13 @@ function feedbackContainsReusableContent(event) {
 }
 
 function approvalCopy(lane) {
+  if (lane === "admin_review_repair") {
+    return {
+      title: "Create protected Remembrance review replacement",
+      description:
+        "Organization admin:review authority required. Send one complete new protected skill replacement to this organization's normal verification and review queue. The original draft is retained unchanged. This does not approve the replacement or close the original; any original disposition requires a separate normal explicit decision after proving an accepted, tenant-readable active replacement. Private-learning approval does not authorize this administrator action.",
+    };
+  }
   if (lane === PRIVATE_SKILL_LANE) {
     return {
       title: "Submit private Remembrance skill",
