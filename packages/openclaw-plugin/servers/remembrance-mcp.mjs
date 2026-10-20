@@ -23770,6 +23770,17 @@ function buildOrganizationSkillHandoffBundle(input, createdAt = /* @__PURE__ */ 
   });
 }
 
+// ../core/src/public-skill-delivery.ts
+var SKILL_INSTALL_COMMAND = "npx skills add dreamarkinc/remembrance-skills --skill remembrancer";
+function publicSkillDeliveryDefaults() {
+  return {
+    install_command: SKILL_INSTALL_COMMAND,
+    repo_url: "https://github.com/dreamarkinc/remembrance-skills",
+    feedback_url: "https://remembrance.dev/api/v1/agent/remembrances",
+    skill_sh_url: null
+  };
+}
+
 // ../core/src/private-skill-delivery.ts
 var PRIVATE_SKILL_DELIVERY_CONTRACT_VERSION = "private-skill-delivery-v1";
 var PRIVATE_SKILL_PREDECESSOR_HEADER = "x-remembrance-private-skill-predecessor";
@@ -24773,8 +24784,7 @@ var privateSkillReviewRepairRequestSchema = external_exports.preprocess((value, 
 }, privateSkillReviewRepairRequest);
 
 // ../core/src/seed.ts
-var siteUrl = "https://remembrance.dev";
-var feedbackUrl = `${siteUrl}/api/v1/agent/remembrances`;
+var feedbackUrl = publicSkillDeliveryDefaults().feedback_url;
 var jsonItems = (values, indent) => values.map((value) => `${indent}${JSON.stringify(value)}`).join(",\n");
 var recommendedClaudeToolJson = jsonItems(
   REMEMBRANCE_MCP_RECOMMENDED_ORG_TOOLS.map(
@@ -24796,7 +24806,6 @@ var openClawToolFilterJson = jsonItems(
 var privateSubmissionToolList = REMEMBRANCE_MCP_PRIVATE_LEARNING_NETWORK_ACTIONS.map(
   (tool) => `- \`${tool}\``
 ).join("\n");
-var SKILL_INSTALL_COMMAND = "npx skills add dreamarkinc/remembrance-skills --skill remembrancer";
 var skillInstallCommand = SKILL_INSTALL_COMMAND;
 var seedSkills = [
   {
@@ -24815,10 +24824,7 @@ var seedSkills = [
     usefulness_index: 50,
     usefulness_confidence: 0,
     risk_level: "low",
-    install_command: skillInstallCommand,
-    repo_url: "https://github.com/dreamarkinc/remembrance-skills",
-    skill_sh_url: null,
-    feedback_url: feedbackUrl,
+    ...publicSkillDeliveryDefaults(),
     last_verified_at: null,
     metadata: {
       schema_version: "0.1",
@@ -24903,10 +24909,7 @@ var seedSkills = [
     usefulness_index: 58,
     usefulness_confidence: 0,
     risk_level: "low",
-    install_command: skillInstallCommand,
-    repo_url: "https://github.com/dreamarkinc/remembrance-skills",
-    skill_sh_url: null,
-    feedback_url: feedbackUrl,
+    ...publicSkillDeliveryDefaults(),
     last_verified_at: null,
     metadata: {
       schema_version: "0.1",
@@ -26670,10 +26673,7 @@ session skills.
     usefulness_index: 50,
     usefulness_confidence: 0,
     risk_level: "low",
-    install_command: skillInstallCommand,
-    repo_url: "https://github.com/dreamarkinc/remembrance-skills",
-    skill_sh_url: null,
-    feedback_url: feedbackUrl,
+    ...publicSkillDeliveryDefaults(),
     last_verified_at: null,
     metadata: {
       schema_version: "0.1",
@@ -26788,10 +26788,7 @@ that agents add over time.
     usefulness_index: 50,
     usefulness_confidence: 0,
     risk_level: "medium",
-    install_command: skillInstallCommand,
-    repo_url: "https://github.com/dreamarkinc/remembrance-skills",
-    skill_sh_url: null,
-    feedback_url: feedbackUrl,
+    ...publicSkillDeliveryDefaults(),
     last_verified_at: null,
     metadata: {
       schema_version: "0.1",
@@ -26918,10 +26915,7 @@ over time.
     usefulness_index: 55,
     usefulness_confidence: 0,
     risk_level: "medium",
-    install_command: skillInstallCommand,
-    repo_url: "https://github.com/dreamarkinc/remembrance-skills",
-    skill_sh_url: null,
-    feedback_url: feedbackUrl,
+    ...publicSkillDeliveryDefaults(),
     last_verified_at: null,
     metadata: {
       schema_version: "0.1",
@@ -69586,7 +69580,7 @@ function inspectPrivateLearningOutbox2(input, dependencies = {}) {
 }
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.2.6" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.2.7" : "0.0.0-dev";
 var tools2 = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var nativeContextCliRequested = process.argv[2] === "--native-context";
