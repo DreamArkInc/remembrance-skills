@@ -120,14 +120,14 @@ function principalSessionResponseError(status, body, stage) {
   );
 }
 function withPrincipalSessionProbe(report, result) {
-  const diagnostic = result.error instanceof PrincipalSessionError ? result.error.diagnostic() : new PrincipalSessionError("session_unavailable", "local").diagnostic();
+  const diagnostic2 = result.error instanceof PrincipalSessionError ? result.error.diagnostic() : new PrincipalSessionError("session_unavailable", "local").diagnostic();
   return {
     ...report,
     status: !result.ready && report.status === "healthy" ? "attention" : report.status,
     principal_session: result.ready ? { status: "ready", reason_code: null, remediation: null } : {
       status: "unavailable",
-      reason_code: diagnostic.reason_code,
-      remediation: diagnostic.remediation
+      reason_code: diagnostic2.reason_code,
+      remediation: diagnostic2.remediation
     },
     checks: [
       ...report.checks,
@@ -135,10 +135,10 @@ function withPrincipalSessionProbe(report, result) {
         id: "principal_session",
         status: result.ready ? "pass" : "warning",
         summary: result.ready ? "The registry verified the installation session used for persistent preferences." : "Signing is configured, but the registry could not verify an installation session. Preferences were not saved by this probe.",
-        issue_codes: result.ready ? [] : [diagnostic.reason_code],
+        issue_codes: result.ready ? [] : [diagnostic2.reason_code],
         remediation: result.ready ? null : {
-          code: diagnostic.reason_code,
-          action: diagnostic.remediation,
+          code: diagnostic2.reason_code,
+          action: diagnostic2.remediation,
           automatic: false
         }
       }
@@ -4147,23 +4147,23 @@ var ZodEffects = class extends ZodType {
     }
     if (effect.type === "transform") {
       if (ctx.common.async === false) {
-        const base = this._def.schema._parseSync({
+        const base2 = this._def.schema._parseSync({
           data: ctx.data,
           path: ctx.path,
           parent: ctx
         });
-        if (!isValid(base))
+        if (!isValid(base2))
           return INVALID;
-        const result = effect.transform(base.value, checkCtx);
+        const result = effect.transform(base2.value, checkCtx);
         if (result instanceof Promise) {
           throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
         }
         return { status: status.value, value: result };
       } else {
-        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base) => {
-          if (!isValid(base))
+        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base2) => {
+          if (!isValid(base2))
             return INVALID;
-          return Promise.resolve(effect.transform(base.value, checkCtx)).then((result) => ({
+          return Promise.resolve(effect.transform(base2.value, checkCtx)).then((result) => ({
             status: status.value,
             value: result
           }));
@@ -7924,12 +7924,12 @@ var PrivateLessonLengthLimitError = class extends Error {
   tool;
   issues;
   diagnostic() {
-    const base = this.tool === "capture_learning" ? "$.lesson" : "$";
+    const base2 = this.tool === "capture_learning" ? "$.lesson" : "$";
     return {
       code: "private_lesson_too_long",
       measured_after: "local_redaction",
       issues: this.issues.map(({ field, unit, length, limit }) => ({
-        field: field === null ? base : `${base}.${field}`,
+        field: field === null ? base2 : `${base2}.${field}`,
         unit,
         length,
         limit
@@ -8732,6 +8732,9 @@ function privateSkillDestinationBodyLimit(status, body, bodyLength) {
 }
 var captureLearningInputSchema = external_exports.object({
   contract_version: external_exports.literal(PRIVATE_LEARNING_CAPTURE_VERSION).default(PRIVATE_LEARNING_CAPTURE_VERSION),
+  capture_id: external_exports.string().regex(/^cap_[a-f0-9]{32}$/u).optional().describe(
+    "Optional opaque lesson capture identity: cap_ followed by 32 random lowercase hexadecimal characters. Allocate before the first lesson call and reuse with the identical lesson after a lost response. Inspect it locally to reconcile first. A different lesson or destination is refused for the same identity. Supported only with lesson; it grants no submission approval."
+  ),
   lesson: privateLessonPreparationInputSchema.optional(),
   private_skill: privateSkillCaptureSchema.optional(),
   replacement_of: external_exports.union([
@@ -8757,6 +8760,20 @@ var captureLearningInputSchema = external_exports.object({
       code: external_exports.ZodIssueCode.custom,
       message: replaces === "psd_" ? "replacement_of with a private-skill draft_id is valid only with a private_skill payload." : "replacement_of with a private-lesson draft_id is valid only with a lesson payload.",
       path: ["replacement_of"]
+    });
+  }
+  if (value.capture_id !== void 0 && value.lesson === void 0) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "capture_id is valid only with a lesson payload.",
+      path: ["capture_id"]
+    });
+  }
+  if (value.capture_id !== void 0 && value.replacement_of !== void 0) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "A replacement uses its existing replacement_of identity; omit capture_id.",
+      path: ["capture_id"]
     });
   }
 });
@@ -9327,11 +9344,11 @@ function rsaPrivateExponentRecoversFactorUncached(modulus, exponent, privateExpo
     oddPart >>= 1n;
     powersOfTwo += 1;
   }
-  for (const base of RSA_EXPONENT_FACTOR_WITNESSES) {
-    if (base >= modulus) continue;
-    const direct = greatestCommonDivisor(base, modulus, metrics);
+  for (const base2 of RSA_EXPONENT_FACTOR_WITNESSES) {
+    if (base2 >= modulus) continue;
+    const direct = greatestCommonDivisor(base2, modulus, metrics);
     if (direct > 1n && direct < modulus) return true;
-    let value = modularPower(base, oddPart, modulus, metrics);
+    let value = modularPower(base2, oddPart, modulus, metrics);
     if (value === 1n || value === modulus - 1n) continue;
     for (let round = 1; round <= powersOfTwo; round += 1) {
       metrics.ownershipSteps += 1;
@@ -9361,9 +9378,9 @@ function greatestCommonDivisor(left, right, metrics) {
   }
   return a;
 }
-function modularPower(base, exponent, modulus, metrics) {
+function modularPower(base2, exponent, modulus, metrics) {
   let result = 1n;
-  let factor = base % modulus;
+  let factor = base2 % modulus;
   let remaining = exponent;
   while (remaining > 0n) {
     metrics.ownershipSteps += 1;
@@ -18744,10 +18761,10 @@ function recoveredRsaPrime({ modulus, exponent, privateExponent }, metrics, atte
     powersOfTwo += 1;
   }
   const meter = rsaArithmeticMeter(metrics, modulus);
-  for (const base of RSA_FACTOR_SEARCH_BASES) {
+  for (const base2 of RSA_FACTOR_SEARCH_BASES) {
     if (metrics.rsaCrtContinuationProofAttempts >= attempts) return null;
     metrics.rsaCrtContinuationProofAttempts += 1;
-    let value = modularPower(base, oddPart, modulus, meter);
+    let value = modularPower(base2, oddPart, modulus, meter);
     for (let round = 0; round < powersOfTwo && value !== 1n && value !== modulus - 1n; round += 1) {
       meter.ownershipSteps += 1;
       const squared = value * value % modulus;
@@ -20823,14 +20840,14 @@ function isShortPemBoundaryFragment(value) {
   return trimmed.length <= 32 && /^-{5}(?:BEGIN|END)[A-Z0-9_-]{0,18}$/iu.test(trimmed) && exactPrivateKeyMarker2(trimmed) === null;
 }
 function uniqueRedactedObjectKey(reserved, used, nextSuffixByBase, candidate) {
-  const base = candidate === "[redacted]" ? "[redacted-key]" : candidate;
-  if (!reserved.has(base) && !used.has(base)) return base;
-  let suffix = nextSuffixByBase.get(base) ?? 2;
-  while (reserved.has(`${base}-${suffix}`) || used.has(`${base}-${suffix}`)) {
+  const base2 = candidate === "[redacted]" ? "[redacted-key]" : candidate;
+  if (!reserved.has(base2) && !used.has(base2)) return base2;
+  let suffix = nextSuffixByBase.get(base2) ?? 2;
+  while (reserved.has(`${base2}-${suffix}`) || used.has(`${base2}-${suffix}`)) {
     suffix += 1;
   }
-  nextSuffixByBase.set(base, suffix + 1);
-  return `${base}-${suffix}`;
+  nextSuffixByBase.set(base2, suffix + 1);
+  return `${base2}-${suffix}`;
 }
 function createRedactionWorkMetrics() {
   return {
@@ -28349,19 +28366,19 @@ function parseNullableDef(def, refs) {
     };
   }
   if (refs.target === "openApi3") {
-    const base2 = parseDef(def.innerType._def, {
+    const base3 = parseDef(def.innerType._def, {
       ...refs,
       currentPath: [...refs.currentPath]
     });
-    if (base2 && "$ref" in base2)
-      return { allOf: [base2], nullable: true };
-    return base2 && { ...base2, nullable: true };
+    if (base3 && "$ref" in base3)
+      return { allOf: [base3], nullable: true };
+    return base3 && { ...base3, nullable: true };
   }
-  const base = parseDef(def.innerType._def, {
+  const base2 = parseDef(def.innerType._def, {
     ...refs,
     currentPath: [...refs.currentPath, "anyOf", "0"]
   });
-  return base && { anyOf: [base, { type: "null" }] };
+  return base2 && { anyOf: [base2, { type: "null" }] };
 }
 
 // ../../node_modules/zod-to-json-schema/dist/esm/parsers/number.js
@@ -29143,16 +29160,48 @@ var privateLessonDraftReferenceSchema = external_exports.object({
 }).strict();
 var privateLessonInspectSchema = external_exports.object({
   draft_id: external_exports.string().regex(/^pld_[A-Za-z0-9_-]{8,96}$/).optional(),
+  capture_id: external_exports.string().regex(/^cap_[a-f0-9]{32}$/u).optional().describe(
+    "Reconcile one lesson capture by its opaque capture_id without replaying lesson content. Omit draft_id when selecting capture_id."
+  ),
   limit: external_exports.number().int().min(1).max(200).default(50),
   offset: external_exports.number().int().min(0).max(Number.MAX_SAFE_INTEGER - 200).default(0).describe(
     "Zero-based local page offset. Follow next_offset until truncated is false."
   )
-}).strict();
+}).strict().superRefine((value, ctx) => {
+  if (value.capture_id !== void 0 && value.draft_id !== void 0) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: "Select either capture_id or draft_id, not both.",
+      path: ["capture_id"]
+    });
+  }
+});
 var privateLessonRetrySchema = privateLessonDraftReferenceSchema.extend({
   deliver_rechecked_hold: external_exports.literal(true).optional().describe(
     "Only after the user chose to deliver a held draft whose safety_recheck is passes_current_rule: send it under the current safety rule. A draft the current check still holds is refused locally and not sent."
+  ),
+  legacy_destination_recovery: external_exports.discriminatedUnion("action", [
+    external_exports.object({ action: external_exports.literal("review") }).strict(),
+    external_exports.object({
+      action: external_exports.literal("approve"),
+      review_id: external_exports.string().regex(/^sha256:[a-f0-9]{64}$/),
+      expected_payload_digest: external_exports.string().regex(/^sha256:[a-f0-9]{64}$/),
+      expected_destination: external_exports.object({
+        api_base_sha256: external_exports.string().regex(/^sha256:[a-f0-9]{64}$/),
+        credential_sha256: external_exports.string().regex(/^sha256:[a-f0-9]{64}$/)
+      }).strict(),
+      organization_audience_hash: external_exports.string().regex(/^sha256:[a-f0-9]{64}$/),
+      owner_attested_single_organization: external_exports.literal(true),
+      all_outbox_readers_updated: external_exports.literal(true),
+      owner_attestation_sha256: external_exports.string().regex(/^sha256:[a-f0-9]{64}$/)
+    }).strict()
+  ]).optional().describe(
+    "Explicit legacy destination recovery only. review requests a content-free plan using the signed current organization policy; it changes no draft and sends no lesson. approve requires the exact review fields, new explicit owner confirmation that this draft belongs only to that organization and may be delivered there, the SHA-256 hash of that approval, and confirmation every outbox reader is Remembrance 0.2.6 or newer. Existing submission approval is not migration approval. Approval binds the unchanged encrypted draft locally and returns its normal retry; it does not submit it. Never infer the old destination, reveal retained source, or approve on the owner's behalf."
   )
-});
+}).refine(
+  (value) => !(value.deliver_rechecked_hold && value.legacy_destination_recovery),
+  { message: "Choose safety-hold release or legacy destination recovery, never both." }
+);
 var privateLessonDeleteSchema = privateLessonDraftReferenceSchema.extend({
   confirm: external_exports.literal(true).describe(
     "Must be true. Deletion is explicit and leaves a content-free tombstone."
@@ -29227,8 +29276,8 @@ var bootstrapAgentIdentitySchema = external_exports.object({
   force_rotate: external_exports.boolean().default(false).describe("Generate and register a new key even when one exists.")
 }).strict();
 function feedbackToolSchemaFor(privateCaptureMode) {
-  const base = privateCaptureMode ? categoricalAgentFeedbackRequestBaseSchema : agentFeedbackRequestBaseSchema;
-  return base.extend({
+  const base2 = privateCaptureMode ? categoricalAgentFeedbackRequestBaseSchema : agentFeedbackRequestBaseSchema;
+  return base2.extend({
     verified_attestation: external_exports.boolean().default(false).describe(
       "When true, sign the feedback with the local TOFU key. Missing local identity is initialized automatically; bootstrap_agent_identity remains available for preflight or recovery."
     )
@@ -29405,7 +29454,7 @@ var declaredToolDefinitions = [
   ),
   localNetworkTool(
     "retry_private_lesson_candidate",
-    "Retry one retained private-lesson draft through the same private_lesson approval lane as submit_private_lesson_candidate. Network access is allowed only for authorization-pending, due transient retry, newly compatible profile, or refreshable policy states, and for a held draft the current local safety check releases once the user chose to deliver it (deliver_rechecked_hold=true); a fresh ready draft is rejected locally. It never falls back to a public or alternate transport.",
+    "Retry one retained private-lesson draft through the same private_lesson approval lane as submit_private_lesson_candidate. Network access is allowed only for authorization-pending, due transient retry, newly compatible profile, or refreshable policy states, and for a held draft the current local safety check releases once the user chose to deliver it (deliver_rechecked_hold=true); a fresh ready draft is rejected locally. A legacy_destination_recovery review explicitly requests a content-free signed-policy review for one eligible unbound draft, without changing or sending it. Only new explicit owner approval of that exact review and all outbox readers at 0.2.6 or newer permits local destination binding; a separate normal retry performs delivery. Never infer migration approval from submission approval. It never falls back to a public or alternate transport.",
     "retry_private_lesson_candidate",
     privateLessonRetrySchema,
     "content_write"
@@ -30183,7 +30232,7 @@ validateServedToolDefinitionSet(
 );
 
 // src/private-lesson-outbox.ts
-import { createCipheriv as createCipheriv2, createDecipheriv as createDecipheriv2, randomBytes as randomBytes4 } from "node:crypto";
+import { createCipheriv as createCipheriv2, createDecipheriv as createDecipheriv2, randomBytes as randomBytes5 } from "node:crypto";
 import {
   chmod as chmod2,
   link,
@@ -31561,6 +31610,149 @@ function isLoopError(error) {
   return error instanceof Error && "code" in error && error.code === "ELOOP";
 }
 
+// src/capture-learning-diagnostics.ts
+import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
+import { randomBytes as randomBytes4 } from "node:crypto";
+var contexts = new AsyncLocalStorage2();
+var failures = /* @__PURE__ */ new WeakMap();
+var CaptureLearningReplayError = class extends Error {
+  constructor(code) {
+    super(
+      "This capture identity is already bound to a retained local outcome."
+    );
+    this.code = code;
+    this.name = "CaptureLearningReplayError";
+  }
+  code;
+};
+async function withCaptureLearningDiagnostics(operation) {
+  if (contexts.getStore()) return operation();
+  const context = {
+    capture_id: `cap_${randomBytes4(16).toString("hex")}`,
+    correlation_id: `capcorr_${randomBytes4(16).toString("hex")}`,
+    failure_stage: "validation",
+    persistence_outcome: "not_persisted"
+  };
+  return contexts.run(context, async () => {
+    try {
+      return await operation();
+    } catch (error) {
+      const failure = error !== null && (typeof error === "object" || typeof error === "function") ? error : new Error("Private learning capture failed.");
+      failures.set(failure, {
+        ...diagnostic(context),
+        ...preparationConstraintDiagnostic(context, error),
+        ...error instanceof CaptureLearningReplayError ? {
+          code: error.code,
+          recovery: context.replacement_of ? "Inspect the original held draft and the selected replacement. Repeat only the exact same lesson and replacement_of through its existing recovery lane; do not create an unrelated capture." : "Inspect the outcome for this capture_id. It must not be reused for a different lesson or destination, and a submitted or explicitly deleted capture is never recreated."
+        } : {}
+      });
+      throw failure;
+    }
+  });
+}
+function captureLearningDiagnostic(error) {
+  return error !== null && (typeof error === "object" || typeof error === "function") ? failures.get(error) : void 0;
+}
+function captureLearningCurrentDiagnostic() {
+  const context = contexts.getStore();
+  return context ? diagnostic(context) : void 0;
+}
+function currentCaptureLearningId() {
+  return contexts.getStore()?.capture_id;
+}
+function adoptCaptureLearningId(captureId) {
+  const context = contexts.getStore();
+  if (context && captureId && /^cap_[a-f0-9]{32}$/u.test(captureId)) {
+    context.capture_id = captureId;
+  }
+}
+function markCaptureLearningStage(stage) {
+  const context = contexts.getStore();
+  if (context) context.failure_stage = stage;
+}
+function markCaptureLearningReplacement(draftId) {
+  const context = contexts.getStore();
+  if (context) context.replacement_of = draftId;
+}
+function markCaptureLearningRoute(route) {
+  const context = contexts.getStore();
+  if (context) context.capture_route = route;
+}
+function markCaptureLearningPersisting(draftId) {
+  const context = contexts.getStore();
+  if (!context) return;
+  context.failure_stage = "encrypted_persistence";
+  context.persistence_outcome = "unknown";
+  if (draftId) context.reconciliation_draft_id = draftId;
+}
+function markCaptureLearningPersisted(draftId) {
+  const context = contexts.getStore();
+  if (!context) return;
+  context.persistence_outcome = "persisted";
+  context.draft_id = draftId;
+  delete context.reconciliation_draft_id;
+}
+function markCaptureLearningNotPersisted() {
+  const context = contexts.getStore();
+  if (!context) return;
+  context.persistence_outcome = "not_persisted";
+  delete context.draft_id;
+  delete context.reconciliation_draft_id;
+}
+function diagnostic(context) {
+  return {
+    code: `capture_${context.failure_stage}_failed`,
+    ...context.replacement_of ? { replacement_of: context.replacement_of } : { capture_id: context.capture_id },
+    correlation_id: context.correlation_id,
+    failure_stage: context.failure_stage,
+    persistence_outcome: context.persistence_outcome,
+    ...context.capture_route ? { capture_route: context.capture_route } : {},
+    ...context.draft_id ? { draft_id: context.draft_id } : {},
+    ...context.reconciliation_draft_id ? { reconciliation_draft_id: context.reconciliation_draft_id } : context.persistence_outcome === "unknown" && context.capture_route === "private_skill" ? {
+      next_action: {
+        tool: "inspect_private_learning_outbox",
+        arguments: { limit: 50 }
+      }
+    } : {},
+    candidate_sent: false,
+    ...context.draft_id || context.reconciliation_draft_id ? {
+      next_action: {
+        tool: context.capture_route === "private_skill" ? "inspect_private_learning_outbox" : "inspect_private_lesson_outbox",
+        arguments: context.capture_route === "private_skill" ? {
+          limit: 50,
+          private_skill_draft_id: context.draft_id ?? context.reconciliation_draft_id
+        } : {
+          draft_id: context.draft_id ?? context.reconciliation_draft_id
+        }
+      }
+    } : context.replacement_of ? {
+      next_action: {
+        tool: "inspect_private_lesson_outbox",
+        arguments: { draft_id: context.replacement_of }
+      }
+    } : {},
+    recovery: context.replacement_of && context.persistence_outcome !== "persisted" ? "Inspect the original held draft and any retained replacement. Correct a bounded refusal, then repeat only the exact same lesson and replacement_of. This uses the existing deterministic replacement lane; do not add capture_id or create an unrelated capture." : context.persistence_outcome === "persisted" ? "Inspect the retained draft and resume its returned next action. Do not create a replacement capture." : context.persistence_outcome === "not_persisted" ? "No draft was saved by this attempt. Correct the bounded validation or storage issue, then retry; use the same capture_id for a lesson capture." : context.capture_route === "private_lesson" ? "Inspect using capture_id, or repeat the exact same lesson and capture_id. This reconciles the selected local write before any new draft can be created. Do not change the capture_id or payload to bypass an unknown outcome." : "Inspect the private learning outbox before retrying. The outcome is unknown; a new capture may duplicate a retained draft."
+  };
+}
+function preparationConstraintDiagnostic(context, error) {
+  if (context.failure_stage !== "preparation" || !(error instanceof ZodError))
+    return {};
+  if (!error.issues.some(
+    (issue) => issue.path[0] === "evidence_hashes" && issue.code === "invalid_string" && issue.validation === "regex"
+  ))
+    return {};
+  return {
+    validation_issues: [
+      {
+        path: "$.lesson.evidence_hashes[]",
+        code: "invalid_string",
+        constraint: "^sha256:[a-f0-9]{64}$"
+      }
+    ],
+    remediation: "Use sha256: followed by exactly 64 lowercase hexadecimal characters; omit evidence_hashes when no digest exists."
+  };
+}
+
 // src/private-lesson-outbox.ts
 var PRIVATE_LESSON_OUTBOX_VERSION = "private-lesson-outbox-v1";
 var PRIVATE_LESSON_OUTBOX_MAX_BYTES = 64 * 1024 * 1024;
@@ -31666,18 +31858,78 @@ async function releaseRecheckedPrivateLessonHold(draftId, options = {}) {
   });
 }
 async function queuePreparedPrivateLesson(prepared, policy, options = {}) {
+  const draftId = options.captureId ? privateLessonCaptureDraftId(options.captureId) : createPublicId("pld");
   const outbox = await readyOutbox(options);
   const draft = newPrivateLessonDraft(
     prepared,
-    createPublicId("pld"),
+    draftId,
     policy,
     options.destination ?? null,
-    options.now ?? /* @__PURE__ */ new Date()
+    options.now ?? /* @__PURE__ */ new Date(),
+    options.captureId !== void 0
   );
-  await writeDraft(draft, outbox, false);
-  return draft;
+  return withPrivateLessonOutboxLock(outbox.directory, async () => {
+    if (options.captureId) {
+      markCaptureLearningPersisting(draftId);
+      const unresolved = await reconcilePrivateLessonTemporaryWrites(
+        outbox.directory,
+        outbox.encryption
+      );
+      if (unresolved.has(draftId)) {
+        throw new CaptureLearningReplayError("capture_reconciliation_required");
+      }
+      if ((await privateLessonQuarantineEntriesForDraft(
+        outbox.directory,
+        draftId
+      )).length > 0) {
+        throw new CaptureLearningReplayError("capture_reconciliation_required");
+      }
+      if (existsSync2(tombstonePath(outbox.directory, draftId))) {
+        throw new CaptureLearningReplayError("capture_id_deleted");
+      }
+      await assertNotReplacedUnlocked(outbox.directory, draftId);
+      const completion = existsSync2(
+        submittedRecordPath(outbox.directory, draftId)
+      ) ? await readPrivateLessonSubmittedRecord(draftId, {
+        ...options,
+        encryption: outbox.encryption,
+        outboxDirectory: outbox.directory
+      }) : null;
+      if (completion) {
+        markCaptureLearningPersisted(draftId);
+        throw new CaptureLearningReplayError("capture_id_already_submitted");
+      }
+      if (existsSync2(draftPath(outbox.directory, draftId))) {
+        const existing = await readPrivateLessonDraft(draftId, {
+          ...options,
+          encryption: outbox.encryption,
+          outboxDirectory: outbox.directory
+        });
+        markCaptureLearningPersisted(draftId);
+        if (existing.payload_digest !== draft.payload_digest || existing.redactor_digest !== draft.redactor_digest) {
+          throw new CaptureLearningReplayError("capture_id_payload_mismatch");
+        }
+        if (canonicalJson(existing.destination_binding) !== canonicalJson(draft.destination_binding)) {
+          throw new CaptureLearningReplayError(
+            "capture_id_destination_mismatch"
+          );
+        }
+        return existing;
+      }
+      markCaptureLearningNotPersisted();
+    }
+    await writeDraft(draft, outbox, false);
+    markCaptureLearningPersisted(draftId);
+    return draft;
+  });
 }
-function newPrivateLessonDraft(prepared, draftId, policy, destination, now) {
+function privateLessonCaptureDraftId(captureId) {
+  if (!/^cap_[a-f0-9]{32}$/u.test(captureId)) {
+    throw new Error("Private lesson capture identity is invalid.");
+  }
+  return `pld_${hashValue(`private-lesson-capture-v1:${captureId}`).replace(/^sha256:/u, "")}`;
+}
+function newPrivateLessonDraft(prepared, draftId, policy, destination, now, stableCaptureIdentity = false) {
   const createdAt = now.toISOString();
   const state = prepared.status === "held_safety" ? "held_safety" : policy ? "ready" : "awaiting_authorization";
   return {
@@ -31693,10 +31945,9 @@ function newPrivateLessonDraft(prepared, draftId, policy, destination, now) {
     policy,
     destination_binding: destination ? parsePrivateLessonDestination(destination) : null,
     idempotency_key: `private-lesson-${hashValue(
-      canonicalJson({
-        draft_id: draftId,
-        payload_digest: prepared.payload_digest
-      })
+      canonicalJson(
+        stableCaptureIdentity ? { draft_id: draftId } : { draft_id: draftId, payload_digest: prepared.payload_digest }
+      )
     ).replace(/^sha256:/, "")}`,
     attempts: 0,
     next_retry_at: null,
@@ -31800,6 +32051,14 @@ async function queuePrivateLessonReplacement(replacementOf, prepared, options = 
     const attempts = original.replacement_attempts ?? [];
     const digest2 = prepared.payload_digest;
     const draftId = privateLessonReplacementDraftId(replacementOf, digest2);
+    markCaptureLearningPersisting(draftId);
+    const unresolved = await reconcilePrivateLessonTemporaryWrites(
+      directory,
+      outbox.encryption
+    );
+    if (unresolved.has(draftId) || (await privateLessonQuarantineEntriesForDraft(directory, draftId)).length > 0) {
+      throw new CaptureLearningReplayError("capture_reconciliation_required");
+    }
     const replay = attempts.includes(digest2);
     const used = replay ? attempts.length : attempts.length + 1;
     if (!replay && privateLessonCapturedForOtherDestination(original, options.destination)) {
@@ -31830,11 +32089,13 @@ async function queuePrivateLessonReplacement(replacementOf, prepared, options = 
       throw refuse("replacement_deleted", used, draftId);
     }
     if (existsSync2(draftPath(directory, draftId))) {
+      const existing = await readPrivateLessonDraft(draftId, {
+        ...read2,
+        encryption: outbox.encryption
+      });
+      markCaptureLearningPersisted(draftId);
       return {
-        draft: await readPrivateLessonDraft(draftId, {
-          ...read2,
-          encryption: outbox.encryption
-        }),
+        draft: existing,
         attempts_remaining: PRIVATE_LESSON_REPLACEMENT_MAX_ATTEMPTS - used,
         replayed: true
       };
@@ -31906,10 +32167,15 @@ async function readPrivateLessonDraft(draftId, options = {}) {
   assertDraftId(draftId);
   const outbox = await readyOutbox(options, false);
   return withPrivateLessonOutboxLock(outbox.directory, async () => {
-    await reconcilePrivateLessonTemporaryWrites(
+    const unresolved = await reconcilePrivateLessonTemporaryWrites(
       outbox.directory,
       outbox.encryption
     );
+    const unresolvedError = unresolved.get(draftId);
+    if (unresolvedError) throw unresolvedError;
+    if (!existsSync2(draftPath(outbox.directory, draftId)) && (await privateLessonQuarantineEntriesForDraft(outbox.directory, draftId)).length > 0) {
+      throw new PrivateLessonDraftUnavailableError(draftId, "corrupt");
+    }
     if (existsSync2(tombstonePath(outbox.directory, draftId))) {
       throw new PrivateLessonDraftUnavailableError(draftId, "deleted");
     }
@@ -32103,6 +32369,67 @@ async function updatePrivateLessonDraft(draftId, update, options = {}) {
     next.updated_at = (options.now ?? /* @__PURE__ */ new Date()).toISOString();
     await writeDraft(next, outbox, true);
     return next;
+  });
+}
+function ownerAttestedLegacyPrivateLessonRecoveryEligible(draft) {
+  const legacyUnbound = draft.destination_binding === null && draft.last_error_code === "private_lesson_destination_legacy_unbound" && (draft.state === "held_validation" || draft.state === "retry_scheduled");
+  const heldForOtherOrganization = draft.attested_organization_audience_hash !== void 0 && draft.last_error_code === "private_lesson_destination_attestation_mismatch" && draft.state === "held_validation";
+  return (legacyUnbound || heldForOtherOrganization) && draft.policy === null && draft.held_reasons.length === 0 && draft.hold_telemetry_status === "not_required" && draft.hold_event_digest === null && draft.hold_receipt_digest === null && draft.hold_reported_at === null && draft.submitted_at === null && draft.receipt_digest === null && draft.terminal_reason === null;
+}
+async function recoverOwnerAttestedLegacyPrivateLessonDestination(input, options = {}) {
+  assertDraftId(input.draft_id);
+  if (input.owner_attested_single_organization !== true || !isSha256Digest(input.expected_payload_digest) || !isSha256Digest(input.organization_audience_hash) || !isSha256Digest(input.owner_attestation_sha256) || input.dry_run !== void 0 && typeof input.dry_run !== "boolean") {
+    throw new Error("Explicit owner-attested legacy recovery authorization is required.");
+  }
+  const destination = parsePrivateLessonDestination(input.destination);
+  const outbox = await readyOutbox(options, false);
+  return withPrivateLessonOutboxLock(outbox.directory, async () => {
+    if (existsSync2(tombstonePath(outbox.directory, input.draft_id)) || existsSync2(submittedRecordPath(outbox.directory, input.draft_id))) {
+      throw new Error("Legacy recovery requires an unresolved retained draft.");
+    }
+    const path = draftPath(outbox.directory, input.draft_id);
+    await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
+    const serialized = await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
+    const envelope = parseEnvelope(serialized, input.draft_id);
+    const current = await decryptDraft(envelope, outbox.encryption);
+    if (!ownerAttestedLegacyPrivateLessonRecoveryEligible(current) || current.payload_digest !== input.expected_payload_digest) {
+      throw new Error("Selected draft does not match the owner-attested legacy recovery scope.");
+    }
+    const now = (options.now ?? /* @__PURE__ */ new Date()).toISOString();
+    const next = {
+      ...current,
+      destination_binding: destination,
+      attested_organization_audience_hash: input.organization_audience_hash,
+      state: "retry_scheduled",
+      next_retry_at: now,
+      last_error_code: null,
+      updated_at: now
+    };
+    const encryption = {
+      key: await readPrivateLessonOutboxKey(outbox.encryption, envelope.encryption.key_source),
+      source: envelope.encryption.key_source
+    };
+    if (!input.dry_run) await writeDraft(next, { ...outbox, encryption }, true);
+    return {
+      draft_id: current.draft_id,
+      payload_digest: current.payload_digest,
+      original_identity_sha256: hashValue(canonicalJson({
+        draft_id: current.draft_id,
+        canonical_payload: current.canonical_payload,
+        payload_digest: current.payload_digest,
+        redaction_version: current.redaction_version,
+        redactor_digest: current.redactor_digest,
+        idempotency_key: current.idempotency_key,
+        policy: current.policy,
+        created_at: current.created_at
+      })),
+      before_envelope_sha256: hashValue(serialized),
+      after_envelope_sha256: input.dry_run ? null : hashValue(await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES)),
+      owner_attestation_sha256: input.owner_attestation_sha256,
+      organization_audience_hash: input.organization_audience_hash,
+      status: input.dry_run ? "destination_recovery_preflight" : "destination_recovered",
+      candidate_sent: false
+    };
   });
 }
 async function completePrivateLessonSubmission(draftId, input, options = {}) {
@@ -32631,7 +32958,7 @@ async function inspectPrivateLessonOutboxHealth(options = {}) {
   const env = options.env ?? process.env;
   const directory = options.outboxDirectory ?? privateLessonOutboxDirectory(env, options.homeDirectory);
   let encryption = options.encryption ?? null;
-  let diagnostic;
+  let diagnostic2;
   if (!encryption) {
     try {
       encryption = await readExistingPrivateLessonOutboxEncryption(
@@ -32639,21 +32966,21 @@ async function inspectPrivateLessonOutboxHealth(options = {}) {
         options
       );
     } catch (error) {
-      diagnostic = error instanceof PrivateOutboxStorageError ? error.diagnostic() : privateOutboxStorageError(error, "fallback_key_read").diagnostic();
+      diagnostic2 = error instanceof PrivateOutboxStorageError ? error.diagnostic() : privateOutboxStorageError(error, "fallback_key_read").diagnostic();
     }
   }
   const inventory = retainedKeyInventory({
     ...options,
     outboxDirectory: directory
   });
-  if (!encryption && !diagnostic) {
-    diagnostic = privateLearningKeyBootstrapHold(
+  if (!encryption && !diagnostic2) {
+    diagnostic2 = privateLearningKeyBootstrapHold(
       inventory,
       "confirmed_missing",
       "fallback_key_read"
     )?.diagnostic();
   }
-  const encryptionReady = diagnostic ? diagnostic.reason_code === "outbox_key_missing" ? false : null : encryption !== null;
+  const encryptionReady = diagnostic2 ? diagnostic2.reason_code === "outbox_key_missing" ? false : null : encryption !== null;
   const keyFileState = () => privateLessonFallbackKeyState(
     { ...options, outboxDirectory: directory },
     encryption?.source,
@@ -32664,8 +32991,8 @@ async function inspectPrivateLessonOutboxHealth(options = {}) {
     return {
       storage_initialized: false,
       encryption_ready: encryptionReady,
-      encryption_source: diagnostic ? null : encryption?.source ?? "uninitialized",
-      ...diagnostic ? { diagnostic } : {},
+      encryption_source: diagnostic2 ? null : encryption?.source ?? "uninitialized",
+      ...diagnostic2 ? { diagnostic: diagnostic2 } : {},
       ...await keyFileState(),
       total_bytes: 0,
       ceiling_bytes: ceilingBytes2,
@@ -32780,8 +33107,8 @@ async function inspectPrivateLessonOutboxHealth(options = {}) {
   return {
     storage_initialized: true,
     encryption_ready: encryptionReady,
-    encryption_source: diagnostic ? null : "uninitialized",
-    ...diagnostic ? { diagnostic } : {},
+    encryption_source: diagnostic2 ? null : "uninitialized",
+    ...diagnostic2 ? { diagnostic: diagnostic2 } : {},
     ...keyFile,
     total_bytes: totalBytes,
     ceiling_bytes: ceilingBytes,
@@ -32940,7 +33267,7 @@ async function resolveFallbackOutboxEncryption(options) {
     encoded = await readConcurrentPrivateLessonFallbackKey(path);
   } catch (error) {
     if (!isMissingError2(error)) throw error;
-    encoded = randomBytes4(32).toString("base64url");
+    encoded = randomBytes5(32).toString("base64url");
     try {
       await atomicWritePrivate(path, `${encoded}
 `);
@@ -33187,7 +33514,7 @@ async function writeDraftUnlocked(draft, outbox, replace, _currentOutboxBytes, a
   if (plaintext.length > PRIVATE_LESSON_DRAFT_MAX_BYTES) {
     throw new Error("Private lesson draft exceeds its local size limit.");
   }
-  const nonce = randomBytes4(12);
+  const nonce = randomBytes5(12);
   const aad = Buffer.from(
     canonicalJson({
       version: "private-lesson-outbox-envelope-v1",
@@ -33245,7 +33572,28 @@ async function writeDraftUnlocked(draft, outbox, replace, _currentOutboxBytes, a
   if (replace) {
     await atomicReplacePrivate(path, serialized);
   } else {
-    await atomicCreatePrivateLessonEntry(path, serialized);
+    markCaptureLearningPersisting(validated.draft_id);
+    try {
+      await atomicCreatePrivateLessonEntry(path, serialized);
+    } catch (error) {
+      try {
+        await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
+        const retained = await decryptDraft(
+          parseEnvelope(
+            await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES),
+            validated.draft_id
+          ),
+          outbox.encryption,
+          true
+        );
+        if (retained.payload_digest === validated.payload_digest) {
+          markCaptureLearningPersisted(validated.draft_id);
+        }
+      } catch {
+      }
+      throw error;
+    }
+    markCaptureLearningPersisted(validated.draft_id);
   }
 }
 async function decryptDraft(envelope, encryption, allowUnsupportedProfile = false) {
@@ -33861,13 +34209,13 @@ async function appendPrivateLessonQuarantineRecoveryItems(directory, items) {
 }
 function privateLessonRecoveryItem(draftId, reasonCode, storageError) {
   if (reasonCode === "undecryptable_entry") {
-    const diagnostic = storageError?.diagnostic();
+    const diagnostic2 = storageError?.diagnostic();
     return {
       lane: "private_lesson",
       draft_id: draftId,
       reason_code: reasonCode,
-      remediation: diagnostic?.remediation ?? "Restore access to the original encryption key, then inspect the retained draft again. Do not delete or regenerate it.",
-      ...diagnostic ? { diagnostic } : {}
+      remediation: diagnostic2?.remediation ?? "Restore access to the original encryption key, then inspect the retained draft again. Do not delete or regenerate it.",
+      ...diagnostic2 ? { diagnostic: diagnostic2 } : {}
     };
   }
   if (reasonCode === "held_safety_recovery_required") {
@@ -33899,6 +34247,7 @@ function privateLessonRecoveryItem(draftId, reasonCode, storageError) {
   };
 }
 async function reconcilePrivateLessonTemporaryWrites(directory, encryption) {
+  const unresolved = /* @__PURE__ */ new Map();
   const groups = /* @__PURE__ */ new Map();
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (/^\.[a-f0-9]{24}\.(?:capacity|replaced)\.tmp$/u.test(entry.name) && entry.isFile()) {
@@ -33919,9 +34268,15 @@ async function reconcilePrivateLessonTemporaryWrites(directory, encryption) {
       const envelope = parseEnvelope(value, draftId);
       await decryptDraft(envelope, encryption, true);
     } catch (error) {
-      if (isPrivateOutboxKeyAccessError(error)) continue;
+      if (isPrivateOutboxKeyAccessError(error)) {
+        if (draftId) unresolved.set(draftId, error);
+        continue;
+      }
       if (error instanceof PrivateOutboxStorageError) throw error;
-      if (error instanceof PrivateOutboxDecryptionError) continue;
+      if (error instanceof PrivateOutboxDecryptionError) {
+        if (draftId) unresolved.set(draftId, error);
+        continue;
+      }
       const recoveryId = derivedPrivateLessonRecoveryId(entry.name);
       await quarantinePrivateLessonTemporary(
         directory,
@@ -33975,6 +34330,11 @@ async function reconcilePrivateLessonTemporaryWrites(directory, encryption) {
         await unlink2(join3(directory, duplicate.name));
       }
     } else {
+      const draftId = target.slice(0, -".lesson.json".length);
+      unresolved.set(
+        draftId,
+        new PrivateLessonDraftUnavailableError(draftId, "corrupt")
+      );
       for (const temporary of temporaryValues) {
         await quarantinePrivateLessonTemporary(
           directory,
@@ -33985,6 +34345,7 @@ async function reconcilePrivateLessonTemporaryWrites(directory, encryption) {
       }
     }
   }
+  return unresolved;
 }
 async function validatePrivateLessonCanonicalPath(path, name, encryption) {
   const draftId = name.match(/^(pld_[A-Za-z0-9_-]{8,96})/u)?.[1];
@@ -34046,7 +34407,7 @@ async function quarantinePrivateLessonTemporary(directory, draftId, temporaryNam
     join3(directory, temporaryName),
     join3(
       quarantine,
-      `${draftId}.${reason}.${randomBytes4(8).toString("hex")}.retained`
+      `${draftId}.${reason}.${randomBytes5(8).toString("hex")}.retained`
     )
   );
 }
@@ -34092,7 +34453,7 @@ async function recordPrivateLessonCapacityRejection(directory, rejectedCaptureBy
   const path = join3(directory, PRIVATE_LESSON_CAPACITY_STATE_FILE);
   const temporary = join3(
     directory,
-    `.${randomBytes4(12).toString("hex")}.capacity.tmp`
+    `.${randomBytes5(12).toString("hex")}.capacity.tmp`
   );
   const encoded = `${canonicalJson({
     version: "private-outbox-capacity-v1",
@@ -34178,7 +34539,7 @@ async function atomicWritePrivate(path, data) {
 async function atomicCreatePrivateLessonEntry(path, data, temporarySuffix = ".tmp") {
   const temporary = join3(
     dirname3(path),
-    `.${randomBytes4(12).toString("hex")}${temporarySuffix}`
+    `.${randomBytes5(12).toString("hex")}${temporarySuffix}`
   );
   try {
     await atomicWritePrivate(temporary, data);
@@ -34194,7 +34555,7 @@ async function atomicReplacePrivate(path, data) {
   await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
   const temporary = join3(
     dirname3(path),
-    `.${randomBytes4(12).toString("hex")}.tmp`
+    `.${randomBytes5(12).toString("hex")}.tmp`
   );
   try {
     await atomicWritePrivate(temporary, data);
@@ -34989,18 +35350,18 @@ var require_commonmark = __commonJS({
               strIdx += 1;
               if (str.charCodeAt(strIdx) === 35) {
                 var start = strIdx + 1;
-                var base = 10;
+                var base2 = 10;
                 var cp = str.charCodeAt(start);
                 if ((cp | 32) === 120) {
-                  base = 16;
+                  base2 = 16;
                   strIdx += 1;
                   start += 1;
                 }
-                while ((cp = str.charCodeAt(++strIdx)) >= 48 && cp <= 57 || base === 16 && (cp | 32) >= 97 && (cp | 32) <= 102)
+                while ((cp = str.charCodeAt(++strIdx)) >= 48 && cp <= 57 || base2 === 16 && (cp | 32) >= 97 && (cp | 32) <= 102)
                   ;
                 if (start !== strIdx) {
                   var entity = str.substring(start, strIdx);
-                  var parsed = parseInt(entity, base);
+                  var parsed = parseInt(entity, base2);
                   if (str.charCodeAt(strIdx) === 59) {
                     strIdx += 1;
                   } else if (strict) {
@@ -54823,15 +55184,15 @@ var Inst = class Inst2 {
       }
       return false;
     }
-    let base = 0;
+    let base2 = 0;
     let n = len >> 1;
     while (n > 1) {
       const half = n >> 1;
-      base += this.runes[base + half << 1] <= r ? half : 0;
+      base2 += this.runes[base2 + half << 1] <= r ? half : 0;
       n -= half;
     }
-    base += this.runes[base << 1] <= r ? 1 : 0;
-    const m = base - 1;
+    base2 += this.runes[base2 << 1] <= r ? 1 : 0;
+    const m = base2 - 1;
     return m >= 0 && r <= this.runes[m << 1 | 1];
   }
   matchRunePos(r) {
@@ -54849,15 +55210,15 @@ var Inst = class Inst2 {
       }
       return -1;
     }
-    let base = 0;
+    let base2 = 0;
     let n = len >> 1;
     while (n > 1) {
       const half = n >> 1;
-      base += this.runes[base + half << 1] <= r ? half : 0;
+      base2 += this.runes[base2 + half << 1] <= r ? half : 0;
       n -= half;
     }
-    base += this.runes[base << 1] <= r ? 1 : 0;
-    const m = base - 1;
+    base2 += this.runes[base2 << 1] <= r ? 1 : 0;
+    const m = base2 - 1;
     return m >= 0 && r <= this.runes[m << 1 | 1] ? m : -1;
   }
   /**
@@ -62604,7 +62965,7 @@ function inspectPrivateSkillCandidate(candidate) {
 }
 
 // src/private-skill-outbox.ts
-import { createCipheriv as createCipheriv3, createDecipheriv as createDecipheriv3, randomBytes as randomBytes5 } from "node:crypto";
+import { createCipheriv as createCipheriv3, createDecipheriv as createDecipheriv3, randomBytes as randomBytes6 } from "node:crypto";
 import {
   chmod as chmod3,
   lstat as lstat3,
@@ -64831,7 +65192,7 @@ async function ensurePrivateDirectory(path) {
 async function writePrivateSkillDraft(draft, directory, encryption, env = process.env) {
   const parsed = validatePrivateSkillDraft(draft);
   const metadata = envelopeMetadata(parsed);
-  const nonce = randomBytes5(12);
+  const nonce = randomBytes6(12);
   const cipher = createCipheriv3("aes-256-gcm", encryption.key, nonce);
   cipher.setAAD(Buffer.from(canonicalJson(metadata)));
   const ciphertext = Buffer.concat([
@@ -65150,12 +65511,12 @@ function parseRetainedNativeContexts(value) {
   if (value === void 0) return [];
   if (!Array.isArray(value))
     throw new Error("Private skill native contexts are invalid.");
-  const contexts = value.map(parsePrivateSkillNativeContext);
-  const sources = new Set(contexts.map((context) => context.source_digest));
-  const contents = new Set(contexts.map((context) => context.context_digest));
-  if (sources.size !== contexts.length || contents.size !== contexts.length)
+  const contexts2 = value.map(parsePrivateSkillNativeContext);
+  const sources = new Set(contexts2.map((context) => context.source_digest));
+  const contents = new Set(contexts2.map((context) => context.context_digest));
+  if (sources.size !== contexts2.length || contents.size !== contexts2.length)
     throw new Error("Private skill native context lineage is duplicated.");
-  return contexts;
+  return contexts2;
 }
 function parsePrivateSkillReformulationAttempts(value, draftId, originalCandidateDigest) {
   if (value === void 0) return [];
@@ -65611,7 +65972,7 @@ function privateSkillInspectorRefreshAllowed(draft) {
   return draft.inspection.outcome === "positive_recovery_need" || draft.inspection.outcome === "operational_failure" || draft.last_error_code === "submission_reinspection_source_projection_drift" || draft.last_error_code === "inspector_refresh_new_lineage_required";
 }
 function envelopeMetadataFromEnvelope(envelope) {
-  const base = {
+  const base2 = {
     version: envelope.version,
     draft_id: envelope.draft_id,
     state: envelope.state,
@@ -65621,7 +65982,7 @@ function envelopeMetadataFromEnvelope(envelope) {
     updated_at: envelope.updated_at
   };
   return hasEnvelopeReformulationMetadata(envelope) ? {
-    ...base,
+    ...base2,
     reformulation_available: envelope.reformulation_available,
     reformulation_reason: envelope.reformulation_reason,
     reformulation_attempt_count: envelope.reformulation_attempt_count,
@@ -65631,7 +65992,7 @@ function envelopeMetadataFromEnvelope(envelope) {
     ...envelope.inspector_digest === void 0 ? {} : { inspector_digest: envelope.inspector_digest },
     ...envelope.native_context_pending === void 0 ? {} : { native_context_pending: envelope.native_context_pending },
     ...envelope.next_action === void 0 ? {} : { next_action: envelope.next_action }
-  } : base;
+  } : base2;
 }
 function parseEnvelope2(value) {
   const parsed = JSON.parse(value);
@@ -65957,13 +66318,13 @@ async function privateSkillRecoveryItems(options = {}) {
 }
 function privateSkillRecoveryItem(draftId, reasonCode, storageError) {
   if (reasonCode === "undecryptable_entry") {
-    const diagnostic = storageError?.diagnostic();
+    const diagnostic2 = storageError?.diagnostic();
     return {
       lane: "private_skill",
       draft_id: draftId,
       reason_code: reasonCode,
-      remediation: diagnostic?.remediation ?? "Restore access to the original encryption key, then inspect the retained draft again. Do not delete or regenerate it.",
-      ...diagnostic ? { diagnostic } : {}
+      remediation: diagnostic2?.remediation ?? "Restore access to the original encryption key, then inspect the retained draft again. Do not delete or regenerate it.",
+      ...diagnostic2 ? { diagnostic: diagnostic2 } : {}
     };
   }
   return {
@@ -66096,7 +66457,7 @@ async function quarantinePrivateSkillTemporary(directory, target, temporaryName,
     join4(directory, temporaryName),
     join4(
       quarantine,
-      `${target.replace(/\.json$/u, "")}.${reason}.${randomBytes5(8).toString("hex")}.retained`
+      `${target.replace(/\.json$/u, "")}.${reason}.${randomBytes6(8).toString("hex")}.retained`
     )
   );
 }
@@ -66230,7 +66591,7 @@ async function atomicWritePrivateJson(path, value) {
 }
 async function atomicWritePrivateText(path, value) {
   await ensurePrivateDirectory(dirname4(path));
-  const temporary = `${path}.${process.pid}.${randomBytes5(8).toString("hex")}.tmp`;
+  const temporary = `${path}.${process.pid}.${randomBytes6(8).toString("hex")}.tmp`;
   let handle = null;
   try {
     handle = await open3(temporary, "wx", 384);
@@ -66750,7 +67111,9 @@ async function executeLocalOnlyTool(name, payload, context) {
     case "get_pending_action_payload":
       return LOCAL_ONLY_HANDLERS.get_pending_action_payload(payload, context);
     case "capture_learning":
-      return LOCAL_ONLY_HANDLERS.capture_learning(payload, context);
+      return withCaptureLearningDiagnostics(
+        async () => LOCAL_ONLY_HANDLERS.capture_learning(payload, context)
+      );
     case "inspect_private_learning_outbox":
       return LOCAL_ONLY_HANDLERS.inspect_private_learning_outbox(
         payload,
@@ -66811,7 +67174,8 @@ function acknowledgeFeedbackDenialLocally(input, persistence) {
     };
   }
 }
-async function preparePrivateLessonDraft(input, persistence, destination, tool, replacementOf) {
+async function preparePrivateLessonDraft(input, persistence, destination, tool, replacementOf, captureId) {
+  markCaptureLearningStage("preparation");
   const prepared = preparePrivateLessonCandidate(input, { tool });
   if (replacementOf) {
     return preparePrivateLessonReplacement(
@@ -66822,26 +67186,37 @@ async function preparePrivateLessonDraft(input, persistence, destination, tool, 
       destination
     );
   }
+  markCaptureLearningStage("encrypted_persistence");
+  if (captureId) {
+    markCaptureLearningPersisting(privateLessonCaptureDraftId(captureId));
+  }
   const draft = await persistence.queuePreparedPrivateLesson(
     prepared,
-    destination
+    destination,
+    captureId
   );
+  markCaptureLearningPersisted(draft.draft_id);
+  markCaptureLearningStage("response");
   return privateLessonDraftActionResult(draft, destination, {
-    next_action: prepared.status === "ready" || prepared.status === "held_safety" && privateLessonHealthReportingEnabled() ? {
+    next_action: prepared.status === "ready" && (draft.state === "ready" || draft.state === "awaiting_authorization") || prepared.status === "held_safety" && draft.state === "held_safety" && privateLessonHealthReportingEnabled() ? {
       tool: "submit_private_lesson_candidate",
       arguments: { draft_id: draft.draft_id }
-    } : null,
+    } : privateLessonNextAction(draft),
     // Where the lesson holds, without its text, for a replacement.
     ...prepared.status === "held_safety" ? privateLessonFindings(input) : {}
   });
 }
 async function preparePrivateLessonReplacement(input, prepared, replacementOf, persistence, destination) {
+  markCaptureLearningStage("encrypted_persistence");
+  markCaptureLearningPersisting();
   try {
     const { draft, attempts_remaining, replayed } = await persistence.queuePrivateLessonReplacement(
       replacementOf,
       prepared,
       destination
     );
+    markCaptureLearningPersisted(draft.draft_id);
+    markCaptureLearningStage("response");
     return privateLessonDraftActionResult(draft, destination, {
       replacement_attempts_remaining: attempts_remaining,
       replayed,
@@ -66856,8 +67231,11 @@ async function preparePrivateLessonReplacement(input, prepared, replacementOf, p
     if (!(error instanceof PrivateLessonReplacementRefusedError) || error.reason !== "replacement_held") {
       throw error;
     }
+    markCaptureLearningNotPersisted();
+    markCaptureLearningStage("response");
     return {
       status: "not_stored",
+      persistence_outcome: "not_persisted",
       ...error.diagnostic(),
       held_reasons: prepared.held_reasons,
       ...privateLessonFindings(input),
@@ -66871,7 +67249,12 @@ async function preparePrivateLessonReplacement(input, prepared, replacementOf, p
 }
 async function captureLearning(input, persistence, lessonDestination, skillDestination) {
   const parsed = captureLearningInputSchema.parse(input);
+  adoptCaptureLearningId(parsed.capture_id);
   const route = captureLearningRoute(parsed);
+  markCaptureLearningRoute(route);
+  if (route === "private_lesson" && parsed.replacement_of) {
+    markCaptureLearningReplacement(parsed.replacement_of.draft_id);
+  }
   if (route === "preference") {
     return {
       contract_version: parsed.contract_version,
@@ -66884,6 +67267,8 @@ async function captureLearning(input, persistence, lessonDestination, skillDesti
     };
   }
   if (route === "private_skill") {
+    markCaptureLearningStage("encrypted_persistence");
+    markCaptureLearningPersisting();
     const link2 = parsed.replacement_of && "context_source" in parsed.replacement_of ? parsed.replacement_of : void 0;
     const draft = link2 ? await persistence.queuePrivateSkillReformulation(
       link2.draft_id,
@@ -66894,6 +67279,8 @@ async function captureLearning(input, persistence, lessonDestination, skillDesti
       parsed.private_skill,
       skillDestination
     );
+    markCaptureLearningPersisted(draft.draft_id);
+    markCaptureLearningStage("response");
     const recoveryContext = privateSkillRecoveryContext(draft);
     return {
       contract_version: parsed.contract_version,
@@ -66909,11 +67296,15 @@ async function captureLearning(input, persistence, lessonDestination, skillDesti
     persistence,
     lessonDestination,
     "capture_learning",
-    parsed.replacement_of?.draft_id
+    parsed.replacement_of?.draft_id,
+    parsed.replacement_of ? void 0 : currentCaptureLearningId()
   );
   return {
     contract_version: parsed.contract_version,
     capture_route: "private_lesson",
+    ...!parsed.replacement_of ? { capture_id: currentCaptureLearningId() } : {},
+    correlation_id: captureLearningCurrentDiagnostic()?.correlation_id,
+    persistence_outcome: "persisted",
     ...prepared
   };
 }
@@ -66999,7 +67390,7 @@ function optionalPrivateSkillDraftId(value) {
   return value;
 }
 function unavailableInspection(lane, error) {
-  const diagnostic = privateOutboxDiagnostic(error);
+  const diagnostic2 = privateOutboxDiagnostic(error);
   return {
     status: "unavailable",
     drafts: [],
@@ -67007,8 +67398,8 @@ function unavailableInspection(lane, error) {
     recovery_items: [],
     error_code: `${lane}_inspection_failed`,
     reason_code: "private_learning_inspection_unavailable",
-    action_required: diagnostic === null ? "Run run_connection_doctor, follow its local private-learning remediation, then inspect the outbox again. No retained draft was changed." : "Follow the bounded local diagnostic remediation directly; run run_connection_doctor only if the diagnostic is absent, then inspect the outbox again. No retained draft was changed.",
-    ...diagnostic ? { diagnostic } : {}
+    action_required: diagnostic2 === null ? "Run run_connection_doctor, follow its local private-learning remediation, then inspect the outbox again. No retained draft was changed." : "Follow the bounded local diagnostic remediation directly; run run_connection_doctor only if the diagnostic is absent, then inspect the outbox again. No retained draft was changed.",
+    ...diagnostic2 ? { diagnostic: diagnostic2 } : {}
   };
 }
 function privateOutboxDiagnostic(error) {
@@ -67017,6 +67408,12 @@ function privateOutboxDiagnostic(error) {
   return { reason_code, stage, remediation };
 }
 async function inspectPrivateLessonOutbox(input, persistence, destination) {
+  if (input.capture_id) {
+    input = {
+      ...input,
+      draft_id: privateLessonCaptureDraftId(input.capture_id)
+    };
+  }
   const snapshot = await persistence.inspectPrivateLessonOutbox(
     input.limit,
     input.offset
@@ -67028,6 +67425,8 @@ async function inspectPrivateLessonOutbox(input, persistence, destination) {
       );
       if (completion) {
         return {
+          ...input.capture_id ? { capture_id: input.capture_id } : {},
+          persistence_outcome: "persisted",
           draft: privateLessonSubmittedActionResult(completion),
           outbox: publicOutboxSummary(snapshot.summary),
           recovery_items: snapshot.recovery_items
@@ -67035,12 +67434,20 @@ async function inspectPrivateLessonOutbox(input, persistence, destination) {
       }
       const draft = await persistence.readPrivateLessonDraft(input.draft_id);
       return {
+        ...input.capture_id ? { capture_id: input.capture_id } : {},
+        persistence_outcome: "persisted",
         draft: privateLessonDraftActionResult(draft, destination),
         outbox: publicOutboxSummary(snapshot.summary),
         recovery_items: snapshot.recovery_items
       };
     } catch (error) {
       return {
+        ...input.capture_id ? { capture_id: input.capture_id } : {},
+        persistence_outcome: "unknown",
+        ...error instanceof PrivateLessonDraftUnavailableError && error.reason === "unknown" ? {
+          local_record_outcome: "not_found",
+          recovery: "No retained local record was found. This does not establish that a previous call never persisted or submitted. Reconcile with the same capture_id within the retained outcome window; submitted completion markers are retained for 14 days."
+        } : {},
         selected_draft_error: privateLessonSelectedDraftError(
           input.draft_id,
           error
@@ -67067,7 +67474,7 @@ function privateLessonPageNextAction(nextOffset, limit) {
   };
 }
 function privateLessonSelectedDraftError(draftId, error) {
-  const diagnostic = error instanceof PrivateLessonDraftUnavailableError || error instanceof PrivateOutboxDecryptionError ? error.diagnostic() : error instanceof PrivateOutboxStorageError ? {
+  const diagnostic2 = error instanceof PrivateLessonDraftUnavailableError || error instanceof PrivateOutboxDecryptionError ? error.diagnostic() : error instanceof PrivateOutboxStorageError ? {
     ...error.diagnostic(),
     code: error.reasonCode,
     draft_id: draftId,
@@ -67085,9 +67492,9 @@ function privateLessonSelectedDraftError(draftId, error) {
   };
   return {
     status: "unavailable",
-    error_code: diagnostic.code,
-    reason_code: diagnostic.code,
-    ...diagnostic
+    error_code: diagnostic2.code,
+    reason_code: diagnostic2.code,
+    ...diagnostic2
   };
 }
 function privateLessonHealthReportingEnabled(env = process.env) {
@@ -67119,6 +67526,15 @@ function privateLessonDraftActionResult(draft, destination, extra = {}) {
   };
 }
 function privateLessonNextAction(draft) {
+  if (ownerAttestedLegacyPrivateLessonRecoveryEligible(draft)) {
+    return {
+      tool: "retry_private_lesson_candidate",
+      arguments: {
+        draft_id: draft.draft_id,
+        legacy_destination_recovery: { action: "review" }
+      }
+    };
+  }
   if (draft.state === "ready") {
     return {
       tool: "submit_private_lesson_candidate",
@@ -67139,15 +67555,6 @@ function privateLessonNextAction(draft) {
     };
   }
   if (draft.state === "held_validation") {
-    if (draft.last_error_code === "private_lesson_destination_legacy_unbound") {
-      return {
-        tool: "capture_learning",
-        action_code: "recapture_legacy_private_lesson_with_destination_binding",
-        retained_source_draft_id: draft.draft_id,
-        retained_source_available_to_agent: false,
-        required_input: ["lesson"]
-      };
-    }
     if (draft.last_error_code === "private_lesson_destination_api_changed" || draft.last_error_code === "private_lesson_destination_credential_changed" || draft.last_error_code === "private_lesson_destination_audience_mismatch") {
       return {
         tool: "retry_private_lesson_candidate",
@@ -67181,14 +67588,14 @@ function privateLessonActionRequired(draft, destination) {
       !privateLessonReplaceable(draft, destination)
     );
   }
+  if (ownerAttestedLegacyPrivateLessonRecoveryEligible(draft) && draft.last_error_code === "private_lesson_destination_legacy_unbound") {
+    return "This legacy draft has no authenticated destination binding. Request its content-free legacy destination review, then obtain the owner's new approval for that exact draft and organization before local migration. Its retained source stays encrypted and unavailable to the agent; the draft was not sent.";
+  }
   if (draft.state === "awaiting_authorization") {
     return "Restore authorization for the exact private-lesson submission action, then retry this retained draft.";
   }
   if (draft.state === "retry_scheduled") {
     return "Retry the exact retained draft at or after next_retry_at.";
-  }
-  if (draft.state === "held_validation" && draft.last_error_code === "private_lesson_destination_legacy_unbound") {
-    return "This legacy draft has no authenticated destination binding. Update the client and re-capture the lesson from current safe task context with capture_learning; the retained draft was not sent.";
   }
   if (draft.state === "held_validation" && draft.last_error_code === "private_lesson_destination_api_changed") {
     return "The API destination differs from the captured destination. Restore the captured API base, then retry the exact retained draft; it will not be sent across API bases.";
@@ -67308,12 +67715,12 @@ function privateSkillSelectedSubmittedResult(completion) {
 }
 function privateSkillSelectedDraftError(draftId, error) {
   if (error instanceof PrivateSkillDraftDeletedError) {
-    const diagnostic = error.diagnostic();
+    const diagnostic2 = error.diagnostic();
     return {
       status: "unavailable",
-      error_code: diagnostic.code,
-      reason_code: diagnostic.code,
-      ...diagnostic
+      error_code: diagnostic2.code,
+      reason_code: diagnostic2.code,
+      ...diagnostic2
     };
   }
   return {
@@ -67366,7 +67773,7 @@ function publicOutboxSummary(summary) {
 }
 
 // ../codex-plugin/scripts/feedback-disposition.mjs
-import { createHash as createHash4, randomBytes as randomBytes6 } from "node:crypto";
+import { createHash as createHash4, randomBytes as randomBytes7 } from "node:crypto";
 import {
   chmodSync,
   closeSync as closeSync3,
@@ -67583,7 +67990,7 @@ function cleanupExpiredMarkers(directory, now) {
   }
 }
 function writeMarkerAtomically(path, marker) {
-  const temporaryPath = `${path}.${randomBytes6(8).toString("hex")}.tmp`;
+  const temporaryPath = `${path}.${randomBytes7(8).toString("hex")}.tmp`;
   let descriptor;
   try {
     descriptor = openSync3(
@@ -67743,9 +68150,10 @@ function createLocalPersistenceCapabilities(dependencies = {}) {
       readKey: (source) => readExistingPrivateLessonOutboxKeyForSource(source, process.env, {})
     }),
     queuePrivateSkillHandoff: (payload, uploadBaseUrl) => queuePrivateSkillHandoff(payload, { uploadBaseUrl }),
-    queuePreparedPrivateLesson: async (prepared, destination) => queuePreparedPrivateLesson(prepared, null, {
+    queuePreparedPrivateLesson: async (prepared, destination, captureId) => queuePreparedPrivateLesson(prepared, null, {
       ...await withEncryption(),
-      ...destination ? { destination } : {}
+      ...destination ? { destination } : {},
+      ...captureId ? { captureId } : {}
     }),
     queuePrivateLessonReplacement: async (replacementOf, prepared, destination) => queuePrivateLessonReplacement(replacementOf, prepared, {
       ...await withEncryption(),
@@ -67795,8 +68203,8 @@ function createLocalPersistenceCapabilities(dependencies = {}) {
 }
 
 // ../core/src/redaction-request-budget.ts
-import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
-var requests = new AsyncLocalStorage2();
+import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
+var requests = new AsyncLocalStorage3();
 trackRedactionRequests(() => requests.getStore());
 function withRedactionRequestBudget(run) {
   return requests.getStore() ? run() : requests.run({}, run);
@@ -67854,8 +68262,8 @@ function inspectReviewRepairForTransport(value) {
 }
 
 // src/network-transport.ts
-import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
-var networkExecutionAuthority = new AsyncLocalStorage3();
+import { AsyncLocalStorage as AsyncLocalStorage4 } from "node:async_hooks";
+var networkExecutionAuthority = new AsyncLocalStorage4();
 var guardedFetches = /* @__PURE__ */ new WeakSet();
 function installRuntimeFetchGuard() {
   const delegate = globalThis.fetch;
@@ -67905,7 +68313,7 @@ import {
   rmSync as rmSync2,
   writeFileSync as writeFileSync2
 } from "node:fs";
-import { createHash as createHash5, randomBytes as randomBytes7 } from "node:crypto";
+import { createHash as createHash5, randomBytes as randomBytes8 } from "node:crypto";
 import { isIP } from "node:net";
 import { homedir as homedir9 } from "node:os";
 import { join as join10 } from "node:path";
@@ -68563,7 +68971,7 @@ function recordConnectionDoctorLifecycleProbe(options = {}) {
   );
   const path = join10(healthDir, `${rawSurface}.json`);
   if (!existsSync5(path)) return false;
-  const temporaryPath = `${path}.${process.pid}.${randomBytes7(6).toString("hex")}.tmp`;
+  const temporaryPath = `${path}.${process.pid}.${randomBytes8(6).toString("hex")}.tmp`;
   try {
     const parsed = JSON.parse(
       readSecureLocalText(path, {
@@ -69569,6 +69977,173 @@ function isRecord10(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+// src/legacy-lesson-destination-recovery.ts
+var CONTRACT_VERSION = "private-lesson-legacy-destination-recovery-v1";
+var DIGEST3 = /^sha256:[a-f0-9]{64}$/u;
+async function legacyLessonDestinationRecovery(draft, destination, request, dependencies) {
+  const alreadyRecovered = isRecoveredForDestination(draft, destination);
+  if (!ownerAttestedLegacyPrivateLessonRecoveryEligible(draft) && !alreadyRecovered) {
+    return refused(draft, "private_lesson_destination_recovery_ineligible");
+  }
+  if (request.action === "approve" && !validApproval(request)) {
+    return refused(draft, "private_lesson_destination_recovery_approval_required");
+  }
+  if (request.action === "approve" && (request.expected_payload_digest !== draft.payload_digest || canonicalJson(request.expected_destination) !== canonicalJson(destination))) {
+    return refused(draft, "private_lesson_destination_recovery_review_stale");
+  }
+  let audience;
+  try {
+    audience = await dependencies.verifiedOrganizationAudience();
+    if (!DIGEST3.test(audience)) throw new Error("Invalid verified audience.");
+  } catch {
+    return refused(draft, "private_lesson_destination_recovery_policy_unavailable");
+  }
+  if (alreadyRecovered && draft.attested_organization_audience_hash !== audience || draft.policy !== null && draft.policy.organization_audience_hash !== audience) {
+    return refused(draft, "private_lesson_destination_recovery_review_stale");
+  }
+  const plan = recoveryPlan(draft, destination, audience);
+  if (request.action === "review") {
+    if (alreadyRecovered) return recovered(draft, plan, "already_recovered");
+    return {
+      ...base(draft),
+      status: "destination_recovery_review",
+      persistence_outcome: "unchanged",
+      plan,
+      requires_explicit_owner_approval: true,
+      owner_consent_required: `Confirm that draft ${draft.draft_id} belongs only to the organization currently authenticated by this installation (audience ${audience}), and authorize binding and privately delivering this unchanged draft there. Confirm that every client reading this outbox is Remembrance 0.2.6 or newer. This is new approval: the original draft did not record its destination. The retained lesson text stays encrypted and is not shown.`,
+      next_action: {
+        tool: "retry_private_lesson_candidate",
+        arguments: {
+          draft_id: draft.draft_id,
+          legacy_destination_recovery: {
+            action: "approve",
+            review_id: plan.review_id,
+            expected_payload_digest: draft.payload_digest,
+            expected_destination: destination,
+            organization_audience_hash: audience
+          }
+        },
+        requires_explicit_owner_approval: true,
+        required_owner_input: [
+          "owner_attested_single_organization",
+          "all_outbox_readers_updated",
+          "owner_attestation_sha256"
+        ],
+        instruction: "Ask the owner for the stated confirmation. Only after that confirmation, add both true confirmations and the SHA-256 hash of the owner's exact approval. Existing submission approval does not authorize migration."
+      }
+    };
+  }
+  if (request.review_id !== plan.review_id || request.organization_audience_hash !== audience) {
+    return refused(draft, "private_lesson_destination_recovery_review_stale");
+  }
+  if (alreadyRecovered) {
+    return recovered(draft, plan, "already_recovered");
+  }
+  try {
+    const receipt = await dependencies.recover({
+      draft_id: draft.draft_id,
+      expected_payload_digest: draft.payload_digest,
+      destination,
+      organization_audience_hash: audience,
+      owner_attested_single_organization: true,
+      owner_attestation_sha256: request.owner_attestation_sha256
+    });
+    return {
+      ...recovered(draft, plan, "destination_recovered"),
+      recovery_receipt: receipt
+    };
+  } catch {
+    try {
+      const current = await dependencies.readDraft(draft.draft_id);
+      if (current.payload_digest === draft.payload_digest && isRecoveredForDestination(current, destination) && current.attested_organization_audience_hash === audience) {
+        return recovered(current, plan, "already_recovered");
+      }
+      if (ownerAttestedLegacyPrivateLessonRecoveryEligible(current) && current.payload_digest === draft.payload_digest) {
+        return refused(current, "private_lesson_destination_recovery_not_applied");
+      }
+    } catch {
+    }
+    return {
+      ...base(draft),
+      status: "destination_recovery_unknown",
+      error_code: "private_lesson_destination_recovery_outcome_unknown",
+      failure_stage: "destination_recovery",
+      persistence_outcome: "unknown",
+      retained_locally: null,
+      action_required: "The local migration outcome could not be established. Reconcile by repeating this exact approved action; do not recapture, change the destination, or delete the retained draft.",
+      next_action: {
+        tool: "retry_private_lesson_candidate",
+        arguments: {
+          draft_id: draft.draft_id,
+          legacy_destination_recovery: request
+        }
+      }
+    };
+  }
+}
+function isRecoveredForDestination(draft, destination) {
+  return draft.attested_organization_audience_hash !== void 0 && draft.destination_binding !== null && canonicalJson(draft.destination_binding) === canonicalJson(destination) && draft.last_error_code !== "private_lesson_destination_attestation_mismatch" && draft.state !== "submitted" && draft.state !== "superseded_redactor";
+}
+function validApproval(request) {
+  return request.owner_attested_single_organization === true && request.all_outbox_readers_updated === true && DIGEST3.test(request.review_id) && DIGEST3.test(request.expected_payload_digest) && DIGEST3.test(request.owner_attestation_sha256) && DIGEST3.test(request.organization_audience_hash);
+}
+function recoveryPlan(draft, destination, audience) {
+  const fields2 = {
+    contract_version: CONTRACT_VERSION,
+    draft_id: draft.draft_id,
+    payload_digest: draft.payload_digest,
+    destination,
+    organization_audience_hash: audience,
+    original_identity_sha256: hashValue(canonicalJson({
+      draft_id: draft.draft_id,
+      payload_digest: draft.payload_digest,
+      redaction_version: draft.redaction_version,
+      redactor_digest: draft.redactor_digest,
+      idempotency_key: draft.idempotency_key,
+      created_at: draft.created_at
+    })),
+    minimum_reader_version: "0.2.6"
+  };
+  return { ...fields2, review_id: hashValue(canonicalJson(fields2)) };
+}
+function base(draft) {
+  return {
+    contract_version: CONTRACT_VERSION,
+    draft_id: draft.draft_id,
+    payload_digest: draft.payload_digest,
+    retained_locally: true,
+    candidate_sent: false,
+    retained_source_available_to_agent: false
+  };
+}
+function recovered(draft, plan, status) {
+  return {
+    ...base(draft),
+    status,
+    persistence_outcome: "destination_bound",
+    plan,
+    action_required: "The unchanged encrypted draft is bound to the owner-approved destination. Follow its exact normal private retry; migration alone does not submit the lesson.",
+    next_action: {
+      tool: "retry_private_lesson_candidate",
+      arguments: { draft_id: draft.draft_id }
+    }
+  };
+}
+function refused(draft, code) {
+  return {
+    ...base(draft),
+    status: "destination_recovery_refused",
+    error_code: code,
+    failure_stage: "destination_recovery_review",
+    persistence_outcome: "unchanged",
+    action_required: "The selected draft was not migrated. Inspect its retained state and request a fresh destination review after correcting authorization or configuration; never infer its older destination or expose its source.",
+    next_action: {
+      tool: "inspect_private_lesson_outbox",
+      arguments: { draft_id: draft.draft_id }
+    }
+  };
+}
+
 // src/server.ts
 function inspectPrivateLearningOutbox2(input, dependencies = {}) {
   return inspectPrivateLearningOutbox(
@@ -69580,7 +70155,7 @@ function inspectPrivateLearningOutbox2(input, dependencies = {}) {
 }
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.2.7" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.2.8" : "0.0.0-dev";
 var tools2 = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var nativeContextCliRequested = process.argv[2] === "--native-context";
@@ -69828,19 +70403,41 @@ async function dispatchJsonRpcRequest(request) {
         error: { code: -32602, message: `Unknown tool: ${name}` }
       };
     }
-    let result;
     try {
-      result = await callTool(definition, request.params?.arguments);
+      const execute = async () => {
+        const result2 = await callTool(definition, request.params?.arguments);
+        markCaptureLearningStage("response");
+        return remembranceMcpToolCallResult(result2, definition.name);
+      };
+      const result = name === "capture_learning" ? await withCaptureLearningDiagnostics(execute) : await execute();
+      return { id: request.id, result };
     } catch (error) {
+      const capture2 = captureLearningDiagnostic(error);
+      if (capture2) {
+        try {
+          process.stderr.write(
+            `${JSON.stringify({
+              event: "capture_learning_failed",
+              occurred_at: (/* @__PURE__ */ new Date()).toISOString(),
+              server_version: SERVER_VERSION,
+              code: capture2.code,
+              correlation_id: capture2.correlation_id,
+              capture_id: capture2.capture_id,
+              failure_stage: capture2.failure_stage,
+              persistence_outcome: capture2.persistence_outcome,
+              ...capture2.draft_id ? { draft_id: capture2.draft_id } : {},
+              ...capture2.reconciliation_draft_id ? { reconciliation_draft_id: capture2.reconciliation_draft_id } : {}
+            })}
+`
+          );
+        } catch {
+        }
+      }
       return {
         id: request.id,
         error: jsonRpcErrorForToolError(error)
       };
     }
-    return {
-      id: request.id,
-      result: remembranceMcpToolCallResult(result, definition.name)
-    };
   }
   if (request.id !== void 0) {
     return {
@@ -69854,6 +70451,17 @@ async function dispatchJsonRpcRequest(request) {
   return null;
 }
 function jsonRpcErrorForToolError(error) {
+  const classified = classifiedJsonRpcErrorForToolError(error);
+  const capture2 = captureLearningDiagnostic(error);
+  if (!capture2) return classified;
+  const outcome = capture2.persistence_outcome === "persisted" ? "The encrypted draft was saved." : capture2.persistence_outcome === "not_persisted" ? "No draft was saved by this call." : "Whether the encrypted draft was saved is unknown; reconcile before creating another capture.";
+  return {
+    ...classified,
+    message: classified.message === "MCP operation failed." ? `Private learning capture failed during ${capture2.failure_stage} (${capture2.code}). ${outcome} ${"remediation" in capture2 ? capture2.remediation : capture2.recovery} Reference: ${capture2.correlation_id}.` : classified.message,
+    data: { ...capture2, ...classified.data }
+  };
+}
+function classifiedJsonRpcErrorForToolError(error) {
   if (error instanceof PrivateLessonDraftUnavailableError || error instanceof PrivateSkillRecoveryContextError || error instanceof PrivateSkillDraftUnavailableError) {
     return {
       code: error.jsonRpcCode(),
@@ -69892,14 +70500,17 @@ function jsonRpcErrorForToolError(error) {
 var McpPublicError = class extends Error {
 };
 async function callTool(definition, rawArguments, dependencies = {}) {
-  const runtimeDefinition = canonicalToolDefinitionForDispatch(definition);
-  return runWithRemembranceNetworkExecution(
-    {
-      toolName: runtimeDefinition.name,
-      networkBehavior: runtimeDefinition.executionNetworkBehavior
-    },
-    () => callToolWithinExecution(runtimeDefinition, rawArguments, dependencies)
-  );
+  const execute = () => {
+    const runtimeDefinition = canonicalToolDefinitionForDispatch(definition);
+    return runWithRemembranceNetworkExecution(
+      {
+        toolName: runtimeDefinition.name,
+        networkBehavior: runtimeDefinition.executionNetworkBehavior
+      },
+      () => callToolWithinExecution(runtimeDefinition, rawArguments, dependencies)
+    );
+  };
+  return definition.name === "capture_learning" ? withCaptureLearningDiagnostics(execute) : execute();
 }
 async function callToolWithinExecution(runtimeDefinition, rawArguments, dependencies) {
   if ((dependencies.testSchemaOverride || dependencies.testLocalOnlyExecutor) && process.env.NODE_ENV !== "test") {
@@ -69957,7 +70568,10 @@ async function callNetworkToolWithinExecution(definition, payload, access, trans
       access,
       "retry",
       transport,
-      { deliverRecheckedHold: args.deliver_rechecked_hold === true }
+      {
+        deliverRecheckedHold: args.deliver_rechecked_hold === true,
+        legacyDestinationRecovery: args.legacy_destination_recovery
+      }
     );
   }
   if (definition.local === "retry_private_skill_candidate") {
@@ -71058,7 +71672,7 @@ function privateLessonDestinationError(draft, current) {
 function privateLessonDestinationActionRequired(code) {
   switch (code) {
     case "private_lesson_destination_legacy_unbound":
-      return "This legacy draft has no authenticated destination binding. Update the client and re-capture the lesson from current safe task context with capture_learning; the retained draft was not sent.";
+      return "This legacy draft has no authenticated destination binding. Request its content-free legacy destination review, then obtain the owner's new approval for that exact draft and organization before local migration. Its retained source stays encrypted and unavailable to the agent; the draft was not sent.";
     case "private_lesson_destination_api_changed":
       return "The API destination differs from the captured destination. Restore the captured API base, then retry the exact retained draft; it will not be sent across API bases.";
     case "private_lesson_destination_credential_changed":
@@ -71070,17 +71684,17 @@ function privateLessonDestinationActionRequired(code) {
   }
 }
 function privateLessonDestinationNextAction(draftId, code) {
-  if (code === "private_lesson_destination_legacy_unbound") {
+  if (code === "private_lesson_destination_legacy_unbound" || code === "private_lesson_destination_attestation_mismatch") {
     return {
-      tool: "capture_learning",
-      action_code: "recapture_legacy_private_lesson_with_destination_binding",
-      retained_source_draft_id: draftId,
-      retained_source_available_to_agent: false,
-      required_input: ["lesson"]
+      tool: "retry_private_lesson_candidate",
+      arguments: {
+        draft_id: draftId,
+        legacy_destination_recovery: { action: "review" }
+      }
     };
   }
   return {
-    tool: code === "private_lesson_destination_attestation_mismatch" ? "inspect_private_lesson_outbox" : "retry_private_lesson_candidate",
+    tool: "retry_private_lesson_candidate",
     arguments: { draft_id: draftId }
   };
 }
@@ -71093,7 +71707,10 @@ async function holdPrivateLessonDestination(draft, code) {
     updated_at: (/* @__PURE__ */ new Date()).toISOString()
   }));
 }
-async function submitPrivateLessonDraft(draftId, access, mode, transport, { deliverRecheckedHold = false } = {}) {
+async function submitPrivateLessonDraft(draftId, access, mode, transport, {
+  deliverRecheckedHold = false,
+  legacyDestinationRecovery
+} = {}) {
   const allowPolicyRefresh = mode === "retry";
   const currentDestination = privateLessonDestinationForAccess(access);
   const source = await readPrivateLessonSubmissionSource(draftId);
@@ -71124,6 +71741,18 @@ async function submitPrivateLessonDraft(draftId, access, mode, transport, { deli
     return privateLessonSubmittedActionResult2(migrated, {
       status: "already_submitted"
     });
+  }
+  if (legacyDestinationRecovery) {
+    return legacyLessonDestinationRecovery(
+      draft,
+      currentDestination,
+      legacyDestinationRecovery,
+      {
+        verifiedOrganizationAudience: async () => (await fetchVerifiedPrivateLessonPolicy(access, transport)).policy.payload.organization_audience_hash,
+        recover: recoverOwnerAttestedLegacyPrivateLessonDestination,
+        readDraft: readPrivateLessonDraft
+      }
+    );
   }
   if (deliverRecheckedHold && draft.state === "held_safety" && draft.held_reasons.length > 0) {
     try {
@@ -73164,9 +73793,9 @@ function formatConnectionDoctorReport(report) {
       `Private lesson action: ${report.private_lesson_automation.action.visibility}`
     );
     if (report.private_lesson_automation.outbox.diagnostic) {
-      const diagnostic = report.private_lesson_automation.outbox.diagnostic;
+      const diagnostic2 = report.private_lesson_automation.outbox.diagnostic;
       lines2.push(
-        `Private lesson storage: ${diagnostic.reason_code} (${diagnostic.stage}). ${diagnostic.remediation}`
+        `Private lesson storage: ${diagnostic2.reason_code} (${diagnostic2.stage}). ${diagnostic2.remediation}`
       );
     }
     if (report.private_lesson_automation.outbox.deletion_guidance) {

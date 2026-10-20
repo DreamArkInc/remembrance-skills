@@ -1,6 +1,6 @@
 {
   "name": "@remembrance/cursor-plugin",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "private": true,
   "license": "Apache-2.0",
   "description": "Cursor plugin for Remembrance MCP tools, always-on agent guidance, and contribution hooks.",
