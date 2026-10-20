@@ -234,7 +234,10 @@ lane approval requires no additional user prompt.
    Safe lesson and skill records are encrypted in separate local outboxes and
    return only a draft ID and content-free state. Pre-redaction lesson input is
    never written to disk. Tags use an open, bounded lowercase slug vocabulary;
-   malformed or privacy-sensitive tags hold rather than disappear silently.
+   a malformed or privacy-sensitive tag is dropped and counted. Each redaction
+   match becomes its `[redacted:category]` marker and the lesson continues;
+   only a stack trace or zero-width or bidirectional control characters hold it
+   locally as `held_safety`.
 2. Invoke only the returned `next_action`: `submit_private_lesson_candidate`,
    `submit_private_skill_candidate`, or `record_preference`. The lesson and
    skill submission actions carry only a local draft ID through the host; the
@@ -267,7 +270,8 @@ a pattern-only server update does not strand an otherwise safe draft. A true
 profile mismatch remains encrypted in
 `awaiting_compatible_profile` with a precise update/restart action; a retired
 profile moves to terminal `superseded_redactor` only when the client no longer
-supports it and is never retried. Rollback floors remain monotonic across
+supports it and is never retried. A draft that an older co-installed client
+retired on a profile this client supports resumes its normal lifecycle. Rollback floors remain monotonic across
 negotiation. `inspect_private_learning_outbox` and
 `run_connection_doctor` report content-free state, retained bytes, precise
 reason, and deletion guidance without returning draft content or a local path.
@@ -298,6 +302,28 @@ verification, review, topology, public propagation, or private-skill
 materialization. `REMEMBRANCE_HEALTH_REPORTING=0` disables this optional report
 without affecting querying or retained drafts; the organization kill switch
 disables the whole private-lesson lane.
+
+A draft an earlier client held, for a reason the current safety check no
+longer holds, is re-checked on this machine and marked `safety_recheck:
+passes_current_rule`. It stays held until the user chooses: deliver it with
+`retry_private_lesson_candidate` and `deliver_rechecked_hold: true`, which
+sends its stored bytes once under the current profile and never sends its hold
+event again; keep it, which needs no action; or delete it with confirmation.
+The hooks offer that choice once per draft. Never deliver one on your own; a
+draft the current check still holds is refused locally and nothing is sent.
+
+A lesson the current check holds returns content-free `findings` (field,
+category, rule, occurrence count, approximate offset and length; never its
+text) and an `agent_recovery` action. If the task still has the lesson, write
+a version without what the findings name and call `capture_learning` with
+`replacement_of: {draft_id}` naming the held draft, then follow the returned
+`next_action`. The held draft is never sent; it becomes a content-free
+replaced record only after the organization accepts the new version, and a
+failed or denied submission keeps both. Each held draft accepts at most three
+versions, held ones included, and one retained replacement at a time; a
+version that still holds is not stored and returns its own findings, and an
+exact replay returns the same replacement. A draft marked
+`passes_current_rule` is the user's decision and is not replaced.
 
 Hosted-only MCP and raw REST clients cannot guarantee durable local retention.
 They receive `auto_capture_supported: false` and use explicit network contracts

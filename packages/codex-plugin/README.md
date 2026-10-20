@@ -15,22 +15,48 @@ Your agent keeps getting smarter, and so does the network behind it.
 
 ## Install (marketplace)
 
+**Codex CLI.** The Codex plugin needs a Codex CLI: `codex` on your PATH or, on
+macOS, the CLI bundled in the ChatGPT desktop app. The setup, update and
+hook-review commands run the newest one they find, so an older `codex` on PATH
+cannot shadow the app's newer CLI; set `CODEX_CLI` to a CLI's full path to
+choose one yourself. No other host needs the Codex CLI.
+
 ```bash
-CODEX_CLI="${CODEX_CLI:-$(command -v codex || true)}"
-[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/ChatGPT.app/Contents/Resources/codex"
-[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/Codex.app/Contents/Resources/codex"
-[ -x "$CODEX_CLI" ] || { printf '%s\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, then try again." >&2; exit 1; }
+(
+set +eu; unalias codex 2>/dev/null || :; unset -f codex 2>/dev/null || :
+if [ -n "$CODEX_CLI" ]; then
+  [ -x "$CODEX_CLI" ] || { printf 'CODEX_CLI is set but is not an executable file: %s\n' "$CODEX_CLI" >&2; exit 1; }
+else
+  best=-1
+  for c in "$(command -v codex 2>/dev/null)" \
+    /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex \
+    /Applications/ChatGPT.app/Contents/Resources/codex \
+    /Applications/Codex.app/Contents/Resources/codex; do
+    case "$c" in /*) [ -x "$c" ] || continue ;; *) continue ;; esac
+    out=$("$c" --version </dev/null 2>/dev/null) || continue
+    v=$(printf '%s\n' "$out" | awk 'match($0, /[0-9]+[.][0-9]+[.][0-9]+/) { split(substr($0, RSTART, RLENGTH), n, "."); v = n[1] * 1000000 + n[2] * 1000 + n[3]; exit } END { print v + 0 }')
+    [ "$v" -gt "$best" ] && best=$v && CODEX_CLI=$c
+  done
+  [ -n "$CODEX_CLI" ] || { printf '%s\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, or set CODEX_CLI to a Codex CLI path, then try again." >&2; exit 1; }
+fi
+printf 'Using Codex CLI: %s\n' "$CODEX_CLI" >&2
 "$CODEX_CLI" plugin marketplace add dreamarkinc/remembrance-skills &&
   "$CODEX_CLI" plugin marketplace upgrade remembrance &&
   "$CODEX_CLI" plugin add remembrance@remembrance &&
   "$CODEX_CLI"
+)
 ```
 
 This one setup works for both first install and update. If your shell prints
-`codex: command not found`, it automatically checks the current
-`ChatGPT.app` bundle and then the legacy `Codex.app` compatibility path. The
-final command opens Codex CLI so its secure hook review can be completed when
-Codex requires it.
+`codex: command not found`, the setup still finds the CLI bundled in the
+ChatGPT desktop app. The final command opens Codex CLI so its secure hook
+review can be completed when Codex requires it.
+
+The block runs in a subshell, so a failure prints a message and leaves your
+terminal open. It uses `CODEX_CLI` when set; otherwise it runs the newest of
+`codex` on PATH, the ChatGPT desktop app's bundled CLI
+(`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`) and the
+older bundle paths, and stops at the first failed step.
 
 Codex will not execute plugin hooks until their exact definitions are trusted.
 In the Codex window opened by the installer, if Codex shows a **Hooks need
@@ -50,8 +76,8 @@ the review above; the MCP tools keep working. While Codex holds any of them,
 the bundled MCP server says so where the agent sees it:
 
 - Its initialize instructions carry one line after the core rules:
-  "Remembrance hooks await Codex approval: run codex, choose Review hooks,
-  press t." When an update notice applies too, the notice comes first, so
+  "Remembrance hooks await Codex approval: run_connection_doctor gives the
+  command." When an update notice applies too, the notice comes first, so
   its headline stays within the 2,048 characters that truncating clients
   show, and the line follows it. Codex 0.145 passes the whole instructions
   to the model.
@@ -188,6 +214,11 @@ there the tables are a safeguard. Under the managed `writes` mode, the `prompt`
 mode, or older releases, every private lesson or skill submission otherwise
 stops for approval, and a run that cannot ask denies it. Public-only use,
 without an organization key, does not need it.
+
+An agent asks you (for managed settings, your administrator) before applying
+this step: it never edits host permission or settings files without your
+consent, and never answers the host's approval prompt for its own pending
+action.
 
 Merge one table per private submit and retry tool into the user-level
 `~/.codex/config.toml` (do not duplicate an existing table). Keep them separate
@@ -405,7 +436,14 @@ For managed Codex, configure both policy layers before rollout:
 - in `requirements.toml`, restrict the marketplace source to the Remembrance
   repository. Never give the bundled local server the hosted URL as its
   identity: Codex matches a stdio server by its command (`sh`) and disables a
-  server whose identity does not match an approved entry;
+  server whose identity does not match an approved entry. That match never
+  covers the plugin's files (the structured identity form adds the arguments,
+  never the working directory or environment), so another local server with
+  the same name and identity, such as one a user adds to their own
+  `config.toml`, can pass it too; the marketplace source restriction is what
+  limits where the plugin itself comes from. OpenAI's documentation does not
+  say whether a plugin's bundled server is checked against plugin-scoped or
+  top-level `mcp_servers` entries;
 - in managed config, set `enabled_tools` to the bounded organization tool set
   in the bundled setup reference and use
   `default_tools_approval_mode = "writes"`. That mode asks before every call of
@@ -632,7 +670,9 @@ Both hooks **fail open**: they never block the user's work on API errors. A
 timeout, HTTP error, or malformed response injects compact recovery guidance
 instead of pretending Remembrance was used; unrelated prompts still inject
 nothing. Prompt text is redacted for common secrets and private-network URLs
-before any query is sent.
+before any query is sent. A prompt that contains a private key the hook
+recognizes (a PEM or PuTTY key file, or base64 key data) is not searched at all,
+so none of its text is sent.
 
 ## MCP tools
 
@@ -799,6 +839,12 @@ If MCP tools are unavailable, use the REST contract from
 - `REMEMBRANCE_AUTO_CONTRIBUTE=0`: disables silent completion recovery and its
   next-prompt contribution guidance.
 - `REMEMBRANCE_AGENT_KEY_PATH`: optional local TOFU key path for MCP identity.
+- `REMEMBRANCE_UNATTENDED=1`: marks a run no person attends, as in
+  `REMEMBRANCE_UNATTENDED=1 codex exec ...` in a scheduled job. Its hooks show
+  none of the user decisions about retained private drafts, so none is used
+  up, and the next prompt a person makes on the machine gets them; the run
+  still captures and delivers its own lessons. Leave it unset in sessions a
+  person uses.
 
 With an organization key, every query returns `skill_access`. If its policy is
 `org_only`, Codex uses only returned organization skills and never substitutes

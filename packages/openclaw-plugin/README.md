@@ -114,6 +114,11 @@ lesson or skill submission stops for a manual approval, and unattended or
 headless runs deny it. Public-only use, without an organization key, does not
 need it.
 
+An agent asks you (for managed settings, your administrator) before applying
+this step: it never edits host permission or settings files without your
+consent, and never answers the host's approval prompt for its own pending
+action.
+
 In native runs OpenClaw documents no prompt of its own for MCP tools; this
 plugin asks before each private submission. To persist approval, answer
 **allow-always** once for each lane when it asks to "Submit private Remembrance
@@ -532,9 +537,11 @@ adds one more, if all three were shown). It is sent only through its exact
 submit or retry action after the user agrees. Drafts no active session is
 handling are offered as a user decision too, until the user delivers, keeps or
 deletes them; a kept draft is parked. These decisions go to the next
-main-session prompt on the machine, at most once a day, including unattended
-runs; the drafts stay listed by `inspect_private_learning_outbox`, and none is
-sent or deleted without the user.
+main-session prompt on the machine, at most once a day, unless the run sets
+`REMEMBRANCE_UNATTENDED=1`; set it for unattended runs, which then neither show
+nor use up a decision. The drafts stay listed by
+`inspect_private_learning_outbox`, and none is sent or deleted without the
+user.
 
 When a person explicitly names a Remembrance skill or supplies a
 `remembrance://skills/{slug}` URI, OpenClaw resolves ambiguous names with
@@ -975,7 +982,9 @@ Both hooks **fail open**: query errors never block the user's work. Timeout,
 HTTP, and malformed-response failures inject compact recovery guidance;
 unrelated prompts still inject nothing and completion errors finalize normally.
 Prompt text is redacted for common secrets and private-network URLs before any
-query is sent.
+query is sent. A prompt that contains a private key the hook recognizes (a PEM
+or PuTTY key file, or base64 key data) is not searched at all, so none of its
+text is sent.
 
 ## Environment
 
@@ -1014,6 +1023,12 @@ query is sent.
   next-prompt contribution guidance.
 - `REMEMBRANCE_USAGE_DIR`: overrides the per-session usage-marker directory.
 - `REMEMBRANCE_AGENT_KEY_PATH`: optional local TOFU key path for MCP identity.
+- `REMEMBRANCE_UNATTENDED=1`: marks runs no person attends. Their hooks show
+  none of the user decisions about retained private drafts, so none is used
+  up, and the next prompt a person makes on the machine gets them; the runs
+  still capture and deliver their own lessons. The plugin reads the Gateway's
+  environment, so the setting applies to every session that Gateway serves:
+  set it only on a Gateway or profile that serves no person.
 
 With an organization key, every query returns `skill_access`. If its policy is
 `org_only`, OpenClaw uses only returned organization skills and never

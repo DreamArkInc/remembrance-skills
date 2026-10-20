@@ -150,6 +150,11 @@ under a broader ask rule that comes before them, which would otherwise stop
 every private lesson or skill submission for a manual approval. Public-only
 use, without an organization key, does not need it.
 
+An agent asks you (for managed settings, your administrator) before applying
+this step: it never edits host permission or settings files without your
+consent, and never answers the host's approval prompt for its own pending
+action.
+
 Add the four private submit and retry tools and the local-only
 `capture_learning` to the `permission` map in
 `~/.config/opencode/opencode.json`. `capture_learning` stays on this machine
@@ -196,6 +201,8 @@ generation prompt, a subagent hand-back, pasted `git status` output, an explicit
 local skill invocation) skips only the skill search: the organization policy,
 required settings and preferences a search would carry still arrive; set
 `REMEMBRANCE_AUTO_QUERY_HYGIENE=0` to search it anyway.
+A prompt that contains a private key the hook recognizes (a PEM or PuTTY key
+file, or base64 key data) is not searched at all, so none of its text is sent.
 Besides prompts a keyword trigger matches, the hook searches any other
 task-shaped prompt of at least 40 characters (trigger reason `task_shape`).
 A task-shape search that finds nothing adds nothing of its own: no no-match
@@ -231,6 +238,12 @@ Set `REMEMBRANCE_AUTO_QUERY=0` to disable the query, or
 `REMEMBRANCE_AUTO_CONTRIBUTE=0` to disable silent completion recovery. The
 idle event does not emit routine contribution text as a toast or structured log;
 the next real user prompt receives only the exact bounded recovery actions.
+Start a run no person attends, such as `opencode run` in a scheduled job, with
+`REMEMBRANCE_UNATTENDED=1`: its hooks then show none of the user decisions
+about retained private drafts, so none is used up, and the run still captures
+and delivers its own lessons. The plugin reads the OpenCode process's
+environment, so a run attached to a server that is already running follows
+that server's environment. Leave it unset for sessions a person uses.
 
 ## Host policy
 
@@ -305,9 +318,10 @@ is sent only through its exact submit or retry action after the user agrees.
 Drafts no active session is handling are offered as a user decision too, until
 the user delivers, keeps or deletes them; a kept draft is parked. These
 decisions go to the next main-session prompt on the machine, at most once a
-day, including unattended runs such as `opencode run`; the drafts stay listed
-by `inspect_private_learning_outbox`, and none is sent or deleted without the
-user.
+day, unless the run sets `REMEMBRANCE_UNATTENDED=1`; set it for unattended runs
+such as `opencode run`, which then neither show nor use up a decision. The
+drafts stay listed by `inspect_private_learning_outbox`, and none is sent or
+deleted without the user.
 
 ### Routing metadata on complete skill proposals
 

@@ -136,13 +136,13 @@ const COMPLETION_OBLIGATION_GROWN_FIELDS = Object.freeze({
 const PRIVATE_AUTHORIZATION_RETRY_INTERVAL_MS = 6 * 60 * 60 * 1000;
 // A private draft whose session tree has had no user prompt for this long is
 // offered to other sessions, and only as a user decision (owner decision,
-// 0.2.3). The notice offering such drafts shows at most once per interval on
-// a machine.
+// 0.2.3; recorded in DEPLOYMENT.md, "Private draft reminders"). The notice
+// offering such drafts shows at most once per interval on a machine.
 const PRIVATE_ORPHAN_AFTER_MS = 24 * 60 * 60 * 1000;
 const PRIVATE_ORPHAN_NOTICE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 // A declined or host-denied draft returns in that notice after these waits,
 // then not again until its lane is allowed, the user asks for it, or the
-// client updates (owner decision, 0.2.3).
+// client updates (owner decision, 0.2.3; recorded in DEPLOYMENT.md).
 const PRIVATE_PARKED_NOTICE_DELAYS_MS = [1, 7, 30].map(
   (days) => days * 24 * 60 * 60 * 1000,
 );
@@ -300,14 +300,30 @@ const CLIENT_RELEASE_MANIFEST_SURFACES = new Set([
 
 const CLIENT_UPDATE_GUIDANCE = {
   codex: {
-    command: [
-      'CODEX_CLI="${CODEX_CLI:-$(command -v codex || true)}"',
-      '[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/ChatGPT.app/Contents/Resources/codex"',
-      '[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/Codex.app/Contents/Resources/codex"',
-      '[ -x "$CODEX_CLI" ] || { printf \'%s\\n\' "Codex CLI not found. Install the Codex CLI, or update the ChatGPT desktop app, then try again." >&2; exit 1; }',
-      '"$CODEX_CLI" plugin marketplace upgrade remembrance',
-      '"$CODEX_CLI" plugin add remembrance@remembrance --json',
-    ].join("\n"),
+    // Byte-identical to the Codex update command in @remembrance/core
+    // (codexCliCommand in agent-hosts.ts): plugins cannot import core, and
+    // scripts/codex-cli-lookup.test.mjs compares every hook-core copy.
+    command: `(
+set +eu; unalias codex 2>/dev/null || :; unset -f codex 2>/dev/null || :
+if [ -n "$CODEX_CLI" ]; then
+  [ -x "$CODEX_CLI" ] || { printf 'CODEX_CLI is set but is not an executable file: %s\\n' "$CODEX_CLI" >&2; exit 1; }
+else
+  best=-1
+  for c in "$(command -v codex 2>/dev/null)" \\
+    /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex \\
+    /Applications/ChatGPT.app/Contents/Resources/codex \\
+    /Applications/Codex.app/Contents/Resources/codex; do
+    case "$c" in /*) [ -x "$c" ] || continue ;; *) continue ;; esac
+    out=$("$c" --version </dev/null 2>/dev/null) || continue
+    v=$(printf '%s\\n' "$out" | awk 'match($0, /[0-9]+[.][0-9]+[.][0-9]+/) { split(substr($0, RSTART, RLENGTH), n, "."); v = n[1] * 1000000 + n[2] * 1000 + n[3]; exit } END { print v + 0 }')
+    [ "$v" -gt "$best" ] && best=$v && CODEX_CLI=$c
+  done
+  [ -n "$CODEX_CLI" ] || { printf '%s\\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, or set CODEX_CLI to a Codex CLI path, then try again." >&2; exit 1; }
+fi
+printf 'Using Codex CLI: %s\\n' "$CODEX_CLI" >&2
+"$CODEX_CLI" plugin marketplace upgrade remembrance &&
+  "$CODEX_CLI" plugin add remembrance@remembrance --json
+)`,
     update:
       "Ask the user for permission to update Remembrance. If approved, run the bundled Codex update command exactly as shown.",
     restart:
@@ -829,6 +845,157 @@ export function redactPrompt(prompt) {
     });
   }
   return redacted;
+}
+
+// --- Private keys ------------------------------------------------------------
+
+// Client 0.2.6 stopgap (lesson-redaction research, finding F1): redaction
+// blanks named token shapes but not key blocks, and the server's relevance
+// judge receives a search's task text as sent, so a search would carry a
+// pasted private key off the machine. A search the hook would run on a prompt
+// that carries a private key is skipped whole: nothing is sent, the prompt
+// itself is left as it is, and the decision keeps only the content-free
+// reason "private_key". It replaces a hygiene stop too, whose failed
+// preference read would fall back to the search. Callers pass the prompt
+// before redaction, which can blank a key's first line and keep the rest.
+// Other decisions are returned as they are.
+export function withoutPrivateKeySearch(decision, prompt) {
+  if (!decision.likely_match && !decision.hygiene) return decision;
+  return promptCarriesPrivateKey(prompt)
+    ? { likely_match: false, reason: "private_key" }
+    : decision;
+}
+
+// A PEM private-key label (RFC 7468, or the four-dash SSH2 form), whose words
+// a wrapped or quoted line may split, the header of a legacy encrypted PEM key
+// (RFC 1421), which stays when its label is lost, or a PuTTY key-file label
+// and its value.
+const PRIVATE_KEY_LABEL =
+  /-{4,5}[^A-Za-z0-9]{0,8}?BEGIN(?:[^A-Za-z0-9]{1,8}[A-Z0-9]{1,16}){0,4}?[^A-Za-z0-9]{1,8}PRIVATE[^A-Za-z0-9]{1,8}KEY(?:[^A-Za-z0-9]{1,8}BLOCK)?[^A-Za-z0-9]{0,8}?-{4,5}|Proc-Type\s{0,4}:\s{0,4}4,ENCRYPTED|(?:PuTTY-User-Key-File-\d{1,2}|Private-Lines)\s{0,4}:\s{0,4}\S{0,64}/giu;
+// Key text right after a label: past line breaks, quote or comment marks and
+// at most four "Name: value" headers (Proc-Type, DEK-Info, Comment, ...), 16
+// base64 characters.
+const KEY_TEXT_AFTER_LABEL =
+  /[^A-Za-z0-9]{0,32}(?:[A-Za-z][\w-]{0,40}:(?:[^\n]{0,256}\n|[ \t]{0,4}\S{1,256}[ \t])[^A-Za-z0-9]{0,32}){0,4}[A-Za-z0-9+/]{16}/uy;
+const BASE64_RUN = /[A-Za-z0-9+/]{16,}/gu;
+// A run and the lines that continue it, as openssl base64 (64 characters a
+// line) and base64 (76) wrap an encoding: base64 characters and the line
+// breaks and indentation between them, at most 768 of these steps.
+const WRAPPED_RUN =
+  /(?:[A-Za-z0-9+/]|\r?\n[ \t]{0,8}(?=[A-Za-z0-9+/])){1,768}/uy;
+
+// Whether a text carries a private key in a common text form: a labeled key
+// file (PEM, PuTTY) with its key text, or base64 whose leading bytes open a
+// private key (a bare or MIME-wrapped body whose labels were lost, or a key
+// file encoded once more, on one line or wrapped). Structural signals only,
+// no word list: a few passes over the text, and at each of its first four
+// positions a base64 run decodes at most 48 bytes (576 for an encoded key
+// file, which is scanned in turn; no line is read as part of two wrapped
+// encodings).
+// ponytail: not recognized are a key missing both its begin label and its
+// first body line; a PGP, SSH2 or PuTTY body without its labels, or a legacy
+// encrypted PEM body without its Proc-Type header too; an SSH2 file flattened
+// onto one line under a quoted Comment; a key file encoded once more whose
+// text does not open with its label (a PuTTY file, a JSON file that holds a
+// key); and byte-array, hex, JWK and PKCS #12 forms. The 0.2.6 redactor
+// replaces this stopgap.
+export function promptCarriesPrivateKey(prompt) {
+  // Invisible format characters (a zero-width space, a soft hyphen) that a
+  // page or editor puts inside long lines are not part of the key text.
+  // String literals carry a key file's line breaks as "\n" and may escape
+  // its "/" (PHP) or "+" (.NET): read the characters they stand for.
+  const text = String(prompt ?? "")
+    .replace(/\p{Cf}/gu, "")
+    .replace(
+      /\\(?:[nrt]|u00([0-7][0-9A-Fa-f])|(\/))/gu,
+      (_escape, code, slash) =>
+        code ? String.fromCharCode(Number.parseInt(code, 16)) : (slash ?? "\n"),
+    );
+  for (const label of text.matchAll(PRIVATE_KEY_LABEL)) {
+    KEY_TEXT_AFTER_LABEL.lastIndex = label.index + label[0].length;
+    if (KEY_TEXT_AFTER_LABEL.test(text)) return true;
+  }
+  let wrappedEnd = 0;
+  for (const { 0: run, index } of text.matchAll(BASE64_RUN)) {
+    WRAPPED_RUN.lastIndex = index;
+    const wrapped = index < wrappedEnd ? run : WRAPPED_RUN.exec(text)[0];
+    wrappedEnd = Math.max(wrappedEnd, index + wrapped.length);
+    if (base64RunOpensPrivateKey(run, wrapped)) return true;
+  }
+  return false;
+}
+
+// A run may carry up to three stray characters (a diff's "+") before the key.
+// "M" opens DER (0x30), "b" the OpenSSH magic and "L" the dashes of a key
+// file, which `wrapped` holds with the lines that continue the run.
+function base64RunOpensPrivateKey(run, wrapped) {
+  for (let offset = 0; offset < 4; offset += 1) {
+    const lead = run[offset];
+    if (lead === "L") {
+      const file = Buffer.from(wrapped.slice(offset, offset + 768), "base64");
+      if (promptCarriesPrivateKey(file.toString("latin1"))) return true;
+    } else if (lead === "M" || lead === "b") {
+      const bytes = Buffer.from(run.slice(offset, offset + 64), "base64");
+      if (
+        derOpensPrivateKey(bytes) ||
+        bytes.toString("latin1", 0, 15) === "openssh-key-v1\0"
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// The first fields of a DER private key: PKCS #1 RSA or OpenSSL DSA (version,
+// then a large integer), SEC 1 EC (version 1, then the private value), PKCS #8
+// (version, then an algorithm) or an EncryptedPrivateKeyInfo (a PKCS #5 or
+// PKCS #12 password-based scheme). Certificates, public keys, requests and
+// signatures open with other fields.
+function derOpensPrivateKey(bytes) {
+  const key = derHeader(bytes, 0);
+  if (key?.tag !== 0x30) return false;
+  const first = derHeader(bytes, key.start);
+  if (first?.tag === 0x30) {
+    const scheme = derHeader(bytes, first.start);
+    return (
+      scheme?.tag === 0x06 &&
+      /^2a864886f70d01(?:05|0c01)/u.test(
+        bytes.toString("hex", scheme.start, scheme.start + scheme.length),
+      )
+    );
+  }
+  if (first?.tag !== 0x02 || first.length !== 1 || bytes[first.start] > 1) {
+    return false;
+  }
+  const second = derHeader(bytes, first.start + 1);
+  if (second?.tag === 0x02) return second.length >= 64;
+  if (second?.tag === 0x04) {
+    return (
+      bytes[first.start] === 1 && second.length >= 16 && second.length <= 80
+    );
+  }
+  return second?.tag === 0x30 && derHeader(bytes, second.start)?.tag === 0x06;
+}
+
+// A DER tag and definite length in their shortest form, or null.
+function derHeader(bytes, offset) {
+  if (offset + 2 > bytes.length || bytes[offset + 1] === 0x80) return null;
+  let length = bytes[offset + 1];
+  let start = offset + 2;
+  if (length > 0x80) {
+    const width = length - 0x80;
+    if (width > 3 || start + width > bytes.length || bytes[start] === 0) {
+      return null;
+    }
+    length = 0;
+    for (let index = 0; index < width; index += 1) {
+      length = length * 256 + bytes[start + index];
+    }
+    if (length < 0x80) return null;
+    start += width;
+  }
+  return { tag: bytes[offset], length, start };
 }
 
 // --- Query payload -----------------------------------------------------------
@@ -2334,9 +2501,19 @@ async function buildPromptHookResult(prompt, options = {}) {
     debugLog(env, "disabled", {}, options);
     return null;
   }
-  // Rendered for each prompt context in withContext below.
+  // Rendered for each prompt context in withContext below. A prompt that
+  // names no session reads as the "unknown" ledger, as a stop that names none
+  // does: silent lines only for the drafts that ledger holds a hint for, and
+  // every other due or parked draft only as a user decision.
   const lifecycleRecovery =
-    !options.sessionId && privateLearningLifecycleRecoveryInstruction(env);
+    !options.sessionId &&
+    privateLearningSessionRecovery(
+      null,
+      privateHintsOnMachine(null, env),
+      readPrivateDrafts(env),
+      env,
+      { notices: !options.subagentSession },
+    );
   // `subagentSession`: the host runs this session for a subagent, or cannot
   // show it is a main session, and its ledger names no agent (OpenClaw's
   // sessions_spawn; on OpenCode, every session but one created with no
@@ -2406,7 +2583,10 @@ async function buildPromptHookResult(prompt, options = {}) {
     projectPath: options.projectPath,
   }).catch(() => 0);
   const searchText = searchTextForPrompt(redacted, env);
-  let decision = shouldQueryPrompt(searchText, env);
+  let decision = withoutPrivateKeySearch(
+    shouldQueryPrompt(searchText, env),
+    prompt,
+  );
   if (decision.hygiene) {
     // Only the skill search stops: the governance a search would have carried
     // and every addition this prompt earns are still delivered.
@@ -3469,8 +3649,14 @@ function privateAuthorizationMarker(draftId, env) {
 }
 
 // A draft's content-free markers beside its hint: authorization backoff,
-// parking (a decline or host denial), and its one held-safety notice.
-const PRIVATE_DRAFT_MARKERS = ["authorization", "parked", "held-notice"];
+// parking (a decline or host denial), its one held-safety notice, and its
+// one offer of a hold the current safety check would not keep.
+const PRIVATE_DRAFT_MARKERS = [
+  "authorization",
+  "parked",
+  "held-notice",
+  "release-offer",
+];
 
 function privateDraftMarkerPath(draftId, marker, env) {
   return /^(pld|psd)_[A-Za-z0-9_-]{8,96}$/.test(draftId ?? "")
@@ -3511,7 +3697,11 @@ function privateAuthorizationTerminalIsKnown(draftId, env) {
     ? privateLessonOutboxDirectoryForHook(env)
     : privateSkillOutboxDirectoryForHook(env);
   const lane = lesson ? "lesson" : "skill";
-  for (const terminal of ["submitted", "deleted"]) {
+  // A held lesson replaced by an accepted re-capture is terminal too.
+  const terminals = lesson
+    ? ["submitted", "deleted", "replaced"]
+    : ["submitted", "deleted"];
+  for (const terminal of terminals) {
     try {
       const value = JSON.parse(
         readSecureHookFile(
@@ -3536,13 +3726,17 @@ function privateAuthorizationTerminalIsKnown(draftId, env) {
             privateTerminalDigest(
               lane === "lesson" ? value.receipt_digest : value.candidate_digest,
             )
-          : value.reason === "explicit_confirmed_deletion" &&
+          : value.reason ===
+              (terminal === "deleted"
+                ? "explicit_confirmed_deletion"
+                : "replaced_by_verified_replacement") &&
             privateTerminalTimestamp(value.deleted_at)
       ) {
         return true;
       }
     } catch {
-      // Missing or malformed terminal state cannot prove delivery or deletion.
+      // Missing or malformed terminal state cannot prove delivery, deletion
+      // or replacement.
     }
   }
   return false;
@@ -3554,7 +3748,7 @@ function clearKnownTerminalAuthorizationOpportunities(env) {
     assertSecureHookDirectory(lstatSync(directory));
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const match = entry.name.match(
-        /^((?:pld|psd)_[A-Za-z0-9_-]{8,96})\.(authorization|parked|held-notice)\.json$/,
+        /^((?:pld|psd)_[A-Za-z0-9_-]{8,96})\.(authorization|parked|held-notice|release-offer)\.json$/,
       );
       if (
         !match ||
@@ -6606,7 +6800,9 @@ export function observeSuccessfulCompletionTool(
     // awaiting the user the drafts it offered; host_policy_denied is for
     // private lines and notices only. The held-safety notice names no
     // action to decline (an earlier client's did, and its decline changes
-    // nothing): its delivery marked the drafts it showed.
+    // nothing): its delivery marked the drafts it showed. An unattended run
+    // shows no notice, so its keep (an earlier transcript's action_id) is no
+    // user's and parks nothing.
     const actionId = String(input.action_id ?? "");
     const reason = String(input.reason ?? "");
     const privateOnly = reason === PRIVATE_DECLINE_REASON;
@@ -6624,7 +6820,8 @@ export function observeSuccessfulCompletionTool(
       }
       if (
         actionId === PRIVATE_ORPHAN_NOTICE_ACTION_ID &&
-        organizationPrivateLessonAuthorized(env)
+        organizationPrivateLessonAuthorized(env) &&
+        !unattendedRun(env)
       ) {
         parkPrivateDraftsAwaitingUser(sessionId, reason, env);
       }
@@ -8548,6 +8745,17 @@ export function visibleCompletionRecoveryEnabled(env = process.env) {
   );
 }
 
+// REMEMBRANCE_UNATTENDED=1 marks a run no person attends, such as a
+// scheduled or headless one. Its prompts and stops compose none of the
+// user-decision notices (privateDraftNotices), so it neither shows nor uses
+// one up, and a keep it observes parks nothing. Its own drafts' lines and
+// learning are unchanged.
+function unattendedRun(env = process.env) {
+  return /^(1|true|yes)$/i.test(
+    String(env?.REMEMBRANCE_UNATTENDED ?? "").trim(),
+  );
+}
+
 function organizationPrivateLessonAuthorized(env = process.env) {
   if (contributeDisabled(env?.REMEMBRANCE_AUTO_CONTRIBUTE)) return false;
   const credential = resolveApiCredential(env);
@@ -9326,7 +9534,12 @@ export function privateSkillNativeContextCaptureNeeded(env = process.env) {
   return (readPrivateSkillLifecycleState(env)?.native_context_needed ?? 0) > 0;
 }
 
-// The machine-wide recovery, for a caller that names no session.
+// The machine-wide recovery: every due draft on the machine as silent
+// submit and retry work, whoever holds it and parked ones included. A
+// hook's prompt or stop renders only a ledger's share
+// (privateLearningSessionRecovery), and one that names no session reads as
+// the "unknown" ledger; only a privateLessonCompletionGuidance call without
+// lifecycleRecovery falls back to this.
 export function privateLearningLifecycleRecoveryInstruction(env = process.env) {
   return privateLearningLifecycleText(
     readPrivateLessonLifecycleState(env),
@@ -9420,16 +9633,18 @@ function privateLearningLifecycleText(lessons, skills, own = null) {
 function readPrivateDrafts(env) {
   const parked = new Map();
   const held = new Set();
+  const offered = new Set();
   const directory = privateLearningLifecycleDirectory(env);
   if (organizationPrivateLessonAuthorized(env)) {
     try {
       assertSecureHookDirectory(lstatSync(directory));
       for (const entry of readdirSync(directory, { withFileTypes: true })) {
         const match = entry.name.match(
-          /^((?:pld|psd)_[A-Za-z0-9_-]{8,96})\.(parked|held-notice)\.json$/,
+          /^((?:pld|psd)_[A-Za-z0-9_-]{8,96})\.(parked|held-notice|release-offer)\.json$/,
         );
         if (!match || entry.isSymbolicLink() || !entry.isFile()) continue;
         if (match[2] === "held-notice") held.add(match[1]);
+        if (match[2] === "release-offer") offered.add(match[1]);
         const marker =
           match[2] === "parked" && readPrivateParkedMarker(match[1], env);
         if (marker) parked.set(match[1], marker);
@@ -9443,6 +9658,7 @@ function readPrivateDrafts(env) {
     skills: scanPrivateSkillOutbox(env),
     parked,
     held,
+    offered,
   };
 }
 
@@ -9490,9 +9706,9 @@ function privateHintsOnMachine(sessionId, env) {
 
 // This ledger's share of the lifecycle recovery for one prompt or stop: its
 // silent lines count and name only drafts its own session tree holds an
-// unparked hint for; a main thread also gets the user decisions
-// (privateDraftNotices), unless the host says it runs this session for a
-// subagent (`notices: false`). `hints` are every private hint on the
+// unparked hint for; a main thread of an attended run also gets the user
+// decisions (privateDraftNotices), unless the host says it runs this session
+// for a subagent (`notices: false`). `hints` are every private hint on the
 // machine. Null when nothing is due.
 function privateLearningSessionRecovery(
   sessionId,
@@ -9548,16 +9764,20 @@ function rememberPrivateNotice(sessionId, text, shown) {
   return text;
 }
 
-// The two user decisions, each one bounded, content-free sentence: one
+// The user decisions, each one bounded, content-free sentence: one
 // directive unit, which the context allocator keeps whole or drops, so its
 // exact text in the delivered context acknowledges it
 // (acknowledgePrivateDraftNotices). Retained drafts awaiting the user
 // (privateDraftsAwaitingUser), at most once per
 // PRIVATE_ORPHAN_NOTICE_INTERVAL_MS on this machine, with the action_id that
-// keeps them; and lesson drafts a safety hold left with nothing to send,
-// once per draft, with no reply asked. Main threads only.
+// keeps them; lesson drafts a safety hold left with nothing to send, once
+// per draft, with no reply asked; and held lesson drafts the current safety
+// check would send, once per draft, to deliver, keep or delete. Main threads
+// of attended runs only (unattendedRun).
 function privateDraftNotices(sessionId, hints, drafts, env) {
-  if (String(sessionId ?? "").includes(":agent:")) return [];
+  if (unattendedRun(env) || String(sessionId ?? "").includes(":agent:")) {
+    return [];
+  }
   const notices = [];
   const awaiting = privateDraftsAwaitingUser(sessionId, hints, drafts, env);
   if (awaiting.length > 0 && privateOrphanNoticeDue(env)) {
@@ -9574,13 +9794,26 @@ function privateDraftNotices(sessionId, hints, drafts, env) {
       ),
     );
   }
-  const held = privateHeldDrafts(drafts);
+  const held = privateHeldDrafts(drafts, env);
   if (held.length > 0) {
+    // Only a session of the draft's own destination can replace it.
+    const them = held.length === 1 ? "it" : "them";
     notices.push(
       rememberPrivateNotice(
         sessionId,
-        `- ${held.length} retained private lesson draft${held.length === 1 ? " was" : "s were"} held by the local safety check and will not be sent: ask the user once whether to re-capture a safe version with a new capture_learning call or delete ${held.length === 1 ? "it" : "them"} with delete_private_lesson_candidate and confirm=true (inspect_private_learning_outbox lists each draft_id), and never resubmit the held content; this notice is shown once and needs no reply, and if no user can answer in this run, leave the outbox as it is.`,
+        `- ${held.length} retained private lesson draft${held.length === 1 ? " was" : "s were"} held by the local safety check and will not be sent: ask the user once whether to keep ${them}, delete ${them} with delete_private_lesson_candidate and confirm=true, or re-capture a safe version with capture_learning and replacement_of naming the held draft_id in a session using the API base and organization key the draft was captured for (the held draft goes only once the organization accepts the new version; inspect_private_learning_outbox lists each draft_id), and never resubmit the held content; this notice is shown once and needs no reply, and if no user can answer in this run, leave the outbox as it is.`,
         { held },
+      ),
+    );
+  }
+  const offered = privateReleasableDrafts(drafts, env);
+  if (offered.length > 0) {
+    const one = offered.length === 1;
+    notices.push(
+      rememberPrivateNotice(
+        sessionId,
+        `- ${offered.length} retained private lesson draft${one ? " was" : "s were"} held by an earlier safety check that the current one would not apply: ask the user once whether to deliver ${one ? "it" : "each"} with retry_private_lesson_candidate and deliver_rechecked_hold=true, keep ${one ? "it" : "them"} held (nothing to do), or delete ${one ? "it" : "them"} with delete_private_lesson_candidate and confirm=true (inspect_private_learning_outbox marks each draft_id with safety_recheck passes_current_rule); send nothing without that choice, this notice is shown once, and if no user can answer in this run, leave the outbox as it is.`,
+        { offered },
       ),
     );
   }
@@ -9653,14 +9886,43 @@ function privateSessionIdle(owner, env) {
 }
 
 // Lesson drafts a safety hold left with no agent action (classified, or
-// health reporting off) that have not had their one notice.
-function privateHeldDrafts(drafts) {
+// health reporting off) that have not had their one notice; a draft known
+// to be submitted, deleted or replaced never has one. A hold the current
+// safety check would not keep has its own offer instead.
+function privateHeldDrafts(drafts, env) {
   return [...drafts.lessons.drafts]
     .filter(
       ([draftId, { envelope, action }]) =>
-        envelope?.state === "held_safety" && !action && !drafts.held.has(draftId),
+        envelope?.state === "held_safety" &&
+        !privateLessonHoldReleasable(envelope) &&
+        !action &&
+        !drafts.held.has(draftId) &&
+        !privateAuthorizationTerminalIsKnown(draftId, env),
     )
     .map(([draftId]) => draftId);
+}
+
+// The outbox's content-free re-check of a held draft under the current
+// safety check, written beside its encrypted payload. Only the user's
+// choice sends such a draft; the server re-checks it before that.
+function privateLessonHoldReleasable(envelope) {
+  return envelope?.safety_recheck === "passes_current_rule";
+}
+
+// Held lesson drafts the current safety check would send, not offered yet,
+// in draft id order; a draft known to be submitted or deleted is never
+// offered.
+function privateReleasableDrafts(drafts, env) {
+  return [...drafts.lessons.drafts]
+    .filter(
+      ([draftId, { envelope }]) =>
+        envelope?.state === "held_safety" &&
+        privateLessonHoldReleasable(envelope) &&
+        !drafts.offered.has(draftId) &&
+        !privateAuthorizationTerminalIsKnown(draftId, env),
+    )
+    .map(([draftId]) => draftId)
+    .sort();
 }
 
 function privateOrphanNoticePath(env) {
@@ -9836,8 +10098,10 @@ function allowPrivateLane(prefix, env) {
 // read. The orphan interval restarts with the drafts it offered recorded,
 // each parked draft it named moves to its next wait, once: one another
 // delivery already moved, or a park restarted, is no longer due. Each held
-// draft it counted has had its one notice.
+// draft it counted has had its one notice. An unattended run acknowledges
+// none: a composition it delivers stays for an attended delivery.
 function acknowledgePrivateDraftNotices(context, env, ledgerId) {
+  if (unattendedRun(env)) return;
   const ledger = ledgerId == null ? null : sessionHash(ledgerId);
   const delivered = new Set();
   for (const [key, shown] of [...privateNoticesShown].reverse()) {
@@ -9853,6 +10117,12 @@ function acknowledgePrivateDraftNotices(context, env, ledgerId) {
     for (const draftId of shown.held ?? []) {
       writePrivateUsageMarker(
         privateDraftMarkerPath(draftId, "held-notice", env),
+        `${JSON.stringify({ version: 1, shown_at: now })}\n`,
+      );
+    }
+    for (const draftId of shown.offered ?? []) {
+      writePrivateUsageMarker(
+        privateDraftMarkerPath(draftId, "release-offer", env),
         `${JSON.stringify({ version: 1, shown_at: now })}\n`,
       );
     }
@@ -9893,8 +10163,9 @@ function acknowledgePrivateDraftNotices(context, env, ledgerId) {
 // parked yet is: one that began awaiting after the delivery then returns as
 // a user decision a day later, about when the next notice would have
 // offered it. A parked draft keeps its own schedule and comes with the next
-// notice: a delivery moves on each parked draft it shows, so one due now was
-// not in the offer.
+// notice: a delivery moves on each parked draft it shows, so one due now has
+// come due since (its wait ran out, the host let its lane through, or a
+// client update brought it back), whether or not that offer showed it.
 function parkPrivateDraftsAwaitingUser(sessionId, reason, env) {
   const drafts = readPrivateDrafts(env);
   const offered = readPrivateOrphanNotice(env)?.drafts;

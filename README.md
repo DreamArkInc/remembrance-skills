@@ -81,6 +81,11 @@ manual approval, and unattended or headless runs deny it. Public-only use,
 without an organization key, does not need it; skill-only and REST installs
 have no MCP tools to approve.
 
+An agent asks you (for managed settings, your administrator) before applying
+this step: it never edits host permission or settings files without your
+consent, and never answers the host's approval prompt for its own pending
+action.
+
 After installing below, persist your host's approval for exactly
 `submit_private_lesson_candidate`, `retry_private_lesson_candidate`,
 `submit_private_skill_candidate`, and `retry_private_skill_candidate` (hosted
@@ -113,8 +118,9 @@ auto-approve.
   `"remembrance_*"` rule because the last matching rule wins.
 - **OpenClaw:** choose allow-always once for the lesson lane and once for the
   skill lane.
-- **Gemini CLI:** one `[[rule]]` per tool, including `capture_learning`, in
-  `~/.gemini/policies/remembrance.toml`.
+- **Gemini CLI:** one allow `[[rule]]` per tool, including `capture_learning`,
+  then one ask rule per tool under its full Gemini CLI name, both delete tools
+  included, in `~/.gemini/policies/remembrance.toml`.
 
 The exact snippets are in
 [`remembrance-setup.md`](skills/remembrancer/references/remembrance-setup.md#highly-recommended-approve-private-submissions)
@@ -293,7 +299,7 @@ server below if your Gemini setup launches command-based MCP servers:
   "mcpServers": {
     "remembrance": {
       "url": "https://remembrance.dev/api/mcp",
-      "headers": { "Authorization": "Bearer ${env:REMEMBRANCE_API_KEY}" }
+      "headers": { "Authorization": "Bearer ${REMEMBRANCE_API_KEY}" }
     }
   }
 }
@@ -301,20 +307,46 @@ server below if your Gemini setup launches command-based MCP servers:
 
 ### Codex — plugin (skill + tools + auto-query hook)
 
+**Codex CLI.** The Codex plugin needs a Codex CLI: `codex` on your PATH or, on
+macOS, the CLI bundled in the ChatGPT desktop app. The setup, update and
+hook-review commands run the newest one they find, so an older `codex` on PATH
+cannot shadow the app's newer CLI; set `CODEX_CLI` to a CLI's full path to
+choose one yourself. No other host needs the Codex CLI.
+
 ```bash
-CODEX_CLI="${CODEX_CLI:-$(command -v codex || true)}"
-[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/ChatGPT.app/Contents/Resources/codex"
-[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/Codex.app/Contents/Resources/codex"
-[ -x "$CODEX_CLI" ] || { printf '%s\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, then try again." >&2; exit 1; }
+(
+set +eu; unalias codex 2>/dev/null || :; unset -f codex 2>/dev/null || :
+if [ -n "$CODEX_CLI" ]; then
+  [ -x "$CODEX_CLI" ] || { printf 'CODEX_CLI is set but is not an executable file: %s\n' "$CODEX_CLI" >&2; exit 1; }
+else
+  best=-1
+  for c in "$(command -v codex 2>/dev/null)" \
+    /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex \
+    /Applications/ChatGPT.app/Contents/Resources/codex \
+    /Applications/Codex.app/Contents/Resources/codex; do
+    case "$c" in /*) [ -x "$c" ] || continue ;; *) continue ;; esac
+    out=$("$c" --version </dev/null 2>/dev/null) || continue
+    v=$(printf '%s\n' "$out" | awk 'match($0, /[0-9]+[.][0-9]+[.][0-9]+/) { split(substr($0, RSTART, RLENGTH), n, "."); v = n[1] * 1000000 + n[2] * 1000 + n[3]; exit } END { print v + 0 }')
+    [ "$v" -gt "$best" ] && best=$v && CODEX_CLI=$c
+  done
+  [ -n "$CODEX_CLI" ] || { printf '%s\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, or set CODEX_CLI to a Codex CLI path, then try again." >&2; exit 1; }
+fi
+printf 'Using Codex CLI: %s\n' "$CODEX_CLI" >&2
 "$CODEX_CLI" plugin marketplace add dreamarkinc/remembrance-skills &&
   "$CODEX_CLI" plugin marketplace upgrade remembrance &&
   "$CODEX_CLI" plugin add remembrance@remembrance &&
   "$CODEX_CLI"
+)
 ```
 
-If `codex` is not on your shell `PATH`, this checks the current `ChatGPT.app`
-bundle first and retains the legacy `Codex.app` compatibility path. The final
-command opens Codex CLI for its secure hook review when Codex requires it.
+The block runs in a subshell, so a failure prints a message and leaves your
+terminal open. It uses `CODEX_CLI` when set; otherwise it runs the newest of
+`codex` on PATH, the ChatGPT desktop app's bundled CLI
+(`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`) and the
+older bundle paths, and stops at the first failed step.
+
+The final command opens Codex CLI for its secure hook review when Codex
+requires it.
 
 The prompt hook queries explicit reusable work and injects a full-conversation
 reminder for contextual follow-ups. The Stop hook recovers any eligible task

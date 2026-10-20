@@ -168,6 +168,11 @@ step is required for Remembrance to do its job fully. Without it, every private
 lesson or skill submission stops for a manual approval in VS Code. Public-only
 use, without an organization key, does not need it.
 
+An agent asks you (for managed settings, your administrator) before applying
+this step: it never edits host permission or settings files without your
+consent, and never answers the host's approval prompt for its own pending
+action.
+
 VS Code has no settings key or policy that pre-approves a single tool, so use
 its interface:
 
@@ -204,6 +209,8 @@ generation prompt, a subagent hand-back, pasted `git status` output, an explicit
 local skill invocation) skips only the skill search: the organization policy,
 required settings and preferences a search would carry still arrive; set
 `REMEMBRANCE_AUTO_QUERY_HYGIENE=0` to search it anyway.
+A prompt that contains a private key the hook recognizes (a PEM or PuTTY key
+file, or base64 key data) is not searched at all, so none of its text is sent.
 Besides prompts a keyword trigger matches, the hook searches any other
 task-shaped prompt of at least 40 characters (trigger reason `task_shape`).
 A task-shape search that finds nothing adds nothing of its own: no no-match
@@ -240,6 +247,10 @@ next real user prompt. That prompt receives only the exact pending query,
 actions. Hook narration, tool receipts, and correlation IDs stay out of the
 final answer; only a failure, host-policy block, or required user action is
 surfaced.
+For a run no person attends, set `REMEMBRANCE_UNATTENDED=1` in the environment
+VS Code starts its hooks with: the hooks then show none of the user decisions
+about retained private drafts, so none is used up, and the run still captures
+and delivers its own lessons. Leave it unset for sessions a person uses.
 
 VS Code names a subagent only in `SubagentStart` and `SubagentStop`, and sends
 the subagent's task through `UserPromptSubmit` under your session right after

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { constants as fsConstants, accessSync } from "node:fs";
-import { delimiter, isAbsolute, resolve } from "node:path";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
 
 const REMEMBRANCE_PLUGIN_ID = "remembrance@remembrance";
@@ -89,6 +89,7 @@ export async function inspectCodexHookTrust(options = {}) {
 export function resolveCodexExecutable(
   env = process.env,
   platform = process.platform,
+  applicationsRoot = "/Applications",
 ) {
   const candidates = [];
   const configured = String(env.REMEMBRANCE_CODEX_CLI_PATH ?? "").trim();
@@ -98,9 +99,16 @@ export function resolveCodexExecutable(
     if (value && isAbsolute(value)) candidates.push(value);
   }
   if (platform === "darwin") {
+    // The current ChatGPT desktop app bundles its CLI under codex-cli/bin;
+    // the two older bundle paths stay for compatibility. Order-based, so
+    // SessionStart starts no extra process to compare versions.
     candidates.push(
-      "/Applications/ChatGPT.app/Contents/Resources/codex",
-      "/Applications/Codex.app/Contents/Resources/codex",
+      join(
+        applicationsRoot,
+        "ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+      ),
+      join(applicationsRoot, "ChatGPT.app/Contents/Resources/codex"),
+      join(applicationsRoot, "Codex.app/Contents/Resources/codex"),
     );
   }
   const executableName = platform === "win32" ? "codex.exe" : "codex";

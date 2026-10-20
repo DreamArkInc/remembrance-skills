@@ -151,6 +151,11 @@ Cursor's Run Mode, every private lesson or skill submission stops for a manual
 approval (the Allowlist mode always asks). Public-only use, without an
 organization key, does not need it.
 
+An agent asks you (for managed settings, your administrator) before applying
+this step: it never edits host permission or settings files without your
+consent, and never answers the host's approval prompt for its own pending
+action.
+
 In the IDE, merge these entries into the `mcpAllowlist` array of
 `~/.cursor/permissions.json` (create the file if it is missing). The last,
 `capture_learning`, is local only: it stays on this machine and sends nothing,
@@ -368,6 +373,13 @@ query-fit action.
 Hosted/cloud Cursor without the local plugin reports
 `auto_capture_supported: false` and cannot guarantee durable draft retention.
 
+With `REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY=1`, the stop hook also asks the
+user decisions about retained private drafts. For a run no person attends, set
+`REMEMBRANCE_UNATTENDED=1` in the environment Cursor starts its hooks with: the
+hooks then show none of those decisions, so none is used up, and the run still
+captures and delivers its own lessons. Leave it unset for sessions a person
+uses.
+
 ## What the plugin does
 
 - `rules/remembrance-auto-query.mdc` is always applied and tells Cursor to call
@@ -387,7 +399,10 @@ Hosted/cloud Cursor without the local plugin reports
   generation prompt, a subagent hand-back, pasted `git status` output, an
   explicit local skill invocation) is not marked eligible; preferences still
   arrive through the MCP tools. Set `REMEMBRANCE_AUTO_QUERY_HYGIENE=0` to mark
-  it anyway. Unlike the prompt hooks of the other plugins, it does not treat a
+  it anyway. A prompt that contains a private key the hook recognizes (a PEM or
+  PuTTY key file, or base64 key data) is not marked for its trigger words, as
+  the other plugins' hooks do not search it.
+  Unlike the prompt hooks of the other plugins, it does not treat a
   task-shaped prompt without a trigger word as relevant: this hook cannot
   search, so the always-apply rule is Cursor's path for such prompts and
   `REMEMBRANCE_AUTO_QUERY_TASK_SHAPE` does not apply here.

@@ -115,22 +115,48 @@ claude plugin install remembrance@remembrance
 
 Codex:
 
+**Codex CLI.** The Codex plugin needs a Codex CLI: `codex` on your PATH or, on
+macOS, the CLI bundled in the ChatGPT desktop app. The setup, update and
+hook-review commands run the newest one they find, so an older `codex` on PATH
+cannot shadow the app's newer CLI; set `CODEX_CLI` to a CLI's full path to
+choose one yourself. No other host needs the Codex CLI.
+
 ~~~bash
-CODEX_CLI="${CODEX_CLI:-$(command -v codex || true)}"
-[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/ChatGPT.app/Contents/Resources/codex"
-[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/Codex.app/Contents/Resources/codex"
-[ -x "$CODEX_CLI" ] || { printf '%s\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, then try again." >&2; exit 1; }
+(
+set +eu; unalias codex 2>/dev/null || :; unset -f codex 2>/dev/null || :
+if [ -n "$CODEX_CLI" ]; then
+  [ -x "$CODEX_CLI" ] || { printf 'CODEX_CLI is set but is not an executable file: %s\n' "$CODEX_CLI" >&2; exit 1; }
+else
+  best=-1
+  for c in "$(command -v codex 2>/dev/null)" \
+    /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex \
+    /Applications/ChatGPT.app/Contents/Resources/codex \
+    /Applications/Codex.app/Contents/Resources/codex; do
+    case "$c" in /*) [ -x "$c" ] || continue ;; *) continue ;; esac
+    out=$("$c" --version </dev/null 2>/dev/null) || continue
+    v=$(printf '%s\n' "$out" | awk 'match($0, /[0-9]+[.][0-9]+[.][0-9]+/) { split(substr($0, RSTART, RLENGTH), n, "."); v = n[1] * 1000000 + n[2] * 1000 + n[3]; exit } END { print v + 0 }')
+    [ "$v" -gt "$best" ] && best=$v && CODEX_CLI=$c
+  done
+  [ -n "$CODEX_CLI" ] || { printf '%s\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, or set CODEX_CLI to a Codex CLI path, then try again." >&2; exit 1; }
+fi
+printf 'Using Codex CLI: %s\n' "$CODEX_CLI" >&2
 "$CODEX_CLI" plugin marketplace add dreamarkinc/remembrance-skills &&
   "$CODEX_CLI" plugin marketplace upgrade remembrance &&
   "$CODEX_CLI" plugin add remembrance@remembrance &&
   "$CODEX_CLI"
+)
 ~~~
 
 This command handles both first install and update. If zsh says
-"codex: command not found", it discovers the current ChatGPT desktop bundle or
-the legacy Codex app bundle without requiring a shell alias. The final command
-opens Codex CLI so its secure hook review can be completed immediately when
-Codex requires it.
+"codex: command not found", it still finds the CLI bundled in the ChatGPT
+desktop app without requiring a shell alias. The final command opens Codex CLI
+so its secure hook review can be completed immediately when Codex requires it.
+
+The block runs in a subshell, so a failure prints a message and leaves your
+terminal open. It uses `CODEX_CLI` when set; otherwise it runs the newest of
+`codex` on PATH, the ChatGPT desktop app's bundled CLI
+(`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`) and the
+older bundle paths, and stops at the first failed step.
 
 Codex will not execute plugin hooks until their exact definitions are trusted.
 In the Codex window opened by the installer, if Codex shows a **Hooks need
@@ -317,6 +343,39 @@ leaves `capture_learning` to Auto-review or a person, as managed Codex may,
 only the capture is reviewed; its submission still must not prompt.
 `run_connection_doctor` cannot see a persisted approval; its `host_approval`
 field reports only recent denials.
+
+### Unattended runs
+
+A run no person attends, such as a scheduled job, `codex exec` or
+`claude -p`, cannot answer the user decisions the hooks ask about retained
+private drafts: deliver, keep or delete. To keep its learning going without
+using those decisions up:
+
+1. Approve the four private submit and retry tools as above, so the run
+   delivers its own lessons and skills. On a host that asks, a run nobody can
+   answer denies them, and the draft waits in the outbox.
+2. Start the run with `REMEMBRANCE_UNATTENDED=1`. Its hooks then show none of
+   the user decisions (drafts awaiting the user, held drafts, parked drafts
+   coming back), so none is used up, and the next prompt a person makes on the
+   machine gets them. The run still captures and delivers its own lessons,
+   and nothing about the drafts changes.
+   - Codex: `REMEMBRANCE_UNATTENDED=1 codex exec ...`.
+   - Claude Code: `REMEMBRANCE_UNATTENDED=1 claude -p ...`, or
+     `{"env":{"REMEMBRANCE_UNATTENDED":"1"}}` in settings only those runs
+     load: `--settings`, or `.claude/settings.local.json` in a folder only
+     scheduled runs use.
+   - OpenCode: `REMEMBRANCE_UNATTENDED=1 opencode run ...`. A run attached
+     to a server that is already running follows that server's environment.
+   - Cursor and VS Code: the environment the app or CLI starts its hooks
+     with. Cursor asks these decisions only with
+     `REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY=1`.
+   - OpenClaw: the Gateway's environment. It then applies to every session
+     that Gateway serves, so set it only on a Gateway or profile that serves
+     no person.
+
+Leave `REMEMBRANCE_UNATTENDED` unset for sessions a person uses. Do not set
+`REMEMBRANCE_AUTO_CONTRIBUTE=0` for this instead: it also stops the run's own
+learning.
 
 ### Claude Code
 
@@ -546,31 +605,37 @@ mixed-version installs, use allow-always.
 
 ### Gemini CLI
 
-Create `~/.gemini/policies/remembrance.toml` with one rule per tool; the last
-rule is the local-only `capture_learning` entry:
+Create `~/.gemini/policies/remembrance.toml` with one allow rule per tool, the
+last of them the local-only `capture_learning` entry, then one ask rule for
+each of those tools and for both confirmed-delete tools, by the full names
+Gemini CLI gives them:
 
 ~~~toml
 [[rule]]
 mcpName = "remembrance"
 toolName = "submit_private_lesson_candidate"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "retry_private_lesson_candidate"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "submit_private_skill_candidate"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "retry_private_skill_candidate"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
@@ -578,18 +643,89 @@ priority = 200
 [[rule]]
 mcpName = "remembrance"
 toolName = "capture_learning"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
+
+# Every tool again by the full name Gemini CLI also checks calls by,
+# only ever asking. The allow rules above outrank them, so those tools
+# still run in every mode, plan mode over ACP included, and both
+# confirmed-delete tools ask in every mode, YOLO included.
+[[rule]]
+toolName = "mcp_remembrance_submit_private_lesson_candidate"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_retry_private_lesson_candidate"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_submit_private_skill_candidate"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_retry_private_skill_candidate"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_capture_learning"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_delete_private_lesson_candidate"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_delete_private_skill_candidate"
+decision = "ask_user"
+priority = 150
 ~~~
 
-Gemini CLI asks before every MCP tool without an allow rule, and
-non-interactive runs treat that prompt as a denial. These rules cover private
-learning only, so a headless run also needs rules for the other Remembrance
-tools it calls, such as `query_skills`. Keep `trust` false and do not list
-the server in `mcp.allowed`: Gemini CLI turns `trust: true` and an
-`mcp.allowed` entry alike into an allow rule for every tool of the server.
-Administrators use the admin policy file in "Approve Gemini CLI" instead, which
-already contains these rules.
+Without a rule, Gemini CLI asks before a Remembrance tool in its default
+and auto-edit modes; YOLO mode runs the tool without asking, and plan mode
+blocks it or, for a read-only tool, asks. A headless run, such as
+`gemini -p`, cannot ask: the model never sees a tool that no rule covers, and
+a tool whose rule asks is denied. These rules cover private learning only, so a
+headless run also needs rules for the other Remembrance tools it calls, such as
+`query_skills`. The rules name no approval mode, so they also apply in plan
+mode: there the five tools run without a prompt, private submissions included.
+
+Gemini CLI also checks some calls under the server name `mcp_remembrance`,
+which no rule with `mcpName = "remembrance"` matches: in an IDE connected
+over ACP, before any other check, and in the terminal, after a rule asks. There
+only the rules that name a tool by its full name, `mcp_remembrance_<tool>`,
+match, and they only ask. In plan mode over ACP, that ask hands the call on to
+the allow rules, so the five tools run; without it, plan mode denies them. Both
+delete tools ask in every mode, YOLO included, whether Gemini CLI starts with
+`--yolo` or the user turns it on with Ctrl+Y; without their full-name rules,
+YOLO mode runs both without asking. Never change a full-name rule to allow: a
+rule without `mcpName` also matches another server's tool that has the same
+full name, such as the tool `private_lesson_candidate` of a server named
+`remembrance_submit`.
+
+Each allow rule also requires `destructiveHint = false`, which Remembrance's
+server declares for every tool except the two delete tools. Gemini CLI checks a
+subagent's calls without the server name or the tool's annotations, and takes
+the server name from the full name, so without that condition an allow rule
+would also let a subagent run such a look-alike tool without asking; with it,
+the full-name rule makes that call ask. A user's own "Allow tool for this
+session" or "Allow all server tools for this session" answer still stops the
+prompts until Gemini CLI restarts.
+
+Keep `trust` false and do not list the server in `mcp.allowed`: Gemini CLI
+turns `trust: true` and an `mcp.allowed` entry alike into an allow rule for
+every tool of the server. A `--policy` flag or a `policyPaths` setting
+replaces `~/.gemini/policies`, and Gemini CLI then does not read this file.
+Gemini CLI starts MCP servers only in a trusted folder; "Approve Gemini CLI"
+covers unattended runs. Administrators use the admin policy file in "Approve
+Gemini CLI" instead, which already contains these rules. Checked against Gemini
+CLI 0.62.0.
 
 ### Claude Desktop and other MCP clients
 
@@ -682,8 +818,12 @@ memory, encrypts only the canonical safe record in a local outbox, and returns
 a draft ID. It never writes the original input to disk, logs, telemetry, or
 error output. Tags
 use an open, bounded lowercase slug vocabulary; new technical terms survive,
-while malformed or privacy-sensitive tags hold the draft instead of being
-silently removed.
+while a malformed or privacy-sensitive tag is dropped and counted. Each
+redaction match becomes its marker and the lesson continues; only a stack
+trace or zero-width or bidirectional control characters hold the draft
+locally. A draft an earlier client held that the current check would send is
+offered to the user once to deliver, keep, or delete; only the user's choice
+delivers it.
 
 The plugin then calls `submit_private_lesson_candidate` with that draft ID.
 This is the host-visible network action in the flow, and
@@ -784,6 +924,17 @@ is a local stdio server, so never give it the hosted URL as its identity. If the
 requirements also carry an `mcp_servers` allowlist, approve this server by its
 configured command (`sh`): Codex disables a server whose name and identity do
 not match an approved entry.
+
+Codex checks only a server's name and how it is launched, never the plugin's
+files. The string form, `identity = { command = "sh" }`, compares the command
+alone; the structured form also compares each positional argument, but neither
+inspects the working directory or environment. So another local server with
+the same name and identity, such as one a user adds to their own
+`config.toml`, can pass the same check; the marketplace source restriction is
+what limits where the plugin itself comes from. OpenAI's managed-configuration
+documentation does not say whether a plugin's bundled server is checked
+against `plugins.<plugin>.mcp_servers.<server>` entries, top-level
+`mcp_servers` entries, or both.
 
 Add these entries to `requirements.toml`:
 
@@ -1169,9 +1320,10 @@ work. See the official
 
 ### Approve Gemini CLI
 
-Define the canonical server and its tool allowlist in the system override
-settings, not only user or workspace settings. Keep `trust` false;
-`trust: true` bypasses every confirmation for the server:
+This recipe was checked against Gemini CLI 0.62.0; check it again
+after upgrading Gemini CLI. Define the canonical server and its tool allowlist
+in the system override settings, not only user or workspace settings. Keep
+`trust` false; `trust: true` bypasses every confirmation for the server:
 
 ~~~json
 {
@@ -1219,136 +1371,158 @@ settings, not only user or workspace settings. Keep `trust` false;
 ~~~
 
 Approve tools only with exact per-tool policy rules. Do not list the server in
-`mcp.allowed`: the server runs without it, and current Gemini CLI source turns
-each `mcp.allowed` entry into an allow rule for every tool of that server.
-Instead, save this file as `remembrance.toml` in the admin policy folder:
-`/Library/Application Support/GeminiCli/policies` on macOS,
+`mcp.allowed`: the server runs without it, and Gemini CLI turns each
+`mcp.allowed` entry into an allow rule for every tool of that server.
+Instead, save this file as `remembrance.toml` in the admin policy
+folder: `/Library/Application Support/GeminiCli/policies` on macOS,
 `/etc/gemini-cli/policies` on Linux, or `C:\ProgramData\gemini-cli\policies`
-on Windows. Gemini CLI ignores admin policy files that are not root-owned.
+on Windows.
 
 ~~~toml
 # One exact rule per tool in includeTools: allow, except the two
 # confirmed-delete tools, which ask. To make a tool ask, change its
 # decision to "ask_user" rather than deleting its rule: an admin ask
 # outranks users' own allow rules, and without one a user's allow decides.
+# Keep each allow rule's toolAnnotations line: it stops the rule from also
+# allowing another server's tool that has the same full name.
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "get_connection_status"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "run_connection_doctor"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "query_skills"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "list_skills"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "invoke_skill"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "get_effective_preferences"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "get_private_lesson_policy"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "get_skill"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "get_resource"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "get_value_proof"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "submit_query_feedback"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "submit_feedback"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "submit_preference_compatibility_feedback"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "report_task_outcome"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "submit_suggestion"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "record_preference"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "link_current_installation"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "submit_private_lesson_candidate"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "acknowledge_feedback_denial"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "decline_pending_action"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
@@ -1356,24 +1530,28 @@ priority = 200
 [[rule]]
 mcpName = "remembrance"
 toolName = "capture_learning"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "inspect_private_learning_outbox"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "submit_private_skill_candidate"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
 [[rule]]
 mcpName = "remembrance"
 toolName = "retry_private_lesson_candidate"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
@@ -1386,6 +1564,7 @@ priority = 200
 [[rule]]
 mcpName = "remembrance"
 toolName = "retry_private_skill_candidate"
+toolAnnotations = { destructiveHint = false }
 decision = "allow"
 priority = 200
 
@@ -1394,41 +1573,287 @@ mcpName = "remembrance"
 toolName = "delete_private_skill_candidate"
 decision = "ask_user"
 priority = 200
+
+# Every tool again by the full name Gemini CLI also checks calls by,
+# only ever asking. The allow rules above outrank them, so those tools
+# still run in every mode, plan mode over ACP included, and both
+# confirmed-delete tools ask in every mode, YOLO included.
+[[rule]]
+toolName = "mcp_remembrance_get_connection_status"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_run_connection_doctor"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_query_skills"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_list_skills"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_invoke_skill"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_get_effective_preferences"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_get_private_lesson_policy"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_get_skill"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_get_resource"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_get_value_proof"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_submit_query_feedback"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_submit_feedback"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_submit_preference_compatibility_feedback"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_report_task_outcome"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_submit_suggestion"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_record_preference"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_link_current_installation"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_submit_private_lesson_candidate"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_acknowledge_feedback_denial"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_decline_pending_action"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_capture_learning"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_inspect_private_learning_outbox"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_submit_private_skill_candidate"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_retry_private_lesson_candidate"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_delete_private_lesson_candidate"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_retry_private_skill_candidate"
+decision = "ask_user"
+priority = 150
+
+[[rule]]
+toolName = "mcp_remembrance_delete_private_skill_candidate"
+decision = "ask_user"
+priority = 150
 ~~~
+
+Gemini CLI checks the folder, not the files in it. On macOS and Linux the
+folder must be owned by root and not writable by group or others. On Windows it
+must be owned by Administrators, SYSTEM or a system service, and only those may
+have write access to it, so remove any write access for Users, such as rights
+inherited from `C:\ProgramData`. Otherwise Gemini CLI skips the whole folder
+with a security warning. It loads only regular `.toml` files, not symbolic
+links, and checks neither the files' owner nor the parent folders, so keep
+those owned and writable only by administrators as well. Once the folder holds
+a `.toml` file, Gemini CLI ignores `--admin-policy` and `adminPolicyPaths`,
+with a warning.
 
 The file has one exact rule for every tool in `includeTools`: an allow rule
 for each tool except the two confirmed-delete tools, whose admin `ask_user`
-rules keep them asking even where a user allowed them, so a headless run denies
-them. Apart from those two, this reproduces the earlier behavior of this
-recipe, whose `mcp.allowed` entry let every included tool run, with exact
-rules instead of a whole-server rule. The file already contains the rules from
-"Highly Recommended: approve private submissions" for the four private submit
-and retry tools and the local-only `capture_learning`, so do not add those
-again. To make a tool ask, change its rule to `decision = "ask_user"` instead
-of deleting the rule: an admin-tier ask outranks users' own allow rules, while
-without an admin rule a user's allow rule decides. A headless run then denies
-that tool.
+rules make them ask even where a user's own rule allows them, so a headless run
+denies them. In Gemini CLI's default, auto-edit and YOLO modes, this reproduces
+the earlier behavior of this recipe, whose `mcp.allowed` entry let every
+included tool run, apart from those two, with exact rules instead of a
+whole-server rule. Unlike that entry, the rules name no approval mode, so they
+also apply in plan mode: there the allowed Remembrance tools run as well,
+private submissions included, and the two delete tools still ask. The file
+already contains the rules from "Highly Recommended: approve private
+submissions" for the four private submit and retry tools and the local-only
+`capture_learning`, so do not add those again. To make a tool ask, change its
+rule to `decision = "ask_user"` instead of deleting the rule: an admin-tier ask
+outranks users' own allow rules, while without an admin rule a user's allow
+rule decides. A headless run then denies that tool.
+
+The rules after those name every tool in `includeTools` again by the full
+name Gemini CLI gives it, `mcp_remembrance_<tool>`, without `mcpName`, and
+only ask. Gemini CLI 0.62.0 also checks calls under the server
+name `mcp_remembrance`, which no rule with `mcpName = "remembrance"`
+matches: in an IDE connected over ACP before any other check, and in the
+terminal after a rule asks. Without a full-name rule, the mode's own default
+decides there: plan mode denies every tool not marked read-only, and YOLO mode
+allows every tool. With them, that check only asks. Over ACP it then hands the
+call on to the exact rules, so the allowed tools run in plan mode as well, and
+both delete tools ask in every approval mode, YOLO included, whether Gemini
+CLI started with `--yolo` or the user turned it on with Ctrl+Y, while a
+headless run refuses them. Never change them to allow: without `mcpName`, a
+rule also matches another server's tool that has the same full name, such as
+the tool `skills` of a server named `remembrance_query`, whose full name is
+`mcp_remembrance_query_skills`.
+
+Each allow rule also requires `destructiveHint = false`, which Remembrance's
+server declares for every tool except the two delete tools. Gemini CLI checks a
+subagent's calls without the server name or the tool's annotations, and takes
+the server name from the full name, so without that condition the allow rule
+for `query_skills` would also let a subagent run that `skills` tool without
+asking. With it, such a call asks, while Remembrance's own tools still run.
+
+The delete tools' admin ask rules hold against users' policy rules, but not
+against a user's own answer to the prompt. After "Allow tool for this session",
+Gemini CLI does not ask before that tool again until it restarts, and "Allow
+all server tools for this session" on any Remembrance prompt does the same for
+every Remembrance tool, both deletes included. Where every delete must ask,
+also set `security.disableAlwaysAllow` to `true` in the system settings:
+Gemini CLI then offers neither answer for any tool, so each tool that asks does
+so every time.
+
+To keep users out of YOLO mode altogether, also set `security.disableYoloMode`
+to `true` in the system settings. Gemini CLI then refuses to start in YOLO
+mode, in the terminal, headless or over ACP, and refuses Ctrl+Y. It does not
+stop an IDE connected over ACP from switching a running session to YOLO mode,
+so keep the full-name rules above either way.
 
 If the organization already restricts servers with `mcp.allowed`, Remembrance
 must be listed there to run, and that entry creates the whole-server allow rule.
-Then also place this rule in the admin policy folder. It creates no allow rule:
-admin rules outrank the one `mcp.allowed` creates, so a Remembrance tool
-without its own admin rule asks again, while the per-tool rules above, at
-priority 200, still win over it for their tools:
+Then also save this rule in the admin policy folder as its own file,
+`remembrance-fallback.toml`, next to `remembrance.toml`. It creates no
+allow rule: admin rules outrank the one `mcp.allowed` creates, so a
+Remembrance tool without its own admin rule asks again, while the per-tool rules
+above, at priority 200, still win over it for their tools. Keep
+`toolName = "*"`, which matches every tool of the `remembrance` server, and
+keep the rule out of `remembrance.toml`: Gemini CLI rejects a rule
+without `toolName`, although its policy engine guide shows one, and an invalid
+rule makes it skip every rule in the same file.
 
 ~~~toml
+# Save as its own file, remembrance-fallback.toml, only where
+# mcp.allowed lists Remembrance; keep toolName, or Gemini CLI skips the file.
 [[rule]]
 mcpName = "remembrance"
+toolName = "*"
 decision = "ask_user"
 priority = 100
 ~~~
 
 System settings live at `/Library/Application Support/GeminiCli/settings.json`
 on macOS, `/etc/gemini-cli/settings.json` on Linux, and
-`C:\ProgramData\gemini-cli\settings.json` on Windows. Also allow
-`remembrance.dev` in the organization's egress policy. Restart Gemini CLI,
-inspect the registered server, then run `run_connection_doctor` and require
-organization scope before contribution work. See the official
+`C:\ProgramData\gemini-cli\settings.json` on Windows. Gemini CLI checks
+that file and every folder above it the way it checks the admin policy folder,
+on Windows `C:\ProgramData` included, and skips the file with a security
+warning when one fails. System settings outrank user and workspace settings but
+are not locked: Gemini CLI reads them from whatever file
+`GEMINI_CLI_SYSTEM_SETTINGS_PATH` names, so a user who controls the
+environment it starts in can drop this definition and use their own, for
+example without `includeTools` or with `trust: true`, which in a trusted
+folder also skips the admin ask rules. The admin policy folder cannot be moved
+that way. Where this matters, start Gemini CLI through a wrapper that sets the
+variable to the managed file, as Gemini CLI's enterprise guide describes.
+
+The system settings also do not cover the MCP servers a subagent defines for
+itself, or the server list an IDE sends when it opens a session over ACP.
+Either can define its own server named `remembrance` that runs another
+command, without `includeTools`, and Gemini CLI 0.62.0 then
+applies the allow rules to that server's tools of the same names. A subagent
+definition in `~/.gemini/agents`, or one the user accepts from a trusted
+project's `.gemini/agents` folder, can also set `trust: true`, and that
+subagent then runs both delete tools without asking: in the terminal in every
+mode except plan mode, which does not run it, and over ACP in YOLO mode. An
+IDE's server list cannot set `trust`, so both delete tools still ask there.
+Where every delete must ask, also set `experimental.enableAgents` to
+`false` in the system settings. Gemini CLI then loads no subagents, its
+built-in ones included.
+
+This recipe was not tested on Windows. A default Windows install may let the
+Users group create files and folders in `C:\ProgramData`. If it does, Gemini
+CLI 0.62.0 skips `C:\ProgramData\gemini-cli\settings.json` on
+every machine, and the admin policy folder too unless its inherited Users
+rights are removed. To check, run `icacls C:\ProgramData` and
+`icacls C:\ProgramData\gemini-cli`: Gemini CLI accepts write, append,
+delete, ownership or permission rights, such as `(W)`, `(WD)`, `(AD)`,
+`(M)` or `(F)`, only for Administrators, SYSTEM, service accounts
+(`NT SERVICE\...`), CREATOR OWNER and CREATOR GROUP. When a check fails,
+Gemini CLI's security warning names the folder and the groups that can write
+to it.
+
+Gemini CLI fills in `${REMEMBRANCE_API_KEY}` from the environment it starts
+in. Without that variable the server receives an empty key and uses the shared
+config file from "Enterprise/org key setup" instead. Gemini CLI starts MCP
+servers only in a trusted folder, and interactive Gemini CLI asks whether to
+trust a new folder. In a folder that is not trusted, the Remembrance server does
+not start, and a headless run, such as `gemini -p` in CI, exits with an error
+unless the folder is trusted, `--skip-trust` is passed, or
+`GEMINI_CLI_TRUST_WORKSPACE=true` is set. Use those two only for unattended
+runs in folders the organization trusts.
+
+Also allow `remembrance.dev` in the organization's egress policy. Restart
+Gemini CLI, inspect the registered server, then run `run_connection_doctor`
+and require organization scope before contribution work. See the official
 [enterprise configuration](https://geminicli.com/docs/cli/enterprise/),
 [MCP settings](https://geminicli.com/docs/tools/mcp-server/), and
 [policy engine](https://geminicli.com/docs/reference/policy-engine/).
@@ -1818,9 +2243,10 @@ session skills.
   standing instructions proactively. If tools are still not visible, use the
   REST fallback and emit REMEMBRANCE_SUBMISSION_PAYLOAD only when the API is
   unavailable.
-- "codex: command not found": use the complete Codex setup above. It checks
-  the current "/Applications/ChatGPT.app/Contents/Resources/codex" bundle,
-  then the legacy "/Applications/Codex.app/Contents/Resources/codex" path.
+- "codex: command not found": use the complete Codex setup above. It runs the
+  newest Codex CLI it finds: `codex` on PATH, the ChatGPT desktop app's
+  "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex", or the
+  older bundle paths. Set CODEX_CLI to a Codex CLI's full path to choose one.
 - "401 or 403": the key is missing, expired, revoked, scoped to a different
   environment, or not visible to the agent process. Check config file vs env
   precedence and regenerate a key from the dashboard if needed.

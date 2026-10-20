@@ -65,6 +65,7 @@ import {
   unavailableQueryContext,
   userCorrectionCaptureDirective,
   valueEpisodeFromResponse,
+  withoutPrivateKeySearch,
 } from "./hook-core.mjs";
 
 // VS Code 1.133 names a subagent only in SubagentStart and SubagentStop.
@@ -185,7 +186,10 @@ export async function handleHookInput(input, options = {}) {
     runtime: "vs_code",
     userAgent: "@remembrance/vscode-plugin",
   }).catch(() => 0);
-  let decision = shouldQueryPrompt(redacted, env);
+  let decision = withoutPrivateKeySearch(
+    shouldQueryPrompt(redacted, env),
+    prompt,
+  );
   if (decision.hygiene) {
     // Only the skill search stops: the governance a search would have carried
     // and this prompt's capture and recovery lines are still delivered.

@@ -471,6 +471,32 @@ function agentHostBySurface(surface) {
 function isPluginHostSurface(value) {
   return PLUGIN_HOSTS.some((host) => host.surface === value);
 }
+var CODEX_CLI_LOOKUP = `set +eu; unalias codex 2>/dev/null || :; unset -f codex 2>/dev/null || :
+if [ -n "$CODEX_CLI" ]; then
+  [ -x "$CODEX_CLI" ] || { printf 'CODEX_CLI is set but is not an executable file: %s\\n' "$CODEX_CLI" >&2; exit 1; }
+else
+  best=-1
+  for c in "$(command -v codex 2>/dev/null)" \\
+    /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex \\
+    /Applications/ChatGPT.app/Contents/Resources/codex \\
+    /Applications/Codex.app/Contents/Resources/codex; do
+    case "$c" in /*) [ -x "$c" ] || continue ;; *) continue ;; esac
+    out=$("$c" --version </dev/null 2>/dev/null) || continue
+    v=$(printf '%s\\n' "$out" | awk 'match($0, /[0-9]+[.][0-9]+[.][0-9]+/) { split(substr($0, RSTART, RLENGTH), n, "."); v = n[1] * 1000000 + n[2] * 1000 + n[3]; exit } END { print v + 0 }')
+    [ "$v" -gt "$best" ] && best=$v && CODEX_CLI=$c
+  done
+  [ -n "$CODEX_CLI" ] || { printf '%s\\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, or set CODEX_CLI to a Codex CLI path, then try again." >&2; exit 1; }
+fi
+printf 'Using Codex CLI: %s\\n' "$CODEX_CLI" >&2`;
+function codexCliCommand(...steps) {
+  return ["(", CODEX_CLI_LOOKUP, steps.join(" &&\n  "), ")"].join("\n");
+}
+var CODEX_PLUGIN_SETUP_COMMAND = codexCliCommand(
+  '"$CODEX_CLI" plugin marketplace add dreamarkinc/remembrance-skills',
+  '"$CODEX_CLI" plugin marketplace upgrade remembrance',
+  '"$CODEX_CLI" plugin add remembrance@remembrance',
+  '"$CODEX_CLI"'
+);
 
 // ../../node_modules/zod/v3/external.js
 var external_exports = {};
@@ -4580,14 +4606,10 @@ var clientHealthReportSchema = external_exports.object({
 
 // ../core/src/client-release.ts
 var CLIENT_RELEASE_SCHEMA_VERSION = "1";
-var CODEX_UPDATE_COMMAND = [
-  'CODEX_CLI="${CODEX_CLI:-$(command -v codex || true)}"',
-  '[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/ChatGPT.app/Contents/Resources/codex"',
-  '[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/Codex.app/Contents/Resources/codex"',
-  `[ -x "$CODEX_CLI" ] || { printf '%s\\n' "Codex CLI not found. Install the Codex CLI, or update the ChatGPT desktop app, then try again." >&2; exit 1; }`,
+var CODEX_UPDATE_COMMAND = codexCliCommand(
   '"$CODEX_CLI" plugin marketplace upgrade remembrance',
   '"$CODEX_CLI" plugin add remembrance@remembrance --json'
-].join("\n");
+);
 var CLIENT_UPDATE_GUIDANCE = {
   codex: {
     surface: "codex",
@@ -4898,7 +4920,7 @@ var HOST_POLICY_OPERATION_CLASSES = /* @__PURE__ */ new Set([
   "feedback",
   "other"
 ]);
-var CODEX_HOOK_REVIEW_COMMAND = `CODEX_CLI="\${CODEX_CLI:-$(command -v codex || true)}"; [ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/ChatGPT.app/Contents/Resources/codex"; [ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/Codex.app/Contents/Resources/codex"; [ -x "$CODEX_CLI" ] || { printf '%s\\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, then try again." >&2; exit 1; }; "$CODEX_CLI"`;
+var CODEX_HOOK_REVIEW_COMMAND = codexCliCommand('"$CODEX_CLI"');
 var CODEX_HOOK_EVENTS = [
   "SessionStart",
   "UserPromptSubmit",
@@ -4916,7 +4938,7 @@ function codexHookReviewAction(followupTool, reviewEvents = []) {
 function codexHookEvents(value) {
   return Array.isArray(value) ? CODEX_HOOK_EVENTS.filter((event) => value.includes(event)) : [];
 }
-var CODEX_HOOKS_PENDING_APPROVAL_NOTICE = "Remembrance hooks await Codex approval: run codex, choose Review hooks, press t.";
+var CODEX_HOOKS_PENDING_APPROVAL_NOTICE = "Remembrance hooks await Codex approval: run_connection_doctor gives the command.";
 var CODEX_HOOK_TRUST_UNREADABLE_NOTICE = "Could not read Codex hook trust state; check hooks with run_connection_doctor.";
 var CODEX_MANAGED_HOOKS_ONLY_NOTICE = "Remembrance plugin hooks are off: Codex policy runs only managed hooks. Tools work.";
 function codexHooksPendingApproval(value, followupTool) {
@@ -7610,8 +7632,7 @@ var PRIVATE_LESSON_TAG_RELATIONAL_PREFIXES = /* @__PURE__ */ new Set([
   "sub"
 ]);
 var privateLessonCanonicalTagSchema = privateLessonTagSyntaxSchema.superRefine((tag, ctx) => {
-  const inspected = inspectPrivateLessonTag(tag);
-  if (inspected.tag !== tag || inspected.held_reasons.length > 0) {
+  if (inspectPrivateLessonTag(tag).tag !== tag) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
       message: "tag must be canonical and pass private-lesson safety checks"
@@ -7978,10 +7999,10 @@ var EXISTING_REDACTION_MARKER = new RegExp(
 var REPLACEMENTS = [
   { category: "unicode_control", pattern: ZERO_WIDTH_OR_BIDI, hold: true },
   { category: "stack_trace", pattern: STACK_TRACE, hold: true },
-  { category: "screenshot", pattern: SCREENSHOT, hold: true },
+  { category: "screenshot", pattern: SCREENSHOT, hold: false },
   { category: "connection_string", pattern: CONNECTION_STRING, hold: false },
   { category: "private_url", pattern: PRIVATE_URL, hold: false },
-  { category: "public_url", pattern: PUBLIC_URL, hold: true },
+  { category: "public_url", pattern: PUBLIC_URL, hold: false },
   { category: "jwt", pattern: JWT, hold: false },
   { category: "cookie", pattern: COOKIE, hold: false },
   { category: "credential", pattern: CREDENTIAL, hold: false },
@@ -7991,24 +8012,24 @@ var REPLACEMENTS = [
   {
     category: "encoded_or_high_entropy",
     pattern: SHORT_PADDED_BASE64,
-    hold: true
+    hold: false
   },
   {
     category: "encoded_or_high_entropy",
     pattern: SHORT_MIXED_OPAQUE,
-    hold: true
+    hold: false
   },
   {
     category: "credential",
     pattern: SHORT_CONTEXTUAL_CREDENTIAL,
     hold: false
   },
-  { category: "encoded_or_high_entropy", pattern: HIGH_ENTROPY, hold: true },
+  { category: "encoded_or_high_entropy", pattern: HIGH_ENTROPY, hold: false },
   { category: "path", pattern: FILE_PATH, hold: false },
   { category: "hostname", pattern: INTERNAL_HOSTNAME, hold: false },
   { category: "hostname", pattern: HOSTNAME, hold: false },
   { category: "identifier", pattern: IDENTIFIER, hold: false },
-  { category: "code_block", pattern: CODE_BLOCK, hold: true }
+  { category: "code_block", pattern: CODE_BLOCK, hold: false }
 ];
 function normalizePrivateLessonText(value) {
   return value.normalize("NFC").replace(/\r\n?/gu, "\n").replace(/[\t ]+/gu, " ").replace(/ *\n */gu, "\n").replace(/\n{3,}/gu, "\n\n").trim();
@@ -8043,6 +8064,141 @@ function redactPrivateLessonText(value) {
     held_reasons: [...held].sort()
   };
 }
+function redactPrivateLessonTextWithSpans(value) {
+  const normalized2 = normalizePrivateLessonText(value);
+  const existingMarkers = [];
+  let text = "";
+  let origin = [];
+  let cursor = 0;
+  const keep = (from, to) => {
+    text += normalized2.slice(from, to);
+    for (let index = from; index < to; index += 1) {
+      origin.push([index, index + 1]);
+    }
+  };
+  const markers = new RegExp(
+    EXISTING_REDACTION_MARKER.source,
+    EXISTING_REDACTION_MARKER.flags
+  );
+  for (const match of normalized2.matchAll(markers)) {
+    keep(cursor, match.index);
+    const placeholder = `\uFFF0${existingMarkers.push(match[0]) - 1}\uFFF1`;
+    text += placeholder;
+    for (let index = 0; index < placeholder.length; index += 1) {
+      origin.push([match.index, match.index + match[0].length]);
+    }
+    cursor = match.index + match[0].length;
+  }
+  keep(cursor, normalized2.length);
+  const counts = {};
+  const held = /* @__PURE__ */ new Set();
+  const spans = [];
+  for (const rule of REPLACEMENTS) {
+    const marker = `[redacted:${rule.category}]`;
+    let next = "";
+    const nextOrigin = [];
+    let position = 0;
+    let matches = 0;
+    for (const match of text.matchAll(
+      new RegExp(rule.pattern.source, rule.pattern.flags)
+    )) {
+      next += text.slice(position, match.index);
+      nextOrigin.push(...origin.slice(position, match.index));
+      const start = origin[match.index]?.[0] ?? normalized2.length;
+      const end = Math.max(
+        start,
+        origin[match.index + match[0].length - 1]?.[1] ?? start
+      );
+      spans.push({ category: rule.category, hold: rule.hold, start, end });
+      next += marker;
+      for (let index = 0; index < marker.length; index += 1) {
+        nextOrigin.push([start, end]);
+      }
+      position = match.index + match[0].length;
+      matches += 1;
+    }
+    if (matches === 0) continue;
+    next += text.slice(position);
+    nextOrigin.push(...origin.slice(position));
+    text = next;
+    origin = nextOrigin;
+    counts[rule.category] = (counts[rule.category] ?? 0) + matches;
+    if (rule.hold) held.add(rule.category);
+  }
+  text = text.replace(/\uFFF0(\d+)\uFFF1/gu, (_, index) => {
+    return existingMarkers[Number(index)] ?? "[redacted:identifier]";
+  });
+  return {
+    text: normalizePrivateLessonText(text),
+    counts: privateLessonRedactionCountsSchema.parse(counts),
+    held_reasons: [...held].sort(),
+    spans
+  };
+}
+var PRIVATE_LESSON_MAX_FINDINGS = 16;
+function privateLessonFindings(input) {
+  const parsed = privateLessonPreparationInputSchema.parse(input);
+  const findings = [];
+  const textFields = [
+    ...parsed.generalized_lesson ? [["generalized_lesson", parsed.generalized_lesson, 0]] : [],
+    ...(parsed.stable_conditions ?? []).map(
+      (condition, index) => [`stable_conditions[${index}]`, condition, 1 + index]
+    )
+  ];
+  for (const [field, value, rank] of textFields) {
+    const byCategory = /* @__PURE__ */ new Map();
+    for (const span of redactPrivateLessonTextWithSpans(value).spans) {
+      byCategory.set(span.category, [
+        ...byCategory.get(span.category) ?? [],
+        span
+      ]);
+    }
+    for (const [category, spans] of byCategory) {
+      const first = spans.find((span) => span.hold) ?? spans[0];
+      findings.push({
+        field,
+        category,
+        rule: "text_pattern",
+        occurrences: spans.length,
+        approx_offset: first.start,
+        length: first.end - first.start,
+        holds: spans.some((span) => span.hold),
+        rank
+      });
+    }
+  }
+  (parsed.tags ?? []).forEach((tag, index) => {
+    if (inspectPrivateLessonTag(tag).tag !== null) return;
+    const lowered = normalizePrivateLessonText(tag).toLowerCase();
+    const aliased = PRIVATE_LESSON_SAFE_TAG_ALIASES[lowered] ?? lowered;
+    const spans = redactPrivateLessonTextWithSpans(aliased).spans;
+    const rule = spans.length > 0 ? "tag_pattern" : privateLessonTagSyntaxSchema.safeParse(aliased).success ? "tag_identity" : "tag_format";
+    const categories = spans.length > 0 ? [...new Set(spans.map((span) => span.category))] : ["identifier"];
+    for (const category of categories) {
+      const matched = spans.filter((span) => span.category === category);
+      findings.push({
+        field: `tags[${index}]`,
+        category,
+        rule,
+        occurrences: Math.max(1, matched.length),
+        approx_offset: matched[0]?.start ?? 0,
+        length: matched[0] ? matched[0].end - matched[0].start : aliased.length,
+        holds: false,
+        rank: 1e3 + index
+      });
+    }
+  });
+  findings.sort(
+    (left, right) => Number(right.holds) - Number(left.holds) || left.rank - right.rank || left.approx_offset - right.approx_offset
+  );
+  return {
+    findings: findings.slice(0, PRIVATE_LESSON_MAX_FINDINGS).map(({ rank: _rank, ...finding }) => finding),
+    findings_omitted: Math.max(
+      0,
+      findings.length - PRIVATE_LESSON_MAX_FINDINGS
+    )
+  };
+}
 function preparePrivateLessonCandidate(input, options = {}) {
   input = privateLessonPreparationInputSchema.parse(input);
   const redactedParts = [
@@ -8061,14 +8217,13 @@ function preparePrivateLessonCandidate(input, options = {}) {
   }
   const tagParts = (input.tags ?? []).map(inspectPrivateLessonTag);
   const counts = {};
-  const held = /* @__PURE__ */ new Set();
   for (const part of [...redactedParts, ...tagParts]) {
     for (const [category, count] of Object.entries(part.counts)) {
       const key = category;
       counts[key] = Math.min(999, (counts[key] ?? 0) + Number(count));
     }
-    for (const reason of part.held_reasons) held.add(reason);
   }
+  const held = new Set(redactedParts.flatMap((part) => part.held_reasons));
   const lesson = redactedParts[0]?.text || null;
   const candidate = privateLessonCanonicalPayloadSchema.parse({
     contract_version: PRIVATE_LESSON_CONTRACT_VERSION,
@@ -8124,6 +8279,7 @@ function computePrivateLessonRedactorDigest() {
         correlation_ids: "domain-separated-sha256-v1",
         tag_syntax: PRIVATE_LESSON_TAG_PATTERN.source,
         tag_safety: "redaction-plus-identity-hints-v2",
+        tag_failure: "drop-and-count-v1",
         tag_identity_hints: [...PRIVATE_LESSON_TAG_IDENTITY_HINTS].sort(),
         tag_identity_label_suffixes: [
           ...PRIVATE_LESSON_TAG_IDENTITY_LABEL_SUFFIXES
@@ -8147,10 +8303,6 @@ function inspectPrivateLessonTag(value) {
   const aliased = PRIVATE_LESSON_SAFE_TAG_ALIASES[normalized2] ?? normalized2;
   const redacted = redactPrivateLessonText(aliased);
   const counts = { ...redacted.counts };
-  const held = /* @__PURE__ */ new Set([
-    ...redacted.held_reasons,
-    ...Object.keys(redacted.counts)
-  ]);
   const identityHints = new Set(
     aliased.split(/[-_]/u).filter((segment) => PRIVATE_LESSON_TAG_IDENTITY_HINTS.has(segment))
   );
@@ -8158,21 +8310,10 @@ function inspectPrivateLessonTag(value) {
   const isGenericOrganizationRelationship = segments.length === 2 && PRIVATE_LESSON_TAG_RELATIONAL_PREFIXES.has(segments[0] ?? "") && PRIVATE_LESSON_TAG_IDENTITY_LABEL_SUFFIXES.has(segments[1] ?? "");
   const hasLikelyIdentityLabel = segments.length >= 2 && !isGenericOrganizationRelationship && PRIVATE_LESSON_TAG_IDENTITY_LABEL_SUFFIXES.has(segments.at(-1) ?? "") && segments.slice(0, -1).some((segment) => !PRIVATE_LESSON_TAG_IDENTITY_HINTS.has(segment));
   if (!privateLessonTagSyntaxSchema.safeParse(aliased).success || redacted.text !== aliased || identityHints.size >= 2 || hasLikelyIdentityLabel) {
-    if (held.size === 0) {
-      counts.identifier = Math.min(999, (counts.identifier ?? 0) + 1);
-      held.add("identifier");
-    }
-    return {
-      tag: null,
-      counts,
-      held_reasons: [...held].sort()
-    };
+    if (Object.keys(counts).length === 0) counts.identifier = 1;
+    return { tag: null, counts };
   }
-  return {
-    tag: aliased,
-    counts: {},
-    held_reasons: []
-  };
+  return { tag: aliased, counts: {} };
 }
 function pseudonymizeCorrelationId(value) {
   const digest2 = hashValue(
@@ -8184,12 +8325,21 @@ function pseudonymizeCorrelationId(value) {
   return `corr_${digest2.slice(0, 48)}`;
 }
 var CURRENT_PRIVATE_LESSON_REDACTOR_DIGEST = computePrivateLessonRedactorDigest();
+var PRIVATE_LESSON_BROAD_HOLD_REDACTOR_DIGEST = "sha256:e3414b36b1f8d5512e42148c0d06b958c7010bbdb52024bd78ad4e68b0356324";
 var PRIVATE_LESSON_LEGACY_V2_REDACTOR_DIGEST = "sha256:bca83ac50b0124a0401f806b3498bbb1ec977c02c1975d5345cb8d0b85c00b75";
 var PRIVATE_LESSON_SUPPORTED_REDACTOR_PROFILES = Object.freeze({
   [PRIVATE_LESSON_REDACTION_VERSION]: Object.freeze({
     [CURRENT_PRIVATE_LESSON_REDACTOR_DIGEST]: Object.freeze({
       version: PRIVATE_LESSON_REDACTION_VERSION,
       digest: CURRENT_PRIVATE_LESSON_REDACTOR_DIGEST,
+      normalization: "unicode-nfc-lf-space-v1"
+    }),
+    // Retained drafts and candidates of published 0.2 clients keep a
+    // supported profile; a candidate is still checked against the current
+    // canonical schema and network-safety refinements.
+    [PRIVATE_LESSON_BROAD_HOLD_REDACTOR_DIGEST]: Object.freeze({
+      version: PRIVATE_LESSON_REDACTION_VERSION,
+      digest: PRIVATE_LESSON_BROAD_HOLD_REDACTOR_DIGEST,
       normalization: "unicode-nfc-lf-space-v1"
     }),
     // Published pre-negotiation clients produced this exact v2 profile.
@@ -8218,6 +8368,27 @@ var PrivateLessonRedactionProfileError = class extends Error {
 };
 function privateLessonRedactorDigest() {
   return CURRENT_PRIVATE_LESSON_REDACTOR_DIGEST;
+}
+function privateLessonCurrentHoldReasons(candidate, heldReasons) {
+  const known = new Set(privateLessonRedactionCategorySchema.options);
+  const holding = new Set(
+    REPLACEMENTS.filter((rule) => rule.hold).map((rule) => rule.category)
+  );
+  const text = [
+    candidate.generalized_lesson ?? "",
+    ...candidate.stable_conditions
+  ].join("\n");
+  return [
+    .../* @__PURE__ */ new Set([
+      ...[...holding].filter(
+        (category) => text.includes(`[redacted:${category}]`)
+      ),
+      ...heldReasons.filter((category) => holding.has(category)),
+      ...[...Object.keys(candidate.redaction_counts), ...heldReasons].filter(
+        (category) => !known.has(category)
+      )
+    ])
+  ].sort();
 }
 function privateLessonSupportedRedactorProfiles() {
   return Object.entries(PRIVATE_LESSON_SUPPORTED_REDACTOR_PROFILES).flatMap(
@@ -8479,6 +8650,9 @@ var privateSkillReplacementLinkSchema = external_exports.object({
   context_source: privateSkillReformulationContextSourceSchema,
   recovery_context_id: external_exports.string().regex(/^pctx_[a-f0-9]{64}$/u).optional()
 }).strict();
+var privateLessonReplacementLinkSchema = external_exports.object({
+  draft_id: external_exports.string().regex(/^pld_[A-Za-z0-9_-]{8,96}$/u)
+}).strict();
 var privateSkillCaptureSchema = privateSkillIdeaRequestSchema.omit({
   agent: true,
   enterprise_encryption: true,
@@ -8560,7 +8734,10 @@ var captureLearningInputSchema = external_exports.object({
   contract_version: external_exports.literal(PRIVATE_LEARNING_CAPTURE_VERSION).default(PRIVATE_LEARNING_CAPTURE_VERSION),
   lesson: privateLessonPreparationInputSchema.optional(),
   private_skill: privateSkillCaptureSchema.optional(),
-  replacement_of: privateSkillReplacementLinkSchema.optional(),
+  replacement_of: external_exports.union([
+    privateSkillReplacementLinkSchema,
+    privateLessonReplacementLinkSchema
+  ]).optional(),
   preference: recordPreferenceRequestSchema.optional()
 }).strict().superRefine((value, ctx) => {
   const populated = [
@@ -8574,10 +8751,11 @@ var captureLearningInputSchema = external_exports.object({
       message: "Exactly one lesson, private_skill, or preference payload is required."
     });
   }
-  if (value.replacement_of !== void 0 && value.private_skill === void 0) {
+  const replaces = value.replacement_of?.draft_id.slice(0, 4);
+  if (replaces === "psd_" && value.private_skill === void 0 || replaces === "pld_" && value.lesson === void 0) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
-      message: "replacement_of is valid only with a private_skill payload.",
+      message: replaces === "psd_" ? "replacement_of with a private-skill draft_id is valid only with a private_skill payload." : "replacement_of with a private-lesson draft_id is valid only with a lesson payload.",
       path: ["replacement_of"]
     });
   }
@@ -8601,7 +8779,7 @@ function captureLearningRoute(input) {
 
 // ../core/src/agent-guidance.ts
 var REMEMBRANCE_QUERY_TOOL_DESCRIPTION = "Call before non-trivial service, API, tool, library, workflow, UI, review, test, security, or deployment work to find relevant Remembrance skills and resources. This is a read-only routine action: do not ask the user for a separate conversational permission step. For short context-dependent follow-ups, infer the concrete task from the full conversation, preserve any plugin-supplied client_context.directive_id/runtime/trigger_reason, and query anyway. Compare each candidate's bounded why_matched evidence and applicability conditions before opening it; discard stated unlikely or corner-case mismatches. High matches should be fetched before custom work; possible and exploratory matches remain optional. Do not use for broad web search or one-off facts. Results refer by key or preference_fingerprint to preferences stated once in top-level effective_preferences, and get_skill returns the full text of a description_truncated summary. semantic_status says, without content, whether vector retrieval contributed to each result list; lexical_only results remain usable.";
-var REMEMBRANCE_QUERY_FEEDBACK_TOOL_DESCRIPTION = "Submit one complete set of bounded explicit good, partial, or poor judgments for result_id values from one query_skills call, using the same auth scope as that query. Use overall_fit none only when every rated result is poor; if any result is partial or good, use partial or good as appropriate. Keep honest per-result judgments when correcting validation errors; do not drop them or relabel matches to bypass validation. Each result_id appears once; poor ratings require at least one reason. This bounded feedback action carries no reusable content and needs no separate conversational permission request. Unrated results stay neutral. Notes are optional and compact; this path remains independent of private learning capture and never accepts a reusable lesson. An identical retry is safe, but changed later judgments conflict. Labels adjust bounded retrieval profiles without changing global skill usefulness; use submit_feedback only after actually using a skill.";
+var REMEMBRANCE_QUERY_FEEDBACK_TOOL_DESCRIPTION = "Submit one complete set of bounded explicit good, partial, or poor judgments for result_id values from one query_skills call, using the same auth scope as that query. Use overall_fit none only when every rated result is poor; if any result is partial or good, use partial or good as appropriate. Keep honest per-result judgments when correcting validation errors; do not drop them or relabel matches to bypass validation. Each result_id appears once; poor ratings require at least one reason. This bounded feedback action carries no reusable content and needs no separate conversational permission request. Unrated results stay neutral. Notes are optional and compact; this path remains independent of private learning capture and never accepts a reusable lesson. Keep routine organization ratings minimal: use the Remembrance-issued query_id and result_id values, judgments, required reasons, and an idempotency key when needed, and do not automatically attach internal artifact hashes, task text, source snippets, or raw logs. An identical retry is safe, but changed later judgments conflict. Labels adjust bounded retrieval profiles without changing global skill usefulness; use submit_feedback only after actually using a skill.";
 var REMEMBRANCE_INVOKE_SKILL_TOOL_DESCRIPTION = "Load an explicitly selected skill through the authoritative policy boundary. Use an exact slug returned by list_skills, an MCP resource, or query_skills. This resolves the current active reviewed version, records direct selection, and returns post-use feedback and outcome instructions. Pass version_id only when a session-start directive or subagent handoff supplies one; that exact version is loaded and never substituted, and 409 skill_version_unavailable means it cannot be served. Use scope session only for an organization session skill named by a session-start directive; omit scope for ordinary task use. Do not use submit_query_feedback for this explicit selection.";
 var REMEMBRANCE_CONNECTION_STATUS_TOOL_DESCRIPTION = "Inspect the active Remembrance transport, credential source, authenticated registry scope, and content-free recent contribution outcomes for the current installation or API key without exposing credentials or lesson content. Call this before diagnosing authentication, checking environment variables, or making anonymous REST/browser probes. Local or bundled MCP can read REMEMBRANCE_API_KEY or ~/.config/remembrance/config.json; hosted MCP cannot read local files and authenticates from its request header. When a declared native lifecycle is degraded, local MCP may submit bounded, content-free health evidence unless REMEMBRANCE_HEALTH_REPORTING=0. Never infer the plugin's scope from REMEMBRANCE_API_KEY alone.";
 var REMEMBRANCE_CONNECTION_DOCTOR_TOOL_DESCRIPTION = "Run a bounded, non-mutating Remembrance connection diagnostic. It verifies the active transport, a redacted registry destination, authenticated scope, query authorization, a real catalog read, and organization submission capability. Local MCP also checks shared-config permissions, destination consistency, native plugin lifecycle, and signing identity; hosted MCP marks local-only checks unavailable. It never submits content, creates query demand, opens a review item, or returns credentials, absolute paths, private registry URLs, prompts, or repository data.";
@@ -23962,14 +24140,35 @@ var GEMINI_ADMIN_ALLOWED_TOOLS = Object.freeze(
     (tool) => !isConfirmedDelete(tool)
   )
 );
+var GEMINI_CLI_CHECKED_VERSION = "0.62.0";
+var GEMINI_ADMIN_POLICY_FILES = Object.freeze({
+  rules: "remembrance.toml",
+  fallback: "remembrance-fallback.toml"
+});
 var json = (value) => JSON.stringify(value, null, 2);
 var approveTables = (server, names = tools) => names.map((tool) => `[${server}.tools.${tool}]
 approval_mode = "approve"`).join("\n\n");
-var geminiRule = (tool, decision = "allow") => `[[rule]]
-mcpName = "remembrance"
-toolName = "${tool}"
-decision = "${decision}"
-priority = 200`;
+var geminiRule = (tool, decision = "allow", priority = 200) => [
+  "[[rule]]",
+  'mcpName = "remembrance"',
+  `toolName = "${tool}"`,
+  ...decision === "allow" ? ["toolAnnotations = { destructiveHint = false }"] : [],
+  `decision = "${decision}"`,
+  `priority = ${priority}`
+].join("\n");
+var geminiFullNameAsk = (tool) => `[[rule]]
+toolName = "mcp_remembrance_${tool}"
+decision = "ask_user"
+priority = 150`;
+var geminiFullNameAsks = (names) => names.map(
+  (tool, index) => index === 0 ? [
+    "# Every tool again by the full name Gemini CLI also checks calls by,",
+    "# only ever asking. The allow rules above outrank them, so those tools",
+    "# still run in every mode, plan mode over ACP included, and both",
+    "# confirmed-delete tools ask in every mode, YOLO included.",
+    geminiFullNameAsk(tool)
+  ].join("\n") : geminiFullNameAsk(tool)
+);
 var claudeCodePluginTools = withCapture.map(
   (tool) => `mcp__plugin_remembrance_remembrance__${tool}`
 );
@@ -24042,7 +24241,12 @@ var PRIVATE_SUBMISSION_APPROVAL_SNIPPETS = Object.freeze({
   geminiCli: [
     ...tools.map((tool) => geminiRule(tool)),
     `${localOnlyComment}
-${geminiRule(capture)}`
+${geminiRule(capture)}`,
+    ...geminiFullNameAsks([
+      ...tools,
+      capture,
+      ...PRIVATE_SUBMISSION_CONFIRMED_DELETE_TOOLS
+    ])
   ].join("\n\n"),
   // The managed recipe's admin policy file. It holds the step's own rules
   // above exactly once, so administrators use it instead of them.
@@ -24051,15 +24255,26 @@ ${geminiRule(capture)}`
       "# One exact rule per tool in includeTools: allow, except the two",
       "# confirmed-delete tools, which ask. To make a tool ask, change its",
       '# decision to "ask_user" rather than deleting its rule: an admin ask',
-      "# outranks users' own allow rules, and without one a user's allow decides."
+      "# outranks users' own allow rules, and without one a user's allow decides.",
+      "# Keep each allow rule's toolAnnotations line: it stops the rule from also",
+      "# allowing another server's tool that has the same full name."
     ].join("\n"),
     ...REMEMBRANCE_MCP_RECOMMENDED_LOCAL_ORG_TOOLS.map((tool) => {
       if (isConfirmedDelete(tool)) return geminiRule(tool, "ask_user");
       if (tool === capture) return `${localOnlyComment}
 ${geminiRule(tool)}`;
       return geminiRule(tool);
-    })
-  ].join("\n\n")
+    }),
+    ...geminiFullNameAsks(REMEMBRANCE_MCP_RECOMMENDED_LOCAL_ORG_TOOLS)
+  ].join("\n\n"),
+  // Only where mcp.allowed lists Remembrance, which allows every tool of the
+  // server: this admin ask outranks that allow for each tool without its own
+  // rule above, and those rules, at priority 200, still win for their tools.
+  geminiCliAdminFallback: [
+    `# Save as its own file, ${GEMINI_ADMIN_POLICY_FILES.fallback}, only where`,
+    "# mcp.allowed lists Remembrance; keep toolName, or Gemini CLI skips the file.",
+    geminiRule("*", "ask_user", 100)
+  ].join("\n")
 });
 
 // ../core/src/private-skill-completion.ts
@@ -24664,7 +24879,7 @@ var seedSkills = [
     summary: "Operational setup and troubleshooting workflow for Remembrance across Claude Code, Codex, OpenClaw, Cursor, Gemini, MCP, REST, skill-only installs, enterprise keys, and local agent identity.",
     status: "active",
     visibility: "public",
-    version: "0.1.39",
+    version: "0.1.40",
     domains: ["agent-skills", "mcp", "resource-discovery"],
     tags: [
       "remembrance",
@@ -24715,7 +24930,7 @@ var seedSkills = [
         "gemini",
         "rest"
       ],
-      version: "0.1.39",
+      version: "0.1.40",
       status: "active",
       visibility: "public",
       providers: ["codex", "claude", "cursor", "openclaw", "generic"],
@@ -24904,22 +25119,26 @@ claude plugin install remembrance@remembrance
 
 Codex:
 
+**Codex CLI.** The Codex plugin needs a Codex CLI: \`codex\` on your PATH or, on
+macOS, the CLI bundled in the ChatGPT desktop app. The setup, update and
+hook-review commands run the newest one they find, so an older \`codex\` on PATH
+cannot shadow the app's newer CLI; set \`CODEX_CLI\` to a CLI's full path to
+choose one yourself. No other host needs the Codex CLI.
+
 ~~~bash
-CODEX_CLI="\${CODEX_CLI:-$(command -v codex || true)}"
-[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/ChatGPT.app/Contents/Resources/codex"
-[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/Codex.app/Contents/Resources/codex"
-[ -x "$CODEX_CLI" ] || { printf '%s\\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, then try again." >&2; exit 1; }
-"$CODEX_CLI" plugin marketplace add dreamarkinc/remembrance-skills &&
-  "$CODEX_CLI" plugin marketplace upgrade remembrance &&
-  "$CODEX_CLI" plugin add remembrance@remembrance &&
-  "$CODEX_CLI"
+${CODEX_PLUGIN_SETUP_COMMAND}
 ~~~
 
 This command handles both first install and update. If zsh says
-"codex: command not found", it discovers the current ChatGPT desktop bundle or
-the legacy Codex app bundle without requiring a shell alias. The final command
-opens Codex CLI so its secure hook review can be completed immediately when
-Codex requires it.
+"codex: command not found", it still finds the CLI bundled in the ChatGPT
+desktop app without requiring a shell alias. The final command opens Codex CLI
+so its secure hook review can be completed immediately when Codex requires it.
+
+The block runs in a subshell, so a failure prints a message and leaves your
+terminal open. It uses \`CODEX_CLI\` when set; otherwise it runs the newest of
+\`codex\` on PATH, the ChatGPT desktop app's bundled CLI
+(\`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex\`) and the
+older bundle paths, and stops at the first failed step.
 
 Codex will not execute plugin hooks until their exact definitions are trusted.
 In the Codex window opened by the installer, if Codex shows a **Hooks need
@@ -25104,6 +25323,39 @@ only the capture is reviewed; its submission still must not prompt.
 \`run_connection_doctor\` cannot see a persisted approval; its \`host_approval\`
 field reports only recent denials.
 
+### Unattended runs
+
+A run no person attends, such as a scheduled job, \`codex exec\` or
+\`claude -p\`, cannot answer the user decisions the hooks ask about retained
+private drafts: deliver, keep or delete. To keep its learning going without
+using those decisions up:
+
+1. Approve the four private submit and retry tools as above, so the run
+   delivers its own lessons and skills. On a host that asks, a run nobody can
+   answer denies them, and the draft waits in the outbox.
+2. Start the run with \`REMEMBRANCE_UNATTENDED=1\`. Its hooks then show none of
+   the user decisions (drafts awaiting the user, held drafts, parked drafts
+   coming back), so none is used up, and the next prompt a person makes on the
+   machine gets them. The run still captures and delivers its own lessons,
+   and nothing about the drafts changes.
+   - Codex: \`REMEMBRANCE_UNATTENDED=1 codex exec ...\`.
+   - Claude Code: \`REMEMBRANCE_UNATTENDED=1 claude -p ...\`, or
+     \`{"env":{"REMEMBRANCE_UNATTENDED":"1"}}\` in settings only those runs
+     load: \`--settings\`, or \`.claude/settings.local.json\` in a folder only
+     scheduled runs use.
+   - OpenCode: \`REMEMBRANCE_UNATTENDED=1 opencode run ...\`. A run attached
+     to a server that is already running follows that server's environment.
+   - Cursor and VS Code: the environment the app or CLI starts its hooks
+     with. Cursor asks these decisions only with
+     \`REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY=1\`.
+   - OpenClaw: the Gateway's environment. It then applies to every session
+     that Gateway serves, so set it only on a Gateway or profile that serves
+     no person.
+
+Leave \`REMEMBRANCE_UNATTENDED\` unset for sessions a person uses. Do not set
+\`REMEMBRANCE_AUTO_CONTRIBUTE=0\` for this instead: it also stops the run's own
+learning.
+
 ### Claude Code
 
 Merge these entries into \`permissions.allow\` in \`~/.claude/settings.json\`,
@@ -25247,21 +25499,54 @@ mixed-version installs, use allow-always.
 
 ### Gemini CLI
 
-Create \`~/.gemini/policies/remembrance.toml\` with one rule per tool; the last
-rule is the local-only \`capture_learning\` entry:
+Create \`~/.gemini/policies/remembrance.toml\` with one allow rule per tool, the
+last of them the local-only \`capture_learning\` entry, then one ask rule for
+each of those tools and for both confirmed-delete tools, by the full names
+Gemini CLI gives them:
 
 ~~~toml
 ${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.geminiCli}
 ~~~
 
-Gemini CLI asks before every MCP tool without an allow rule, and
-non-interactive runs treat that prompt as a denial. These rules cover private
-learning only, so a headless run also needs rules for the other Remembrance
-tools it calls, such as \`query_skills\`. Keep \`trust\` false and do not list
-the server in \`mcp.allowed\`: Gemini CLI turns \`trust: true\` and an
-\`mcp.allowed\` entry alike into an allow rule for every tool of the server.
-Administrators use the admin policy file in "Approve Gemini CLI" instead, which
-already contains these rules.
+Without a rule, Gemini CLI asks before a Remembrance tool in its default
+and auto-edit modes; YOLO mode runs the tool without asking, and plan mode
+blocks it or, for a read-only tool, asks. A headless run, such as
+\`gemini -p\`, cannot ask: the model never sees a tool that no rule covers, and
+a tool whose rule asks is denied. These rules cover private learning only, so a
+headless run also needs rules for the other Remembrance tools it calls, such as
+\`query_skills\`. The rules name no approval mode, so they also apply in plan
+mode: there the five tools run without a prompt, private submissions included.
+
+Gemini CLI also checks some calls under the server name \`mcp_remembrance\`,
+which no rule with \`mcpName = "remembrance"\` matches: in an IDE connected
+over ACP, before any other check, and in the terminal, after a rule asks. There
+only the rules that name a tool by its full name, \`mcp_remembrance_<tool>\`,
+match, and they only ask. In plan mode over ACP, that ask hands the call on to
+the allow rules, so the five tools run; without it, plan mode denies them. Both
+delete tools ask in every mode, YOLO included, whether Gemini CLI starts with
+\`--yolo\` or the user turns it on with Ctrl+Y; without their full-name rules,
+YOLO mode runs both without asking. Never change a full-name rule to allow: a
+rule without \`mcpName\` also matches another server's tool that has the same
+full name, such as the tool \`private_lesson_candidate\` of a server named
+\`remembrance_submit\`.
+
+Each allow rule also requires \`destructiveHint = false\`, which Remembrance's
+server declares for every tool except the two delete tools. Gemini CLI checks a
+subagent's calls without the server name or the tool's annotations, and takes
+the server name from the full name, so without that condition an allow rule
+would also let a subagent run such a look-alike tool without asking; with it,
+the full-name rule makes that call ask. A user's own "Allow tool for this
+session" or "Allow all server tools for this session" answer still stops the
+prompts until Gemini CLI restarts.
+
+Keep \`trust\` false and do not list the server in \`mcp.allowed\`: Gemini CLI
+turns \`trust: true\` and an \`mcp.allowed\` entry alike into an allow rule for
+every tool of the server. A \`--policy\` flag or a \`policyPaths\` setting
+replaces \`~/.gemini/policies\`, and Gemini CLI then does not read this file.
+Gemini CLI starts MCP servers only in a trusted folder; "Approve Gemini CLI"
+covers unattended runs. Administrators use the admin policy file in "Approve
+Gemini CLI" instead, which already contains these rules. Checked against Gemini
+CLI ${GEMINI_CLI_CHECKED_VERSION}.
 
 ### Claude Desktop and other MCP clients
 
@@ -25354,8 +25639,12 @@ memory, encrypts only the canonical safe record in a local outbox, and returns
 a draft ID. It never writes the original input to disk, logs, telemetry, or
 error output. Tags
 use an open, bounded lowercase slug vocabulary; new technical terms survive,
-while malformed or privacy-sensitive tags hold the draft instead of being
-silently removed.
+while a malformed or privacy-sensitive tag is dropped and counted. Each
+redaction match becomes its marker and the lesson continues; only a stack
+trace or zero-width or bidirectional control characters hold the draft
+locally. A draft an earlier client held that the current check would send is
+offered to the user once to deliver, keep, or delete; only the user's choice
+delivers it.
 
 The plugin then calls \`submit_private_lesson_candidate\` with that draft ID.
 This is the host-visible network action in the flow, and
@@ -25456,6 +25745,17 @@ is a local stdio server, so never give it the hosted URL as its identity. If the
 requirements also carry an \`mcp_servers\` allowlist, approve this server by its
 configured command (\`sh\`): Codex disables a server whose name and identity do
 not match an approved entry.
+
+Codex checks only a server's name and how it is launched, never the plugin's
+files. The string form, \`identity = { command = "sh" }\`, compares the command
+alone; the structured form also compares each positional argument, but neither
+inspects the working directory or environment. So another local server with
+the same name and identity, such as one a user adds to their own
+\`config.toml\`, can pass the same check; the marketplace source restriction is
+what limits where the plugin itself comes from. OpenAI's managed-configuration
+documentation does not say whether a plugin's bundled server is checked
+against \`plugins.<plugin>.mcp_servers.<server>\` entries, top-level
+\`mcp_servers\` entries, or both.
 
 Add these entries to \`requirements.toml\`:
 
@@ -25717,9 +26017,10 @@ work. See the official
 
 ### Approve Gemini CLI
 
-Define the canonical server and its tool allowlist in the system override
-settings, not only user or workspace settings. Keep \`trust\` false;
-\`trust: true\` bypasses every confirmation for the server:
+This recipe was checked against Gemini CLI ${GEMINI_CLI_CHECKED_VERSION}; check it again
+after upgrading Gemini CLI. Define the canonical server and its tool allowlist
+in the system override settings, not only user or workspace settings. Keep
+\`trust\` false; \`trust: true\` bypasses every confirmation for the server:
 
 ~~~json
 {
@@ -25741,50 +26042,151 @@ ${geminiIncludeToolJson}
 ~~~
 
 Approve tools only with exact per-tool policy rules. Do not list the server in
-\`mcp.allowed\`: the server runs without it, and current Gemini CLI source turns
-each \`mcp.allowed\` entry into an allow rule for every tool of that server.
-Instead, save this file as \`remembrance.toml\` in the admin policy folder:
-\`/Library/Application Support/GeminiCli/policies\` on macOS,
+\`mcp.allowed\`: the server runs without it, and Gemini CLI turns each
+\`mcp.allowed\` entry into an allow rule for every tool of that server.
+Instead, save this file as \`${GEMINI_ADMIN_POLICY_FILES.rules}\` in the admin policy
+folder: \`/Library/Application Support/GeminiCli/policies\` on macOS,
 \`/etc/gemini-cli/policies\` on Linux, or \`C:\\ProgramData\\gemini-cli\\policies\`
-on Windows. Gemini CLI ignores admin policy files that are not root-owned.
+on Windows.
 
 ~~~toml
 ${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.geminiCliAdmin}
 ~~~
 
+Gemini CLI checks the folder, not the files in it. On macOS and Linux the
+folder must be owned by root and not writable by group or others. On Windows it
+must be owned by Administrators, SYSTEM or a system service, and only those may
+have write access to it, so remove any write access for Users, such as rights
+inherited from \`C:\\ProgramData\`. Otherwise Gemini CLI skips the whole folder
+with a security warning. It loads only regular \`.toml\` files, not symbolic
+links, and checks neither the files' owner nor the parent folders, so keep
+those owned and writable only by administrators as well. Once the folder holds
+a \`.toml\` file, Gemini CLI ignores \`--admin-policy\` and \`adminPolicyPaths\`,
+with a warning.
+
 The file has one exact rule for every tool in \`includeTools\`: an allow rule
 for each tool except the two confirmed-delete tools, whose admin \`ask_user\`
-rules keep them asking even where a user allowed them, so a headless run denies
-them. Apart from those two, this reproduces the earlier behavior of this
-recipe, whose \`mcp.allowed\` entry let every included tool run, with exact
-rules instead of a whole-server rule. The file already contains the rules from
-"Highly Recommended: approve private submissions" for the four private submit
-and retry tools and the local-only \`capture_learning\`, so do not add those
-again. To make a tool ask, change its rule to \`decision = "ask_user"\` instead
-of deleting the rule: an admin-tier ask outranks users' own allow rules, while
-without an admin rule a user's allow rule decides. A headless run then denies
-that tool.
+rules make them ask even where a user's own rule allows them, so a headless run
+denies them. In Gemini CLI's default, auto-edit and YOLO modes, this reproduces
+the earlier behavior of this recipe, whose \`mcp.allowed\` entry let every
+included tool run, apart from those two, with exact rules instead of a
+whole-server rule. Unlike that entry, the rules name no approval mode, so they
+also apply in plan mode: there the allowed Remembrance tools run as well,
+private submissions included, and the two delete tools still ask. The file
+already contains the rules from "Highly Recommended: approve private
+submissions" for the four private submit and retry tools and the local-only
+\`capture_learning\`, so do not add those again. To make a tool ask, change its
+rule to \`decision = "ask_user"\` instead of deleting the rule: an admin-tier ask
+outranks users' own allow rules, while without an admin rule a user's allow
+rule decides. A headless run then denies that tool.
+
+The rules after those name every tool in \`includeTools\` again by the full
+name Gemini CLI gives it, \`mcp_remembrance_<tool>\`, without \`mcpName\`, and
+only ask. Gemini CLI ${GEMINI_CLI_CHECKED_VERSION} also checks calls under the server
+name \`mcp_remembrance\`, which no rule with \`mcpName = "remembrance"\`
+matches: in an IDE connected over ACP before any other check, and in the
+terminal after a rule asks. Without a full-name rule, the mode's own default
+decides there: plan mode denies every tool not marked read-only, and YOLO mode
+allows every tool. With them, that check only asks. Over ACP it then hands the
+call on to the exact rules, so the allowed tools run in plan mode as well, and
+both delete tools ask in every approval mode, YOLO included, whether Gemini
+CLI started with \`--yolo\` or the user turned it on with Ctrl+Y, while a
+headless run refuses them. Never change them to allow: without \`mcpName\`, a
+rule also matches another server's tool that has the same full name, such as
+the tool \`skills\` of a server named \`remembrance_query\`, whose full name is
+\`mcp_remembrance_query_skills\`.
+
+Each allow rule also requires \`destructiveHint = false\`, which Remembrance's
+server declares for every tool except the two delete tools. Gemini CLI checks a
+subagent's calls without the server name or the tool's annotations, and takes
+the server name from the full name, so without that condition the allow rule
+for \`query_skills\` would also let a subagent run that \`skills\` tool without
+asking. With it, such a call asks, while Remembrance's own tools still run.
+
+The delete tools' admin ask rules hold against users' policy rules, but not
+against a user's own answer to the prompt. After "Allow tool for this session",
+Gemini CLI does not ask before that tool again until it restarts, and "Allow
+all server tools for this session" on any Remembrance prompt does the same for
+every Remembrance tool, both deletes included. Where every delete must ask,
+also set \`security.disableAlwaysAllow\` to \`true\` in the system settings:
+Gemini CLI then offers neither answer for any tool, so each tool that asks does
+so every time.
+
+To keep users out of YOLO mode altogether, also set \`security.disableYoloMode\`
+to \`true\` in the system settings. Gemini CLI then refuses to start in YOLO
+mode, in the terminal, headless or over ACP, and refuses Ctrl+Y. It does not
+stop an IDE connected over ACP from switching a running session to YOLO mode,
+so keep the full-name rules above either way.
 
 If the organization already restricts servers with \`mcp.allowed\`, Remembrance
 must be listed there to run, and that entry creates the whole-server allow rule.
-Then also place this rule in the admin policy folder. It creates no allow rule:
-admin rules outrank the one \`mcp.allowed\` creates, so a Remembrance tool
-without its own admin rule asks again, while the per-tool rules above, at
-priority 200, still win over it for their tools:
+Then also save this rule in the admin policy folder as its own file,
+\`${GEMINI_ADMIN_POLICY_FILES.fallback}\`, next to \`${GEMINI_ADMIN_POLICY_FILES.rules}\`. It creates no
+allow rule: admin rules outrank the one \`mcp.allowed\` creates, so a
+Remembrance tool without its own admin rule asks again, while the per-tool rules
+above, at priority 200, still win over it for their tools. Keep
+\`toolName = "*"\`, which matches every tool of the \`remembrance\` server, and
+keep the rule out of \`${GEMINI_ADMIN_POLICY_FILES.rules}\`: Gemini CLI rejects a rule
+without \`toolName\`, although its policy engine guide shows one, and an invalid
+rule makes it skip every rule in the same file.
 
 ~~~toml
-[[rule]]
-mcpName = "remembrance"
-decision = "ask_user"
-priority = 100
+${PRIVATE_SUBMISSION_APPROVAL_SNIPPETS.geminiCliAdminFallback}
 ~~~
 
 System settings live at \`/Library/Application Support/GeminiCli/settings.json\`
 on macOS, \`/etc/gemini-cli/settings.json\` on Linux, and
-\`C:\\ProgramData\\gemini-cli\\settings.json\` on Windows. Also allow
-\`remembrance.dev\` in the organization's egress policy. Restart Gemini CLI,
-inspect the registered server, then run \`run_connection_doctor\` and require
-organization scope before contribution work. See the official
+\`C:\\ProgramData\\gemini-cli\\settings.json\` on Windows. Gemini CLI checks
+that file and every folder above it the way it checks the admin policy folder,
+on Windows \`C:\\ProgramData\` included, and skips the file with a security
+warning when one fails. System settings outrank user and workspace settings but
+are not locked: Gemini CLI reads them from whatever file
+\`GEMINI_CLI_SYSTEM_SETTINGS_PATH\` names, so a user who controls the
+environment it starts in can drop this definition and use their own, for
+example without \`includeTools\` or with \`trust: true\`, which in a trusted
+folder also skips the admin ask rules. The admin policy folder cannot be moved
+that way. Where this matters, start Gemini CLI through a wrapper that sets the
+variable to the managed file, as Gemini CLI's enterprise guide describes.
+
+The system settings also do not cover the MCP servers a subagent defines for
+itself, or the server list an IDE sends when it opens a session over ACP.
+Either can define its own server named \`remembrance\` that runs another
+command, without \`includeTools\`, and Gemini CLI ${GEMINI_CLI_CHECKED_VERSION} then
+applies the allow rules to that server's tools of the same names. A subagent
+definition in \`~/.gemini/agents\`, or one the user accepts from a trusted
+project's \`.gemini/agents\` folder, can also set \`trust: true\`, and that
+subagent then runs both delete tools without asking: in the terminal in every
+mode except plan mode, which does not run it, and over ACP in YOLO mode. An
+IDE's server list cannot set \`trust\`, so both delete tools still ask there.
+Where every delete must ask, also set \`experimental.enableAgents\` to
+\`false\` in the system settings. Gemini CLI then loads no subagents, its
+built-in ones included.
+
+This recipe was not tested on Windows. A default Windows install may let the
+Users group create files and folders in \`C:\\ProgramData\`. If it does, Gemini
+CLI ${GEMINI_CLI_CHECKED_VERSION} skips \`C:\\ProgramData\\gemini-cli\\settings.json\` on
+every machine, and the admin policy folder too unless its inherited Users
+rights are removed. To check, run \`icacls C:\\ProgramData\` and
+\`icacls C:\\ProgramData\\gemini-cli\`: Gemini CLI accepts write, append,
+delete, ownership or permission rights, such as \`(W)\`, \`(WD)\`, \`(AD)\`,
+\`(M)\` or \`(F)\`, only for Administrators, SYSTEM, service accounts
+(\`NT SERVICE\\...\`), CREATOR OWNER and CREATOR GROUP. When a check fails,
+Gemini CLI's security warning names the folder and the groups that can write
+to it.
+
+Gemini CLI fills in \`\${REMEMBRANCE_API_KEY}\` from the environment it starts
+in. Without that variable the server receives an empty key and uses the shared
+config file from "Enterprise/org key setup" instead. Gemini CLI starts MCP
+servers only in a trusted folder, and interactive Gemini CLI asks whether to
+trust a new folder. In a folder that is not trusted, the Remembrance server does
+not start, and a headless run, such as \`gemini -p\` in CI, exits with an error
+unless the folder is trusted, \`--skip-trust\` is passed, or
+\`GEMINI_CLI_TRUST_WORKSPACE=true\` is set. Use those two only for unattended
+runs in folders the organization trusts.
+
+Also allow \`remembrance.dev\` in the organization's egress policy. Restart
+Gemini CLI, inspect the registered server, then run \`run_connection_doctor\`
+and require organization scope before contribution work. See the official
 [enterprise configuration](https://geminicli.com/docs/cli/enterprise/),
 [MCP settings](https://geminicli.com/docs/tools/mcp-server/), and
 [policy engine](https://geminicli.com/docs/reference/policy-engine/).
@@ -26148,9 +26550,10 @@ session skills.
   standing instructions proactively. If tools are still not visible, use the
   REST fallback and emit REMEMBRANCE_SUBMISSION_PAYLOAD only when the API is
   unavailable.
-- "codex: command not found": use the complete Codex setup above. It checks
-  the current "/Applications/ChatGPT.app/Contents/Resources/codex" bundle,
-  then the legacy "/Applications/Codex.app/Contents/Resources/codex" path.
+- "codex: command not found": use the complete Codex setup above. It runs the
+  newest Codex CLI it finds: \`codex\` on PATH, the ChatGPT desktop app's
+  "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex", or the
+  older bundle paths. Set CODEX_CLI to a Codex CLI's full path to choose one.
 - "401 or 403": the key is missing, expired, revoked, scoped to a different
   environment, or not visible to the agent process. Check config file vs env
   precedence and regenerate a key from the dashboard if needed.
@@ -28751,6 +29154,11 @@ var privateLessonInspectSchema = external_exports.object({
     "Zero-based local page offset. Follow next_offset until truncated is false."
   )
 }).strict();
+var privateLessonRetrySchema = privateLessonDraftReferenceSchema.extend({
+  deliver_rechecked_hold: external_exports.literal(true).optional().describe(
+    "Only after the user chose to deliver a held draft whose safety_recheck is passes_current_rule: send it under the current safety rule. A draft the current check still holds is refused locally and not sent."
+  )
+});
 var privateLessonDeleteSchema = privateLessonDraftReferenceSchema.extend({
   confirm: external_exports.literal(true).describe(
     "Must be true. Deletion is explicit and leaves a content-free tombstone."
@@ -28984,7 +29392,7 @@ var declaredToolDefinitions = [
   ),
   localTool(
     "prepare_private_lesson_candidate",
-    "Locally canonicalize, redact, validate, encrypt, and durably queue one compact organization-private failure, correction, or evidence lesson. Limits apply after local redaction: generalized_lesson at most 1200 characters and each stable_conditions item at most 240; an over-limit call is refused with the field and its length, and nothing is stored. This is an evidence lane, not a complete-skill transport: use propose_private_skill or propose_skill_idea for a complete reusable procedure, playbook, or actionable instructions. Tags use an open, bounded lowercase slug vocabulary; malformed or privacy-sensitive tags hold the draft instead of being dropped. Pre-redaction input remains memory-only and this tool performs no network request. The result returns a draft handle and never echoes lesson prose. Follow the returned next_action with submit_private_lesson_candidate; held_safety content remains local. An unsupported redactor version or digest becomes terminal superseded_redactor and is never retried or re-redacted.",
+    "Locally canonicalize, redact, validate, encrypt, and durably queue one compact organization-private failure, correction, or evidence lesson. Limits apply after local redaction: generalized_lesson at most 1200 characters and each stable_conditions item at most 240; an over-limit call is refused with the field and its length, and nothing is stored. This is an evidence lane, not a complete-skill transport: use propose_private_skill or propose_skill_idea for a complete reusable procedure, playbook, or actionable instructions. Tags use an open, bounded lowercase slug vocabulary; a malformed or privacy-sensitive tag is dropped and counted. Every redaction match becomes its [redacted:category] marker and the draft continues; only a stack trace or zero-width or bidirectional control characters hold it as held_safety. Pre-redaction input remains memory-only and this tool performs no network request. The result returns a draft handle and never echoes lesson prose. Follow the returned next_action with submit_private_lesson_candidate; held_safety content remains local. An unsupported redactor version or digest becomes terminal superseded_redactor and is never retried or re-redacted.",
     "prepare_private_lesson_candidate",
     privateLessonPreparationInputSchema
   ),
@@ -29003,9 +29411,9 @@ var declaredToolDefinitions = [
   ),
   localNetworkTool(
     "retry_private_lesson_candidate",
-    "Retry one retained private-lesson draft through the same private_lesson approval lane as submit_private_lesson_candidate. Network access is allowed only for authorization-pending, due transient retry, newly compatible profile, or refreshable policy states; a fresh ready draft is rejected locally. It never falls back to a public or alternate transport.",
+    "Retry one retained private-lesson draft through the same private_lesson approval lane as submit_private_lesson_candidate. Network access is allowed only for authorization-pending, due transient retry, newly compatible profile, or refreshable policy states, and for a held draft the current local safety check releases once the user chose to deliver it (deliver_rechecked_hold=true); a fresh ready draft is rejected locally. It never falls back to a public or alternate transport.",
     "retry_private_lesson_candidate",
-    privateLessonDraftReferenceSchema,
+    privateLessonRetrySchema,
     "content_write"
   ),
   localTool(
@@ -29721,14 +30129,26 @@ function normalizeBoundedWriteJsonSchema(schema, name) {
     schema.allOf = [
       {
         if: { required: ["replacement_of"] },
-        then: { required: ["private_skill"] }
+        then: {
+          anyOf: [
+            ["^psd_", "private_skill"],
+            ["^pld_", "lesson"]
+          ].map(([pattern, payload]) => ({
+            required: [payload],
+            properties: {
+              replacement_of: { properties: { draft_id: { pattern } } }
+            }
+          }))
+        }
       }
     ];
     const replacement = schemaProperty(schema, "replacement_of");
-    replacement.description = "Optional lineage for a complete replacement of one retained private-skill draft. It carries audit/context identity only and grants no approval, destination authority, or permission to reuse held content.";
-    schemaProperty(replacement, "draft_id").description = "Retained encrypted private-skill draft being replaced.";
-    schemaProperty(replacement, "context_source").description = "Audit-only source label: active_task_context or separately inspected, explicitly partial safe_recovery_context. Neither source is submission authority.";
-    schemaProperty(replacement, "recovery_context_id").description = "Omit this field unless the current inspect_private_learning_outbox agent_recovery.arguments.replacement_of supplies this exact ID. Never invent an ID or derive one from a draft, digest, or ordinary recovery_context. A supplied native context ID may establish a new context epoch but grants no approval or authority to reuse held content. safe_recovery_context alone does not require an ID.";
+    replacement.description = "Optional lineage for a replacement of one retained draft: a complete private skill for a private-skill draft, or a lesson for a held private-lesson draft. It carries audit/context identity only and grants no approval, destination authority, or permission to reuse held content.";
+    const [skillLink, lessonLink] = replacement.anyOf;
+    schemaProperty(skillLink, "draft_id").description = "Retained encrypted private-skill draft being replaced.";
+    schemaProperty(skillLink, "context_source").description = "Audit-only source label: active_task_context or separately inspected, explicitly partial safe_recovery_context. Neither source is submission authority.";
+    schemaProperty(skillLink, "recovery_context_id").description = "Omit this field unless the current inspect_private_learning_outbox agent_recovery.arguments.replacement_of supplies this exact ID. Never invent an ID or derive one from a draft, digest, or ordinary recovery_context. A supplied native context ID may establish a new context epoch but grants no approval or authority to reuse held content. safe_recovery_context alone does not require an ID.";
+    schemaProperty(lessonLink, "draft_id").description = "Held private-lesson draft that this lesson replaces, from its agent_recovery. Write the lesson from the current task, without what the findings name; the held content is never available. The held draft is retired only once the organization accepts this lesson, and accepts at most three versions; a held version is refused with its findings.";
   }
   if (name === "register_agent_key") {
     const metadata = schemaProperty(schema, "metadata");
@@ -31160,6 +31580,7 @@ var PRIVATE_LESSON_CAPACITY_STATE_MAX_BYTES = 1024;
 var PRIVATE_LESSON_OUTBOX_LOCK_NAMESPACE = "outbox";
 var PRIVATE_LESSON_MAX_PAGE_OFFSET = Number.MAX_SAFE_INTEGER - 200;
 var PRIVATE_LESSON_UNVERIFIABLE_COMPLETION_REMEDIATION = "This retained draft records a submission whose completion metadata is missing or invalid, so its acceptance cannot be verified locally. It is kept unchanged and is never resubmitted or retried automatically. Keep it until the user confirms whether the organization received it; delete it with delete_private_lesson_candidate only after explicit confirmation.";
+var PRIVATE_LESSON_ATTESTATION_MISMATCH_REMEDIATION = "The configured key belongs to a different organization than the owner attested for this recovered draft, and nothing was sent. Only a new owner-attested recovery naming the right destination releases it. Otherwise keep it, or delete it with delete_private_lesson_candidate and confirm=true once the user explicitly confirms.";
 var PrivateLessonPolicyFloorError = class extends Error {
   constructor(message, code) {
     super(message);
@@ -31169,16 +31590,18 @@ var PrivateLessonPolicyFloorError = class extends Error {
   code;
 };
 var PrivateLessonDraftUnavailableError = class extends Error {
-  constructor(draftId, reason) {
+  constructor(draftId, reason, replacementDraftId) {
     super(
-      reason === "deleted" ? "Private lesson draft was explicitly deleted." : reason === "corrupt" ? "Private lesson draft is retained but its canonical entry is unavailable. Inspect content-free recovery state before taking any destructive action." : "Private lesson draft does not exist. Inspect content-free outbox state before deciding whether task context supports a fresh capture; do not claim that the missing draft was submitted."
+      reason === "deleted" ? "Private lesson draft was explicitly deleted." : reason === "corrupt" ? "Private lesson draft is retained but its canonical entry is unavailable. Inspect content-free recovery state before taking any destructive action." : reason === "replaced" ? "Private lesson draft was held and has been replaced by a re-captured draft the organization accepted; the held draft was never sent and is no longer retained." : "Private lesson draft does not exist. Inspect content-free outbox state before deciding whether task context supports a fresh capture; do not claim that the missing draft was submitted."
     );
     this.draftId = draftId;
     this.reason = reason;
+    this.replacementDraftId = replacementDraftId;
     this.name = "PrivateLessonDraftUnavailableError";
   }
   draftId;
   reason;
+  replacementDraftId;
   jsonRpcCode() {
     return this.reason === "corrupt" ? -32603 : -32602;
   }
@@ -31186,22 +31609,84 @@ var PrivateLessonDraftUnavailableError = class extends Error {
     return {
       code: `private_lesson_draft_${this.reason}`,
       draft_id: this.draftId,
+      ...this.reason === "replaced" && this.replacementDraftId ? { replacement_draft_id: this.replacementDraftId } : {},
       retained_locally: this.reason === "corrupt",
       candidate_sent: false,
       next_action: {
         tool: "inspect_private_lesson_outbox",
-        arguments: { draft_id: this.draftId }
+        arguments: {
+          draft_id: this.reason === "replaced" && this.replacementDraftId ? this.replacementDraftId : this.draftId
+        }
       }
     };
   }
 };
-async function queuePreparedPrivateLesson(prepared, policy, options = {}) {
-  const now = options.now ?? /* @__PURE__ */ new Date();
+function privateLessonSafetyRecheck(draft) {
+  return draft.state === "held_safety" && draft.redaction_version === PRIVATE_LESSON_REDACTION_VERSION && draft.redactor_digest !== privateLessonRedactorDigest() && draft.held_reasons.length > 0 && (draft.replacement_attempts ?? []).length === 0 && privateLessonCurrentHoldReasons(draft.candidate, draft.held_reasons).length === 0 ? "passes_current_rule" : null;
+}
+var PrivateLessonHoldReleaseRefusedError = class extends Error {
+  constructor(draftId, holdReasons) {
+    super(
+      "The current local safety check still holds this private lesson draft; nothing was sent."
+    );
+    this.draftId = draftId;
+    this.holdReasons = holdReasons;
+    this.name = "PrivateLessonHoldReleaseRefusedError";
+  }
+  draftId;
+  holdReasons;
+};
+async function releaseRecheckedPrivateLessonHold(draftId, options = {}) {
   const outbox = await readyOutbox(options);
-  const draftId = createPublicId("pld");
+  return withPrivateLessonOutboxLock(outbox.directory, async () => {
+    const draft = await readPrivateLessonDraft(draftId, {
+      ...options,
+      outboxDirectory: outbox.directory,
+      encryption: outbox.encryption
+    });
+    if (draft.state !== "held_safety") return draft;
+    if (!privateLessonSafetyRecheck(draft)) {
+      throw new PrivateLessonHoldReleaseRefusedError(
+        draftId,
+        privateLessonCurrentHoldReasons(draft.candidate, draft.held_reasons)
+      );
+    }
+    const now = (options.now ?? /* @__PURE__ */ new Date()).toISOString();
+    const released = validateDraft({
+      ...draft,
+      state: "retry_scheduled",
+      redactor_digest: privateLessonRedactorDigest(),
+      held_reasons: [],
+      // A policy binding is valid only for its own redactor profile.
+      policy: null,
+      next_retry_at: now,
+      last_error_code: null,
+      hold_telemetry_status: "not_required",
+      hold_event_digest: null,
+      hold_receipt_digest: null,
+      hold_reported_at: null,
+      updated_at: now
+    });
+    await writeDraftUnlocked(released, outbox, true);
+    return released;
+  });
+}
+async function queuePreparedPrivateLesson(prepared, policy, options = {}) {
+  const outbox = await readyOutbox(options);
+  const draft = newPrivateLessonDraft(
+    prepared,
+    createPublicId("pld"),
+    policy,
+    options.destination ?? null,
+    options.now ?? /* @__PURE__ */ new Date()
+  );
+  await writeDraft(draft, outbox, false);
+  return draft;
+}
+function newPrivateLessonDraft(prepared, draftId, policy, destination, now) {
   const createdAt = now.toISOString();
   const state = prepared.status === "held_safety" ? "held_safety" : policy ? "ready" : "awaiting_authorization";
-  const draft = {
+  return {
     version: PRIVATE_LESSON_OUTBOX_VERSION,
     draft_id: draftId,
     state,
@@ -31212,7 +31697,7 @@ async function queuePreparedPrivateLesson(prepared, policy, options = {}) {
     redactor_digest: prepared.redactor_digest,
     held_reasons: prepared.held_reasons,
     policy,
-    destination_binding: options.destination ? parsePrivateLessonDestination(options.destination) : null,
+    destination_binding: destination ? parsePrivateLessonDestination(destination) : null,
     idempotency_key: `private-lesson-${hashValue(
       canonicalJson({
         draft_id: draftId,
@@ -31232,8 +31717,196 @@ async function queuePreparedPrivateLesson(prepared, policy, options = {}) {
     hold_receipt_digest: null,
     hold_reported_at: null
   };
-  await writeDraft(draft, outbox, false);
-  return draft;
+}
+var PRIVATE_LESSON_REPLACEMENT_MAX_ATTEMPTS = 3;
+var PRIVATE_LESSON_REPLACEMENT_REFUSALS = {
+  unknown: "No retained private lesson draft has this draft_id, so nothing can be replaced. Capture the lesson without replacement_of.",
+  deleted: "This private lesson draft was deleted, so nothing can be replaced. Capture the lesson without replacement_of.",
+  submitted: "This private lesson draft was already sent, so a replacement would be a second lesson. Capture without replacement_of only for a new lesson.",
+  replaced: "This held private lesson draft was already replaced.",
+  not_held: "Only a draft the local safety check holds can be replaced, and this one is not held. Follow its own next_action instead.",
+  destination_changed: "This held private lesson draft was captured for another API base or organization credential than this session uses, and a version written here must not go there. Capture the lesson without replacement_of; the held draft stays as it is.",
+  releasable: "The current safety check would send this held draft as it is, so it is not replaced: the user chooses whether to deliver, keep or delete it.",
+  replacement_pending: "A replacement of this held draft is already retained. Submit it with its next_action, or delete it with delete_private_lesson_candidate and confirm=true before capturing another.",
+  attempts_exhausted: `This held private lesson draft has used all ${PRIVATE_LESSON_REPLACEMENT_MAX_ATTEMPTS} replacement attempts. Keep it, or delete it with delete_private_lesson_candidate and confirm=true once the user confirms.`,
+  replacement_deleted: "This exact replacement was deleted. Capture a different version, or keep or delete the held draft.",
+  replacement_held: "The local safety check holds this replacement too, so it was not stored. Write a version without what the findings name."
+};
+var PrivateLessonReplacementRefusedError = class extends Error {
+  constructor(draftId, reason, attemptsRemaining, replacementDraftId) {
+    super(
+      `${PRIVATE_LESSON_REPLACEMENT_REFUSALS[reason]} Nothing was stored or sent.`
+    );
+    this.draftId = draftId;
+    this.reason = reason;
+    this.attemptsRemaining = attemptsRemaining;
+    this.replacementDraftId = replacementDraftId;
+    this.name = "PrivateLessonReplacementRefusedError";
+  }
+  draftId;
+  reason;
+  attemptsRemaining;
+  replacementDraftId;
+  diagnostic() {
+    return {
+      code: "private_lesson_replacement_refused",
+      reason_code: this.reason,
+      replacement_of: this.draftId,
+      ...this.replacementDraftId ? { replacement_draft_id: this.replacementDraftId } : {},
+      attempts_remaining: this.attemptsRemaining,
+      candidate_stored: false,
+      candidate_sent: false
+    };
+  }
+};
+async function queuePrivateLessonReplacement(replacementOf, prepared, options = {}) {
+  assertDraftId(replacementOf);
+  const outbox = await readyOutbox(options);
+  const directory = outbox.directory;
+  return withPrivateLessonOutboxLock(directory, async () => {
+    const now = options.now ?? /* @__PURE__ */ new Date();
+    const read2 = { ...options, outboxDirectory: directory };
+    const refuse = (reason, used2 = 0, replacementDraftId) => new PrivateLessonReplacementRefusedError(
+      replacementOf,
+      reason,
+      Math.max(0, PRIVATE_LESSON_REPLACEMENT_MAX_ATTEMPTS - used2),
+      replacementDraftId
+    );
+    await reconcileSubmittedRecordsUnlocked(directory, now);
+    if (existsSync2(tombstonePath(directory, replacementOf))) {
+      throw refuse("deleted");
+    }
+    let original;
+    try {
+      original = await readPrivateLessonDraft(replacementOf, {
+        ...read2,
+        encryption: outbox.encryption
+      });
+    } catch (error) {
+      if (error instanceof PrivateLessonDraftUnavailableError) {
+        if (error.reason === "replaced") {
+          throw refuse(
+            "replaced",
+            PRIVATE_LESSON_REPLACEMENT_MAX_ATTEMPTS,
+            error.replacementDraftId
+          );
+        }
+        if (error.reason === "unknown") throw refuse("unknown");
+      }
+      if (existsSync2(submittedRecordPath(directory, replacementOf))) {
+        throw refuse("submitted");
+      }
+      throw error;
+    }
+    if (original.state === "submitted") throw refuse("submitted");
+    if (original.held_reasons.length === 0 || original.state === "superseded_redactor" || original.replacement_of !== void 0) {
+      throw refuse("not_held");
+    }
+    if (privateLessonSafetyRecheck(original)) throw refuse("releasable");
+    const attempts = original.replacement_attempts ?? [];
+    const digest2 = prepared.payload_digest;
+    const draftId = privateLessonReplacementDraftId(replacementOf, digest2);
+    const replay = attempts.includes(digest2);
+    const used = replay ? attempts.length : attempts.length + 1;
+    if (!replay && privateLessonCapturedForOtherDestination(original, options.destination)) {
+      throw refuse("destination_changed", attempts.length);
+    }
+    const pending = attempts.map((attempt) => privateLessonReplacementDraftId(replacementOf, attempt)).find(
+      (candidate) => candidate !== draftId && existsSync2(draftPath(directory, candidate))
+    );
+    if (pending) throw refuse("replacement_pending", attempts.length, pending);
+    if (!replay) {
+      if (attempts.length >= PRIVATE_LESSON_REPLACEMENT_MAX_ATTEMPTS) {
+        throw refuse("attempts_exhausted", attempts.length);
+      }
+      await writeDraftUnlocked(
+        validateDraft({
+          ...original,
+          replacement_attempts: [...attempts, digest2],
+          updated_at: now.toISOString()
+        }),
+        outbox,
+        true
+      );
+    }
+    if (prepared.status === "held_safety") {
+      throw refuse("replacement_held", used);
+    }
+    if (existsSync2(tombstonePath(directory, draftId))) {
+      throw refuse("replacement_deleted", used, draftId);
+    }
+    if (existsSync2(draftPath(directory, draftId))) {
+      return {
+        draft: await readPrivateLessonDraft(draftId, {
+          ...read2,
+          encryption: outbox.encryption
+        }),
+        attempts_remaining: PRIVATE_LESSON_REPLACEMENT_MAX_ATTEMPTS - used,
+        replayed: true
+      };
+    }
+    const draft = {
+      ...newPrivateLessonDraft(
+        prepared,
+        draftId,
+        null,
+        original.destination_binding ?? options.destination ?? null,
+        now
+      ),
+      ...original.attested_organization_audience_hash !== void 0 ? {
+        attested_organization_audience_hash: original.attested_organization_audience_hash
+      } : {},
+      replacement_of: replacementOf
+    };
+    await writeDraftUnlocked(validateDraft(draft), outbox, false);
+    return {
+      draft,
+      attempts_remaining: PRIVATE_LESSON_REPLACEMENT_MAX_ATTEMPTS - used,
+      replayed: replay
+    };
+  });
+}
+async function retireReplacedPrivateLessonUnlocked(directory, draftId, replacementDraftId, at) {
+  const path = draftPath(directory, draftId);
+  if (existsSync2(tombstonePath(directory, draftId)) || existsSync2(submittedRecordPath(directory, draftId)) || !existsSync2(path)) {
+    return;
+  }
+  try {
+    await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
+    const envelope = parseEnvelope(
+      await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES),
+      draftId
+    );
+    if (envelope.state === "submitted") return;
+  } catch {
+    return;
+  }
+  const record4 = {
+    version: "private-lesson-outbox-deletion-v1",
+    draft_id: draftId,
+    deleted_at: at.toISOString(),
+    reason: "replaced_by_verified_replacement",
+    replacement_draft_id: replacementDraftId,
+    expires_at: new Date(
+      at.getTime() + PRIVATE_LESSON_SUBMITTED_RECORD_RETENTION_MS
+    ).toISOString()
+  };
+  await atomicCreatePrivateLessonEntry(
+    replacedRecordPath(directory, draftId),
+    `${JSON.stringify(record4)}
+`,
+    ".replaced.tmp"
+  );
+  await unlink2(path).catch(() => {
+  });
+  await syncDirectory2(directory).catch(() => {
+  });
+}
+function acceptedPrivateLessonReplacement(directory, draft) {
+  if (draft.state === "submitted") return void 0;
+  return (draft.replacement_attempts ?? []).map((digest2) => privateLessonReplacementDraftId(draft.draft_id, digest2)).find(
+    (replacement) => existsSync2(submittedRecordPath(directory, replacement))
+  );
 }
 async function readPrivateLessonDraft(draftId, options = {}) {
   assertDraftId(draftId);
@@ -31246,10 +31919,12 @@ async function readPrivateLessonDraft(draftId, options = {}) {
     if (existsSync2(tombstonePath(outbox.directory, draftId))) {
       throw new PrivateLessonDraftUnavailableError(draftId, "deleted");
     }
+    await assertNotReplacedUnlocked(outbox.directory, draftId);
     if (existsSync2(submittedRecordPath(outbox.directory, draftId))) {
       throw new Error("Private lesson draft was already submitted.");
     }
     let draft;
+    let envelope;
     try {
       const path = draftPath(outbox.directory, draftId);
       await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
@@ -31257,20 +31932,32 @@ async function readPrivateLessonDraft(draftId, options = {}) {
         path,
         PRIVATE_LESSON_DRAFT_MAX_BYTES
       );
-      const envelope = parseEnvelope(serialized, draftId);
+      envelope = parseEnvelope(serialized, draftId);
       draft = await decryptDraft(envelope, outbox.encryption, true);
     } catch (error) {
       throw selectedPrivateLessonError(draftId, error);
     }
-    const profileReconciled = terminalizeUnsupportedProfile(
-      draft,
-      options.now ?? /* @__PURE__ */ new Date()
+    const now = options.now ?? /* @__PURE__ */ new Date();
+    const replacement = acceptedPrivateLessonReplacement(
+      outbox.directory,
+      draft
     );
-    const reconciled = normalizeLegacyHeldSafetyDraft(
-      profileReconciled,
-      options.now ?? /* @__PURE__ */ new Date()
-    );
-    if (reconciled !== draft) {
+    if (replacement) {
+      await retireReplacedPrivateLessonUnlocked(
+        outbox.directory,
+        draftId,
+        replacement,
+        now
+      ).catch(() => {
+      });
+      throw new PrivateLessonDraftUnavailableError(
+        draftId,
+        "replaced",
+        replacement
+      );
+    }
+    const reconciled = reconcileStoredDraft(draft, now);
+    if (reconciled !== draft || staleSafetyRecheckHint(envelope, reconciled)) {
       await writeDraft(reconciled, outbox, true, void 0, true);
     }
     return reconciled;
@@ -31289,6 +31976,7 @@ async function readPrivateLessonSubmittedRecord(draftId, options = {}) {
     if (existsSync2(tombstonePath(directory, draftId))) {
       throw new PrivateLessonDraftUnavailableError(draftId, "deleted");
     }
+    await assertNotReplacedUnlocked(directory, draftId);
     const path = submittedRecordPath(directory, draftId);
     if (!existsSync2(path)) return null;
     await assertRegularPrivateFile(
@@ -31312,6 +32000,7 @@ async function readPrivateLessonSubmissionSource(draftId, options = {}) {
     if (existsSync2(tombstonePath(outbox.directory, draftId))) {
       throw new PrivateLessonDraftUnavailableError(draftId, "deleted");
     }
+    await assertNotReplacedUnlocked(outbox.directory, draftId);
     const completionPath = submittedRecordPath(outbox.directory, draftId);
     if (existsSync2(completionPath)) {
       await assertRegularPrivateFile(
@@ -31344,7 +32033,7 @@ async function readPrivateLessonSubmissionSource(draftId, options = {}) {
     return { kind: "draft", draft };
   });
 }
-async function reconcilePrivateLessonOutboxProfiles(options = {}) {
+async function reconcilePrivateLessonOutboxProfiles(options = {}, replaced) {
   const outbox = await readyOutbox(options, false);
   return withPrivateLessonOutboxLock(outbox.directory, async () => {
     await reconcilePrivateLessonTemporaryWrites(
@@ -31378,7 +32067,10 @@ async function reconcilePrivateLessonOutboxProfiles(options = {}) {
           outboxDirectory: outbox.directory,
           encryption: outbox.encryption
         });
-      } catch {
+      } catch (error) {
+        if (error instanceof PrivateLessonDraftUnavailableError && error.reason === "replaced") {
+          replaced?.add(draftId);
+        }
         continue;
       }
       inspected += 1;
@@ -31411,7 +32103,7 @@ async function updatePrivateLessonDraft(draftId, update, options = {}) {
       throw new PrivateLessonDraftUnavailableError(draftId, "corrupt");
     }
     const next = validateDraft(update(structuredClone(current)));
-    if (next.draft_id !== current.draft_id || next.payload_digest !== current.payload_digest || next.canonical_payload !== current.canonical_payload || next.redaction_version !== current.redaction_version || next.redactor_digest !== current.redactor_digest || canonicalJson(next.destination_binding) !== canonicalJson(current.destination_binding) || next.idempotency_key !== current.idempotency_key) {
+    if (next.draft_id !== current.draft_id || next.payload_digest !== current.payload_digest || next.canonical_payload !== current.canonical_payload || next.redaction_version !== current.redaction_version || next.redactor_digest !== current.redactor_digest || canonicalJson(next.destination_binding) !== canonicalJson(current.destination_binding) || next.attested_organization_audience_hash !== current.attested_organization_audience_hash || next.idempotency_key !== current.idempotency_key) {
       throw new Error("Private lesson draft content is immutable.");
     }
     next.updated_at = (options.now ?? /* @__PURE__ */ new Date()).toISOString();
@@ -31430,6 +32122,7 @@ async function completePrivateLessonSubmission(draftId, input, options = {}) {
     if (existsSync2(tombstonePath(outbox.directory, draftId))) {
       throw new PrivateLessonDraftUnavailableError(draftId, "deleted");
     }
+    await assertNotReplacedUnlocked(outbox.directory, draftId);
     const existingPath = submittedRecordPath(outbox.directory, draftId);
     if (existsSync2(existingPath)) {
       let completion2;
@@ -31461,6 +32154,7 @@ async function completePrivateLessonSubmission(draftId, input, options = {}) {
     } catch (error) {
       throw selectedPrivateLessonError(draftId, error);
     }
+    current = reconcileStoredDraft(current, options.now ?? /* @__PURE__ */ new Date());
     if (current.state === "superseded_redactor") {
       throw new Error("Terminal private lesson drafts cannot be submitted.");
     }
@@ -31492,6 +32186,15 @@ async function completePrivateLessonSubmission(draftId, input, options = {}) {
     });
     await syncDirectory2(outbox.directory).catch(() => {
     });
+    if (draft.replacement_of) {
+      await retireReplacedPrivateLessonUnlocked(
+        outbox.directory,
+        draft.replacement_of,
+        draftId,
+        submittedAt
+      ).catch(() => {
+      });
+    }
     return completion;
   });
 }
@@ -31507,19 +32210,21 @@ async function deletePrivateLessonDraft(draftId, confirmed, options = {}) {
     const path = draftPath(outbox.directory, draftId);
     const completionPath = submittedRecordPath(outbox.directory, draftId);
     const deletionPath = tombstonePath(outbox.directory, draftId);
+    const replacedPath = replacedRecordPath(outbox.directory, draftId);
     const quarantined = await privateLessonQuarantineEntriesForDraft(
       outbox.directory,
       draftId
     );
-    if (existsSync2(deletionPath) && !existsSync2(path) && !existsSync2(completionPath) && quarantined.length === 0) {
+    if (existsSync2(deletionPath) && !existsSync2(path) && !existsSync2(completionPath) && !existsSync2(replacedPath) && quarantined.length === 0) {
       throw new PrivateLessonDraftUnavailableError(draftId, "deleted");
     }
-    if (!existsSync2(path) && !existsSync2(completionPath) && !existsSync2(deletionPath) && quarantined.length === 0) {
+    if (!existsSync2(path) && !existsSync2(completionPath) && !existsSync2(deletionPath) && !existsSync2(replacedPath) && quarantined.length === 0) {
       throw new PrivateLessonDraftUnavailableError(draftId, "unknown");
     }
     await removeCanonicalPrivateLessonEntry(path);
     await removeCanonicalPrivateLessonEntry(completionPath);
     await removeCanonicalPrivateLessonEntry(deletionPath);
+    await removeCanonicalPrivateLessonEntry(replacedPath);
     for (const entry of quarantined) {
       await removeCanonicalPrivateLessonEntry(entry);
     }
@@ -31540,11 +32245,15 @@ async function deletePrivateLessonDraft(draftId, confirmed, options = {}) {
 }
 async function privateLessonOutboxSummary(options = {}) {
   const outbox = await readyOutbox(options, false);
-  await reconcilePrivateLessonOutboxProfiles({
-    ...options,
-    outboxDirectory: outbox.directory,
-    encryption: outbox.encryption
-  });
+  const replaced = /* @__PURE__ */ new Set();
+  await reconcilePrivateLessonOutboxProfiles(
+    {
+      ...options,
+      outboxDirectory: outbox.directory,
+      encryption: outbox.encryption
+    },
+    replaced
+  );
   const entries = await secureOutboxEntries(outbox.directory);
   const counts = {
     ready: 0,
@@ -31559,6 +32268,7 @@ async function privateLessonOutboxSummary(options = {}) {
   };
   let totalBytes = 0;
   let deletionTombstones = 0;
+  let replacedRecords = 0;
   let terminalBytes = 0;
   const terminalReasons = {};
   let corruptFiles = 0;
@@ -31567,6 +32277,10 @@ async function privateLessonOutboxSummary(options = {}) {
     const metadata = await lstat2(path);
     if (name.endsWith(".deleted.json")) {
       deletionTombstones += 1;
+      continue;
+    }
+    if (name.endsWith(".replaced.json")) {
+      replacedRecords += 1;
       continue;
     }
     if (name.endsWith(".submitted.json")) {
@@ -31586,6 +32300,10 @@ async function privateLessonOutboxSummary(options = {}) {
       continue;
     }
     if (!name.endsWith(".lesson.json")) continue;
+    if (replaced.has(name.slice(0, -".lesson.json".length))) {
+      replacedRecords += 1;
+      continue;
+    }
     let envelope;
     try {
       envelope = parseEnvelope(
@@ -31642,6 +32360,7 @@ async function privateLessonOutboxSummary(options = {}) {
     terminal_reasons: terminalReasons,
     deletion_guidance: counts.superseded_redactor > 0 ? "Update the client, then re-capture the lesson with capture_learning before considering deletion. Delete the superseded draft with delete_private_lesson_candidate only after confirming the replacement was retained or accepted." : null,
     deletion_tombstones: deletionTombstones,
+    replaced_records: replacedRecords,
     temporary_files: retainedArtifacts.temporaryFiles,
     corrupt_files: Math.max(
       corruptFiles,
@@ -31671,13 +32390,14 @@ async function inspectPrivateLessonOutboxSnapshotUnlocked(outbox, options) {
   const recoveryItems = [];
   const terminalReasons = {};
   let deletionTombstones = 0;
+  let replacedRecords = 0;
   let terminalBytes = 0;
   let corruptFiles = 0;
   for (const entry of await readdir(outbox.directory, {
     withFileTypes: true
   })) {
     const match = entry.name.match(
-      /^(pld_[A-Za-z0-9_-]{8,96})\.(lesson|submitted|deleted)\.json$/u
+      /^(pld_[A-Za-z0-9_-]{8,96})\.(lesson|submitted|deleted|replaced)\.json$/u
     );
     if (!match) continue;
     const draftId = match[1];
@@ -31689,6 +32409,25 @@ async function inspectPrivateLessonOutboxSnapshotUnlocked(outbox, options) {
       continue;
     }
     const path = join3(outbox.directory, entry.name);
+    if (entry.name.endsWith(".replaced.json")) {
+      replacedRecords += 1;
+      try {
+        parseReplacedRecord(
+          await readPrivateLessonCanonicalText(
+            path,
+            PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
+          ),
+          draftId
+        );
+      } catch (error) {
+        if (error instanceof PrivateOutboxStorageError) throw error;
+        recoveryItems.push(
+          privateLessonRecoveryItem(draftId, "invalid_canonical_entry")
+        );
+        corruptFiles += 1;
+      }
+      continue;
+    }
     if (entry.name.endsWith(".deleted.json")) {
       let serialized2;
       deletionTombstones += 1;
@@ -31787,9 +32526,24 @@ async function inspectPrivateLessonOutboxSnapshotUnlocked(outbox, options) {
       corruptFiles += 1;
       continue;
     }
-    const profileReconciled = terminalizeUnsupportedProfile(decrypted, now);
-    const draft = normalizeLegacyHeldSafetyDraft(profileReconciled, now);
-    if (draft !== decrypted) {
+    const replacement = acceptedPrivateLessonReplacement(
+      outbox.directory,
+      decrypted
+    );
+    if (replacement) {
+      counts[envelope.state] -= 1;
+      replacedRecords += 1;
+      await retireReplacedPrivateLessonUnlocked(
+        outbox.directory,
+        draftId,
+        replacement,
+        now
+      ).catch(() => {
+      });
+      continue;
+    }
+    const draft = reconcileStoredDraft(decrypted, now);
+    if (draft !== decrypted || staleSafetyRecheckHint(envelope, draft)) {
       counts[envelope.state] -= 1;
       counts[draft.state] += 1;
       await writeDraftUnlocked(draft, outbox, true, void 0, true);
@@ -31863,6 +32617,7 @@ async function inspectPrivateLessonOutboxSnapshotUnlocked(outbox, options) {
       terminal_reasons: terminalReasons,
       deletion_guidance: counts.superseded_redactor > 0 ? "Update the client, then re-capture the lesson with capture_learning before considering deletion. Delete the superseded draft with delete_private_lesson_candidate only after confirming the replacement was retained or accepted." : null,
       deletion_tombstones: deletionTombstones,
+      replaced_records: replacedRecords,
       temporary_files: retainedArtifacts.temporaryFiles,
       corrupt_files: Math.max(
         corruptFiles,
@@ -31932,6 +32687,7 @@ async function inspectPrivateLessonOutboxHealth(options = {}) {
       terminal_reasons: {},
       deletion_guidance: null,
       deletion_tombstones: 0,
+      replaced_records: 0,
       temporary_files: 0,
       corrupt_files: 0,
       quarantined_bytes: 0,
@@ -31970,6 +32726,7 @@ async function inspectPrivateLessonOutboxHealth(options = {}) {
   const counts = emptyOutboxCounts();
   let totalBytes = 0;
   let deletionTombstones = 0;
+  let replacedRecords = 0;
   let terminalBytes = 0;
   let corruptFiles = 0;
   const terminalReasons = {};
@@ -31979,6 +32736,10 @@ async function inspectPrivateLessonOutboxHealth(options = {}) {
     totalBytes += entry.size;
     if (name.endsWith(".deleted.json")) {
       deletionTombstones += 1;
+      continue;
+    }
+    if (name.endsWith(".replaced.json")) {
+      replacedRecords += 1;
       continue;
     }
     if (name.endsWith(".submitted.json")) {
@@ -32037,6 +32798,7 @@ async function inspectPrivateLessonOutboxHealth(options = {}) {
     terminal_reasons: terminalReasons,
     deletion_guidance: counts.superseded_redactor > 0 ? "Update the client, then re-capture the lesson with capture_learning before considering deletion. Delete the superseded draft with delete_private_lesson_candidate only after confirming the replacement was retained or accepted." : null,
     deletion_tombstones: deletionTombstones,
+    replaced_records: replacedRecords,
     temporary_files: retainedArtifacts.temporaryFiles,
     corrupt_files: corruptFiles,
     quarantined_bytes: retainedArtifacts.quarantinedBytes,
@@ -32461,6 +33223,7 @@ async function writeDraftUnlocked(draft, outbox, replace, _currentOutboxBytes, a
     created_at: validated.created_at,
     updated_at: validated.updated_at,
     destination_binding: validated.destination_binding,
+    ...safetyRecheckField(validated),
     encryption: {
       algorithm: "aes-256-gcm",
       key_source: outbox.encryption.source,
@@ -32488,7 +33251,7 @@ async function writeDraftUnlocked(draft, outbox, replace, _currentOutboxBytes, a
   if (replace) {
     await atomicReplacePrivate(path, serialized);
   } else {
-    await atomicCreatePrivateLessonDraft(path, serialized);
+    await atomicCreatePrivateLessonEntry(path, serialized);
   }
 }
 async function decryptDraft(envelope, encryption, allowUnsupportedProfile = false) {
@@ -32603,19 +33366,37 @@ function validateDraft(value, allowUnsupportedProfile = false) {
       );
     }
   }
+  if (value.attested_organization_audience_hash !== void 0 && !isSha256Digest(value.attested_organization_audience_hash)) {
+    throw new Error("Private lesson draft attested audience is invalid.");
+  }
+  if (value.replacement_of !== void 0 && (typeof value.replacement_of !== "string" || !/^pld_[A-Za-z0-9_-]{8,96}$/u.test(value.replacement_of) || value.replacement_of === value.draft_id)) {
+    throw new Error("Private lesson draft replacement link is invalid.");
+  }
+  if (value.replacement_attempts !== void 0 && (!Array.isArray(value.replacement_attempts) || value.replacement_attempts.length > PRIVATE_LESSON_REPLACEMENT_MAX_ATTEMPTS || !value.replacement_attempts.every(isSha256Digest) || new Set(value.replacement_attempts).size !== value.replacement_attempts.length)) {
+    throw new Error("Private lesson draft replacement attempts are invalid.");
+  }
   const destinationBinding = value.destination_binding === void 0 ? null : value.destination_binding === null ? null : parsePrivateLessonDestination(value.destination_binding);
   return {
     ...value,
     destination_binding: destinationBinding
   };
 }
-function terminalizeUnsupportedProfile(draft, now) {
+function staleSafetyRecheckHint(envelope, draft) {
+  return (envelope.safety_recheck ?? null) !== privateLessonSafetyRecheck(draft);
+}
+function reconcileStoredDraft(draft, now) {
+  return normalizeLegacyHeldSafetyDraft(
+    reconcileRedactorProfile(draft, now),
+    now
+  );
+}
+function reconcileRedactorProfile(draft, now) {
   try {
     privateLessonRedactorProfile(
       draft.redaction_version,
       draft.redactor_digest
     );
-    return draft;
+    return resumeDraftRetiredByOlderClient(draft, now);
   } catch (error) {
     if (!(error instanceof PrivateLessonRedactionProfileError)) throw error;
     if (draft.state === "superseded_redactor" && draft.terminal_reason === error.code || // Accepted work is not a draft awaiting a current redactor. Keep a
@@ -32633,6 +33414,18 @@ function terminalizeUnsupportedProfile(draft, now) {
       updated_at: now.toISOString()
     };
   }
+}
+function resumeDraftRetiredByOlderClient(draft, now) {
+  if (draft.state !== "superseded_redactor") return draft;
+  const held = draft.held_reasons.length > 0;
+  return validateDraft({
+    ...draft,
+    state: held ? "held_safety" : "retry_scheduled",
+    terminal_reason: null,
+    next_retry_at: held ? null : now.toISOString(),
+    hold_telemetry_status: !held ? "not_required" : draft.hold_telemetry_status === "submitted" ? "submitted" : "pending",
+    updated_at: now.toISOString()
+  });
 }
 function normalizeLegacyHeldSafetyDraft(draft, now) {
   if (draft.state !== "held_safety" || draft.held_reasons.length > 0) {
@@ -32750,6 +33543,9 @@ async function reconcileSubmittedRecordsUnlocked(directory, now) {
       changed = true;
     }
   }
+  if (await reconcileReplacedRecordsUnlocked(directory, entries, now)) {
+    changed = true;
+  }
   if (changed) await syncDirectory2(directory);
 }
 function submittedRecordListItem(completion) {
@@ -32785,8 +33581,63 @@ function privateLessonDraftListItem(draft) {
     terminal_reason: draft.terminal_reason,
     hold_telemetry_status: draft.hold_telemetry_status,
     hold_event_digest: draft.hold_event_digest,
-    hold_reported_at: draft.hold_reported_at
+    hold_reported_at: draft.hold_reported_at,
+    ...safetyRecheckField(draft)
   };
+}
+function safetyRecheckField(draft) {
+  const recheck = privateLessonSafetyRecheck(draft);
+  return recheck ? { safety_recheck: recheck } : {};
+}
+function privateLessonReplaceable(draft, destination) {
+  return draft.held_reasons.length > 0 && draft.state !== "submitted" && draft.state !== "superseded_redactor" && draft.replacement_of === void 0 && privateLessonSafetyRecheck(draft) === null && !privateLessonCapturedForOtherDestination(draft, destination);
+}
+function privateLessonCapturedForOtherDestination(draft, destination) {
+  const bound = draft.destination_binding;
+  return Boolean(
+    bound && destination && (bound.api_base_sha256 !== destination.api_base_sha256 || bound.credential_sha256 !== destination.credential_sha256)
+  );
+}
+function privateLessonReplacementAttemptsRemaining(draft) {
+  return Math.max(
+    0,
+    PRIVATE_LESSON_REPLACEMENT_MAX_ATTEMPTS - (draft.replacement_attempts ?? []).length
+  );
+}
+function privateLessonAgentRecovery(draftId, attemptsRemaining) {
+  if (attemptsRemaining <= 0) return null;
+  return {
+    tool: "capture_learning",
+    action_code: "recapture_held_private_lesson",
+    arguments: {
+      contract_version: PRIVATE_LEARNING_CAPTURE_VERSION,
+      replacement_of: { draft_id: draftId }
+    },
+    required_input: ["lesson"],
+    context_requirement: "existing_task_context",
+    attempts_remaining: attemptsRemaining,
+    retained_original_available_to_agent: false
+  };
+}
+function privateLessonRecoveryFields(draft, destination) {
+  if (draft.replacement_of !== void 0) {
+    return { replacement_of: draft.replacement_of };
+  }
+  if (!privateLessonReplaceable(draft)) return {};
+  const remaining = privateLessonReplacementAttemptsRemaining(draft);
+  if (remaining > 0 && !privateLessonReplaceable(draft, destination)) {
+    return {
+      replacement_attempts_remaining: remaining,
+      replacement_requires_captured_destination: true
+    };
+  }
+  return {
+    replacement_attempts_remaining: remaining,
+    agent_recovery: privateLessonAgentRecovery(draft.draft_id, remaining)
+  };
+}
+function privateLessonHeldRecoveryActionRequired(attemptsRemaining, capturedDestinationRequired = false) {
+  return attemptsRemaining <= 0 ? "The local safety check holds this lesson draft (held_reasons), so it will not be sent, and it has used every replacement attempt. Keep it, or delete it with delete_private_lesson_candidate and confirm=true once the user confirms." : capturedDestinationRequired ? "The local safety check holds this lesson draft (held_reasons), so it will not be sent. It was captured for another API base or organization credential than this session uses, so a version written here cannot replace it (replacement_requires_captured_destination). Keep it, delete it with delete_private_lesson_candidate and confirm=true, or replace it from a session that uses its own destination. Never resubmit the held content." : "The local safety check holds this lesson draft (held_reasons), so it will not be sent. If this task still has the lesson, write a version without what holds it and capture it as agent_recovery says (capture_learning with replacement_of); this draft is replaced only once that version is accepted. Otherwise keep it, or delete it with delete_private_lesson_candidate and confirm=true. Never resubmit the held content.";
 }
 function privateLessonPageOffset(value) {
   const requested = Math.trunc(value ?? 0);
@@ -32847,6 +33698,79 @@ function parseDeletionTombstone(serialized, expectedDraftId) {
   }
   return value;
 }
+function parseReplacedRecord(serialized, expectedDraftId) {
+  const value = JSON.parse(serialized);
+  const allowedKeys = /* @__PURE__ */ new Set([
+    "version",
+    "draft_id",
+    "deleted_at",
+    "reason",
+    "replacement_draft_id",
+    "expires_at"
+  ]);
+  if (!isRecord3(value) || Object.keys(value).some((key) => !allowedKeys.has(key)) || value.version !== "private-lesson-outbox-deletion-v1" || value.draft_id !== expectedDraftId || value.reason !== "replaced_by_verified_replacement" || typeof value.replacement_draft_id !== "string" || !/^pld_[A-Za-z0-9_-]{8,96}$/u.test(value.replacement_draft_id) || value.replacement_draft_id === expectedDraftId || !isIsoTimestamp(value.deleted_at) || !isIsoTimestamp(value.expires_at) || Date.parse(value.expires_at) <= Date.parse(value.deleted_at)) {
+    throw new Error("Private lesson replaced record is invalid.");
+  }
+  return value;
+}
+async function readReplacedRecordUnlocked(directory, draftId) {
+  const path = replacedRecordPath(directory, draftId);
+  if (!existsSync2(path)) return null;
+  try {
+    await assertRegularPrivateFile(path, PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES);
+    return parseReplacedRecord(
+      await readBoundedFile(path, PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES),
+      draftId
+    );
+  } catch (error) {
+    if (error instanceof PrivateOutboxStorageError) throw error;
+    throw new PrivateLessonDraftUnavailableError(draftId, "corrupt");
+  }
+}
+async function assertNotReplacedUnlocked(directory, draftId) {
+  const replaced = await readReplacedRecordUnlocked(directory, draftId);
+  if (replaced) {
+    throw new PrivateLessonDraftUnavailableError(
+      draftId,
+      "replaced",
+      replaced.replacement_draft_id
+    );
+  }
+}
+async function reconcileReplacedRecordsUnlocked(directory, entries, now) {
+  let changed = false;
+  for (const name of entries.filter(
+    (entry) => entry.endsWith(".replaced.json")
+  )) {
+    const draftId = name.slice(0, -".replaced.json".length);
+    let record4;
+    try {
+      record4 = parseReplacedRecord(
+        await readBoundedFile(
+          join3(directory, name),
+          PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
+        ),
+        draftId
+      );
+    } catch {
+      continue;
+    }
+    const retained = draftPath(directory, draftId);
+    if (existsSync2(retained)) {
+      try {
+        await assertRegularPrivateFile(retained, PRIVATE_LESSON_DRAFT_MAX_BYTES);
+        await unlink2(retained);
+        changed = true;
+      } catch {
+      }
+    }
+    if (Date.parse(record4.expires_at) <= now.getTime()) {
+      await unlink2(join3(directory, name));
+      changed = true;
+    }
+  }
+  return changed;
+}
 async function privateLessonRecoveryItems(options = {}) {
   const outbox = await readyOutbox(options, false);
   return withPrivateLessonOutboxLock(outbox.directory, async () => {
@@ -32859,7 +33783,7 @@ async function privateLessonRecoveryItems(options = {}) {
       withFileTypes: true
     })) {
       const match = entry.name.match(
-        /^(pld_[A-Za-z0-9_-]{8,96})\.(lesson|submitted|deleted)\.json$/u
+        /^(pld_[A-Za-z0-9_-]{8,96})\.(lesson|submitted|deleted|replaced)\.json$/u
       );
       if (!match) continue;
       const draftId = match[1];
@@ -32876,10 +33800,7 @@ async function privateLessonRecoveryItems(options = {}) {
           outbox.encryption
         );
         const now = options.now ?? /* @__PURE__ */ new Date();
-        const draft = validatedDraft ? normalizeLegacyHeldSafetyDraft(
-          terminalizeUnsupportedProfile(validatedDraft, now),
-          now
-        ) : null;
+        const draft = validatedDraft ? reconcileStoredDraft(validatedDraft, now) : null;
         if (draft?.state === "retry_scheduled" && draft.last_error_code === "policy_verification_failed") {
           items.push(
             privateLessonRecoveryItem(draftId, "held_safety_recovery_required")
@@ -32986,7 +33907,7 @@ function privateLessonRecoveryItem(draftId, reasonCode, storageError) {
 async function reconcilePrivateLessonTemporaryWrites(directory, encryption) {
   const groups = /* @__PURE__ */ new Map();
   for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (/^\.[a-f0-9]{24}\.capacity\.tmp$/u.test(entry.name) && entry.isFile()) {
+    if (/^\.[a-f0-9]{24}\.(?:capacity|replaced)\.tmp$/u.test(entry.name) && entry.isFile()) {
       await unlink2(join3(directory, entry.name));
       continue;
     }
@@ -33076,6 +33997,16 @@ async function validatePrivateLessonCanonicalPath(path, name, encryption) {
   if (!draftId) throw new Error("Private lesson entry name is invalid.");
   if (name.endsWith(".submitted.json")) {
     parseSubmittedRecord(
+      await readPrivateLessonCanonicalText(
+        path,
+        PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
+      ),
+      draftId
+    );
+    return null;
+  }
+  if (name.endsWith(".replaced.json")) {
+    parseReplacedRecord(
       await readPrivateLessonCanonicalText(
         path,
         PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
@@ -33224,7 +34155,7 @@ async function removeCanonicalPrivateLessonEntry(path) {
 async function secureOutboxEntries(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   return entries.filter(
-    (entry) => entry.isFile() && !entry.isSymbolicLink() && /^(?:pld_[A-Za-z0-9_-]{8,96}\.(?:lesson|submitted|deleted)\.json)$/u.test(
+    (entry) => entry.isFile() && !entry.isSymbolicLink() && /^(?:pld_[A-Za-z0-9_-]{8,96}\.(?:lesson|submitted|deleted|replaced)\.json)$/u.test(
       entry.name
     )
   ).map((entry) => entry.name).sort();
@@ -33250,10 +34181,10 @@ async function atomicWritePrivate(path, data) {
   }
   await syncDirectory2(dirname3(path));
 }
-async function atomicCreatePrivateLessonDraft(path, data) {
+async function atomicCreatePrivateLessonEntry(path, data, temporarySuffix = ".tmp") {
   const temporary = join3(
     dirname3(path),
-    `.${randomBytes4(12).toString("hex")}.tmp`
+    `.${randomBytes4(12).toString("hex")}${temporarySuffix}`
   );
   try {
     await atomicWritePrivate(temporary, data);
@@ -33491,6 +34422,20 @@ function submittedRecordPath(directory, draftId) {
 function tombstonePath(directory, draftId) {
   assertDraftId(draftId);
   return join3(directory, `${draftId}.deleted.json`);
+}
+function replacedRecordPath(directory, draftId) {
+  assertDraftId(draftId);
+  return join3(directory, `${draftId}.replaced.json`);
+}
+function privateLessonReplacementDraftId(replacementOf, payloadDigest) {
+  assertDraftId(replacementOf);
+  return `pld_${hashValue(
+    canonicalJson({
+      domain: "remembrance-private-lesson-replacement-v1",
+      replacement_of: replacementOf,
+      payload_digest: payloadDigest
+    })
+  ).slice("sha256:".length, "sha256:".length + 32)}`;
 }
 function assertDraftId(value) {
   if (!/^pld_[A-Za-z0-9_-]{8,96}$/.test(value)) {
@@ -65784,7 +66729,8 @@ var LOCAL_ONLY_HANDLERS = Object.freeze({
   ),
   inspect_private_lesson_outbox: (payload, context) => inspectPrivateLessonOutbox(
     payload,
-    context.persistence
+    context.persistence,
+    context.privateLessonDestination
   ),
   delete_private_lesson_candidate: (payload, context) => {
     const request = payload;
@@ -65871,18 +66817,63 @@ function acknowledgeFeedbackDenialLocally(input, persistence) {
     };
   }
 }
-async function preparePrivateLessonDraft(input, persistence, destination, tool) {
+async function preparePrivateLessonDraft(input, persistence, destination, tool, replacementOf) {
   const prepared = preparePrivateLessonCandidate(input, { tool });
+  if (replacementOf) {
+    return preparePrivateLessonReplacement(
+      input,
+      prepared,
+      replacementOf,
+      persistence,
+      destination
+    );
+  }
   const draft = await persistence.queuePreparedPrivateLesson(
     prepared,
     destination
   );
-  return privateLessonDraftActionResult(draft, {
+  return privateLessonDraftActionResult(draft, destination, {
     next_action: prepared.status === "ready" || prepared.status === "held_safety" && privateLessonHealthReportingEnabled() ? {
       tool: "submit_private_lesson_candidate",
       arguments: { draft_id: draft.draft_id }
-    } : null
+    } : null,
+    // Where the lesson holds, without its text, for a replacement.
+    ...prepared.status === "held_safety" ? privateLessonFindings(input) : {}
   });
+}
+async function preparePrivateLessonReplacement(input, prepared, replacementOf, persistence, destination) {
+  try {
+    const { draft, attempts_remaining, replayed } = await persistence.queuePrivateLessonReplacement(
+      replacementOf,
+      prepared,
+      destination
+    );
+    return privateLessonDraftActionResult(draft, destination, {
+      replacement_attempts_remaining: attempts_remaining,
+      replayed,
+      ...draft.state === "awaiting_authorization" && draft.attempts === 0 ? {
+        next_action: {
+          tool: "submit_private_lesson_candidate",
+          arguments: { draft_id: draft.draft_id }
+        }
+      } : {}
+    });
+  } catch (error) {
+    if (!(error instanceof PrivateLessonReplacementRefusedError) || error.reason !== "replacement_held") {
+      throw error;
+    }
+    return {
+      status: "not_stored",
+      ...error.diagnostic(),
+      held_reasons: prepared.held_reasons,
+      ...privateLessonFindings(input),
+      agent_recovery: privateLessonAgentRecovery(
+        replacementOf,
+        error.attemptsRemaining
+      ),
+      action_required: error.attemptsRemaining > 0 ? `The local safety check holds this version too (held_reasons and findings), so it was not stored or sent, and the held draft stays as it is. Write a version without what the findings name and capture it again with the same replacement_of; ${error.attemptsRemaining} attempt${error.attemptsRemaining === 1 ? "" : "s"} left.` : privateLessonHeldRecoveryActionRequired(0)
+    };
+  }
 }
 async function captureLearning(input, persistence, lessonDestination, skillDestination) {
   const parsed = captureLearningInputSchema.parse(input);
@@ -65899,11 +66890,12 @@ async function captureLearning(input, persistence, lessonDestination, skillDesti
     };
   }
   if (route === "private_skill") {
-    const draft = parsed.replacement_of ? await persistence.queuePrivateSkillReformulation(
-      parsed.replacement_of.draft_id,
+    const link2 = parsed.replacement_of && "context_source" in parsed.replacement_of ? parsed.replacement_of : void 0;
+    const draft = link2 ? await persistence.queuePrivateSkillReformulation(
+      link2.draft_id,
       parsed.private_skill,
-      parsed.replacement_of.context_source,
-      ...parsed.replacement_of.recovery_context_id ? [parsed.replacement_of.recovery_context_id] : []
+      link2.context_source,
+      ...link2.recovery_context_id ? [link2.recovery_context_id] : []
     ) : await persistence.queuePrivateSkillCapture(
       parsed.private_skill,
       skillDestination
@@ -65922,7 +66914,8 @@ async function captureLearning(input, persistence, lessonDestination, skillDesti
     parsed.lesson,
     persistence,
     lessonDestination,
-    "capture_learning"
+    "capture_learning",
+    parsed.replacement_of?.draft_id
   );
   return {
     contract_version: parsed.contract_version,
@@ -66029,7 +67022,7 @@ function privateOutboxDiagnostic(error) {
   const { reason_code, stage, remediation } = error.diagnostic();
   return { reason_code, stage, remediation };
 }
-async function inspectPrivateLessonOutbox(input, persistence) {
+async function inspectPrivateLessonOutbox(input, persistence, destination) {
   const snapshot = await persistence.inspectPrivateLessonOutbox(
     input.limit,
     input.offset
@@ -66048,7 +67041,7 @@ async function inspectPrivateLessonOutbox(input, persistence) {
       }
       const draft = await persistence.readPrivateLessonDraft(input.draft_id);
       return {
-        draft: privateLessonDraftActionResult(draft),
+        draft: privateLessonDraftActionResult(draft, destination),
         outbox: publicOutboxSummary(snapshot.summary),
         recovery_items: snapshot.recovery_items
       };
@@ -66106,7 +67099,7 @@ function privateLessonSelectedDraftError(draftId, error) {
 function privateLessonHealthReportingEnabled(env = process.env) {
   return !/^(0|false|no)$/i.test(env.REMEMBRANCE_HEALTH_REPORTING ?? "");
 }
-function privateLessonDraftActionResult(draft, extra = {}) {
+function privateLessonDraftActionResult(draft, destination, extra = {}) {
   return {
     draft_id: draft.draft_id,
     state: draft.state,
@@ -66123,8 +67116,10 @@ function privateLessonDraftActionResult(draft, extra = {}) {
     hold_event_digest: draft.hold_event_digest,
     hold_receipt_digest: draft.hold_receipt_digest,
     hold_reported_at: draft.hold_reported_at,
+    ...safetyRecheckField(draft),
+    ...privateLessonRecoveryFields(draft, destination),
     retained_locally: draft.state !== "submitted" || hasUnverifiablePrivateLessonCompletion(draft),
-    action_required: privateLessonActionRequired(draft),
+    action_required: privateLessonActionRequired(draft, destination),
     next_action: privateLessonNextAction(draft),
     ...extra
   };
@@ -66172,7 +67167,8 @@ function privateLessonNextAction(draft) {
   }
   return null;
 }
-function privateLessonActionRequired(draft) {
+var PRIVATE_LESSON_RECHECKED_HOLD_DECISION = "An earlier safety check held this draft and the current one would not. It stays held unless the user chooses to deliver it (retry_private_lesson_candidate with deliver_rechecked_hold=true) or to delete it (delete_private_lesson_candidate with confirm=true); keeping it needs no action.";
+function privateLessonActionRequired(draft, destination) {
   if (hasUnverifiablePrivateLessonCompletion(draft)) {
     return PRIVATE_LESSON_UNVERIFIABLE_COMPLETION_REMEDIATION;
   }
@@ -66181,6 +67177,15 @@ function privateLessonActionRequired(draft) {
   }
   if (draft.state === "held_safety" && draft.held_reasons.length === 0) {
     return "This legacy safety hold has no classified content reason. Retry the exact retained draft so current policy validation can recover it; no replacement has been submitted.";
+  }
+  if (privateLessonSafetyRecheck(draft)) {
+    return PRIVATE_LESSON_RECHECKED_HOLD_DECISION;
+  }
+  if (draft.state === "held_safety" && privateLessonReplaceable(draft)) {
+    return privateLessonHeldRecoveryActionRequired(
+      privateLessonReplacementAttemptsRemaining(draft),
+      !privateLessonReplaceable(draft, destination)
+    );
   }
   if (draft.state === "awaiting_authorization") {
     return "Restore authorization for the exact private-lesson submission action, then retry this retained draft.";
@@ -66199,6 +67204,9 @@ function privateLessonActionRequired(draft) {
   }
   if (draft.state === "held_validation" && draft.last_error_code === "private_lesson_destination_audience_mismatch") {
     return "The current credential proves a different organization audience. Restore the captured organization destination; the retained draft was not sent to this one.";
+  }
+  if (draft.state === "held_validation" && draft.last_error_code === "private_lesson_destination_attestation_mismatch") {
+    return PRIVATE_LESSON_ATTESTATION_MISMATCH_REMEDIATION;
   }
   if (draft.state === "held_validation") {
     return "The encrypted draft remains local because the response or draft failed validation. Inspect its content-free state before choosing any further action; it will not be retried automatically.";
@@ -66742,6 +67750,10 @@ function createLocalPersistenceCapabilities(dependencies = {}) {
     }),
     queuePrivateSkillHandoff: (payload, uploadBaseUrl) => queuePrivateSkillHandoff(payload, { uploadBaseUrl }),
     queuePreparedPrivateLesson: async (prepared, destination) => queuePreparedPrivateLesson(prepared, null, {
+      ...await withEncryption(),
+      ...destination ? { destination } : {}
+    }),
+    queuePrivateLessonReplacement: async (replacementOf, prepared, destination) => queuePrivateLessonReplacement(replacementOf, prepared, {
       ...await withEncryption(),
       ...destination ? { destination } : {}
     }),
@@ -68146,6 +69158,17 @@ function localPluginLifecycleHealth(options) {
     explanation: "Each host process session is tracked independently. Turn-specific prompt, tool, and completion observations are combined only when they share the current SessionStart marker."
   };
 }
+var HOOK_TRUST_UNAVAILABLE_REASONS = /* @__PURE__ */ new Set([
+  "app_server_closed",
+  "app_server_initialize_failed",
+  "app_server_unavailable",
+  "check_disabled",
+  "codex_executable_not_found",
+  "hooks_list_failed",
+  "hooks_list_timeout",
+  "hooks_list_too_large",
+  "plugin_hooks_not_listed"
+]);
 function normalizedPluginHookTrust(value) {
   if (!isRecord9(value)) return null;
   const status = value.status;
@@ -68180,7 +69203,8 @@ function normalizedPluginHookTrust(value) {
     status,
     checked_at: typeof value.checked_at === "string" && Number.isFinite(Date.parse(value.checked_at)) ? new Date(value.checked_at).toISOString() : null,
     review_events: reviewEvents,
-    hooks
+    hooks,
+    reason: status === "unavailable" && typeof value.reason === "string" && HOOK_TRUST_UNAVAILABLE_REASONS.has(value.reason) ? value.reason : null
   };
 }
 function apiDestinationStatus(baseUrl, source) {
@@ -68562,7 +69586,7 @@ function inspectPrivateLearningOutbox2(input, dependencies = {}) {
 }
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.2.5" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.2.6" : "0.0.0-dev";
 var tools2 = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var nativeContextCliRequested = process.argv[2] === "--native-context";
@@ -68843,6 +69867,9 @@ function jsonRpcErrorForToolError(error) {
       data: error.diagnostic()
     };
   }
+  if (error instanceof PrivateLessonReplacementRefusedError) {
+    return { code: -32602, message: error.message, data: error.diagnostic() };
+  }
   if (error instanceof PrivateLessonLengthLimitError || error instanceof PrivateSkillSizeLimitError) {
     return { code: -32602, message: error.message, data: error.diagnostic() };
   }
@@ -68930,11 +69957,13 @@ async function callNetworkToolWithinExecution(definition, payload, access, trans
     return bootstrapAgentIdentity(payload, access, transport);
   }
   if (definition.local === "retry_private_lesson_candidate") {
+    const args = payload;
     return submitPrivateLessonDraft(
-      String(payload.draft_id),
+      String(args.draft_id),
       access,
       "retry",
-      transport
+      transport,
+      { deliverRecheckedHold: args.deliver_rechecked_hold === true }
     );
   }
   if (definition.local === "retry_private_skill_candidate") {
@@ -70019,6 +71048,9 @@ var RECOVERABLE_PRIVATE_LESSON_DESTINATION_ERRORS = /* @__PURE__ */ new Set([
   "private_lesson_destination_audience_mismatch"
 ]);
 function privateLessonDestinationError(draft, current) {
+  if (draft.state === "held_validation" && draft.last_error_code === "private_lesson_destination_attestation_mismatch") {
+    return "private_lesson_destination_attestation_mismatch";
+  }
   const captured = draft.destination_binding;
   if (!captured) return "private_lesson_destination_legacy_unbound";
   if (captured.api_base_sha256 !== current.api_base_sha256) {
@@ -70039,17 +71071,22 @@ function privateLessonDestinationActionRequired(code) {
       return "The credential differs from capture and no verified organization audience was established. Restore the captured credential and API base, then retry the exact retained draft.";
     case "private_lesson_destination_audience_mismatch":
       return "The current credential proves a different organization audience. Restore the captured organization destination; the retained draft was not sent to this one.";
+    case "private_lesson_destination_attestation_mismatch":
+      return PRIVATE_LESSON_ATTESTATION_MISMATCH_REMEDIATION;
   }
 }
 function privateLessonDestinationNextAction(draftId, code) {
-  return code === "private_lesson_destination_legacy_unbound" ? {
-    tool: "capture_learning",
-    action_code: "recapture_legacy_private_lesson_with_destination_binding",
-    retained_source_draft_id: draftId,
-    retained_source_available_to_agent: false,
-    required_input: ["lesson"]
-  } : {
-    tool: "retry_private_lesson_candidate",
+  if (code === "private_lesson_destination_legacy_unbound") {
+    return {
+      tool: "capture_learning",
+      action_code: "recapture_legacy_private_lesson_with_destination_binding",
+      retained_source_draft_id: draftId,
+      retained_source_available_to_agent: false,
+      required_input: ["lesson"]
+    };
+  }
+  return {
+    tool: code === "private_lesson_destination_attestation_mismatch" ? "inspect_private_lesson_outbox" : "retry_private_lesson_candidate",
     arguments: { draft_id: draftId }
   };
 }
@@ -70062,8 +71099,9 @@ async function holdPrivateLessonDestination(draft, code) {
     updated_at: (/* @__PURE__ */ new Date()).toISOString()
   }));
 }
-async function submitPrivateLessonDraft(draftId, access, mode, transport) {
+async function submitPrivateLessonDraft(draftId, access, mode, transport, { deliverRecheckedHold = false } = {}) {
   const allowPolicyRefresh = mode === "retry";
+  const currentDestination = privateLessonDestinationForAccess(access);
   const source = await readPrivateLessonSubmissionSource(draftId);
   if (source.kind === "submitted") {
     return privateLessonSubmittedActionResult2(source.completion, {
@@ -70072,7 +71110,7 @@ async function submitPrivateLessonDraft(draftId, access, mode, transport) {
   }
   let draft = source.draft;
   if (draft.state === "superseded_redactor") {
-    return privateLessonDraftActionResult2(draft, {
+    return privateLessonDraftActionResult2(draft, currentDestination, {
       status: "superseded_redactor",
       action_required: privateLessonDraftActionRequired(draft)
     });
@@ -70093,6 +71131,24 @@ async function submitPrivateLessonDraft(draftId, access, mode, transport) {
       status: "already_submitted"
     });
   }
+  if (deliverRecheckedHold && draft.state === "held_safety" && draft.held_reasons.length > 0) {
+    try {
+      draft = await releaseRecheckedPrivateLessonHold(draft.draft_id);
+    } catch (error) {
+      if (!(error instanceof PrivateLessonHoldReleaseRefusedError)) throw error;
+      return privateLessonDraftActionResult2(draft, currentDestination, {
+        status: "not_submitted",
+        error_code: "private_lesson_hold_not_released",
+        current_hold_reasons: [...error.holdReasons],
+        // Not sent: replacing it is the way on, as for any held draft.
+        action_required: privateLessonHeldRecoveryActionRequired(
+          privateLessonReplacementAttemptsRemaining(draft),
+          !privateLessonReplaceable(draft, currentDestination)
+        ),
+        candidate_sent: false
+      });
+    }
+  }
   if (draft.state === "held_safety" && draft.held_reasons.length === 0) {
     draft = await updatePrivateLessonDraft(
       draft.draft_id,
@@ -70109,14 +71165,13 @@ async function submitPrivateLessonDraft(draftId, access, mode, transport) {
       } : current
     );
   }
-  const currentDestination = privateLessonDestinationForAccess(access);
   const destinationError = privateLessonDestinationError(
     draft,
     currentDestination
   );
   if (destinationError) {
     draft = await holdPrivateLessonDestination(draft, destinationError);
-    return privateLessonDraftActionResult2(draft, {
+    return privateLessonDraftActionResult2(draft, currentDestination, {
       status: "not_submitted",
       action_required: privateLessonDestinationActionRequired(destinationError),
       next_action: privateLessonDestinationNextAction(
@@ -70126,10 +71181,27 @@ async function submitPrivateLessonDraft(draftId, access, mode, transport) {
       candidate_sent: false
     });
   }
-  if (mode === "retry") {
+  const restoredHold = draft.held_reasons.length > 0 && draft.state !== "held_safety";
+  if (restoredHold) {
+    draft = await updatePrivateLessonDraft(
+      draft.draft_id,
+      (current) => current.held_reasons.length > 0 && current.state !== "held_safety" && current.state !== "submitted" && current.state !== "superseded_redactor" ? {
+        ...current,
+        state: "held_safety",
+        next_retry_at: null,
+        last_error_code: null,
+        updated_at: (/* @__PURE__ */ new Date()).toISOString()
+      } : current
+    );
+  }
+  if (mode === "retry" && !restoredHold) {
     const retryGate = privateLessonRetryGate(draft);
     if (retryGate) {
-      return privateLessonDraftActionResult2(draft, retryGate);
+      return privateLessonDraftActionResult2(
+        draft,
+        currentDestination,
+        retryGate
+      );
     }
   }
   if (draft.state === "held_safety") {
@@ -70166,7 +71238,7 @@ async function submitPrivateLessonDraft(draftId, access, mode, transport) {
       error,
       error instanceof PrivateLessonPolicyFloorError ? error.code : void 0
     );
-    return privateLessonDraftActionResult2(draft, {
+    return privateLessonDraftActionResult2(draft, currentDestination, {
       status: "not_submitted",
       action_required: privateLessonDraftActionRequired(draft)
     });
@@ -70174,7 +71246,17 @@ async function submitPrivateLessonDraft(draftId, access, mode, transport) {
   if (draft.destination_binding && draft.destination_binding.credential_sha256 !== currentDestination.credential_sha256 && draft.policy && draft.policy.organization_audience_hash !== currentBinding.organization_audience_hash) {
     const code = "private_lesson_destination_audience_mismatch";
     draft = await holdPrivateLessonDestination(draft, code);
-    return privateLessonDraftActionResult2(draft, {
+    return privateLessonDraftActionResult2(draft, currentDestination, {
+      status: "not_submitted",
+      action_required: privateLessonDestinationActionRequired(code),
+      next_action: privateLessonDestinationNextAction(draft.draft_id, code),
+      candidate_sent: false
+    });
+  }
+  if (draft.attested_organization_audience_hash !== void 0 && draft.attested_organization_audience_hash !== currentBinding.organization_audience_hash) {
+    const code = "private_lesson_destination_attestation_mismatch";
+    draft = await holdPrivateLessonDestination(draft, code);
+    return privateLessonDraftActionResult2(draft, currentDestination, {
       status: "not_submitted",
       action_required: privateLessonDestinationActionRequired(code),
       next_action: privateLessonDestinationNextAction(draft.draft_id, code),
@@ -70192,7 +71274,7 @@ async function submitPrivateLessonDraft(draftId, access, mode, transport) {
       ),
       "organization_policy_disabled"
     );
-    return privateLessonDraftActionResult2(draft, {
+    return privateLessonDraftActionResult2(draft, currentDestination, {
       status: "not_submitted",
       action_required: privateLessonDraftActionRequired(draft)
     });
@@ -70205,7 +71287,7 @@ async function submitPrivateLessonDraft(draftId, access, mode, transport) {
         "payload_limit_unavailable"
       )
     );
-    return privateLessonDraftActionResult2(draft, {
+    return privateLessonDraftActionResult2(draft, currentDestination, {
       status: "not_submitted",
       action_required: privateLessonDraftActionRequired(draft)
     });
@@ -70221,7 +71303,7 @@ async function submitPrivateLessonDraft(draftId, access, mode, transport) {
       new PrivateLessonPolicyHoldError(policyConflict.message),
       policyConflict.code
     );
-    return privateLessonDraftActionResult2(draft, {
+    return privateLessonDraftActionResult2(draft, currentDestination, {
       status: "not_submitted",
       action_required: policyConflict.action_required
     });
@@ -70334,7 +71416,7 @@ async function submitPrivateLessonDraft(draftId, access, mode, transport) {
       updated_at: completion.updated_at
     };
     return {
-      ...privateLessonDraftActionResult2(draft, {
+      ...privateLessonDraftActionResult2(draft, currentDestination, {
         status,
         completion_expires_at: completion.expires_at
       }),
@@ -70344,11 +71426,11 @@ async function submitPrivateLessonDraft(draftId, access, mode, transport) {
   } catch (error) {
     draft = await persistPrivateLessonFailure(draft, error);
     if (draft.state === "submitted") {
-      return privateLessonDraftActionResult2(draft, {
+      return privateLessonDraftActionResult2(draft, currentDestination, {
         status: "already_submitted"
       });
     }
-    return privateLessonDraftActionResult2(draft, {
+    return privateLessonDraftActionResult2(draft, currentDestination, {
       status: "not_submitted",
       action_required: privateLessonDraftActionRequired(draft)
     });
@@ -70417,8 +71499,9 @@ function retryDue(nextRetryAt) {
 }
 async function submitPrivateLessonHoldTelemetry(initialDraft, access, allowPolicyRefresh, transport) {
   let draft = initialDraft;
+  const currentDestination = privateLessonDestinationForAccess(access);
   if (draft.hold_telemetry_status === "submitted") {
-    return privateLessonDraftActionResult2(draft, {
+    return privateLessonDraftActionResult2(draft, currentDestination, {
       status: "already_recorded",
       processing_state: "recorded"
     });
@@ -70430,7 +71513,7 @@ async function submitPrivateLessonHoldTelemetry(initialDraft, access, allowPolic
       next_retry_at: null,
       last_error_code: "health_reporting_disabled"
     }));
-    return privateLessonDraftActionResult2(draft, {
+    return privateLessonDraftActionResult2(draft, currentDestination, {
       status: "not_submitted",
       action_required: null
     });
@@ -70450,7 +71533,7 @@ async function submitPrivateLessonHoldTelemetry(initialDraft, access, allowPolic
     );
   } catch (error) {
     draft = await persistPrivateLessonHoldFailure(draft, error);
-    return privateLessonDraftActionResult2(draft, {
+    return privateLessonDraftActionResult2(draft, currentDestination, {
       status: "not_submitted",
       action_required: privateLessonHoldActionRequired(draft)
     });
@@ -70463,7 +71546,7 @@ async function submitPrivateLessonHoldTelemetry(initialDraft, access, allowPolic
       next_retry_at: null,
       last_error_code: "private_lesson_automation_disabled"
     }));
-    return privateLessonDraftActionResult2(draft, {
+    return privateLessonDraftActionResult2(draft, currentDestination, {
       status: "not_submitted",
       action_required: null
     });
@@ -70479,7 +71562,7 @@ async function submitPrivateLessonHoldTelemetry(initialDraft, access, allowPolic
       new PrivateLessonPolicyHoldError(policyConflict.message),
       policyConflict.code
     );
-    return privateLessonDraftActionResult2(draft, {
+    return privateLessonDraftActionResult2(draft, currentDestination, {
       status: "not_submitted",
       action_required: policyConflict.action_required
     });
@@ -70524,7 +71607,7 @@ async function submitPrivateLessonHoldTelemetry(initialDraft, access, allowPolic
         policy: receiptPolicy
       }));
       return {
-        ...privateLessonDraftActionResult2(draft, {
+        ...privateLessonDraftActionResult2(draft, currentDestination, {
           status: submitted.status
         }),
         receipt: submitted.receipt,
@@ -70536,7 +71619,7 @@ async function submitPrivateLessonHoldTelemetry(initialDraft, access, allowPolic
         continue;
       }
       draft = await persistPrivateLessonHoldFailure(draft, error);
-      return privateLessonDraftActionResult2(draft, {
+      return privateLessonDraftActionResult2(draft, currentDestination, {
         status: "not_submitted",
         action_required: privateLessonHoldActionRequired(draft)
       });
@@ -71013,7 +72096,7 @@ function privateLessonRetryAt(attempts, retryAfterMs = null) {
     Date.now() + Math.max(privateLessonRetryDelayMs(attempts), retryAfterMs ?? 0)
   ).toISOString();
 }
-function privateLessonDraftActionResult2(draft, extra = {}) {
+function privateLessonDraftActionResult2(draft, destination, extra = {}) {
   return {
     draft_id: draft.draft_id,
     state: draft.state,
@@ -71030,6 +72113,8 @@ function privateLessonDraftActionResult2(draft, extra = {}) {
     hold_event_digest: draft.hold_event_digest,
     hold_receipt_digest: draft.hold_receipt_digest,
     hold_reported_at: draft.hold_reported_at,
+    ...safetyRecheckField(draft),
+    ...privateLessonRecoveryFields(draft, destination),
     retained_locally: draft.state !== "submitted",
     next_action: privateLessonDraftNextAction(draft),
     ...extra
@@ -72128,8 +73213,12 @@ function formatConnectionDoctorReport(report) {
     lines2.push(`[${check.status.toUpperCase()}] ${check.id}: ${check.summary}`);
     if (check.remediation) {
       lines2.push(`  Fix: ${check.remediation.action}`);
-      if (check.remediation.command) {
-        lines2.push(`  Command: ${check.remediation.command}`);
+      const command = check.remediation.command;
+      if (command) {
+        lines2.push(
+          command.includes("\n") ? `  Command:
+${command.replace(/^/gm, "    ")}` : `  Command: ${command}`
+        );
       }
     }
   }

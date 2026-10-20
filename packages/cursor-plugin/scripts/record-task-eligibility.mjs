@@ -23,6 +23,7 @@ import {
   resolveApiCredential,
   promptContainsUserCorrection,
   shouldQueryPrompt,
+  withoutPrivateKeySearch,
 } from "./hook-core.mjs";
 import { cursorNativeSessionId, cursorSessionId } from "./record-mcp-use.mjs";
 
@@ -81,11 +82,16 @@ export async function handlePromptEligibility(input, options = {}) {
   }).catch(() => 0);
   // This hook never searches, so it cannot tell an empty task-shape search
   // from a useful one; the always-apply rule is Cursor's task-shaped path.
-  // Eligibility stays on the keyword triggers (owner decision 34C).
-  const decision = shouldQueryPrompt(redacted, {
-    ...env,
-    REMEMBRANCE_AUTO_QUERY_TASK_SHAPE: "0",
-  });
+  // Eligibility stays on the keyword triggers (owner decision 34C). A prompt
+  // that carries a private key is not marked, as the other hosts' prompt
+  // hooks do not search it.
+  const decision = withoutPrivateKeySearch(
+    shouldQueryPrompt(redacted, {
+      ...env,
+      REMEMBRANCE_AUTO_QUERY_TASK_SHAPE: "0",
+    }),
+    prompt,
+  );
   const continuation = isContextualContinuationPrompt(redacted);
   const correction = promptContainsUserCorrection(redacted);
   if (!decision.likely_match && !continuation && !correction) {

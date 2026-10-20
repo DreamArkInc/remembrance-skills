@@ -89,22 +89,48 @@ longer available is reported and skipped, never replaced. Anonymous sessions
 skip this step; set `REMEMBRANCE_SESSION_SKILLS=0` to turn it off.
 
 The same marketplace publishes Codex through a dedicated, independently
-validated package:
+validated package.
+
+**Codex CLI.** The Codex plugin needs a Codex CLI: `codex` on your PATH or, on
+macOS, the CLI bundled in the ChatGPT desktop app. The setup, update and
+hook-review commands run the newest one they find, so an older `codex` on PATH
+cannot shadow the app's newer CLI; set `CODEX_CLI` to a CLI's full path to
+choose one yourself. No other host needs the Codex CLI.
 
 ```bash
-CODEX_CLI="${CODEX_CLI:-$(command -v codex || true)}"
-[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/ChatGPT.app/Contents/Resources/codex"
-[ -x "$CODEX_CLI" ] || CODEX_CLI="/Applications/Codex.app/Contents/Resources/codex"
-[ -x "$CODEX_CLI" ] || { printf '%s\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, then try again." >&2; exit 1; }
+(
+set +eu; unalias codex 2>/dev/null || :; unset -f codex 2>/dev/null || :
+if [ -n "$CODEX_CLI" ]; then
+  [ -x "$CODEX_CLI" ] || { printf 'CODEX_CLI is set but is not an executable file: %s\n' "$CODEX_CLI" >&2; exit 1; }
+else
+  best=-1
+  for c in "$(command -v codex 2>/dev/null)" \
+    /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex \
+    /Applications/ChatGPT.app/Contents/Resources/codex \
+    /Applications/Codex.app/Contents/Resources/codex; do
+    case "$c" in /*) [ -x "$c" ] || continue ;; *) continue ;; esac
+    out=$("$c" --version </dev/null 2>/dev/null) || continue
+    v=$(printf '%s\n' "$out" | awk 'match($0, /[0-9]+[.][0-9]+[.][0-9]+/) { split(substr($0, RSTART, RLENGTH), n, "."); v = n[1] * 1000000 + n[2] * 1000 + n[3]; exit } END { print v + 0 }')
+    [ "$v" -gt "$best" ] && best=$v && CODEX_CLI=$c
+  done
+  [ -n "$CODEX_CLI" ] || { printf '%s\n' "Codex CLI not found. Install the Codex CLI, or install or update the ChatGPT desktop app on macOS, or set CODEX_CLI to a Codex CLI path, then try again." >&2; exit 1; }
+fi
+printf 'Using Codex CLI: %s\n' "$CODEX_CLI" >&2
 "$CODEX_CLI" plugin marketplace add dreamarkinc/remembrance-skills &&
   "$CODEX_CLI" plugin marketplace upgrade remembrance &&
   "$CODEX_CLI" plugin add remembrance@remembrance &&
   "$CODEX_CLI"
+)
 ```
 
-If `codex` is not on your shell `PATH`, this checks the current `ChatGPT.app`
-bundle first and retains the legacy `Codex.app` compatibility path. The final
-command opens Codex CLI for its secure hook review when Codex requires it.
+The block runs in a subshell, so a failure prints a message and leaves your
+terminal open. It uses `CODEX_CLI` when set; otherwise it runs the newest of
+`codex` on PATH, the ChatGPT desktop app's bundled CLI
+(`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`) and the
+older bundle paths, and stops at the first failed step.
+
+The final command opens Codex CLI for its secure hook review when Codex
+requires it.
 
 If Codex shows a **Hooks need review** screen, choose **Review hooks** and trust
 only the Remembrance `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`,
@@ -126,6 +152,11 @@ step is required for Remembrance to do its job fully. Without it, every private
 lesson or skill submission stops for a manual approval, and unattended or
 headless runs such as `claude -p` deny it. Public-only use, without an
 organization key, does not need it.
+
+An agent asks you (for managed settings, your administrator) before applying
+this step: it never edits host permission or settings files without your
+consent, and never answers the host's approval prompt for its own pending
+action.
 
 Merge these entries into `permissions.allow` in `~/.claude/settings.json`,
 which applies to every project. The first four are the private submit and
@@ -486,8 +517,9 @@ adds one more, if all three were shown). It is sent only through its exact
 submit or retry action after the user agrees. Drafts no active session is
 handling are offered as a user decision too, until the user delivers, keeps or
 deletes them; a kept draft is parked. These decisions go to the next
-main-thread prompt on the machine, at most once a day, including unattended
-runs such as `claude -p`; the drafts stay listed by
+main-thread prompt on the machine, at most once a day, unless the run sets
+`REMEMBRANCE_UNATTENDED=1`; set it for unattended runs such as `claude -p`,
+which then neither show nor use up a decision. The drafts stay listed by
 `inspect_private_learning_outbox`, and none is sent or deleted without the
 user.
 `submit_query_feedback` remains independently available for bounded query-fit
@@ -606,6 +638,12 @@ Environment:
 - `REMEMBRANCE_DIRECTIVE_EVENT_TIMEOUT_MS`: fail-open shown/followed event
   timeout, default `750`, bounded to `100`-`2000` milliseconds.
 - `REMEMBRANCE_AGENT_KEY_PATH`: optional local TOFU key path for MCP identity.
+- `REMEMBRANCE_UNATTENDED=1`: marks a run no person attends, such as
+  `claude -p` in a scheduled job. Its hooks show none of the user decisions
+  about retained private drafts, so none is used up, and the next prompt a
+  person makes on the machine gets them; the run still captures and delivers
+  its own lessons. Set it per run, as a prefix or in the `env` of settings only
+  those runs load (`--settings`), and leave it unset in sessions a person uses.
 
 With an organization key, every query returns `skill_access`. If its policy is
 `org_only`, Claude Code uses only returned organization skills and never
@@ -625,7 +663,9 @@ chmod 600 ~/.config/remembrance/config.json
 
 The hook never blocks work on API errors. Malformed responses and timeouts
 inject compact recovery guidance; unrelated prompts still inject nothing. It
-redacts common secrets and private-network URLs before sending a query. Its
+redacts common secrets and private-network URLs before sending a query. It
+does not search a prompt that contains a private key it recognizes (a PEM or
+PuTTY key file, or base64 key data), so none of that prompt's text is sent. Its
 file-backed prompt cache is best-effort and uses atomic file
 replacement to avoid partial writes; concurrent hook processes may still race
 and last-write-wins, which only loses cache entries.
