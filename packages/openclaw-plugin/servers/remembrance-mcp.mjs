@@ -27299,13 +27299,13 @@ function toolArgumentSchemaLocation(schema, path) {
         const child = schemaObject(properties[segment]);
         if (child) {
           name = Object.keys(properties).find((key) => key === segment);
-          next.push(child);
+          if (!next.includes(child)) next.push(child);
         }
       } else if (typeof segment === "number") {
         const child = schemaObject(current.items);
         if (child) {
           name = "[]";
-          next.push(child);
+          if (!next.includes(child)) next.push(child);
         }
       }
     }
@@ -30166,9 +30166,29 @@ function normalizeBoundedWriteJsonSchema(schema, name) {
     schema["x-remembrance-validation-rules"] = QUERY_FEEDBACK_VALIDATION_RULES;
   }
   if (name === "capture_learning") {
-    schema.oneOf = ["lesson", "private_skill", "preference"].map((field) => ({
+    const replacement = schemaProperty(schema, "replacement_of");
+    const [skillLink, lessonLink] = replacement.anyOf;
+    const branch = (field, extra = {}) => ({
+      type: "object",
+      properties: {
+        contract_version: schemaProperty(schema, "contract_version"),
+        [field]: schemaProperty(schema, field),
+        ...extra
+      },
+      additionalProperties: false,
       required: [field]
-    }));
+    });
+    schema.oneOf = [
+      {
+        ...branch("lesson", {
+          capture_id: schemaProperty(schema, "capture_id"),
+          replacement_of: lessonLink
+        }),
+        not: { required: ["capture_id", "replacement_of"] }
+      },
+      branch("private_skill", { replacement_of: skillLink }),
+      branch("preference")
+    ];
     schema.allOf = [
       {
         if: { required: ["replacement_of"] },
@@ -30185,9 +30205,7 @@ function normalizeBoundedWriteJsonSchema(schema, name) {
         }
       }
     ];
-    const replacement = schemaProperty(schema, "replacement_of");
     replacement.description = "Optional lineage for a replacement of one retained draft: a complete private skill for a private-skill draft, or a lesson for a held private-lesson draft. It carries audit/context identity only and grants no approval, destination authority, or permission to reuse held content.";
-    const [skillLink, lessonLink] = replacement.anyOf;
     schemaProperty(skillLink, "draft_id").description = "Retained encrypted private-skill draft being replaced.";
     schemaProperty(skillLink, "context_source").description = "Audit-only source label: active_task_context or separately inspected, explicitly partial safe_recovery_context. Neither source is submission authority.";
     schemaProperty(skillLink, "recovery_context_id").description = "Omit this field unless the current inspect_private_learning_outbox agent_recovery.arguments.replacement_of supplies this exact ID. Never invent an ID or derive one from a draft, digest, or ordinary recovery_context. A supplied native context ID may establish a new context epoch but grants no approval or authority to reuse held content. safe_recovery_context alone does not require an ID.";
@@ -70155,7 +70173,7 @@ function inspectPrivateLearningOutbox2(input, dependencies = {}) {
 }
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.2.8" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.2.9" : "0.0.0-dev";
 var tools2 = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var nativeContextCliRequested = process.argv[2] === "--native-context";
