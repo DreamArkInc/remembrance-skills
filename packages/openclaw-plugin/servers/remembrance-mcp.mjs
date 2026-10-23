@@ -8316,13 +8316,13 @@ function inspectPrivateLessonTag(value) {
   return { tag: aliased, counts: {} };
 }
 function pseudonymizeCorrelationId(value) {
-  const digest2 = hashValue(
+  const digest3 = hashValue(
     canonicalJson({
       domain: "remembrance-private-lesson-correlation-v1",
       value: normalizePrivateLessonText(value)
     })
   ).slice("sha256:".length);
-  return `corr_${digest2.slice(0, 48)}`;
+  return `corr_${digest3.slice(0, 48)}`;
 }
 var CURRENT_PRIVATE_LESSON_REDACTOR_DIGEST = computePrivateLessonRedactorDigest();
 var PRIVATE_LESSON_BROAD_HOLD_REDACTOR_DIGEST = "sha256:e3414b36b1f8d5512e42148c0d06b958c7010bbdb52024bd78ad4e68b0356324";
@@ -8398,7 +8398,7 @@ function privateLessonSupportedRedactorProfiles() {
     }))
   );
 }
-function privateLessonRedactorProfile(version, digest2) {
+function privateLessonRedactorProfile(version, digest3) {
   if (typeof version !== "string" || !PRIVATE_LESSON_SUPPORTED_REDACTION_VERSIONS.includes(
     version
   )) {
@@ -8406,10 +8406,10 @@ function privateLessonRedactorProfile(version, digest2) {
       "unsupported_redaction_version"
     );
   }
-  if (typeof digest2 !== "string") {
+  if (typeof digest3 !== "string") {
     throw new PrivateLessonRedactionProfileError("unsupported_redactor_digest");
   }
-  const profile = PRIVATE_LESSON_SUPPORTED_REDACTOR_PROFILES[version]?.[digest2];
+  const profile = PRIVATE_LESSON_SUPPORTED_REDACTOR_PROFILES[version]?.[digest3];
   if (!profile) {
     throw new PrivateLessonRedactionProfileError("unsupported_redactor_digest");
   }
@@ -27512,7 +27512,7 @@ import { existsSync as existsSync6 } from "node:fs";
 import { mkdir as mkdir5, writeFile as writeFile2 } from "node:fs/promises";
 import { dirname as dirname8 } from "node:path";
 import {
-  createHash as createHash6,
+  createHash as createHash7,
   createHmac,
   createPrivateKey as createPrivateKey2,
   generateKeyPairSync,
@@ -30659,7 +30659,8 @@ var RECORD_FILE = /^[a-f0-9]{32}\.json$/u;
 var OVERFLOW_FILE = /^[a-f0-9]{16}\.obligations-overflow\.json$/u;
 var LANE_ENVELOPE_KINDS = /* @__PURE__ */ new Map([
   ["private-lesson-outbox-envelope-v1", "private_lesson"],
-  ["private-skill-outbox-envelope-v1", "private_skill"]
+  ["private-skill-outbox-envelope-v1", "private_skill"],
+  ["private-skill-outbox-envelope-v2", "private_skill"]
 ]);
 var LANE_KEY_FREE_VERSIONS = /* @__PURE__ */ new Set([
   "private-lesson-outbox-submitted-v1",
@@ -32067,8 +32068,8 @@ async function queuePrivateLessonReplacement(replacementOf, prepared, options = 
     }
     if (privateLessonSafetyRecheck(original)) throw refuse("releasable");
     const attempts = original.replacement_attempts ?? [];
-    const digest2 = prepared.payload_digest;
-    const draftId = privateLessonReplacementDraftId(replacementOf, digest2);
+    const digest3 = prepared.payload_digest;
+    const draftId = privateLessonReplacementDraftId(replacementOf, digest3);
     markCaptureLearningPersisting(draftId);
     const unresolved = await reconcilePrivateLessonTemporaryWrites(
       directory,
@@ -32077,7 +32078,7 @@ async function queuePrivateLessonReplacement(replacementOf, prepared, options = 
     if (unresolved.has(draftId) || (await privateLessonQuarantineEntriesForDraft(directory, draftId)).length > 0) {
       throw new CaptureLearningReplayError("capture_reconciliation_required");
     }
-    const replay = attempts.includes(digest2);
+    const replay = attempts.includes(digest3);
     const used = replay ? attempts.length : attempts.length + 1;
     if (!replay && privateLessonCapturedForOtherDestination(original, options.destination)) {
       throw refuse("destination_changed", attempts.length);
@@ -32093,7 +32094,7 @@ async function queuePrivateLessonReplacement(replacementOf, prepared, options = 
       await writeDraftUnlocked(
         validateDraft({
           ...original,
-          replacement_attempts: [...attempts, digest2],
+          replacement_attempts: [...attempts, digest3],
           updated_at: now.toISOString()
         }),
         outbox,
@@ -32177,7 +32178,7 @@ async function retireReplacedPrivateLessonUnlocked(directory, draftId, replaceme
 }
 function acceptedPrivateLessonReplacement(directory, draft) {
   if (draft.state === "submitted") return void 0;
-  return (draft.replacement_attempts ?? []).map((digest2) => privateLessonReplacementDraftId(draft.draft_id, digest2)).find(
+  return (draft.replacement_attempts ?? []).map((digest3) => privateLessonReplacementDraftId(draft.draft_id, digest3)).find(
     (replacement) => existsSync2(submittedRecordPath(directory, replacement))
   );
 }
@@ -33301,7 +33302,7 @@ async function rememberPrivateLessonPolicyFloor(binding, options = {}, legacyPol
     binding.organization_audience_hash,
     "organization audience"
   );
-  const digest2 = digestHex(
+  const digest3 = digestHex(
     binding.policy_identity_digest ?? binding.policy_digest,
     "policy identity"
   );
@@ -33352,7 +33353,7 @@ async function rememberPrivateLessonPolicyFloor(binding, options = {}, legacyPol
     );
   }
   if (observed.some(
-    (item) => item.sequence === binding.policy_sequence && (item.identity_bound && item.digest !== digest2 || !item.identity_bound && !binding.policy_identity_digest && item.digest !== legacyDigest)
+    (item) => item.sequence === binding.policy_sequence && (item.identity_bound && item.digest !== digest3 || !item.identity_bound && !binding.policy_identity_digest && item.digest !== legacyDigest)
   )) {
     throw new PrivateLessonPolicyFloorError(
       "Private lesson policy conflicts at the same sequence.",
@@ -33361,7 +33362,7 @@ async function rememberPrivateLessonPolicyFloor(binding, options = {}, legacyPol
   }
   const identityPath2 = join3(
     directory,
-    `.policy-identity.${audience}.${binding.policy_sequence}.${digest2}.json`
+    `.policy-identity.${audience}.${binding.policy_sequence}.${digest3}.json`
   );
   const legacyPath = join3(
     directory,
@@ -51831,9 +51832,9 @@ function pkcs12(b, t, f, callbacks) {
   let covered = t.complete;
   if (f[2]) {
     const mac = f[2].tag === 48 && fields(b, f[2], 3);
-    const digest2 = mac && mac[0]?.tag === 48 && fields(b, mac[0], 2);
-    const alg = digest2 && digest2[0]?.tag === 48 && fields(b, digest2[0], 2);
-    if (!mac || mac.length < 2 || !digest2 || digest2.length !== 2 || !alg || !hex(b, alg[0]) || alg[1] && (alg[1].tag !== 5 || alg[1].body !== alg[1].end) || digest2[1]?.tag !== 4 || digest2[1].body === digest2[1].end || mac[1]?.tag !== 4 || mac[1].body === mac[1].end || mac[2] && (integer(b, mac[2]) ?? 0n) <= 0n)
+    const digest3 = mac && mac[0]?.tag === 48 && fields(b, mac[0], 2);
+    const alg = digest3 && digest3[0]?.tag === 48 && fields(b, digest3[0], 2);
+    if (!mac || mac.length < 2 || !digest3 || digest3.length !== 2 || !alg || !hex(b, alg[0]) || alg[1] && (alg[1].tag !== 5 || alg[1].body !== alg[1].end) || digest3[1]?.tag !== 4 || digest3[1].body === digest3[1].end || mac[1]?.tag !== 4 || mac[1].body === mac[1].end || mac[2] && (integer(b, mac[2]) ?? 0n) <= 0n)
       covered = false;
   }
   const ci = fields(b, f[1], 2);
@@ -62343,27 +62344,289 @@ function inspectBoundedPrivateLearningRoot(input) {
 }
 
 // src/private-skill-native-context.ts
+import { createHash as createHash4 } from "node:crypto";
+
+// src/private-skill-native-authority.ts
 import { createHash as createHash3 } from "node:crypto";
+var PRIVATE_SKILL_NATIVE_AUTHORITY_VERSION = "private-skill-native-authority-v1";
+var PRIVATE_SKILL_NATIVE_AUTHORITY_TTL_MS = 3e4;
+var PRIVATE_SKILL_NATIVE_AUTHORITY_COMMAND_MAX_BYTES = 64 * 1024;
+var DIGEST2 = /^sha256:[a-f0-9]{64}$/u;
+var DRAFT = /^psd_[A-Za-z0-9_-]{8,96}$/u;
+var HEADER = /^\/remembrance-context (psd_[A-Za-z0-9_-]{8,96})$/u;
+var CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]|\r(?!\n)/u;
+var issued = /* @__PURE__ */ new WeakMap();
+var unproven = Object.freeze({ status: "unproven" });
+function createPrivateSkillNativeAuthority(sessionId, commandSource, destination, projectPath, options = {}) {
+  try {
+    const command = parseCommand(commandSource);
+    const session = nativeSession(sessionId);
+    const target = parseDestination(destination);
+    const project = projectIdentity(projectPath);
+    const generation = options.generation ?? 0;
+    if (!Number.isSafeInteger(generation) || generation < 0) invalid();
+    const sourceEventDigest = options.sourceEventDigest ?? null;
+    if (sourceEventDigest !== null && !isDigest2(sourceEventDigest)) invalid();
+    const now = options.now ?? Date.now;
+    const instant = now();
+    if (!validTime(instant) || instant > Number.MAX_SAFE_INTEGER - PRIVATE_SKILL_NATIVE_AUTHORITY_TTL_MS)
+      invalid();
+    const capability = Object.freeze(
+      /* @__PURE__ */ Object.create(null)
+    );
+    issued.set(
+      capability,
+      Object.freeze({
+        draft_id: command.draft_id,
+        command_digest: digest(commandSource),
+        source_digest: digest(command.source),
+        destination: target,
+        provenance: Object.freeze({
+          draft_id: command.draft_id,
+          destination: target,
+          session_digest: digest(session),
+          project_digest: project,
+          generation,
+          source_event_digest: sourceEventDigest
+        }),
+        issued_at: instant,
+        expires_at: instant + PRIVATE_SKILL_NATIVE_AUTHORITY_TTL_MS,
+        now
+      })
+    );
+    return Object.freeze({ status: "authorized", ...command, capability });
+  } catch {
+    return unproven;
+  }
+}
+function verifyPrivateSkillNativeAuthority(capability, draftId, contextSource, destination) {
+  try {
+    const entry = liveIssuance(capability);
+    if (typeof draftId !== "string" || !DRAFT.test(draftId) || entry.draft_id !== draftId || typeof contextSource !== "string" || contextSource.length > PRIVATE_SKILL_NATIVE_AUTHORITY_COMMAND_MAX_BYTES || Buffer.byteLength(contextSource, "utf8") > PRIVATE_SKILL_NATIVE_AUTHORITY_COMMAND_MAX_BYTES || entry.source_digest !== digest(contextSource))
+      invalid();
+    const target = parseDestination(destination);
+    if (target.api_base_sha256 !== entry.destination.api_base_sha256 || target.credential_sha256 !== entry.destination.credential_sha256)
+      invalid();
+    return entry.provenance;
+  } catch {
+    return invalid();
+  }
+}
+function privateSkillNativeAuthorityDraftId(capability) {
+  try {
+    return liveIssuance(capability).draft_id;
+  } catch {
+    return invalid();
+  }
+}
+function createPrivateSkillNativeAuthorityRecord(capability, draftId, contextSource, destination, context, preparedContext) {
+  try {
+    const provenance = verifyPrivateSkillNativeAuthority(
+      capability,
+      draftId,
+      contextSource,
+      destination
+    );
+    const identity2 = contextIdentity(context);
+    const prepared = contextIdentity(preparedContext ?? context);
+    if (prepared.source_digest !== digest(contextSource) || prepared.context_digest !== identity2.context_digest)
+      invalid();
+    return Object.freeze({
+      version: PRIVATE_SKILL_NATIVE_AUTHORITY_VERSION,
+      ...identity2,
+      authorized_source_digest: prepared.source_digest,
+      ...provenance,
+      revoked: false
+    });
+  } catch {
+    return invalid();
+  }
+}
+function parsePrivateSkillNativeAuthorityRecord(value, draftId, context) {
+  try {
+    const record4 = exactRecord2(value, [
+      "version",
+      "draft_id",
+      "destination",
+      "source_digest",
+      "context_digest",
+      "authorized_source_digest",
+      "session_digest",
+      "project_digest",
+      "generation",
+      "source_event_digest",
+      "revoked"
+    ]);
+    const identity2 = contextIdentity(context);
+    if (record4.version !== PRIVATE_SKILL_NATIVE_AUTHORITY_VERSION || typeof draftId !== "string" || !DRAFT.test(draftId) || record4.draft_id !== draftId || record4.source_digest !== identity2.source_digest || record4.context_digest !== identity2.context_digest || !isDigest2(record4.authorized_source_digest) || !isDigest2(record4.session_digest) || record4.project_digest !== null && !isDigest2(record4.project_digest) || !Number.isSafeInteger(record4.generation) || record4.generation < 0 || record4.source_event_digest !== null && !isDigest2(record4.source_event_digest) || typeof record4.revoked !== "boolean")
+      invalid();
+    return Object.freeze({
+      version: PRIVATE_SKILL_NATIVE_AUTHORITY_VERSION,
+      draft_id: draftId,
+      destination: parseDestination(record4.destination),
+      ...identity2,
+      authorized_source_digest: record4.authorized_source_digest,
+      session_digest: record4.session_digest,
+      project_digest: record4.project_digest,
+      generation: record4.generation,
+      source_event_digest: record4.source_event_digest,
+      revoked: record4.revoked
+    });
+  } catch {
+    return invalid();
+  }
+}
+function liveIssuance(capability) {
+  if (typeof capability !== "object" || capability === null) invalid();
+  const entry = issued.get(capability);
+  if (!entry) invalid();
+  const instant = entry.now();
+  if (!validTime(instant) || instant < entry.issued_at || instant >= entry.expires_at) {
+    issued.delete(capability);
+    invalid();
+  }
+  return entry;
+}
+function parseCommand(value) {
+  if (typeof value !== "string" || value.length > PRIVATE_SKILL_NATIVE_AUTHORITY_COMMAND_MAX_BYTES || Buffer.byteLength(value, "utf8") > PRIVATE_SKILL_NATIVE_AUTHORITY_COMMAND_MAX_BYTES || /[\uD800-\uDFFF]/u.test(value) || CONTROL.test(value))
+    invalid();
+  const newline = value.indexOf("\n");
+  if (newline < 0) invalid();
+  const header = value.slice(0, newline).replace(/\r$/u, "");
+  const match = HEADER.exec(header);
+  const source = value.slice(newline + 1);
+  if (!match || source.trim().length === 0) invalid();
+  return { draft_id: match[1], source };
+}
+function nativeSession(value) {
+  if (typeof value !== "string") invalid();
+  const session = value.trim();
+  if (!session || session.length > 256 || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(session) || /^(?:unknown|null|undefined|cursor|opencode-session)$/iu.test(session))
+    invalid();
+  return session;
+}
+function projectIdentity(value) {
+  if (value === void 0 || value === null) return null;
+  if (typeof value !== "string" || !value.trim() || value.length > 4096 || Buffer.byteLength(value, "utf8") > 4096 || /[\u0000-\u001F\u007F-\u009F\uD800-\uDFFF]/u.test(value))
+    invalid();
+  return digest(value);
+}
+function parseDestination(value) {
+  const record4 = exactRecord2(value, ["api_base_sha256", "credential_sha256"]);
+  if (!isDigest2(record4.api_base_sha256) || !isDigest2(record4.credential_sha256))
+    invalid();
+  return Object.freeze({
+    api_base_sha256: record4.api_base_sha256,
+    credential_sha256: record4.credential_sha256
+  });
+}
+function contextIdentity(value) {
+  try {
+    const record4 = exactRecord2(value, [
+      "context_id",
+      "source_digest",
+      "context_digest",
+      "inspector_digest",
+      "context",
+      "partial"
+    ]);
+    if (!isDigest2(record4.source_digest) || !isDigest2(record4.context_digest) || typeof record4.context !== "string" || !record4.context.trim() || /[\uD800-\uDFFF]/u.test(record4.context) || record4.context.length > 256 * 1024 || Buffer.byteLength(record4.context, "utf8") > 256 * 1024)
+      invalid();
+    if (record4.context_digest !== digest(record4.context.normalize("NFC").replace(/\r\n?/gu, "\n").trim()))
+      invalid();
+    return {
+      source_digest: record4.source_digest,
+      context_digest: record4.context_digest
+    };
+  } catch {
+    return invalid();
+  }
+}
+function exactRecord2(value, keys) {
+  try {
+    const result = exactRecord(value, keys);
+    if (!result) invalid();
+    return result;
+  } catch {
+    return invalid();
+  }
+}
+function validTime(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+function isDigest2(value) {
+  return typeof value === "string" && DIGEST2.test(value);
+}
+function digest(value) {
+  return `sha256:${createHash3("sha256").update(value, "utf8").digest("hex")}`;
+}
+function invalid() {
+  throw new Error("native_context_authority_invalid");
+}
+
+// src/private-skill-native-context.ts
 var PRIVATE_SKILL_NATIVE_CONTEXT_MAX_BYTES = 256 * 1024;
 var PRIVATE_SKILL_NATIVE_CONTEXT_OMISSION = "[omitted: private recovery context]";
-var DIGEST2 = /^sha256:[a-f0-9]{64}$/u;
+var DIGEST3 = /^sha256:[a-f0-9]{64}$/u;
+function privateSkillNativeContextProjection(value) {
+  return Object.freeze({
+    context_id: value.context_id,
+    source_digest: value.source_digest,
+    context_digest: value.context_digest,
+    inspector_digest: value.inspector_digest,
+    context: value.context,
+    partial: value.partial
+  });
+}
+function parseRetainedPrivateSkillNativeContext(value, draftId) {
+  const legacy = dataRecord(value, [
+    "context_id",
+    "source_digest",
+    "context_digest",
+    "inspector_digest",
+    "context",
+    "partial"
+  ]);
+  if (legacy) return parsePrivateSkillNativeContext(legacy);
+  const record4 = dataRecord(value, [
+    "context_id",
+    "source_digest",
+    "context_digest",
+    "inspector_digest",
+    "context",
+    "partial",
+    "authority"
+  ]);
+  if (!record4) invalid2("native_context_record_invalid");
+  const context = parsePrivateSkillNativeContext(
+    privateSkillNativeContextProjection(
+      record4
+    )
+  );
+  const authority = parsePrivateSkillNativeAuthorityRecord(
+    record4.authority,
+    draftId,
+    context
+  );
+  return Object.freeze({ ...context, authority });
+}
 function createPrivateSkillNativeBinding(sessionId, destination) {
   if (typeof sessionId !== "string" || sessionId.length > 256 || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(sessionId) || /^(?:unknown|null|undefined)$/iu.test(sessionId)) {
-    invalid("native_context_binding_invalid");
+    invalid2("native_context_binding_invalid");
   }
   return Object.freeze({
-    session_digest: digest(sessionId),
-    destination: parseDestination(destination)
+    session_digest: digest2(sessionId),
+    destination: parseDestination2(destination)
   });
 }
 function parsePrivateSkillNativeBinding(value) {
   const record4 = dataRecord(value, ["session_digest", "destination"]);
-  if (!record4 || !isDigest2(record4.session_digest)) {
-    invalid("native_context_binding_invalid");
+  if (!record4 || !isDigest3(record4.session_digest)) {
+    invalid2("native_context_binding_invalid");
   }
   return Object.freeze({
     session_digest: record4.session_digest,
-    destination: parseDestination(record4.destination)
+    destination: parseDestination2(record4.destination)
   });
 }
 function createPrivateSkillNativeContext(rawSource) {
@@ -62401,7 +62664,7 @@ ${inspected.redacted}`;
     return unavailable("native_context_source_too_large", "context");
   const checked = independentlyUnchanged(context, "context");
   if (checked) return checked;
-  return available(makeContext(digest(rawSource), context));
+  return available(makeContext(digest2(rawSource), context));
 }
 function parsePrivateSkillNativeContext(value) {
   const record4 = dataRecord(value, [
@@ -62412,12 +62675,12 @@ function parsePrivateSkillNativeContext(value) {
     "context",
     "partial"
   ]);
-  if (!record4 || record4.partial !== true || !isDigest2(record4.source_digest) || !isDigest2(record4.context_digest) || !isDigest2(record4.inspector_digest) || !validText(record4.context) || tooLarge(record4.context) || record4.context_digest !== digest(normalizeContext(record4.context)) || record4.context_id !== contextId(
+  if (!record4 || record4.partial !== true || !isDigest3(record4.source_digest) || !isDigest3(record4.context_digest) || !isDigest3(record4.inspector_digest) || !validText(record4.context) || tooLarge(record4.context) || record4.context_digest !== digest2(normalizeContext(record4.context)) || record4.context_id !== contextId(
     record4.source_digest,
     record4.context_digest,
     record4.inspector_digest
   )) {
-    invalid("native_context_record_invalid");
+    invalid2("native_context_record_invalid");
   }
   return Object.freeze({
     context_id: record4.context_id,
@@ -62460,7 +62723,7 @@ function isUnchanged(result, expected) {
   return result.status === "complete" && result.outcome === "unchanged" && result.redacted === expected && result.sensitiveMaterial === false && result.sensitiveObjectKeyMaterial === false;
 }
 function makeContext(source_digest, context) {
-  const context_digest = digest(normalizeContext(context));
+  const context_digest = digest2(normalizeContext(context));
   return Object.freeze({
     context_id: contextId(
       source_digest,
@@ -62475,13 +62738,13 @@ function makeContext(source_digest, context) {
   });
 }
 function contextId(source, context, inspector) {
-  return `pctx_${digest(JSON.stringify(["private-skill-native-context-v1", source, context, inspector])).slice(7)}`;
+  return `pctx_${digest2(JSON.stringify(["private-skill-native-context-v1", source, context, inspector])).slice(7)}`;
 }
 function normalizeContext(value) {
   return value.normalize("NFC").replace(/\r\n?/gu, "\n").trim();
 }
-function digest(value) {
-  return `sha256:${createHash3("sha256").update(value, "utf8").digest("hex")}`;
+function digest2(value) {
+  return `sha256:${createHash4("sha256").update(value, "utf8").digest("hex")}`;
 }
 function validText(value) {
   return typeof value === "string" && value.trim().length > 0 && !/[\uD800-\uDFFF]/u.test(value);
@@ -62489,13 +62752,13 @@ function validText(value) {
 function tooLarge(value) {
   return Buffer.byteLength(value, "utf8") > PRIVATE_SKILL_NATIVE_CONTEXT_MAX_BYTES;
 }
-function isDigest2(value) {
-  return typeof value === "string" && DIGEST2.test(value);
+function isDigest3(value) {
+  return typeof value === "string" && DIGEST3.test(value);
 }
-function parseDestination(value) {
+function parseDestination2(value) {
   const record4 = dataRecord(value, ["api_base_sha256", "credential_sha256"]);
-  if (!record4 || !isDigest2(record4.api_base_sha256) || !isDigest2(record4.credential_sha256)) {
-    invalid("native_context_binding_invalid");
+  if (!record4 || !isDigest3(record4.api_base_sha256) || !isDigest3(record4.credential_sha256)) {
+    invalid2("native_context_binding_invalid");
   }
   return Object.freeze({
     api_base_sha256: record4.api_base_sha256,
@@ -62509,7 +62772,7 @@ function dataRecord(value, fields2) {
     return null;
   }
 }
-function invalid(code) {
+function invalid2(code) {
   const error = new Error(code);
   Object.assign(error, { code });
   throw error;
@@ -63357,6 +63620,10 @@ var PRIVATE_SKILL_OUTBOX_MAX_BYTES = 64 * 1024 * 1024;
 var PRIVATE_SKILL_CAPTURE_HEADROOM_BYTES = 1024 * 1024;
 var PRIVATE_SKILL_SUBMITTED_RECORD_RETENTION_MS = 14 * 24 * 60 * 60 * 1e3;
 var PRIVATE_SKILL_DRAFT_MAX_BYTES = PRIVATE_SKILL_OUTBOX_MAX_BYTES;
+var PRIVATE_SKILL_NATIVE_EVENT_MAX = Math.floor(
+  PRIVATE_SKILL_DRAFT_MAX_BYTES / Buffer.byteLength(canonicalJson(`sha256:${"0".repeat(64)}`))
+);
+var PRIVATE_SKILL_NATIVE_WITHDRAWAL_RESERVE_BYTES = 64;
 var PRIVATE_SKILL_MARKER_MAX_BYTES = 8 * 1024;
 var PRIVATE_SKILL_CAPACITY_STATE_FILE = ".capture-capacity.json";
 var PRIVATE_SKILL_CAPACITY_STATE_MAX_BYTES = 1024;
@@ -63398,6 +63665,7 @@ var PRIVATE_SKILL_DELIVERY_RECORD_MAX = Math.floor(
   PRIVATE_SKILL_DRAFT_MAX_BYTES / PRIVATE_SKILL_DELIVERY_RECORD_MIN_BYTES
 );
 var inProcessDraftLocks = /* @__PURE__ */ new Map();
+var qualifiedNativeRecoveryContexts = /* @__PURE__ */ new WeakSet();
 var PrivateSkillDraftDeletedError = class extends PrivateSkillDraftUnavailableError {
   constructor(deletedDraftId) {
     super(deletedDraftId);
@@ -63633,6 +63901,11 @@ async function queuePrivateSkillReformulation(draftId, rawCandidate, contextSour
         privateSkillDraftPath(outbox.directory, draftId),
         outbox.encryption
       );
+      await qualifyRequestedNativeRecoveryContext(
+        current,
+        options,
+        outbox.directory
+      );
       const refreshed = refreshPrivateSkillInspector(
         current,
         options.now ?? /* @__PURE__ */ new Date()
@@ -63645,6 +63918,11 @@ async function queuePrivateSkillReformulation(draftId, rawCandidate, contextSour
           options.env
         );
         current = refreshed;
+        await qualifyRequestedNativeRecoveryContext(
+          current,
+          options,
+          outbox.directory
+        );
       }
       const requestedOperationalCause = options.operationalCause === void 0 ? null : parsePrivateSkillOperationalRetryCause(options.operationalCause);
       const duplicateIndex = current.reformulation_attempts.findIndex(
@@ -64229,59 +64507,339 @@ async function bindPrivateSkillNativeContext(draftId, sessionId, destination, op
     return { status: "bound" };
   });
 }
-async function capturePrivateSkillNativeContext(sessionId, source, destination, options = {}) {
-  const binding = createPrivateSkillNativeBinding(sessionId, destination);
+async function preparePrivateSkillNativeContextAuthority(sessionId, commandSource, destination, projectPath, options = {}) {
+  if (typeof options.sourceEventDigest !== "string" || !/^sha256:[a-f0-9]{64}$/u.test(options.sourceEventDigest))
+    return { status: "unproven" };
+  const eventDigest = options.sourceEventDigest;
+  const provisional = createPrivateSkillNativeAuthority(
+    sessionId,
+    commandSource,
+    destination,
+    projectPath,
+    { now: options.authorityNow, sourceEventDigest: eventDigest }
+  );
+  if (provisional.status !== "authorized") return provisional;
+  const access = verifyPrivateSkillNativeAuthority(
+    provisional.capability,
+    provisional.draft_id,
+    provisional.source,
+    destination
+  ).destination;
   const outbox = await readyPrivateSkillOutbox(options, false);
   return withPrivateSkillOutboxLock(outbox.directory, async () => {
-    let prepared;
-    let count = 0;
-    for (const name of await safeOutboxEntries(outbox.directory)) {
-      if (!/^psd_[A-Za-z0-9_-]{8,96}\.json$/u.test(name)) continue;
-      let current;
-      try {
-        current = await readPrivateSkillDraftFrom(
-          join4(outbox.directory, name),
-          outbox.encryption
-        );
-      } catch {
-        continue;
+    assertPrivateSkillDraftIsMutable(outbox.directory, provisional.draft_id);
+    let current = await readPrivateSkillDraftFrom(
+      privateSkillDraftPath(outbox.directory, provisional.draft_id),
+      outbox.encryption
+    );
+    const regrant = current.native_contexts.some(
+      (context) => context.authority?.revoked
+    );
+    if (current.native_authority_state?.issuance_closed)
+      return { status: "unproven" };
+    if (!nativeContextAppendEligible(current) && !regrant || current.attempts !== 0)
+      return { status: "unproven" };
+    assertPrivateSkillReformulationIsLocal(current);
+    const assessment = await assessPrivateSkillDestinationBinding(
+      current.destination_binding,
+      access,
+      outbox.directory
+    );
+    if (assessment.status !== "matched") return { status: "unproven" };
+    const events = current.native_authority_state?.prepared_events ?? [];
+    if (events.includes(eventDigest)) return { status: "unproven" };
+    const initialized = validatePrivateSkillDraft(
+      {
+        ...current,
+        native_authority_state: {
+          version: "private-skill-native-authority-state-v1",
+          generation: current.native_authority_state?.generation ?? 0,
+          prepared_events: [...events, eventDigest],
+          issuance_closed: false
+        },
+        updated_at: (options.now ?? /* @__PURE__ */ new Date()).toISOString()
+      },
+      current,
+      { nativeAuthorityTransition: "prepare" }
+    );
+    await writePrivateSkillDraft(
+      initialized,
+      outbox.directory,
+      outbox.encryption,
+      options.env
+    );
+    current = initialized;
+    return createPrivateSkillNativeAuthority(
+      sessionId,
+      commandSource,
+      access,
+      projectPath,
+      {
+        now: options.authorityNow,
+        generation: current.native_authority_state.generation,
+        sourceEventDigest: eventDigest
       }
-      if (current.attempts !== 0 || current.state !== "held_validation" || current.reformulation_status !== "attempts_exhausted" || !privateSkillHasPositiveRecoveryOutcome(current))
-        continue;
-      const destinationAssessment = await assessPrivateSkillDestinationBinding(
-        current.destination_binding,
-        destination,
-        outbox.directory
+    );
+  });
+}
+async function revokePrivateSkillNativeContextAuthority(draftId, options = {}) {
+  assertPrivateSkillDraftId(draftId);
+  if (options.sourceEventDigest !== void 0 && !/^sha256:[a-f0-9]{64}$/u.test(options.sourceEventDigest))
+    throw new Error("native_context_authority_source_event_invalid");
+  const outbox = await readyPrivateSkillOutbox(options, false);
+  return withPrivateSkillOutboxLock(outbox.directory, async () => {
+    assertPrivateSkillDraftIsMutable(outbox.directory, draftId);
+    const current = await readPrivateSkillDraftFrom(
+      privateSkillDraftPath(outbox.directory, draftId),
+      outbox.encryption
+    );
+    const generation = (current.native_authority_state?.generation ?? 0) + 1;
+    const events = current.native_authority_state?.prepared_events ?? [];
+    if (current.native_authority_state?.issuance_closed)
+      return { status: "revoked" };
+    if (options.sourceEventDigest && events.includes(options.sourceEventDigest))
+      return { status: "revoked" };
+    if (!Number.isSafeInteger(generation))
+      throw new Error("native_context_authority_generation_exhausted");
+    const nextFor = (closed, retainedEvents) => validatePrivateSkillDraft(
+      {
+        ...current,
+        native_authority_state: {
+          version: "private-skill-native-authority-state-v1",
+          generation,
+          prepared_events: retainedEvents,
+          issuance_closed: closed
+        },
+        native_contexts: current.native_contexts.map(
+          (context) => context.authority ? Object.freeze({
+            ...context,
+            authority: Object.freeze({
+              ...context.authority,
+              revoked: true
+            })
+          }) : context
+        ),
+        updated_at: (options.now ?? /* @__PURE__ */ new Date()).toISOString()
+      },
+      current,
+      { nativeAuthorityTransition: "revoke" }
+    );
+    const publish = (next) => writePrivateSkillDraft(
+      next,
+      outbox.directory,
+      outbox.encryption,
+      options.env,
+      () => assertPrivateSkillDraftIsMutable(outbox.directory, draftId),
+      true
+    );
+    try {
+      await publish(
+        nextFor(
+          false,
+          options.sourceEventDigest ? [...events, options.sourceEventDigest] : events
+        )
       );
-      if (destinationAssessment.status !== "matched") continue;
-      prepared ??= createPrivateSkillNativeContext(source);
-      if (prepared.status !== "available")
-        return { status: "unavailable", count, reason_code: prepared.code };
-      const context = prepared.context;
-      if (current.native_contexts.some(
-        (entry) => entry.source_digest === context.source_digest || entry.context_digest === context.context_digest
-      ))
-        continue;
-      const next = validatePrivateSkillDraft(
+    } catch (error) {
+      if (!(error instanceof PrivateOutboxCapacityError) && !(error instanceof Error && error.message === "Private skill draft exceeds its encrypted size limit."))
+        throw error;
+      await publish(nextFor(true, events));
+    }
+    return { status: "revoked" };
+  });
+}
+function nativeContextAppendEligible(draft) {
+  return draft.attempts === 0 && draft.state === "held_validation" && draft.reformulation_status === "attempts_exhausted" && privateSkillHasPositiveRecoveryOutcome(draft);
+}
+async function capturePrivateSkillNativeContext(sessionId, source, destination, options = {}) {
+  if (!options.nativeAuthority)
+    return {
+      status: "ignored",
+      count: 0,
+      reason_code: "native_context_applicability_unproven"
+    };
+  const capability = options.nativeAuthority;
+  let draftId;
+  let binding;
+  try {
+    draftId = privateSkillNativeAuthorityDraftId(capability);
+    binding = createPrivateSkillNativeBinding(sessionId, destination);
+    const provenance = verifyPrivateSkillNativeAuthority(
+      capability,
+      draftId,
+      source,
+      binding.destination
+    );
+    if (provenance.session_digest !== binding.session_digest)
+      return {
+        status: "ignored",
+        count: 0,
+        reason_code: "native_context_applicability_unproven"
+      };
+  } catch {
+    return {
+      status: "ignored",
+      count: 0,
+      reason_code: "native_context_applicability_unproven"
+    };
+  }
+  const access = binding.destination;
+  const outbox = await readyPrivateSkillOutbox(options, false);
+  return withPrivateSkillOutboxLock(outbox.directory, async () => {
+    let generation;
+    let preparedEvents = [];
+    let issuanceClosed = false;
+    const recheck = () => {
+      const provenance = verifyPrivateSkillNativeAuthority(
+        capability,
+        draftId,
+        source,
+        access
+      );
+      if (issuanceClosed || provenance.session_digest !== binding.session_digest || generation !== void 0 && (provenance.generation !== generation || provenance.source_event_digest !== null && !preparedEvents.includes(provenance.source_event_digest)))
+        throw new Error("native_context_authority_invalid");
+      assertPrivateSkillDraftIsMutable(outbox.directory, draftId);
+    };
+    recheck();
+    const current = await readPrivateSkillDraftFrom(
+      privateSkillDraftPath(outbox.directory, draftId),
+      outbox.encryption
+    );
+    generation = current.native_authority_state?.generation ?? 0;
+    preparedEvents = current.native_authority_state?.prepared_events ?? [];
+    issuanceClosed = current.native_authority_state?.issuance_closed ?? false;
+    recheck();
+    if (current.attempts !== 0) return { status: "ignored", count: 0 };
+    if (!nativeContextAppendEligible(current) && !current.native_contexts.some((entry) => entry.authority?.revoked))
+      return { status: "ignored", count: 0 };
+    const assessment = await assessPrivateSkillDestinationBinding(
+      current.destination_binding,
+      access,
+      outbox.directory
+    );
+    if (assessment.status !== "matched") return { status: "ignored", count: 0 };
+    recheck();
+    const prepared = createPrivateSkillNativeContext(source);
+    if (prepared.status !== "available")
+      return { status: "unavailable", count: 0, reason_code: prepared.code };
+    const context = prepared.context;
+    const existing = current.native_contexts.find(
+      (entry) => entry.source_digest === context.source_digest || entry.context_digest === context.context_digest
+    );
+    if (existing) {
+      if (!existing.authority?.revoked) return { status: "ignored", count: 0 };
+      assertPrivateSkillReformulationIsLocal(current);
+      const checked = reviewPrivateSkillNativeContext(
+        privateSkillNativeContextProjection(existing)
+      );
+      if (checked.status !== "available" || existing.context_digest !== context.context_digest)
+        return {
+          status: "unavailable",
+          count: 0,
+          reason_code: "native_context_regrant_mismatch"
+        };
+      const authority2 = createPrivateSkillNativeAuthorityRecord(
+        capability,
+        draftId,
+        source,
+        access,
+        privateSkillNativeContextProjection(existing),
+        context
+      );
+      const regranted = validatePrivateSkillDraft(
         {
           ...current,
-          native_binding: current.native_binding ?? binding,
-          native_contexts: [...current.native_contexts, context],
+          native_contexts: current.native_contexts.map(
+            (entry) => entry === existing ? Object.freeze({ ...entry, authority: authority2 }) : entry
+          ),
           updated_at: (options.now ?? /* @__PURE__ */ new Date()).toISOString()
         },
         current,
-        { nativeContextObserved: true }
+        { nativeAuthorityTransition: "regrant" }
       );
       await writePrivateSkillDraft(
-        next,
+        regranted,
         outbox.directory,
         outbox.encryption,
-        options.env
+        options.env,
+        recheck
       );
-      count++;
+      return { status: "regranted", count: 0 };
     }
-    return { status: count ? "recorded" : "ignored", count };
+    if (!nativeContextAppendEligible(current))
+      return { status: "ignored", count: 0 };
+    const authority = createPrivateSkillNativeAuthorityRecord(
+      capability,
+      draftId,
+      source,
+      access,
+      context
+    );
+    const next = validatePrivateSkillDraft(
+      {
+        ...current,
+        destination_binding: assessment.binding,
+        native_authority_state: current.native_authority_state ?? {
+          version: "private-skill-native-authority-state-v1",
+          generation: 0,
+          prepared_events: [],
+          issuance_closed: false
+        },
+        native_binding: current.native_binding ?? binding,
+        native_contexts: [
+          ...current.native_contexts,
+          Object.freeze({ ...context, authority })
+        ],
+        updated_at: (options.now ?? /* @__PURE__ */ new Date()).toISOString()
+      },
+      current,
+      {
+        nativeContextObserved: true,
+        nativeAuthorityTransition: "append",
+        allowDestinationAudienceUpgrade: true
+      }
+    );
+    await writePrivateSkillDraft(
+      next,
+      outbox.directory,
+      outbox.encryption,
+      options.env,
+      recheck
+    );
+    return { status: "recorded", count: 1 };
   });
+}
+async function qualifyNativeRecoveryContext(draft, context, destination, directory) {
+  if (!context.authority) return;
+  if (context.authority.revoked || context.authority.generation !== draft.native_authority_state?.generation)
+    throw new PrivateSkillRecoveryContextError(draft.draft_id, "unavailable");
+  const current = await assessPrivateSkillDestinationBinding(
+    draft.destination_binding,
+    destination,
+    directory
+  );
+  const source = await assessPrivateSkillDestinationBinding(
+    draft.destination_binding,
+    context.authority.destination,
+    directory
+  );
+  if (current.status !== "matched" || source.status !== "matched")
+    throw new PrivateSkillRecoveryContextError(draft.draft_id, "unavailable");
+  qualifiedNativeRecoveryContexts.add(context);
+}
+async function qualifyRequestedNativeRecoveryContext(draft, options, directory) {
+  if (!options.recoveryContextId) return;
+  const context = draft.native_contexts.find(
+    (entry) => entry.context_id === options.recoveryContextId
+  );
+  if (!context?.authority) return;
+  if (!options.destination)
+    throw new PrivateSkillRecoveryContextError(draft.draft_id, "unavailable");
+  await qualifyNativeRecoveryContext(
+    draft,
+    context,
+    parsePrivateSkillDestination(options.destination),
+    directory
+  );
 }
 function verifiedNativeRecoveryContext(draft, contextId2, allowCurrentEpoch = false) {
   const retained = draft.native_contexts.find(
@@ -64291,7 +64849,11 @@ function verifiedNativeRecoveryContext(draft, contextId2, allowCurrentEpoch = fa
     (epoch) => epoch.authorized_context_identity === retained.context_digest
   ) && (!allowCurrentEpoch || draft.recovery_epochs.epochs.at(-1)?.authorized_context_identity !== retained.context_digest))
     throw new PrivateSkillRecoveryContextError(draft.draft_id, "unavailable");
-  const checked = reviewPrivateSkillNativeContext(retained);
+  if (retained.authority && (retained.authority.revoked || retained.authority.generation !== draft.native_authority_state?.generation || !qualifiedNativeRecoveryContexts.has(retained)))
+    throw new PrivateSkillRecoveryContextError(draft.draft_id, "unavailable");
+  const checked = reviewPrivateSkillNativeContext(
+    privateSkillNativeContextProjection(retained)
+  );
   if (checked.status !== "available")
     throw new PrivateSkillRecoveryContextError(
       draft.draft_id,
@@ -64303,6 +64865,7 @@ function selectPrivateSkillNativeRecoveryContext(draft) {
   if (draft.attempts !== 0 || draft.state !== "held_validation" || draft.reformulation_status !== "attempts_exhausted")
     return null;
   for (const context of [...draft.native_contexts].reverse()) {
+    if (context.authority) continue;
     try {
       return {
         ...verifiedNativeRecoveryContext(draft, context.context_id),
@@ -64313,10 +64876,46 @@ function selectPrivateSkillNativeRecoveryContext(draft) {
   }
   return null;
 }
+async function readPrivateSkillNativeRecoveryContext(draftId, destination, options = {}) {
+  assertPrivateSkillDraftId(draftId);
+  const access = parsePrivateSkillDestination(destination);
+  const outbox = await readyPrivateSkillOutbox(options, false);
+  return withPrivateSkillOutboxLock(outbox.directory, async () => {
+    assertPrivateSkillDraftIsMutable(outbox.directory, draftId);
+    const draft = await readPrivateSkillDraftFrom(
+      privateSkillDraftPath(outbox.directory, draftId),
+      outbox.encryption
+    );
+    if (draft.attempts !== 0 || draft.state !== "held_validation" || draft.reformulation_status !== "attempts_exhausted")
+      return null;
+    const assessment = await assessPrivateSkillDestinationBinding(
+      draft.destination_binding,
+      access,
+      outbox.directory
+    );
+    if (assessment.status !== "matched") return null;
+    for (const context of [...draft.native_contexts].reverse()) {
+      try {
+        await qualifyNativeRecoveryContext(
+          draft,
+          context,
+          access,
+          outbox.directory
+        );
+        return Object.freeze({
+          ...verifiedNativeRecoveryContext(draft, context.context_id),
+          context_id: context.context_id
+        });
+      } catch {
+      }
+    }
+    return null;
+  });
+}
 function hasPendingNativeContext(draft) {
   return draft.attempts === 0 && draft.state === "held_validation" && draft.reformulation_status === "attempts_exhausted" && privateSkillHasPositiveRecoveryOutcome(draft) && Boolean(
     draft.native_binding && draft.native_contexts.some(
-      (context) => !draft.recovery_epochs?.epochs.some(
+      (context) => !context.authority?.revoked && (!context.authority || context.authority.generation === draft.native_authority_state?.generation) && !draft.recovery_epochs?.epochs.some(
         (epoch) => epoch.authorized_context_identity === context.context_digest
       )
     )
@@ -65207,7 +65806,7 @@ async function ensurePrivateDirectory(path) {
   }
   await chmod3(path, 448);
 }
-async function writePrivateSkillDraft(draft, directory, encryption, env = process.env) {
+async function writePrivateSkillDraft(draft, directory, encryption, env = process.env, beforePublish, withdrawal = false) {
   const parsed = validatePrivateSkillDraft(draft);
   const metadata = envelopeMetadata(parsed);
   const nonce = randomBytes6(12);
@@ -65230,7 +65829,8 @@ async function writePrivateSkillDraft(draft, directory, encryption, env = proces
   const encoded = `${canonicalJson(envelope)}
 `;
   const encodedBytes = Buffer.byteLength(encoded);
-  if (encodedBytes > PRIVATE_SKILL_DRAFT_MAX_BYTES) {
+  const reserve = parsed.native_authority_state && !withdrawal ? PRIVATE_SKILL_NATIVE_WITHDRAWAL_RESERVE_BYTES : 0;
+  if (encodedBytes + reserve > PRIVATE_SKILL_DRAFT_MAX_BYTES) {
     throw new Error("Private skill draft exceeds its encrypted size limit.");
   }
   const path = privateSkillDraftPath(directory, parsed.draft_id);
@@ -65243,7 +65843,8 @@ async function writePrivateSkillDraft(draft, directory, encryption, env = proces
   });
   const projectedBytes = await retainedPrivateSkillOutboxBytes(directory) - currentSize + encodedBytes;
   const ceilingBytes = privateSkillOutboxMaxBytes(env);
-  if (projectedBytes > ceilingBytes) {
+  const nonGrowingWithdrawal = withdrawal && currentSize > 0 && encodedBytes <= currentSize;
+  if (projectedBytes + reserve > ceilingBytes && !nonGrowingWithdrawal) {
     if (currentSize === 0) {
       await recordPrivateSkillCapacityRejection(directory, encodedBytes).catch(
         () => {
@@ -65256,7 +65857,7 @@ async function writePrivateSkillDraft(draft, directory, encryption, env = proces
       "would be exceeded"
     );
   }
-  await atomicWritePrivateText(path, encoded);
+  await atomicWritePrivateText(path, encoded, beforePublish);
 }
 async function readPrivateSkillDraftFrom(path, encryption) {
   const envelope = parseEnvelope2(
@@ -65284,6 +65885,8 @@ async function readPrivateSkillDraftFrom(path, encryption) {
     throw new PrivateOutboxDecryptionError("private_skill", envelope.draft_id);
   }
   const parsed = validatePrivateSkillDraft(JSON.parse(plaintext));
+  if (envelope.version === "private-skill-outbox-envelope-v2" !== Boolean(parsed.native_authority_state))
+    throw new Error("Private skill native authority envelope is invalid.");
   if (parsed.draft_id !== envelope.draft_id || parsed.state !== envelope.state || parsed.candidate_digest !== envelope.candidate_digest || parsed.next_retry_at !== envelope.next_retry_at || parsed.created_at !== envelope.created_at || parsed.updated_at !== envelope.updated_at) {
     throw new Error(
       "Private skill outbox metadata does not match its payload."
@@ -65430,7 +66033,15 @@ function validatePrivateSkillDraft(value, previous, options = {}) {
     // Absent, not null, on drafts that never had one.
     ...destinationCapabilityHold ? { destination_capability_hold: destinationCapabilityHold } : {},
     native_binding: value.native_binding == null ? null : parsePrivateSkillNativeBinding(value.native_binding),
-    native_contexts: parseRetainedNativeContexts(value.native_contexts),
+    ...value.native_authority_state === void 0 ? {} : {
+      native_authority_state: parsePrivateSkillNativeAuthorityState(
+        value.native_authority_state
+      )
+    },
+    native_contexts: parseRetainedNativeContexts(
+      value.native_contexts,
+      draftId
+    ),
     selected_reformulation_attempt: selectedReformulationAttempt,
     source_projections: sourceProjections,
     selected_source_projection: selectedSourceProjection,
@@ -65448,6 +66059,13 @@ function validatePrivateSkillDraft(value, previous, options = {}) {
   }
   if (draft.native_contexts.length > 0 && !draft.native_binding)
     throw new Error("Private skill native context has no task binding.");
+  const preparedNativeEvents = new Set(
+    draft.native_authority_state?.prepared_events ?? []
+  );
+  if (draft.native_contexts.some(
+    (context) => context.authority && (!draft.native_authority_state || draft.native_authority_state.issuance_closed && !context.authority.revoked || context.authority.source_event_digest !== null && !preparedNativeEvents.has(context.authority.source_event_digest) || context.authority.generation > draft.native_authority_state.generation || !context.authority.revoked && context.authority.generation !== draft.native_authority_state.generation)
+  ))
+    throw new Error("Private skill native authority generation is invalid.");
   validatePrivateSkillReformulationState(draft);
   validatePrivateSkillSourceProjectionState(draft);
   validatePrivateSkillDeliveryState(
@@ -65457,7 +66075,15 @@ function validatePrivateSkillDraft(value, previous, options = {}) {
   validatePrivateSkillDestinationRejection(draft);
   if (previous) {
     const transition = options.transition ?? "preserve";
-    if (options.nativeContextObserved) {
+    validatePrivateSkillNativeAuthorityTransition(
+      previous,
+      draft,
+      options.nativeAuthorityTransition
+    );
+    if (options.nativeAuthorityTransition === "revoke" || options.nativeAuthorityTransition === "regrant") {
+      if (canonicalJson(draft.native_binding) !== canonicalJson(previous.native_binding))
+        throw new Error("Private skill native context lineage changed.");
+    } else if (options.nativeContextObserved) {
       if (previous.native_binding && canonicalJson(previous.native_binding) !== canonicalJson(draft.native_binding) || canonicalJson(previous.native_contexts) !== canonicalJson(
         draft.native_contexts.slice(0, previous.native_contexts.length)
       ) || draft.native_contexts.length > previous.native_contexts.length + 1) {
@@ -65525,16 +66151,74 @@ function parsePrivateSkillDestinationCapabilityHold(value) {
     )
   };
 }
-function parseRetainedNativeContexts(value) {
+function parseRetainedNativeContexts(value, draftId) {
   if (value === void 0) return [];
   if (!Array.isArray(value))
     throw new Error("Private skill native contexts are invalid.");
-  const contexts2 = value.map(parsePrivateSkillNativeContext);
+  const contexts2 = value.map(
+    (entry) => parseRetainedPrivateSkillNativeContext(entry, draftId)
+  );
   const sources = new Set(contexts2.map((context) => context.source_digest));
   const contents = new Set(contexts2.map((context) => context.context_digest));
   if (sources.size !== contexts2.length || contents.size !== contexts2.length)
     throw new Error("Private skill native context lineage is duplicated.");
   return contexts2;
+}
+function parsePrivateSkillNativeAuthorityState(value) {
+  if (!isRecord4(value) || Object.keys(value).sort().join(",") !== "generation,issuance_closed,prepared_events,version" || value.version !== "private-skill-native-authority-state-v1" || !Number.isSafeInteger(value.generation) || Number(value.generation) < 0 || typeof value.issuance_closed !== "boolean" || !Array.isArray(value.prepared_events) || value.prepared_events.length > PRIVATE_SKILL_NATIVE_EVENT_MAX || value.prepared_events.some(
+    (event) => typeof event !== "string" || !/^sha256:[a-f0-9]{64}$/u.test(event)
+  ) || new Set(value.prepared_events).size !== value.prepared_events.length)
+    throw new Error("Private skill native authority state is invalid.");
+  return Object.freeze({
+    version: "private-skill-native-authority-state-v1",
+    generation: Number(value.generation),
+    prepared_events: Object.freeze([...value.prepared_events]),
+    issuance_closed: value.issuance_closed
+  });
+}
+function validatePrivateSkillNativeAuthorityTransition(previous, next, transition) {
+  const prior = previous.native_authority_state;
+  const state = next.native_authority_state;
+  const events = prior?.prepared_events ?? [];
+  const nextEvents = state?.prepared_events ?? [];
+  if ((transition === "prepare" || transition === "revoke" || transition === "append") && canonicalJson(nextEvents.slice(0, events.length)) !== canonicalJson(events))
+    throw new Error("Private skill native authority replay history changed.");
+  if (transition === "prepare" || transition === "append") {
+    if (!state || state.issuance_closed || prior?.issuance_closed || state.generation !== (prior?.generation ?? 0))
+      throw new Error("Private skill native authority generation changed.");
+    if (nextEvents.length !== events.length + (transition === "prepare" ? 1 : 0))
+      throw new Error("Private skill native authority replay history changed.");
+  } else if (transition === "revoke") {
+    if (!state || state.generation !== (prior?.generation ?? 0) + 1 || next.native_contexts.length !== previous.native_contexts.length)
+      throw new Error("Private skill native authority revocation is invalid.");
+    if (nextEvents.length < events.length || nextEvents.length > events.length + 1)
+      throw new Error("Private skill native authority replay history changed.");
+    for (let index = 0; index < previous.native_contexts.length; index++) {
+      const before = previous.native_contexts[index];
+      const expected = before.authority ? { ...before, authority: { ...before.authority, revoked: true } } : before;
+      if (canonicalJson(next.native_contexts[index]) !== canonicalJson(expected))
+        throw new Error(
+          "Private skill native authority revocation is invalid."
+        );
+    }
+  } else if (transition === "regrant") {
+    if (!prior || canonicalJson(prior) !== canonicalJson(state) || next.native_contexts.length !== previous.native_contexts.length)
+      throw new Error("Private skill native authority regrant is invalid.");
+    let changed = 0;
+    for (let index = 0; index < previous.native_contexts.length; index++) {
+      const before = previous.native_contexts[index], after = next.native_contexts[index];
+      if (canonicalJson(before) === canonicalJson(after)) continue;
+      if (!before.authority?.revoked || !after.authority || after.authority.revoked || after.authority.generation !== prior.generation || canonicalJson(privateSkillNativeContextProjection(before)) !== canonicalJson(privateSkillNativeContextProjection(after)))
+        throw new Error("Private skill native authority regrant is invalid.");
+      changed++;
+    }
+    if (changed !== 1)
+      throw new Error("Private skill native authority regrant is invalid.");
+  } else if (canonicalJson(prior ?? null) !== canonicalJson(state ?? null)) {
+    throw new Error(
+      "Private skill native authority state changed without a native observation."
+    );
+  }
 }
 function parsePrivateSkillReformulationAttempts(value, draftId, originalCandidateDigest) {
   if (value === void 0) return [];
@@ -65930,7 +66614,7 @@ function validatePrivateSkillDestinationTransition(previous, next, allowAudience
 function envelopeMetadata(draft) {
   const recovery = privateSkillRecoveryTransition(draft);
   return {
-    version: "private-skill-outbox-envelope-v1",
+    version: draft.native_authority_state ? "private-skill-outbox-envelope-v2" : "private-skill-outbox-envelope-v1",
     draft_id: draft.draft_id,
     state: draft.state,
     candidate_digest: draft.candidate_digest,
@@ -65948,7 +66632,7 @@ function envelopeMetadata(draft) {
 }
 function privateSkillRecoveryTransition(draft, operationalRetryAvailable = false, currentInspectorDigest = PRIVATE_LEARNING_INSPECTOR_DIGEST) {
   const operationalRetryAttempt = operationalRetryAvailable ? privateSkillCurrentEpochOperationalRetryAttempt(draft) : null;
-  return derivePrivateSkillRecoveryTransition({
+  const result = derivePrivateSkillRecoveryTransition({
     draft,
     current_inspector_digest: currentInspectorDigest,
     effective_candidate_digest: effectivePrivateSkillCandidateDigest(draft),
@@ -65966,6 +66650,9 @@ function privateSkillRecoveryTransition(draft, operationalRetryAvailable = false
       privateSkillActiveDeliveryLineage(draft)?.possible_delivery_at
     )
   });
+  if (draft.native_authority_state?.issuance_closed && result.next_action?.kind === "capture_native_context")
+    return { ...result, next_action: null };
+  return result;
 }
 function privateSkillCurrentEpochOperationalRetryAttempt(draft) {
   const index = draft.reformulation_attempts.length - 1;
@@ -66018,7 +66705,10 @@ function parseEnvelope2(value) {
     throw new Error("Private skill outbox envelope is invalid.");
   }
   const envelope = parsed;
-  if (envelope.version !== "private-skill-outbox-envelope-v1" || envelope.encryption.algorithm !== "aes-256-gcm" || !/^[A-Za-z0-9_-]{16}$/u.test(envelope.encryption.nonce) || !/^[A-Za-z0-9_-]{16,}$/u.test(envelope.encryption.ciphertext) || !/^[A-Za-z0-9_-]{20,32}$/u.test(envelope.encryption.auth_tag)) {
+  if (![
+    "private-skill-outbox-envelope-v1",
+    "private-skill-outbox-envelope-v2"
+  ].includes(envelope.version) || envelope.encryption.algorithm !== "aes-256-gcm" || !/^[A-Za-z0-9_-]{16}$/u.test(envelope.encryption.nonce) || !/^[A-Za-z0-9_-]{16,}$/u.test(envelope.encryption.ciphertext) || !/^[A-Za-z0-9_-]{20,32}$/u.test(envelope.encryption.auth_tag)) {
     throw new Error("Private skill outbox envelope is invalid.");
   }
   assertPrivateSkillDraftId(envelope.draft_id);
@@ -66607,7 +67297,7 @@ async function atomicWritePrivateJson(path, value) {
   }
   await atomicWritePrivateText(path, encoded);
 }
-async function atomicWritePrivateText(path, value) {
+async function atomicWritePrivateText(path, value, beforePublish) {
   await ensurePrivateDirectory(dirname4(path));
   const temporary = `${path}.${process.pid}.${randomBytes6(8).toString("hex")}.tmp`;
   let handle = null;
@@ -66618,6 +67308,7 @@ async function atomicWritePrivateText(path, value) {
     await handle.close();
     handle = null;
     await chmod3(temporary, 384);
+    beforePublish?.();
     await rename3(temporary, path);
     await chmod3(path, 384);
   } catch (error) {
@@ -67088,7 +67779,8 @@ var LOCAL_ONLY_HANDLERS = Object.freeze({
   ),
   inspect_private_learning_outbox: (payload, context) => inspectPrivateLearningOutbox(
     payload,
-    context.persistence
+    context.persistence,
+    context.privateSkillDestination
   ),
   queue_private_skill_import: (payload, context) => context.persistence.queuePrivateSkillHandoff(
     payload,
@@ -67292,7 +67984,8 @@ async function captureLearning(input, persistence, lessonDestination, skillDesti
       link2.draft_id,
       parsed.private_skill,
       link2.context_source,
-      ...link2.recovery_context_id ? [link2.recovery_context_id] : []
+      link2.recovery_context_id,
+      skillDestination
     ) : await persistence.queuePrivateSkillCapture(
       parsed.private_skill,
       skillDestination
@@ -67326,7 +68019,7 @@ async function captureLearning(input, persistence, lessonDestination, skillDesti
     ...prepared
   };
 }
-async function inspectPrivateLearningOutbox(input, persistence) {
+async function inspectPrivateLearningOutbox(input, persistence, destination) {
   const selectedPrivateSkillDraftId = optionalPrivateSkillDraftId(
     input.private_skill_draft_id
   );
@@ -67348,7 +68041,14 @@ async function inspectPrivateLearningOutbox(input, persistence) {
     outbox: publicOutboxSummary(lessonResult.value.summary),
     recovery_items: lessonResult.value.recovery_items
   } : unavailableInspection("private_lesson", lessonResult.reason);
-  const selectedDraft = selectedPrivateSkill?.status === "draft" ? privateSkillSelectedDraftResult(selectedPrivateSkill.draft) : selectedPrivateSkill?.status === "submitted" ? privateSkillSelectedSubmittedResult(selectedPrivateSkill.completion) : null;
+  const selectedDraft = selectedPrivateSkill?.status === "draft" ? privateSkillSelectedDraftResult(
+    selectedPrivateSkill.draft,
+    await selectNativeContextForInspection(
+      selectedPrivateSkill.draft,
+      persistence,
+      destination
+    )
+  ) : selectedPrivateSkill?.status === "submitted" ? privateSkillSelectedSubmittedResult(selectedPrivateSkill.completion) : null;
   const selectedDraftError = selectedPrivateSkill?.status === "unavailable" ? privateSkillSelectedDraftError(
     selectedPrivateSkill.draft_id,
     selectedPrivateSkill.error
@@ -67375,6 +68075,36 @@ async function inspectPrivateLearningOutbox(input, persistence) {
     private_skills: privateSkills,
     deletion_guidance: "Unsubmitted drafts are retained until an explicit confirmed deletion. Successful content is removed immediately; content-free completion markers expire after 14 days."
   };
+}
+async function selectNativeContextForInspection(draft, persistence, destination) {
+  const legacyFields = [
+    "context_id",
+    "source_digest",
+    "context_digest",
+    "inspector_digest",
+    "context",
+    "partial"
+  ];
+  const legacyContexts = draft.native_contexts.filter(
+    (context) => Object.keys(context).length === legacyFields.length && legacyFields.every((field) => Object.hasOwn(context, field))
+  );
+  if (legacyContexts.length === draft.native_contexts.length) {
+    return selectPrivateSkillNativeRecoveryContext(draft);
+  }
+  if (destination && persistence.selectPrivateSkillNativeRecoveryContext) {
+    try {
+      return await persistence.selectPrivateSkillNativeRecoveryContext(
+        draft.draft_id,
+        destination
+      );
+    } catch {
+      return null;
+    }
+  }
+  return legacyContexts.length > 0 ? selectPrivateSkillNativeRecoveryContext({
+    ...draft,
+    native_contexts: legacyContexts
+  }) : null;
 }
 async function inspectSelectedPrivateSkill(draftId, persistence) {
   const before = await readSelectedPrivateSkillCompletion(draftId, persistence);
@@ -67685,9 +68415,8 @@ function privateSkillNextAction(draft, _contractVersion) {
 function privateSkillRecoveryContext(draft) {
   return privateSkillReformulationAvailable(draft) ? createPrivateSkillRecoveryContext(draft.candidate) : { status: "context_unavailable" };
 }
-function privateSkillSelectedDraftResult(draft) {
+function privateSkillSelectedDraftResult(draft, nativeContext) {
   const recoveryContext = privateSkillRecoveryContext(draft);
-  const nativeContext = selectPrivateSkillNativeRecoveryContext(draft);
   return {
     ...privateSkillDraftActionResult(draft),
     next_action: privateSkillNextAction(
@@ -67696,8 +68425,22 @@ function privateSkillSelectedDraftResult(draft) {
     ),
     ...privateSkillPermanentRefusalGuidance(draft),
     recovery_context: recoveryContext,
+    ...draft.native_authority_state?.issuance_closed ? {
+      native_context_authority_hold: {
+        reason_code: "native_context_authority_history_capacity",
+        retained_locally: true,
+        new_context_issuance_available: false,
+        instruction: "The retained draft reached its authority-history storage bound. Preserve the draft and spent attempts. Use only recovery context or normal lifecycle actions already available; repeated source selection, another session, or a generated replacement cannot reopen issuance. Never reset history or delete the unresolved draft automatically."
+      }
+    } : {},
     native_recovery_context: nativeContext ? {
-      ...nativeContext,
+      // Stored authority and provenance remain inside the protected outbox.
+      context_id: nativeContext.context_id,
+      source_digest: nativeContext.source_digest,
+      context_digest: nativeContext.context_digest,
+      inspector_digest: nativeContext.inspector_digest,
+      context: nativeContext.context,
+      partial: nativeContext.partial,
       authoritative: false,
       is_submission_content: false,
       agent_requirement: "Use this independently inspected native task context only if it adds material task information. Author a complete replacement, not a copy of this partial context. Selecting its ID consumes one new context epoch; generated text alone never resets attempts."
@@ -67791,7 +68534,7 @@ function publicOutboxSummary(summary) {
 }
 
 // ../codex-plugin/scripts/feedback-disposition.mjs
-import { createHash as createHash4, randomBytes as randomBytes7 } from "node:crypto";
+import { createHash as createHash5, randomBytes as randomBytes7 } from "node:crypto";
 import {
   chmodSync,
   closeSync as closeSync3,
@@ -67855,7 +68598,7 @@ function validIdentifier(value) {
 }
 function exactEventDigest(input) {
   const fields2 = [input.tool, input.query_id, input.result_id ?? ""];
-  const hash = createHash4("sha256");
+  const hash = createHash5("sha256");
   for (const field of fields2) {
     const bytes = Buffer.from(field, "utf8");
     hash.update(String(bytes.length), "utf8");
@@ -67868,7 +68611,7 @@ function exactEventDigest(input) {
 function localUsageOwnerId2() {
   const uid = currentUserId2();
   if (uid !== null) return `uid-${uid}`;
-  return `home-${createHash4("sha256").update(homedir4()).digest("hex").slice(0, 16)}`;
+  return `home-${createHash5("sha256").update(homedir4()).digest("hex").slice(0, 16)}`;
 }
 function currentUserId2() {
   try {
@@ -67988,10 +68731,10 @@ function cleanupExpiredMarkers(directory, now) {
       visited += 1;
       if (!entry.isFile() || !MARKER_NAME_PATTERN.test(entry.name)) continue;
       markerCount += 1;
-      const digest2 = entry.name.slice(0, -".json".length);
+      const digest3 = entry.name.slice(0, -".json".length);
       const path = join5(directory, entry.name);
       try {
-        if (removeExpiredMarker(path, readMarker(path, digest2), now)) {
+        if (removeExpiredMarker(path, readMarker(path, digest3), now)) {
           markerCount -= 1;
         }
       } catch {
@@ -68043,7 +68786,7 @@ function acknowledgeFeedbackDenial(input, env = process.env) {
   if (!normalized2) {
     throw new TypeError("Invalid feedback denial acknowledgement input.");
   }
-  const digest2 = exactEventDigest(normalized2);
+  const digest3 = exactEventDigest(normalized2);
   const directory = markerDirectory(env);
   const path = markerPath(normalized2, env);
   const now = Date.now();
@@ -68052,7 +68795,7 @@ function acknowledgeFeedbackDenial(input, env = process.env) {
     ensurePrivateDirectory2(directory);
     cleanupExpiredMarkers(directory, now);
     try {
-      const existing = readMarker(path, digest2);
+      const existing = readMarker(path, digest3);
       if (Date.parse(existing.expires_at) > now) {
         return {
           status: "acknowledged_host_denial",
@@ -68073,11 +68816,11 @@ function acknowledgeFeedbackDenial(input, env = process.env) {
     ).toISOString();
     writeMarkerAtomically(path, {
       version: FEEDBACK_DENIAL_VERSION,
-      event_digest: `sha256:${digest2}`,
+      event_digest: `sha256:${digest3}`,
       acknowledged_at: acknowledgedAt,
       expires_at: expiresAt
     });
-    const persisted = readMarker(path, digest2);
+    const persisted = readMarker(path, digest3);
     if (Date.parse(persisted.expires_at) <= now) {
       throw new Error("Local acknowledgement expired before persistence.");
     }
@@ -68181,11 +68924,17 @@ function createLocalPersistenceCapabilities(dependencies = {}) {
       ...await withEncryption(),
       ...destination ? { destination } : {}
     }),
-    queuePrivateSkillReformulation: async (draftId, candidate, contextSource, recoveryContextId) => queuePrivateSkillReformulation(draftId, candidate, contextSource, {
+    queuePrivateSkillReformulation: async (draftId, candidate, contextSource, recoveryContextId, destination) => queuePrivateSkillReformulation(draftId, candidate, contextSource, {
       ...await withEncryption(),
-      recoveryContextId
+      recoveryContextId,
+      ...destination ? { destination } : {}
     }),
     readPrivateSkillDraft: async (draftId) => refreshPrivateSkillDraft(draftId, await withReadOnlyEncryption()),
+    selectPrivateSkillNativeRecoveryContext: async (draftId, destination) => readPrivateSkillNativeRecoveryContext(
+      draftId,
+      destination,
+      await withReadOnlyEncryption()
+    ),
     readPrivateSkillSubmittedRecord: async (draftId) => readPrivateSkillSubmittedRecord(draftId, await withReadOnlyEncryption()),
     inspectPrivateLearningOutboxes: async (limit) => {
       let encryption;
@@ -68331,7 +69080,7 @@ import {
   rmSync as rmSync2,
   writeFileSync as writeFileSync2
 } from "node:fs";
-import { createHash as createHash5, randomBytes as randomBytes8 } from "node:crypto";
+import { createHash as createHash6, randomBytes as randomBytes8 } from "node:crypto";
 import { isIP } from "node:net";
 import { homedir as homedir9 } from "node:os";
 import { join as join10 } from "node:path";
@@ -69632,7 +70381,7 @@ function apiDestinationStatus(baseUrl, source) {
   return {
     kind: normalized2 === "https://remembrance.dev" ? "remembrance_cloud" : "custom",
     source,
-    fingerprint: createHash5("sha256").update(normalized2, "utf8").digest("hex").slice(0, 16)
+    fingerprint: createHash6("sha256").update(normalized2, "utf8").digest("hex").slice(0, 16)
   };
 }
 function missingPluginLifecycleHealth(surface) {
@@ -69781,10 +70530,9 @@ function isRecord9(value) {
 var MAX_NATIVE_EVENT_BYTES = 512 * 1024;
 async function runPrivateSkillNativeContextCli(input = process.stdin, output = process.stdout) {
   try {
-    if (/^(0|false|no)$/iu.test(process.env.REMEMBRANCE_AUTO_CONTRIBUTE ?? "")) {
-      output.write('{"status":"disabled"}\n');
-      return 0;
-    }
+    const automationDisabled = /^(0|false|no)$/iu.test(
+      process.env.REMEMBRANCE_AUTO_CONTRIBUTE ?? ""
+    );
     let size = 0;
     const chunks = [];
     for await (const chunk of input) {
@@ -69797,8 +70545,35 @@ async function runPrivateSkillNativeContextCli(input = process.stdin, output = p
     if (!event || typeof event !== "object" || Array.isArray(event))
       throw new Error("native_context_event_invalid");
     const value = event;
-    if (typeof value.session_id !== "string" || value.kind !== "user_prompt" && value.kind !== "private_skill_capture")
+    const withdrawalMatch = value.kind === "qualified_user_prompt" && value.producer === "openclaw_reply_dispatch" && typeof value.prompt === "string" ? /^\/remembrance-context-revoke (psd_[A-Za-z0-9_-]{8,96})(?:\r?\n)?$/u.exec(
+      value.prompt
+    ) : null;
+    const withdrawal = withdrawalMatch?.[0] === value.prompt ? withdrawalMatch : null;
+    if (automationDisabled && !withdrawal) {
+      output.write('{"status":"disabled"}\n');
+      return 0;
+    }
+    if (typeof value.session_id !== "string" || ![
+      "user_prompt",
+      "qualified_user_prompt",
+      "private_skill_capture"
+    ].includes(String(value.kind)))
       throw new Error("native_context_event_invalid");
+    if (value.kind === "user_prompt" || value.kind === "qualified_user_prompt" && (value.producer !== "openclaw_reply_dispatch" || typeof value.prompt !== "string" || typeof value.source_event_digest !== "string" || !/^sha256:[a-f0-9]{64}$/u.test(value.source_event_digest))) {
+      output.write(
+        '{"status":"ignored","reason_code":"applicability_unproven"}\n'
+      );
+      return 0;
+    }
+    if (withdrawal) {
+      const result2 = await revokePrivateSkillNativeContextAuthority(
+        withdrawal[1],
+        { sourceEventDigest: value.source_event_digest }
+      );
+      output.write(`${JSON.stringify(result2)}
+`);
+      return 0;
+    }
     const access = resolveApiAccess();
     if (!access.credential.apiKey || isUnusableCredentialSource(access.credential.source)) {
       output.write(
@@ -69807,11 +70582,21 @@ async function runPrivateSkillNativeContextCli(input = process.stdin, output = p
       return 0;
     }
     const destination = privateSkillDestinationForAccess(access);
-    const result = value.kind === "user_prompt" ? value.origin === "user" && typeof value.prompt === "string" ? await capturePrivateSkillNativeContext(
+    const authority = value.kind === "qualified_user_prompt" ? await preparePrivateSkillNativeContextAuthority(
       value.session_id,
       value.prompt,
-      destination
-    ) : { status: "ignored" } : typeof value.draft_id === "string" && value.original_capture === true ? await bindPrivateSkillNativeContext(
+      destination,
+      null,
+      { sourceEventDigest: value.source_event_digest }
+    ) : null;
+    const result = value.kind === "qualified_user_prompt" ? authority?.status === "authorized" ? await capturePrivateSkillNativeContext(
+      value.session_id,
+      authority.source,
+      destination,
+      {
+        nativeAuthority: authority.capability
+      }
+    ) : { status: "ignored", reason_code: "applicability_unproven" } : typeof value.draft_id === "string" && value.original_capture === true ? await bindPrivateSkillNativeContext(
       value.draft_id,
       value.session_id,
       destination
@@ -69997,7 +70782,7 @@ function isRecord10(value) {
 
 // src/legacy-lesson-destination-recovery.ts
 var CONTRACT_VERSION = "private-lesson-legacy-destination-recovery-v1";
-var DIGEST3 = /^sha256:[a-f0-9]{64}$/u;
+var DIGEST4 = /^sha256:[a-f0-9]{64}$/u;
 async function legacyLessonDestinationRecovery(draft, destination, request, dependencies) {
   const alreadyRecovered = isRecoveredForDestination(draft, destination);
   if (!ownerAttestedLegacyPrivateLessonRecoveryEligible(draft) && !alreadyRecovered) {
@@ -70012,7 +70797,7 @@ async function legacyLessonDestinationRecovery(draft, destination, request, depe
   let audience;
   try {
     audience = await dependencies.verifiedOrganizationAudience();
-    if (!DIGEST3.test(audience)) throw new Error("Invalid verified audience.");
+    if (!DIGEST4.test(audience)) throw new Error("Invalid verified audience.");
   } catch {
     return refused(draft, "private_lesson_destination_recovery_policy_unavailable");
   }
@@ -70103,7 +70888,7 @@ function isRecoveredForDestination(draft, destination) {
   return draft.attested_organization_audience_hash !== void 0 && draft.destination_binding !== null && canonicalJson(draft.destination_binding) === canonicalJson(destination) && draft.last_error_code !== "private_lesson_destination_attestation_mismatch" && draft.state !== "submitted" && draft.state !== "superseded_redactor";
 }
 function validApproval(request) {
-  return request.owner_attested_single_organization === true && request.all_outbox_readers_updated === true && DIGEST3.test(request.review_id) && DIGEST3.test(request.expected_payload_digest) && DIGEST3.test(request.owner_attestation_sha256) && DIGEST3.test(request.organization_audience_hash);
+  return request.owner_attested_single_organization === true && request.all_outbox_readers_updated === true && DIGEST4.test(request.review_id) && DIGEST4.test(request.expected_payload_digest) && DIGEST4.test(request.owner_attestation_sha256) && DIGEST4.test(request.organization_audience_hash);
 }
 function recoveryPlan(draft, destination, audience) {
   const fields2 = {
@@ -70173,7 +70958,7 @@ function inspectPrivateLearningOutbox2(input, dependencies = {}) {
 }
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.2.9" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.2.10" : "0.0.0-dev";
 var tools2 = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var nativeContextCliRequested = process.argv[2] === "--native-context";
@@ -70208,7 +70993,7 @@ var PRINCIPAL_SESSION_AWAITED_TOOLS = /* @__PURE__ */ new Set([
   "report_task_outcome"
 ]);
 function apiAccessKey(access) {
-  return createHash6("sha256").update(
+  return createHash7("sha256").update(
     [
       access.configuration.baseUrl,
       access.credential.source,
@@ -72394,8 +73179,8 @@ async function fetchVerifiedPrivateLessonPolicy(access, transport, requiredProfi
     access,
     transport
   );
-  const digest2 = privateLessonPolicyDigest(verified.payload);
-  if (body.policy_digest !== digest2) {
+  const digest3 = privateLessonPolicyDigest(verified.payload);
+  if (body.policy_digest !== digest3) {
     throw new PrivateLessonPolicySafetyError(
       "Private lesson policy digest does not match its signed payload."
     );
@@ -74177,7 +74962,7 @@ function localRuntimeProfile(identity2) {
   const runtime = isPluginHostSurface(configuredSurface) ? configuredSurface : "other";
   const clientName = connectedClientInfo?.name ?? agentHostBySurface(runtime)?.host_name ?? "MCP";
   const hostSurface = localRuntimeHostSurface(runtime, clientName);
-  const profileDigest = createHash6("sha256").update(
+  const profileDigest = createHash7("sha256").update(
     [identity2.key_id, runtime, hostSurface, clientName.toLowerCase()].join(
       ":"
     ),

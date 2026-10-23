@@ -9103,6 +9103,20 @@ function privateSkillNativeContextEvent(value) {
   const sessionId = normalizeNativeSessionId(value.session_id);
   if (!sessionId) return null;
   if (
+    value.kind === "qualified_user_prompt" &&
+    value.producer === "openclaw_reply_dispatch" &&
+    typeof value.prompt === "string" &&
+    /^sha256:[a-f0-9]{64}$/u.test(String(value.source_event_digest ?? ""))
+  ) {
+    return {
+      kind: "qualified_user_prompt",
+      producer: "openclaw_reply_dispatch",
+      session_id: sessionId,
+      prompt: value.prompt,
+      source_event_digest: value.source_event_digest,
+    };
+  }
+  if (
     value.kind === "user_prompt" &&
     value.origin === "user" &&
     typeof value.prompt === "string"
@@ -9133,14 +9147,14 @@ function nativeContextBridgeResult(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const status = String(value.status ?? "");
   if (
-    !["bound", "recorded", "ignored", "disabled", "unavailable"].includes(
+    !["bound", "recorded", "regranted", "revoked", "ignored", "disabled", "unavailable"].includes(
       status,
     )
   ) {
     return null;
   }
   const result = { status };
-  if (status === "recorded" && Number.isSafeInteger(value.count)) {
+  if (["recorded", "regranted"].includes(status) && Number.isSafeInteger(value.count)) {
     result.count = Math.max(0, Number(value.count));
   }
   if (
@@ -9326,35 +9340,12 @@ export async function capturePrivateSkillNativeUserPrompt(
   prompt,
   options = {},
 ) {
-  const env = options.env ?? process.env;
-  const nativeSessionId = normalizeNativeSessionId(options.nativeSessionId);
-  const userPrompt = userPromptOutsideHostNotifications(prompt);
-  if (
-    !nativeSessionId ||
-    contributeDisabled(env.REMEMBRANCE_AUTO_CONTRIBUTE) ||
-    userPrompt === null ||
-    !privateSkillNativeContextCaptureNeeded(env)
-  ) {
-    return { status: "ignored" };
-  }
-  const bridge =
-    options.nativeContextBridge ?? runPrivateSkillNativeContextBridge;
-  try {
-    return await bridge(
-      {
-        kind: "user_prompt",
-        session_id: nativeSessionId,
-        origin: "user",
-        prompt: userPrompt,
-      },
-      { env },
-    );
-  } catch {
-    return {
-      status: "unavailable",
-      reason_code: "native_context_bridge_unavailable",
-    };
-  }
+  // A user role or prompt callback does not identify its producer. In
+  // particular Codex send_input can enqueue user-role text. Existing retained
+  // recovery remains readable; new relations use a qualified host ingress.
+  void prompt;
+  void options;
+  return { status: "ignored", reason_code: "applicability_unproven" };
 }
 
 export async function bindPrivateSkillNativeCapture(
@@ -9462,7 +9453,7 @@ function scanPrivateSkillOutbox(env) {
     /^(psd_[A-Za-z0-9_-]{8,96})\.json$/,
     MAX_PRIVATE_SKILL_ENVELOPE_BYTES,
     (envelope, draftId) =>
-      envelope?.version === "private-skill-outbox-envelope-v1" &&
+      ["private-skill-outbox-envelope-v1", "private-skill-outbox-envelope-v2"].includes(envelope?.version) &&
       envelope.draft_id === draftId &&
       [
         "ready",
@@ -9612,7 +9603,7 @@ function privateLearningLifecycleText(lessons, skills, own = null) {
       : []),
     ...(nativeContextNeeded > 0
       ? [
-          `${nativeContextNeeded} retained private skill draft${nativeContextNeeded === 1 ? " has" : "s have"} exhausted the current reformulation epoch. A later verified native user prompt will be inspected locally and may open one new bounded epoch automatically; no user action or alternate transport is required.`,
+          `${nativeContextNeeded} retained private skill draft${nativeContextNeeded === 1 ? " has" : "s have"} exhausted the current reformulation epoch. Inspect the exact draft for already retained recovery context. New context requires a qualified host source selecting that exact draft with /remembrance-context <draft_id> followed by a newline and literal context. Ordinary prompts do not establish applicability. Use only supplied host-qualified retained context; never fabricate provenance. If this host cannot qualify the source, preserve the hold and attempts.`,
         ]
       : []),
     "Do not ask the user to inspect files or repeat an existing lane approval. Do not retry authorization, policy, validation, safety, or terminal holds through another transport. Never delete an unresolved draft automatically. Hide routine receipts; surface only a concrete failure or required user action.",

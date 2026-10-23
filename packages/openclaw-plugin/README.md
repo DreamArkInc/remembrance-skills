@@ -333,8 +333,9 @@ edits the skill.
 ## What it does
 
 Remembrance uses a prompt hook, a completion hook, an approval hook
-(`before_tool_call`), one tool observation hook and, for subagents, OpenClaw's
-`subagent_ended` hook:
+(`before_tool_call`), one tool observation hook, the canonical inbound
+`reply_dispatch` observer for exact private-skill context selection and, for
+subagents, OpenClaw's `subagent_ended` hook:
 
 - **Before a prompt:** the plugin checks whether the work looks like something
   that could benefit from reusable guidance. If it finds matching skills or
@@ -542,6 +543,43 @@ main-session prompt on the machine, at most once a day, unless the run sets
 nor use up a decision. The drafts stay listed by
 `inspect_private_learning_outbox`, and none is sent or deleted without the
 user.
+
+### Explicit private-skill recovery context
+
+When inspection reports that an eligible retained private skill needs more
+meaning, select that exact draft in an authorized direct Telegram text message:
+
+```text
+/remembrance-context psd_0123456789abcdef
+Literal context for this draft goes here.
+```
+
+Use the actual draft ID returned by inspection. The command must start the
+message; the context starts on the next line and must be nonempty. The complete
+message is limited to 64 KiB of UTF-8. OpenClaw's canonical inbound text is
+inspected locally before safe partial context and its draft relation are retained
+in the encrypted outbox. Existing conversation-access permission and the host's
+sender authorization are required. This source is currently qualified only for
+direct Telegram text; other channels and ordinary prompts preserve the hold.
+
+Retained safe context works across sessions and client restarts. Existing
+processing consent and private-skill submission approval still apply. A new
+message or session never resets spent reformulation attempts. The original
+capture, unrelated drafts, and already spent context remain unchanged.
+
+Withdraw the new context authority with this exact body, using the actual ID:
+
+```text
+/remembrance-context-revoke psd_0123456789abcdef
+```
+
+Withdrawal uses the same authorized source and conversation-access permission.
+It remains available with contribution automation disabled or organization
+credentials unavailable. It revokes the protected relation while preserving the
+encrypted draft. A fresh selection can regrant an equal safe context without
+restoring spent attempts; replaying the old selection cannot regrant it. Capacity
+holds preserve the draft and require the bounded recovery instructions returned
+by inspection.
 
 When a person explicitly names a Remembrance skill or supplies a
 `remembrance://skills/{slug}` URI, OpenClaw resolves ambiguous names with
@@ -1019,8 +1057,10 @@ text is sent.
   demand.
 - `REMEMBRANCE_DIRECTIVE_EVENT_TIMEOUT_MS`: fail-open shown/followed event
   timeout, default `750`, bounded to `100`-`2000` milliseconds.
-- `REMEMBRANCE_AUTO_CONTRIBUTE=0`: disables silent completion recovery and its
-  next-prompt contribution guidance.
+- `REMEMBRANCE_AUTO_CONTRIBUTE=0`: disables silent completion recovery, its
+  next-prompt contribution guidance, and new native context selection.
+  Content-free authority withdrawal remains available under existing source
+  authorization.
 - `REMEMBRANCE_USAGE_DIR`: overrides the per-session usage-marker directory.
 - `REMEMBRANCE_AGENT_KEY_PATH`: optional local TOFU key path for MCP identity.
 - `REMEMBRANCE_UNATTENDED=1`: marks runs no person attends. Their hooks show

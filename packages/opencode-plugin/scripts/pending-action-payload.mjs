@@ -633,6 +633,7 @@ const OVERFLOW_FILE = /^[a-f0-9]{16}\.obligations-overflow\.json$/u;
 const LANE_ENVELOPE_KINDS = new Map([
   ["private-lesson-outbox-envelope-v1", "private_lesson"],
   ["private-skill-outbox-envelope-v1", "private_skill"],
+  ["private-skill-outbox-envelope-v2", "private_skill"],
 ]);
 // Content-free records that never carry ciphertext, in either lane.
 const LANE_KEY_FREE_VERSIONS = new Set([

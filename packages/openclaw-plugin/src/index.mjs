@@ -89,6 +89,7 @@ import {
   responseRequestsRemembranceFollowup,
   resolveApiCredential,
   runPromptHook,
+  runPrivateSkillNativeContextBridge,
   sessionIdFor,
   toolResponseIndicatesFailure,
   transferSubagentObligations,
@@ -101,8 +102,35 @@ import {
   persistPrivateLearningSubmitApproval,
   privateLearningSubmitApprovals,
 } from "./private-lesson-approval.mjs";
+import { nativeContextAuthorityEvent } from "./native-context-authority.mjs";
 
 export { handlePrivateLessonSubmitApproval } from "./private-lesson-approval.mjs";
+
+async function resolveNativeCommandAuthorization(input) {
+  const sdk = await import("openclaw/plugin-sdk/command-auth");
+  return sdk.resolveCommandAuthorization(input);
+}
+
+// Observe the host's canonical inbound text before model dispatch. This hook
+// does not claim a reply was sent or suppress the normal dispatcher. Its only
+// effect is a bounded local encrypted relation after host authorization.
+export async function handleNativeContextAuthority(event, hookContext, options = {}) {
+  const env = options.env ?? process.env;
+  const withdrawalMatch = typeof event?.ctx?.RawBody === "string"
+    ? /^\/remembrance-context-revoke psd_[A-Za-z0-9_-]{8,96}(?:\r?\n)?$/u.exec(event.ctx.RawBody) : null;
+  const withdrawal = withdrawalMatch?.[0] === event?.ctx?.RawBody;
+  if (/^(0|false|no)$/iu.test(env.REMEMBRANCE_AUTO_CONTRIBUTE ?? "") && !withdrawal) return;
+  try {
+    const qualified = await nativeContextAuthorityEvent(
+      { ...event, cfg: hookContext?.cfg },
+      { resolveCommandAuthorization: options.resolveCommandAuthorization ?? resolveNativeCommandAuthorization },
+    );
+    if (!qualified) return;
+    await (options.nativeContextBridge ?? runPrivateSkillNativeContextBridge)(qualified, { env });
+  } catch {
+    // Provider text, actor identifiers, and OS exceptions remain local.
+  }
+}
 
 const CONTRIBUTION_TOOLS = [
   "submit_query_feedback",
@@ -1067,6 +1095,11 @@ const plugin = definePluginEntry({
       );
     }
     registerSetupCli(api);
+    api.on(
+      "reply_dispatch",
+      async (event, ctx) => handleNativeContextAuthority(event, ctx),
+      { priority: 60 },
+    );
     api.on(
       "before_tool_call",
       async (event) =>
