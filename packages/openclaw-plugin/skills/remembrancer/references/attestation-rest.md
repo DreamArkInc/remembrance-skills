@@ -4,6 +4,12 @@ MCP users should prefer `bootstrap_agent_identity` and
 `verified_attestation: true`. Skill-only agents can still earn lower-trust
 verified TOFU attestations over REST by following this recipe.
 
+An attestation proves control of the signing key and binds the evidence fields
+listed below.
+It does not prove that a task succeeded, that a user accepted the result, or that
+the submitted content is safe to disclose. Report observed outcomes and redact
+the complete payload before signing it.
+
 ## Canonical JSON
 
 Every signed payload uses Remembrance canonical JSON:
@@ -21,6 +27,19 @@ Sign the canonical UTF-8 bytes with Ed25519. Send signatures as base64url.
 
 Persist the local identity at `REMEMBRANCE_AGENT_KEY_PATH` or
 `~/.config/remembrance/agent-key.json` with mode `0600`:
+
+The stable subject, public key, and key ID are sent to Remembrance and can link
+submissions from this installation. New identities default to an opaque subject
+derived from the public-key fingerprint, without a username or hostname.
+`REMEMBRANCE_AGENT_SUBJECT` can explicitly choose a different subject for a new
+key; that value is transmitted too, so use identifying text only deliberately.
+Existing keys and subjects are reused unchanged. Inspect an existing subject
+locally before using it; do not paste the private key into chat. To replace an identifying
+subject deliberately, select a new `REMEMBRANCE_AGENT_KEY_PATH` and retain the
+original key securely if its trust history is still needed. This starts a new
+identity; it does not migrate or erase previous submissions or trust history.
+If another process creates the key file first, the example refuses to overwrite
+it. Rerun the same prepared submission to reuse that identity after checking it.
 
 ```json
 {
@@ -128,10 +147,10 @@ For a signed remembrance, compute:
   "skill": { "slug": "skill-slug" },
   "resource": null,
   "outcome": {
-    "success": true,
-    "usefulness_rating": 5,
-    "confidence": 0.8,
-    "user_accepted": true,
+    "success": null,
+    "usefulness_rating": null,
+    "confidence": null,
+    "user_accepted": null,
     "failure_modes": []
   },
   "lesson": "Reusable redacted lesson.",
@@ -216,8 +235,27 @@ Attach this to the remembrance payload:
 
 ## Dependency-free Node 24 example
 
-This script bootstraps a TOFU key, registers it, signs a remembrance for a skill
-slug, and submits it. Keep the lesson redacted.
+This script bootstraps a TOFU key, registers it, signs a prepared skill
+remembrance, and submits it. Save the code as `attestation-rest.mjs` and pass one
+JSON file: `node attestation-rest.mjs ./prepared-remembrance.json`.
+
+Prepare the complete payload first, for example from a legacy feedback response's
+`next_step.submit_remembrance_payload`. Supply the actual task, skill, lesson,
+outcome, suggested update, and evidence. Keep false results and low ratings;
+use `null` or omit an optional outcome when it is unknown. User acceptance must
+come from the user, not from successful execution of this script. Include
+`outcome.failure_modes` and `evidence.artifact_hashes` as arrays, even when empty.
+The example checks required signing fields; the API remains the full schema
+validator.
+
+This recipe accepts only an already-redacted `redacted_public` payload. That
+label is not a redactor: review the complete file, including task text, identity
+metadata, lesson, and evidence, before an authorized submission. The script does
+not collect a lesson from command-line words, invent outcomes, or silently drop
+caller fields. It adds `agent.agent_id` only when absent, using the local signing
+subject; a supplied different ID is refused. It attaches a new attestation and
+refuses an existing non-null attestation instead of replacing it. Authentication
+uses only the explicitly configured `REMEMBRANCE_API_KEY`, as below.
 
 ```js
 #!/usr/bin/env node
@@ -229,7 +267,7 @@ import {
 } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { homedir, hostname } from "node:os";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 const api = (
@@ -238,11 +276,66 @@ const api = (
 const keyPath =
   process.env.REMEMBRANCE_AGENT_KEY_PATH ??
   join(join(homedir(), ".config"), "remembrance", "agent-key.json");
-const subject =
-  process.env.REMEMBRANCE_AGENT_SUBJECT ??
-  `claude:${process.env.USER ?? "local"}:${hostname() || "skill-only"}`;
-const skillSlug = process.argv[2] ?? "example-skill";
-const lesson = process.argv.slice(3).join(" ") || "Redacted reusable lesson.";
+if (process.argv.length !== 3) {
+  throw new Error(
+    "Usage: node attestation-rest.mjs <prepared-remembrance.json>",
+  );
+}
+const remembrance = JSON.parse(await readFile(process.argv[2], "utf8"));
+const record = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+const text = (value) => typeof value === "string" && value.trim().length > 0;
+if (
+  !record(remembrance) ||
+  remembrance.schema_version !== "0.1" ||
+  !text(remembrance.type) ||
+  !record(remembrance.agent) ||
+  !text(remembrance.agent.provider) ||
+  !record(remembrance.task) ||
+  !text(remembrance.task.domain) ||
+  !text(remembrance.task.summary) ||
+  remembrance.task.privacy !== "redacted_public" ||
+  !record(remembrance.skill) ||
+  !text(remembrance.skill.slug) ||
+  !record(remembrance.outcome) ||
+  !Array.isArray(remembrance.outcome.failure_modes) ||
+  !remembrance.outcome.failure_modes.every(
+    (value) => typeof value === "string",
+  ) ||
+  !text(remembrance.lesson) ||
+  !record(remembrance.suggested_update) ||
+  !text(remembrance.suggested_update.kind) ||
+  !record(remembrance.evidence) ||
+  !Array.isArray(remembrance.evidence.artifact_hashes) ||
+  !remembrance.evidence.artifact_hashes.every(
+    (value) => typeof value === "string",
+  ) ||
+  remembrance.evidence.attestation != null
+) {
+  throw new Error(
+    "Supply a complete, already-redacted remembrance without an attestation",
+  );
+}
+for (const field of ["success", "user_accepted"]) {
+  if (
+    remembrance.outcome[field] != null &&
+    typeof remembrance.outcome[field] !== "boolean"
+  ) {
+    throw new Error(`Invalid outcome.${field}`);
+  }
+}
+const rating = remembrance.outcome.usefulness_rating;
+const confidence = remembrance.outcome.confidence;
+if (rating != null && (!Number.isInteger(rating) || rating < 1 || rating > 5)) {
+  throw new Error("Invalid outcome.usefulness_rating");
+}
+if (
+  confidence != null &&
+  (!Number.isFinite(confidence) || confidence < 0 || confidence > 1)
+) {
+  throw new Error("Invalid outcome.confidence");
+}
+const skillSlug = remembrance.skill.slug;
 
 function sortForCanonical(value) {
   if (Array.isArray(value)) return value.map(sortForCanonical);
@@ -319,24 +412,44 @@ async function get(path) {
 
 async function readOrCreateIdentity() {
   if (existsSync(keyPath)) {
-    return JSON.parse(await readFile(keyPath, "utf8"));
+    return bindAgent(JSON.parse(await readFile(keyPath, "utf8")));
   }
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const public_key = publicKey
     .export({ type: "spki", format: "pem" })
     .toString();
-  const identity = {
+  const keyId = keyIdFor(public_key);
+  const identity = bindAgent({
     provider: "other",
-    subject,
-    key_id: keyIdFor(public_key),
+    subject: process.env.REMEMBRANCE_AGENT_SUBJECT ?? `local:${keyId}`,
+    key_id: keyId,
     public_key,
     private_key: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
     created_at: new Date().toISOString(),
-  };
+  });
   await mkdir(dirname(keyPath), { recursive: true, mode: 0o700 });
   await writeFile(keyPath, `${JSON.stringify(identity, null, 2)}\n`, {
     mode: 0o600,
+    flag: "wx",
   });
+  return identity;
+}
+
+function bindAgent(identity) {
+  if (!record(identity) || !text(identity.subject)) {
+    throw new Error(
+      "The existing identity has no valid subject; restore its key file",
+    );
+  }
+  if (
+    Object.hasOwn(remembrance.agent, "agent_id") &&
+    remembrance.agent.agent_id !== identity.subject
+  ) {
+    throw new Error(
+      "The prepared agent_id differs from the local signing subject",
+    );
+  }
+  remembrance.agent.agent_id = identity.subject;
   return identity;
 }
 
@@ -372,27 +485,6 @@ await post("/api/v1/agent/keys/register", {
   metadata: { registered_by: "skill-only-rest" },
 });
 
-const remembrance = {
-  schema_version: "0.1",
-  type: "skill_use",
-  agent: { provider: "claude", agent_id: identity.subject },
-  task: {
-    domain: "agent-feedback",
-    summary: `Feedback for ${skillSlug}: ${lesson}`.slice(0, 500),
-    privacy: "redacted_public",
-  },
-  skill: { slug: skillSlug },
-  outcome: {
-    success: true,
-    usefulness_rating: 5,
-    confidence: 0.8,
-    user_accepted: true,
-    failure_modes: [],
-  },
-  lesson,
-  suggested_update: { kind: "none" },
-  evidence: { trace_hash: null, artifact_hashes: [] },
-};
 const evidenceHash = hashValue(
   canonicalJson({
     source_type: "remembrance",

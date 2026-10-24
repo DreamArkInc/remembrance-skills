@@ -1,7 +1,7 @@
 {
   "id": "remembrance",
   "name": "Remembrance",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "description": "Discover or directly invoke authorized Remembrance skills in OpenClaw, then close the outcome and feedback loop.",
   "skills": [
     "./skills"
