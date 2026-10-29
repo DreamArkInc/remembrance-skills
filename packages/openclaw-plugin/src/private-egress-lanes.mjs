@@ -11,5 +11,6 @@ export const PRIVATE_EGRESS_TOOL_LANES = Object.freeze({
   "submit_suggestion": "skill_suggestion",
   "submit_resource": "resource_submission",
   "submit_resource_review": "resource_review",
-  "repair_review_draft": "admin_review_repair"
+  "repair_review_draft": "admin_review_repair",
+  "admin_write": "admin_control"
 });

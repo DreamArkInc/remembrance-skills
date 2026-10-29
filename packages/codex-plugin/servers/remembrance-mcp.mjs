@@ -4820,8 +4820,8 @@ function parseSurfaceReleases(value) {
   );
 }
 function isCanonicalIsoTimestamp(value) {
-  const timestamp2 = Date.parse(value);
-  return Number.isFinite(timestamp2) && new Date(timestamp2).toISOString() === value;
+  const timestamp3 = Date.parse(value);
+  return Number.isFinite(timestamp3) && new Date(timestamp3).toISOString() === value;
 }
 
 // ../core/src/client-health-alerts.ts
@@ -5438,18 +5438,18 @@ function issueCodes(value) {
     )
   ].sort();
 }
-function pass(id, summary) {
-  return { id, status: "pass", summary, remediation: null };
+function pass(id2, summary) {
+  return { id: id2, status: "pass", summary, remediation: null };
 }
-function info(id, summary) {
-  return { id, status: "info", summary, remediation: null };
+function info(id2, summary) {
+  return { id: id2, status: "info", summary, remediation: null };
 }
-function notApplicable(id, summary) {
-  return { id, status: "not_applicable", summary, remediation: null };
+function notApplicable(id2, summary) {
+  return { id: id2, status: "not_applicable", summary, remediation: null };
 }
-function warning(id, summary, code, action, issueCodesValue, automatic = false, command) {
+function warning(id2, summary, code, action, issueCodesValue, automatic = false, command) {
   return {
-    id,
+    id: id2,
     status: "warning",
     summary,
     ...issueCodesValue && issueCodesValue.length > 0 ? { issue_codes: issueCodesValue } : {},
@@ -5461,9 +5461,9 @@ function warning(id, summary, code, action, issueCodesValue, automatic = false, 
     }
   };
 }
-function fail(id, summary, code, action, command) {
+function fail(id2, summary, code, action, command) {
   return {
-    id,
+    id: id2,
     status: "fail",
     summary,
     remediation: {
@@ -8447,21 +8447,21 @@ function privateLessonLegacyLimitPolicyDigest(input) {
   });
 }
 var profileQueryValue = (profile) => `${profile.redaction_version}:${profile.redactor_digest}`;
-function privateLessonPolicyQuery(request) {
+function privateLessonPolicyQuery(request2) {
   const params = new URLSearchParams();
-  for (const profile of request.supported_redactor_profiles ?? []) {
+  for (const profile of request2.supported_redactor_profiles ?? []) {
     params.append("supported_redactor_profile", profileQueryValue(profile));
   }
-  if (request.required_redactor_profile) {
+  if (request2.required_redactor_profile) {
     params.set(
       "required_redactor_profile",
-      profileQueryValue(request.required_redactor_profile)
+      profileQueryValue(request2.required_redactor_profile)
     );
   }
-  if (request.supported_max_payload_bytes !== void 0) {
+  if (request2.supported_max_payload_bytes !== void 0) {
     params.set(
       "supported_max_payload_bytes",
-      String(request.supported_max_payload_bytes)
+      String(request2.supported_max_payload_bytes)
     );
   }
   return params.toString();
@@ -8473,16 +8473,16 @@ function privateLessonSignaturePayload(purpose, canonicalPayload) {
     payload: canonicalPayload
   });
 }
-function assertPlatformEnvelopeSignature(envelope, purpose, keySet, subject) {
-  const canonical = canonicalJson(envelope.payload);
-  if (canonical !== envelope.canonical_payload) {
+function assertPlatformEnvelopeSignature(envelope2, purpose, keySet, subject) {
+  const canonical = canonicalJson(envelope2.payload);
+  if (canonical !== envelope2.canonical_payload) {
     throw new Error(`${subject} signed payload is not canonical.`);
   }
   const keys = privateLessonVerificationKeySetSchema.parse(keySet);
-  const jwk = keys.keys.find((key) => key.kid === envelope.key_id);
+  const jwk = keys.keys.find((key) => key.kid === envelope2.key_id);
   if (!jwk) {
     throw new Error(
-      `${subject} verification key is unavailable: ${envelope.key_id}`
+      `${subject} verification key is unavailable: ${envelope2.key_id}`
     );
   }
   const signatureValid = verify(
@@ -8492,23 +8492,23 @@ function assertPlatformEnvelopeSignature(envelope, purpose, keySet, subject) {
       key: { kty: "OKP", crv: "Ed25519", x: jwk.x },
       format: "jwk"
     }),
-    Buffer.from(envelope.signature, "base64url")
+    Buffer.from(envelope2.signature, "base64url")
   );
   if (!signatureValid) {
     throw new Error(`${subject} signature is invalid.`);
   }
 }
 function verifyPrivateSkillCapabilityEnvelope(args) {
-  const envelope = signedPrivateSkillCapabilitySchema.parse(args.envelope);
+  const envelope2 = signedPrivateSkillCapabilitySchema.parse(args.envelope);
   assertPlatformEnvelopeSignature(
-    envelope,
+    envelope2,
     "remembrance-private-skill-capability",
     args.keySet,
     "Private skill capability"
   );
   const now = (args.now ?? /* @__PURE__ */ new Date()).getTime();
-  const issuedAt = Date.parse(envelope.payload.issued_at);
-  const expiresAt = Date.parse(envelope.payload.expires_at);
+  const issuedAt = Date.parse(envelope2.payload.issued_at);
+  const expiresAt = Date.parse(envelope2.payload.expires_at);
   if (expiresAt <= issuedAt) {
     throw new Error("Private skill capability validity window is invalid.");
   }
@@ -8521,7 +8521,7 @@ function verifyPrivateSkillCapabilityEnvelope(args) {
   if (issuedAt > now + PRIVATE_SKILL_CAPABILITY_CLOCK_SKEW_MS) {
     throw new Error("Private skill capability is not active yet.");
   }
-  return envelope;
+  return envelope2;
 }
 function verifyPrivateLessonSignedEnvelope(args) {
   if (args.kind !== "policy" && args.policyFloor !== void 0) {
@@ -8534,15 +8534,15 @@ function verifyPrivateLessonSignedEnvelope(args) {
     privateLessonRedactorProfile(profile.version, profile.digest);
   }
   const schema = args.kind === "policy" ? signedPrivateLessonPolicySchema : args.kind === "receipt" ? signedPrivateLessonReceiptSchema : signedPrivateLessonHoldReceiptSchema;
-  const envelope = schema.parse(args.envelope);
+  const envelope2 = schema.parse(args.envelope);
   assertPlatformEnvelopeSignature(
-    envelope,
+    envelope2,
     args.kind === "policy" ? "remembrance-private-lesson-policy" : args.kind === "receipt" ? "remembrance-private-lesson-receipt" : "remembrance-private-lesson-hold-receipt",
     args.keySet,
     "Private lesson"
   );
   if (args.kind === "policy") {
-    const policy = envelope;
+    const policy = envelope2;
     privateLessonRedactorProfile(
       policy.payload.redaction_version,
       policy.payload.redactor_digest
@@ -8572,21 +8572,21 @@ function verifyPrivateLessonSignedEnvelope(args) {
     }
   } else {
     privateLessonRedactorProfile(
-      envelope.payload.redaction_version,
-      envelope.payload.redactor_digest
+      envelope2.payload.redaction_version,
+      envelope2.payload.redactor_digest
     );
   }
-  return envelope;
+  return envelope2;
 }
 function privateLessonSignedEnvelopeProfileFields(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     return { version: void 0, digest: void 0 };
   }
-  const envelope = input;
-  if (!envelope.payload || typeof envelope.payload !== "object" || Array.isArray(envelope.payload)) {
+  const envelope2 = input;
+  if (!envelope2.payload || typeof envelope2.payload !== "object" || Array.isArray(envelope2.payload)) {
     return { version: void 0, digest: void 0 };
   }
-  const payload = envelope.payload;
+  const payload = envelope2.payload;
   return {
     version: payload.redaction_version,
     digest: payload.redactor_digest
@@ -11127,7 +11127,7 @@ function analyzeStructuredPrivateKeys(graph, mark, markRange, metrics) {
     metrics
   );
   const markerEvents = [...exactEvents, ...fragmentedEvents].map(
-    (event, id) => ({ ...event, id })
+    (event, id2) => ({ ...event, id: id2 })
   );
   const hasStructuredMarker = markerEvents.length > 0;
   const markerTokenIds = /* @__PURE__ */ new Set();
@@ -15081,7 +15081,7 @@ function recordRawCompleteSourceFrames(tokens, assessment, metrics) {
     const tokenIds = tokens.slice(first, last + 1).map((token) => token.id);
     const existing = byFirst.get(tokenIds[0]) ?? [];
     if (existing.some(
-      (frame) => frame.claim.encoding === claim.encoding && frame.claim.bitOffset === claim.bitOffset && frame.tokenIds.length === tokenIds.length && frame.tokenIds.every((id, index) => id === tokenIds[index])
+      (frame) => frame.claim.encoding === claim.encoding && frame.claim.bitOffset === claim.bitOffset && frame.tokenIds.length === tokenIds.length && frame.tokenIds.every((id2, index) => id2 === tokenIds[index])
     ))
       continue;
     existing.push({
@@ -15127,7 +15127,7 @@ function rawCompleteClaimsForTokens(tokens, metrics) {
   for (const [index, token] of tokens.entries()) {
     for (const frame of byFirst.get(token.id) ?? []) {
       metrics.ownershipSteps += frame.tokenIds.length;
-      if (frame.tokenIds.every((id, next) => tokens[index + next]?.id === id)) {
+      if (frame.tokenIds.every((id2, next) => tokens[index + next]?.id === id2)) {
         claims.push({
           ...frame.claim,
           start: offset,
@@ -17067,9 +17067,9 @@ function structuredMixedEncodedTokenStreams(graph, metrics) {
   if (propertyTokenIds.size === 0 && semanticPropertyTokenIds.size === 0)
     return [];
   const pairedPropertyTokenIds = /* @__PURE__ */ new Set();
-  for (const id of propertyTokenIds) {
+  for (const id2 of propertyTokenIds) {
     metrics.encodedTokensVisited += 1;
-    if (graph.tokens[id].edge.valueToken) pairedPropertyTokenIds.add(id);
+    if (graph.tokens[id2].edge.valueToken) pairedPropertyTokenIds.add(id2);
   }
   const projections = [
     ...pairedPropertyTokenIds.size > 0 ? [
@@ -18840,10 +18840,10 @@ function rsaPrivateExponentRecoversFactor2(modulus, exponent, privateExponent, m
 }
 var rsaArithmeticMeters = /* @__PURE__ */ new WeakMap();
 function rsaArithmeticMeter(metrics, modulus) {
-  const request = currentRedactionRequest();
-  let meter = rsaArithmeticMeters.get(request ?? metrics);
+  const request2 = currentRedactionRequest();
+  let meter = rsaArithmeticMeters.get(request2 ?? metrics);
   if (!meter) {
-    const limit = request ? MAX_REQUEST_RSA_ARITHMETIC_WORK : MAX_RSA_ARITHMETIC_WORK;
+    const limit = request2 ? MAX_REQUEST_RSA_ARITHMETIC_WORK : MAX_RSA_ARITHMETIC_WORK;
     let spent = 0;
     meter = {
       weight: 0,
@@ -18870,7 +18870,7 @@ function rsaArithmeticMeter(metrics, modulus) {
         this.analysis.rsaExponentProofCacheHits = hits;
       }
     };
-    rsaArithmeticMeters.set(request ?? metrics, meter);
+    rsaArithmeticMeters.set(request2 ?? metrics, meter);
   }
   meter.analysis = metrics;
   meter.weight = 2 * (Math.ceil(modulus.toString(16).length / 16) + 16) ** 2;
@@ -19389,8 +19389,8 @@ function pairMarkerEvents(begins, ends, metrics) {
 function buildEnvelopeCandidateIndex(componentGraph, runsByContainer, metrics) {
   const summaries = Array.from(
     { length: componentGraph.components.length },
-    (_, id) => ({
-      id,
+    (_, id2) => ({
+      id: id2,
       directTokens: [],
       directRuns: [],
       childSummaries: [],
@@ -23236,16 +23236,16 @@ function remembranceMcpFailureRetryable(status) {
   if (status === 408 || status === 425 || status === 429) return true;
   return status >= 500 && status <= 599;
 }
-function remembranceMcpFailureDelivery(envelope, operation) {
-  if (!isRecord2(envelope)) return UNKNOWN_DELIVERY;
-  if (envelope.redirect_rejected === true) return UNKNOWN_DELIVERY;
-  if (bodyField(envelope, "delivery") === REMEMBRANCE_API_NOT_DELIVERED_DECLARATION) {
+function remembranceMcpFailureDelivery(envelope2, operation) {
+  if (!isRecord2(envelope2)) return UNKNOWN_DELIVERY;
+  if (envelope2.redirect_rejected === true) return UNKNOWN_DELIVERY;
+  if (bodyField(envelope2, "delivery") === REMEMBRANCE_API_NOT_DELIVERED_DECLARATION) {
     return { delivery: "not_delivered", basis: "server_delivery_declaration" };
   }
-  if (typeof envelope.status === "number" && isRemembranceDocumentedPreWriteRefusal(
+  if (typeof envelope2.status === "number" && isRemembranceDocumentedPreWriteRefusal(
     operation,
-    envelope.status,
-    bodyField(envelope, "code")
+    envelope2.status,
+    bodyField(envelope2, "code")
   )) {
     return { delivery: "not_delivered", basis: "documented_refusal_code" };
   }
@@ -23271,26 +23271,26 @@ function statusClassCode(status) {
   if (status >= 300 && status < 400) return "remembrance_api_redirect_refused";
   return "remembrance_api_request_failed";
 }
-function bodyField(envelope, key) {
-  const body = envelope.body;
+function bodyField(envelope2, key) {
+  const body = envelope2.body;
   if (!isRecord2(body)) return void 0;
   if (body[key] !== void 0) return body[key];
   const details = body.details;
   return isRecord2(details) ? details[key] : void 0;
 }
-function sanitizedFailureCode(envelope) {
-  const candidate = bodyField(envelope, "code");
+function sanitizedFailureCode(envelope2) {
+  const candidate = bodyField(envelope2, "code");
   if (typeof candidate === "string" && SAFE_FAILURE_CODE.test(candidate)) {
     return candidate;
   }
-  const status = envelope.status;
-  if (envelope.redirect_rejected === true && status >= 200) {
+  const status = envelope2.status;
+  if (envelope2.redirect_rejected === true && status >= 200) {
     return "remembrance_api_redirect_refused";
   }
   return statusClassCode(status);
 }
-function retryAfterSeconds(envelope) {
-  const raw = envelope.retry_after;
+function retryAfterSeconds(envelope2) {
+  const raw = envelope2.retry_after;
   const seconds = typeof raw === "string" ? Number(raw) : raw;
   return typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0 && seconds <= 86400 ? Math.trunc(seconds) : null;
 }
@@ -23696,8 +23696,8 @@ function shapeRemembranceQueryResultForAgents(result) {
   return body === result.body ? result : { ...result, body };
 }
 function remembranceMcpToolCallResult(result, toolName) {
-  const failure = remembranceMcpToolFailure(result, toolName);
-  if (!failure) {
+  const failure2 = remembranceMcpToolFailure(result, toolName);
+  if (!failure2) {
     const shaped = toolName === "query_skills" ? shapeRemembranceQueryResultForAgents(result) : result;
     return { content: [{ type: "text", text: JSON.stringify(shaped) }] };
   }
@@ -23707,7 +23707,7 @@ function remembranceMcpToolCallResult(result, toolName) {
         type: "text",
         text: JSON.stringify({
           ...result,
-          tool_error: failure
+          tool_error: failure2
         })
       }
     ],
@@ -23767,13 +23767,13 @@ var organizationSkillHandoffBundleSchema = external_exports.object({
   }
 });
 function buildOrganizationSkillHandoffBundle(input, createdAt = /* @__PURE__ */ new Date()) {
-  const request = organizationSkillHandoffRequestSchema.parse(input);
+  const request2 = organizationSkillHandoffRequestSchema.parse(input);
   const fingerprint = createIdempotencyKey({
     kind: ORGANIZATION_SKILL_HANDOFF_KIND,
-    idempotency_key: request.idempotency_key ?? null,
-    source_runtime: request.source_runtime,
-    handoff_reason: request.handoff_reason,
-    skills: request.skills
+    idempotency_key: request2.idempotency_key ?? null,
+    source_runtime: request2.source_runtime,
+    handoff_reason: request2.handoff_reason,
+    skills: request2.skills
   });
   return organizationSkillHandoffBundleSchema.parse({
     schema_version: ORGANIZATION_SKILL_HANDOFF_SCHEMA_VERSION,
@@ -23781,9 +23781,9 @@ function buildOrganizationSkillHandoffBundle(input, createdAt = /* @__PURE__ */ 
     bundle_id: `handoff_${fingerprint.slice(0, 24)}`,
     created_at: createdAt.toISOString(),
     destination: "active_organization_private_review",
-    source_runtime: request.source_runtime,
-    handoff_reason: request.handoff_reason,
-    skills: request.skills
+    source_runtime: request2.source_runtime,
+    handoff_reason: request2.handoff_reason,
+    skills: request2.skills
   });
 }
 
@@ -23858,7 +23858,8 @@ var remembrance_mcp_consent_lanes_default = {
   submit_suggestion: "skill_suggestion",
   submit_resource: "resource_submission",
   submit_resource_review: "resource_review",
-  repair_review_draft: "admin_review_repair"
+  repair_review_draft: "admin_review_repair",
+  admin_write: "admin_control"
 };
 
 // ../core/src/remembrance-mcp-policy.ts
@@ -23903,6 +23904,18 @@ var REMEMBRANCE_MCP_OPTIONAL_ADMIN_REVIEW_TOOLS = Object.freeze([
   "get_review_comparison",
   "repair_review_draft"
 ]);
+var REMEMBRANCE_MCP_HOSTED_ADMIN_CONTROL_TOOLS = Object.freeze([
+  "get_admin_capabilities",
+  "admin_read",
+  "admin_write"
+]);
+var REMEMBRANCE_MCP_ADMIN_CONTROL_TOOLS = Object.freeze([
+  ...REMEMBRANCE_MCP_HOSTED_ADMIN_CONTROL_TOOLS,
+  "begin_admin_login",
+  "complete_admin_login",
+  "get_admin_session",
+  "end_admin_session"
+]);
 var REMEMBRANCE_MCP_LOCAL_ONLY_TOOLS = Object.freeze([
   "bootstrap_agent_identity",
   "acknowledge_feedback_denial",
@@ -23943,6 +23956,7 @@ var REMEMBRANCE_MCP_ALL_TOOLS = Object.freeze([
   ...REMEMBRANCE_MCP_RECOMMENDED_ORG_TOOLS,
   ...REMEMBRANCE_MCP_OPTIONAL_SHARED_CONTRIBUTION_TOOLS,
   ...REMEMBRANCE_MCP_OPTIONAL_ADMIN_REVIEW_TOOLS,
+  ...REMEMBRANCE_MCP_ADMIN_CONTROL_TOOLS,
   ...REMEMBRANCE_MCP_LOCAL_ONLY_TOOLS
 ]);
 var REMEMBRANCE_MCP_BOUNDED_WRITE_POLICY_MAX_BYTES_BY_PAYLOAD_CLASS = Object.freeze({
@@ -23950,6 +23964,9 @@ var REMEMBRANCE_MCP_BOUNDED_WRITE_POLICY_MAX_BYTES_BY_PAYLOAD_CLASS = Object.fre
   bounded_metadata: 384 * 1024
 });
 var REMEMBRANCE_MCP_BOUNDED_WRITE_MAX_BYTES_BY_TOOL = Object.freeze({
+  begin_admin_login: 1026,
+  complete_admin_login: 1026,
+  end_admin_session: 1026,
   invoke_skill: 354323,
   record_preference: 13443,
   submit_preference_compatibility_feedback: 5487,
@@ -24026,6 +24043,13 @@ function freezeMcpToolSecurityManifest(manifest) {
   return Object.freeze(manifest);
 }
 var REMEMBRANCE_MCP_TOOL_SECURITY = freezeMcpToolSecurityManifest({
+  get_admin_capabilities: read(),
+  admin_read: read(),
+  admin_write: content("admin_write", "broad_content"),
+  begin_admin_login: bounded("bounded_metadata"),
+  complete_admin_login: bounded("bounded_metadata"),
+  get_admin_session: local(),
+  end_admin_session: bounded("bounded_metadata"),
   get_connection_status: read(),
   run_connection_doctor: read(),
   query_skills: read(),
@@ -24548,7 +24572,9 @@ var targetTypes = external_exports.enum([
   "resource",
   "resource_review",
   "skill_idea",
-  "suggestion"
+  "suggestion",
+  "skill_version",
+  "verify_request"
 ]);
 var reviewDecisionPreviewSelectorSchema = external_exports.object({
   action: adminReviewActionValueSchema.nullable().default(null),
@@ -24600,13 +24626,13 @@ var consumedBaselineSchema = external_exports.object({
 }).strict();
 var reviewDecisionSnapshotSchema = external_exports.object({
   schema_version: external_exports.literal("admin-review-decision-snapshot-v1"),
-  org_id: identifier,
+  org_id: nullableIdentifier,
   public_skill_access_policy: external_exports.enum(["allow", "org_only"]),
   selected_route: reviewDecisionPreviewSelectorSchema,
   actor: external_exports.object({
     type: identifier,
     id: identifier,
-    org_id: identifier,
+    org_id: nullableIdentifier,
     api_key_id: nullableIdentifier,
     token_id: nullableIdentifier
   }).strict(),
@@ -24629,7 +24655,7 @@ var reviewDecisionSnapshotSchema = external_exports.object({
     payload_ref: nullableIdentifier,
     superseded_by_submission_id: nullableIdentifier,
     disposition_job_id: nullableIdentifier
-  }).strict(),
+  }).strict().nullable(),
   private_payload: external_exports.object({
     id: identifier,
     updated_at: timestamp,
@@ -24656,6 +24682,14 @@ var reviewDecisionSnapshotSchema = external_exports.object({
     redacted_digest: identifier,
     target_digest: identifier,
     inline_job_digest: identifier.nullable()
+  }).strict().optional(),
+  public_source_binding: external_exports.object({
+    schema_version: external_exports.literal("public-review-source-v1"),
+    job_digest: identifier,
+    target_digest: identifier,
+    payload_digest: nullableIdentifier,
+    current_skill_digest: nullableIdentifier,
+    target_kind: external_exports.enum(["skill_version", "verification_job", "job_only"]).optional()
   }).strict().optional(),
   current_skill: external_exports.object({
     slug: identifier,
@@ -24699,10 +24733,10 @@ var reviewReferenceComparisonSchema = external_exports.object({
   parent_skill: reviewReferenceSkillSchema.nullable(),
   current_skill: reviewReferenceSkillSchema.nullable()
 }).strict();
-function reviewWorkflowResponseBound(tool, body, request) {
+function reviewWorkflowResponseBound(tool, body, request2) {
   if (tool === "get_review_comparison") {
     const parsed2 = reviewReferenceComparisonSchema.safeParse(body);
-    return parsed2.success && parsed2.data.job_id === request.job_id;
+    return parsed2.success && parsed2.data.job_id === request2.job_id;
   }
   if (tool !== "repair_review_draft") return false;
   const parsed = external_exports.object({
@@ -24737,7 +24771,7 @@ function reviewWorkflowResponseBound(tool, body, request) {
   }).strict().safeParse(body);
   if (!parsed.success) return false;
   const receipt = parsed.data;
-  if (receipt.request_id !== request.request_id || receipt.original_job_id !== request.job_id || receipt.replacement.job_id === receipt.original_job_id || receipt.next_action.query.job_id !== receipt.replacement.job_id) return false;
+  if (receipt.request_id !== request2.request_id || receipt.original_job_id !== request2.job_id || receipt.replacement.job_id === receipt.original_job_id || receipt.next_action.query.job_id !== receipt.replacement.job_id) return false;
   if (receipt.replayed) return receipt.verification === null && receipt.dispatch_state === "existing_persisted_job";
   const verification = receipt.verification;
   return verification !== null && verification.verification_job.id === receipt.replacement.job_id && verification.verification_job.status === receipt.verification_status && (verification.queue.queued ? receipt.dispatch_state === "queued" && verification.queue.queueJobId === receipt.replacement.job_id : receipt.dispatch_state === "mongo_poll_fallback" && verification.queue.queueJobId === null);
@@ -24799,6 +24833,21 @@ var privateSkillReviewRepairRequestSchema = external_exports.preprocess((value, 
   if (!checkJsonGraph(value, context, false)) return external_exports.NEVER;
   return value;
 }, privateSkillReviewRepairRequest);
+
+// ../core/src/admin-control.ts
+var adminControlOperationNameSchema = external_exports.string().min(3).max(128).regex(/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/);
+var envelope = {
+  operation: adminControlOperationNameSchema,
+  org_id: external_exports.string().regex(/^org_[a-f0-9]{18}$/).optional(),
+  input: external_exports.record(external_exports.unknown())
+};
+var adminControlReadRequestSchema = external_exports.object(envelope).strict();
+var adminControlWriteRequestSchema = external_exports.object({
+  ...envelope,
+  request_id: external_exports.string().regex(/^acreq_[a-f0-9]{32}$/)
+}).strict();
+var ADMIN_CONTROL_MAX_BODY_BYTES = 262144;
+var ADMIN_CONTROL_MAX_RESPONSE_BYTES = 1048576;
 
 // ../core/src/seed.ts
 var feedbackUrl = publicSkillDeliveryDefaults().feedback_url;
@@ -27510,9 +27559,9 @@ function privateSkillPermanentRefusalGuidance(draft) {
 // src/server.ts
 import { existsSync as existsSync6 } from "node:fs";
 import { mkdir as mkdir5, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname8 } from "node:path";
+import { dirname as dirname11 } from "node:path";
 import {
-  createHash as createHash7,
+  createHash as createHash10,
   createHmac,
   createPrivateKey as createPrivateKey2,
   generateKeyPairSync,
@@ -29140,6 +29189,35 @@ function toolArgumentMessage(error) {
   return error instanceof ZodError ? messages2.get(error) : void 0;
 }
 
+// src/admin-control-tools.ts
+var ADMIN_CONTROL_TOOL_DESCRIPTIONS = {
+  get_admin_capabilities: "Read current authorized administrative operations and their input schemas. Pass org_id to discover organization controls using a browser-approved global session. Uses a separate admin session when present, otherwise the configured organization key. Never grants query tools administrative authority. Hosted MCP requires an explicit x-remembrance-admin-token for global administration; browser login tools are local-only.",
+  admin_read: "Execute one read-only administrative operation returned by get_admin_capabilities. Select org_id only when authorized. The server validates the exact operation input and current tenant permissions. No arbitrary URL or repository method is accepted.",
+  admin_write: "Execute one explicitly requested administrative mutation returned by get_admin_capabilities. Requires operation-specific input and a request_id of acreq_ plus 32 lowercase hexadecimal characters. Preserve the same request_id for the same logical attempt after timeout or unknown delivery; use a new ID only for an intentionally separate action. Never retries automatically. This is not persistent approval for future writes. One-time API keys and member-link credentials are stored in a preflighted local private vault and never returned in tool output; hosted MCP refuses those operations before mutation and requires local MCP or a REST client with secure secret delivery.",
+  begin_admin_login: "Begin a local browser-approved administrative session. Returns only a confirmation URL, public code and expiry. Open the URL and ask the administrator to compare and approve the code. Credentials stay in a separate mode-0600 local store; no browser cookie or organization key is exchanged for an admin token.",
+  complete_admin_login: "Check a pending local admin login once after browser approval. Honors the returned polling interval; never loops or retries automatically. Stores the admin token privately and never returns it. This is a device-style PKCE exchange, not MCP HTTP OAuth conformance.",
+  get_admin_session: "Inspect local admin login status without network access. Never returns credentials and never claims server validity was checked. Use get_admin_capabilities for a fresh authorization check.",
+  end_admin_session: "Revoke the separate local administrative session and remove it only after confirmed revocation. A pending login is cancelled locally. Unknown revocation keeps the credential for a bounded retry; ordinary organization credentials are unchanged."
+};
+var ADMIN_CONTROL_TOOL_NAMES = Object.freeze(Object.keys(ADMIN_CONTROL_TOOL_DESCRIPTIONS));
+var adminSessionToolInputSchema = external_exports.object({}).strict();
+var adminCapabilitiesToolInputSchema = external_exports.object({ org_id: adminControlReadRequestSchema.shape.org_id }).strict();
+function assertAdminControlPayloadBounds(name, payload) {
+  if (!ADMIN_CONTROL_TOOL_NAMES.includes(name)) return;
+  let serialized;
+  try {
+    serialized = JSON.stringify(payload);
+  } catch {
+  }
+  if (serialized === void 0 || Buffer.byteLength(serialized, "utf8") > ADMIN_CONTROL_MAX_BODY_BYTES) {
+    throw new external_exports.ZodError([{
+      code: external_exports.ZodIssueCode.custom,
+      path: [],
+      message: "Administrative arguments must be JSON-serializable and at most 262144 bytes."
+    }]);
+  }
+}
+
 // src/tool-definitions.ts
 var PRIVATE_EGRESS_TOOL_LANES = Object.freeze(
   Object.fromEntries(Object.entries(REMEMBRANCE_MCP_CONSENT_LANES))
@@ -29299,6 +29377,52 @@ var remembranceToolSchema = remembrancePayloadSchema.extend({
   )
 });
 var declaredToolDefinitions = [
+  readTool(
+    "get_admin_capabilities",
+    ADMIN_CONTROL_TOOL_DESCRIPTIONS.get_admin_capabilities,
+    "/api/v1/admin/control",
+    adminCapabilitiesToolInputSchema,
+    "GET"
+  ),
+  readTool(
+    "admin_read",
+    ADMIN_CONTROL_TOOL_DESCRIPTIONS.admin_read,
+    "/api/v1/admin/control/read",
+    adminControlReadRequestSchema
+  ),
+  contentWriteTool(
+    "admin_write",
+    ADMIN_CONTROL_TOOL_DESCRIPTIONS.admin_write,
+    "/api/v1/admin/control/write",
+    adminControlWriteRequestSchema
+  ),
+  localNetworkTool(
+    "begin_admin_login",
+    ADMIN_CONTROL_TOOL_DESCRIPTIONS.begin_admin_login,
+    "begin_admin_login",
+    adminSessionToolInputSchema,
+    "bounded_write"
+  ),
+  localNetworkTool(
+    "complete_admin_login",
+    ADMIN_CONTROL_TOOL_DESCRIPTIONS.complete_admin_login,
+    "complete_admin_login",
+    adminSessionToolInputSchema,
+    "bounded_write"
+  ),
+  localTool(
+    "get_admin_session",
+    ADMIN_CONTROL_TOOL_DESCRIPTIONS.get_admin_session,
+    "get_admin_session",
+    adminSessionToolInputSchema
+  ),
+  localNetworkTool(
+    "end_admin_session",
+    ADMIN_CONTROL_TOOL_DESCRIPTIONS.end_admin_session,
+    "end_admin_session",
+    adminSessionToolInputSchema,
+    "bounded_write"
+  ),
   readTool(
     "get_review_comparison",
     REVIEW_COMPARISON_TOOL_DESCRIPTION,
@@ -29873,10 +29997,10 @@ function canonicalToolDefinitionForDispatch(definition) {
 }
 function parseToolArguments(definition, value) {
   const runtime = canonicalRuntimeForDefinition(definition);
-  return parseWithArgumentDiagnostics(
-    runtime.definition.inputSchema,
-    () => runtime.parseInput(value)
-  );
+  return parseWithArgumentDiagnostics(runtime.definition.inputSchema, () => {
+    assertAdminControlPayloadBounds(runtime.definition.name, value);
+    return runtime.parseInput(value);
+  });
 }
 function parseToolNetworkArguments(definition, value) {
   return canonicalRuntimeForDefinition(definition).parseNetwork(value);
@@ -30061,12 +30185,12 @@ function validateServedToolDefinition(definition) {
   canonicalToolDefinitionForDispatch(definition);
 }
 function annotationsForTool(name) {
-  const readOnly = name === "get_review_comparison" || name === "list_skills" || name === "get_effective_preferences" || name === "get_value_proof" || name === "run_connection_doctor" || name === "get_private_lesson_policy" || name === "inspect_private_lesson_outbox" || name === "inspect_private_learning_outbox" || name === "get_pending_action_payload";
+  const readOnly = name === "get_admin_capabilities" || name === "admin_read" || name === "get_admin_session" || name === "get_review_comparison" || name === "list_skills" || name === "get_effective_preferences" || name === "get_value_proof" || name === "run_connection_doctor" || name === "get_private_lesson_policy" || name === "inspect_private_lesson_outbox" || name === "inspect_private_learning_outbox" || name === "get_pending_action_payload";
   const openWorld = name === "submit_feedback" || name === "submit_remembrance" || name === "propose_skill_idea" || name === "submit_suggestion" || name === "submit_resource" || name === "submit_resource_review";
   return {
     readOnlyHint: readOnly,
     openWorldHint: openWorld,
-    destructiveHint: name === "delete_private_lesson_candidate" || name === "delete_private_skill_candidate",
+    destructiveHint: name === "admin_write" || name === "end_admin_session" || name === "delete_private_lesson_candidate" || name === "delete_private_skill_candidate",
     ...readOnly || name === "queue_private_skill_import" || name === "acknowledge_feedback_denial" || name === "decline_pending_action" || name === "submit_private_lesson_candidate" || name === "retry_private_lesson_candidate" || name === "submit_private_skill_candidate" || name === "retry_private_skill_candidate" || name === "repair_review_draft" ? { idempotentHint: true } : {}
   };
 }
@@ -30348,21 +30472,21 @@ function base64urlOfLength(value, bytes) {
   return typeof value === "string" && BASE64URL.test(value) && Buffer.from(value, "base64url").length === bytes;
 }
 function openResupplyEnvelope(obligation, key) {
-  const envelope = normalizeResupplyEnvelope(
+  const envelope2 = normalizeResupplyEnvelope(
     obligation?.local_resupply_envelope
   );
-  if (!envelope) throw new ResupplyError("envelope_invalid");
+  if (!envelope2) throw new ResupplyError("envelope_invalid");
   let text;
   try {
     const decipher = createDecipheriv(
       "aes-256-gcm",
       key,
-      Buffer.from(envelope.nonce, "base64url")
+      Buffer.from(envelope2.nonce, "base64url")
     );
     decipher.setAAD(envelopeAad(obligation));
-    decipher.setAuthTag(Buffer.from(envelope.auth_tag, "base64url"));
+    decipher.setAuthTag(Buffer.from(envelope2.auth_tag, "base64url"));
     text = Buffer.concat([
-      decipher.update(Buffer.from(envelope.ciphertext, "base64url")),
+      decipher.update(Buffer.from(envelope2.ciphertext, "base64url")),
       decipher.final()
     ]).toString("utf8");
   } catch {
@@ -30529,25 +30653,25 @@ function withoutPayload(status, input, extra) {
   };
 }
 async function readPendingActionPayload(input, env, { readKey }) {
-  const request = {
+  const request2 = {
     action_id: String(input?.action_id ?? ""),
     ledger: String(input?.ledger ?? "")
   };
-  const notFound = withoutPayload("not_found", request, {
+  const notFound = withoutPayload("not_found", request2, {
     guidance: "No pending action with this action_id is retained in this ledger. It may be closed, owned by another session or agent, or never recorded; do not guess its payload."
   });
-  if (!HEX16.test(request.action_id) || !HEX16.test(request.ledger)) {
+  if (!HEX16.test(request2.action_id) || !HEX16.test(request2.ledger)) {
     return notFound;
   }
   let record4 = null;
   for (const directory of [
-    ...retainedRootsUsable(env) ? [join(retainedLedgerRoot(env), `${request.ledger}.obligations`)] : [],
-    join(usageDirectory(env), `${request.ledger}.obligations`)
+    ...retainedRootsUsable(env) ? [join(retainedLedgerRoot(env), `${request2.ledger}.obligations`)] : [],
+    join(usageDirectory(env), `${request2.ledger}.obligations`)
   ]) {
     try {
       assertPrivateDirectory(directory);
       for (const name of readdirSync(directory).sort().slice(0, LEDGER_ENTRY_LIMIT)) {
-        if (!name.startsWith(request.action_id) || !/^[a-f0-9]{32}\.json$/u.test(name)) {
+        if (!name.startsWith(request2.action_id) || !/^[a-f0-9]{32}\.json$/u.test(name)) {
           continue;
         }
         try {
@@ -30583,9 +30707,9 @@ async function readPendingActionPayload(input, env, { readKey }) {
   };
   let payload = null;
   if (record4.local_resupply_envelope) {
-    const envelope = normalizeResupplyEnvelope(record4.local_resupply_envelope);
-    if (!envelope) {
-      return withoutPayload("refused", request, {
+    const envelope2 = normalizeResupplyEnvelope(record4.local_resupply_envelope);
+    if (!envelope2) {
+      return withoutPayload("refused", request2, {
         ...described,
         reason: "envelope_invalid",
         guidance: guidance.envelope_invalid
@@ -30593,9 +30717,9 @@ async function readPendingActionPayload(input, env, { readKey }) {
     }
     let key;
     try {
-      key = await readKey(envelope.key_source);
+      key = await readKey(envelope2.key_source);
     } catch (error) {
-      return withoutPayload("unavailable", request, {
+      return withoutPayload("unavailable", request2, {
         ...described,
         reason: localKeyReason(error),
         // The outbox's own content-free recovery, when the reader gives one.
@@ -30605,11 +30729,11 @@ async function readPendingActionPayload(input, env, { readKey }) {
     }
     try {
       payload = openResupplyEnvelope(
-        { ...record4, local_resupply_envelope: envelope },
+        { ...record4, local_resupply_envelope: envelope2 },
         key
       );
     } catch (error) {
-      return withoutPayload("refused", request, {
+      return withoutPayload("refused", request2, {
         ...described,
         reason: error?.code ?? "decryption_failed",
         guidance: guidance.refused
@@ -30617,7 +30741,7 @@ async function readPendingActionPayload(input, env, { readKey }) {
     }
   } else if (!preference && record4.local_resupply_payload && typeof record4.local_resupply_payload === "object" && !Array.isArray(record4.local_resupply_payload)) {
     if (resupplyPayloadDigest(record4.local_resupply_payload) !== record4.payload_digest || record4.id !== `remembrance_followup:${record4.payload_digest}`) {
-      return withoutPayload("refused", request, {
+      return withoutPayload("refused", request2, {
         ...described,
         reason: "digest_mismatch",
         guidance: guidance.refused
@@ -30625,7 +30749,7 @@ async function readPendingActionPayload(input, env, { readKey }) {
     }
     payload = record4.local_resupply_payload;
   } else {
-    return withoutPayload("not_retained", request, {
+    return withoutPayload("not_retained", request2, {
       ...described,
       reason: record4.local_resupply_payload_omitted === "too_large" || record4.local_resupply_payload_omitted === "key_unavailable" ? record4.local_resupply_payload_omitted : "not_retained",
       guidance: guidance.not_retained
@@ -30633,8 +30757,8 @@ async function readPendingActionPayload(input, env, { readKey }) {
   }
   return {
     status: "retrieved",
-    action_id: request.action_id,
-    ledger: request.ledger,
+    action_id: request2.action_id,
+    ledger: request2.ledger,
     ...described,
     payload_bytes: Buffer.byteLength(JSON.stringify(payload), "utf8"),
     [preference ? "arguments" : "payload"]: payload,
@@ -30756,8 +30880,8 @@ function inventoryRetainedKeyConsumers(env, { limits = INVENTORY_LIMITS, lanes, 
       unretained.kinds.add(String(record4.kind));
     }
     if (record4.local_resupply_envelope == null) return;
-    const envelope = normalizeResupplyEnvelope(record4.local_resupply_envelope);
-    if (!envelope || !RETAINED_KINDS.has(record4.kind) || !consumer(record4.kind, envelope.key_source)) {
+    const envelope2 = normalizeResupplyEnvelope(record4.local_resupply_envelope);
+    if (!envelope2 || !RETAINED_KINDS.has(record4.kind) || !consumer(record4.kind, envelope2.key_source)) {
       leftFile(area, "unclassified");
     }
   };
@@ -31032,6 +31156,12 @@ function readSecureLocalText(path, options) {
 }
 function secureLocalFileMode(path) {
   return lstatSync2(path).mode;
+}
+function assertSecurePrivateLocalDirectory(path) {
+  assertSecureParentDirectory(path);
+  if (isPosix() && (lstatSync2(path).mode & 63) !== 0) {
+    throw new Error("Local credential directory permissions are not private.");
+  }
 }
 function listSecureLocalDirectory(path) {
   assertSecureDirectory(path);
@@ -31656,8 +31786,8 @@ async function withCaptureLearningDiagnostics(operation) {
     try {
       return await operation();
     } catch (error) {
-      const failure = error !== null && (typeof error === "object" || typeof error === "function") ? error : new Error("Private learning capture failed.");
-      failures.set(failure, {
+      const failure2 = error !== null && (typeof error === "object" || typeof error === "function") ? error : new Error("Private learning capture failed.");
+      failures.set(failure2, {
         ...diagnostic(context),
         ...preparationConstraintDiagnostic(context, error),
         ...error instanceof CaptureLearningReplayError ? {
@@ -31665,7 +31795,7 @@ async function withCaptureLearningDiagnostics(operation) {
           recovery: context.replacement_of ? "Inspect the original held draft and the selected replacement. Repeat only the exact same lesson and replacement_of through its existing recovery lane; do not create an unrelated capture." : "Inspect the outcome for this capture_id. It must not be reused for a different lesson or destination, and a submitted or explicitly deleted capture is never recreated."
         } : {}
       });
-      throw failure;
+      throw failure2;
     }
   });
 }
@@ -32147,11 +32277,11 @@ async function retireReplacedPrivateLessonUnlocked(directory, draftId, replaceme
   }
   try {
     await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
-    const envelope = parseEnvelope(
+    const envelope2 = parseEnvelope(
       await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES),
       draftId
     );
-    if (envelope.state === "submitted") return;
+    if (envelope2.state === "submitted") return;
   } catch {
     return;
   }
@@ -32203,7 +32333,7 @@ async function readPrivateLessonDraft(draftId, options = {}) {
       throw new Error("Private lesson draft was already submitted.");
     }
     let draft;
-    let envelope;
+    let envelope2;
     try {
       const path = draftPath(outbox.directory, draftId);
       await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
@@ -32211,8 +32341,8 @@ async function readPrivateLessonDraft(draftId, options = {}) {
         path,
         PRIVATE_LESSON_DRAFT_MAX_BYTES
       );
-      envelope = parseEnvelope(serialized, draftId);
-      draft = await decryptDraft(envelope, outbox.encryption, true);
+      envelope2 = parseEnvelope(serialized, draftId);
+      draft = await decryptDraft(envelope2, outbox.encryption, true);
     } catch (error) {
       throw selectedPrivateLessonError(draftId, error);
     }
@@ -32236,7 +32366,7 @@ async function readPrivateLessonDraft(draftId, options = {}) {
       );
     }
     const reconciled = reconcileStoredDraft(draft, now);
-    if (reconciled !== draft || staleSafetyRecheckHint(envelope, reconciled)) {
+    if (reconciled !== draft || staleSafetyRecheckHint(envelope2, reconciled)) {
       await writeDraft(reconciled, outbox, true, void 0, true);
     }
     return reconciled;
@@ -32409,8 +32539,8 @@ async function recoverOwnerAttestedLegacyPrivateLessonDestination(input, options
     const path = draftPath(outbox.directory, input.draft_id);
     await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
     const serialized = await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
-    const envelope = parseEnvelope(serialized, input.draft_id);
-    const current = await decryptDraft(envelope, outbox.encryption);
+    const envelope2 = parseEnvelope(serialized, input.draft_id);
+    const current = await decryptDraft(envelope2, outbox.encryption);
     if (!ownerAttestedLegacyPrivateLessonRecoveryEligible(current) || current.payload_digest !== input.expected_payload_digest) {
       throw new Error("Selected draft does not match the owner-attested legacy recovery scope.");
     }
@@ -32425,8 +32555,8 @@ async function recoverOwnerAttestedLegacyPrivateLessonDestination(input, options
       updated_at: now
     };
     const encryption = {
-      key: await readPrivateLessonOutboxKey(outbox.encryption, envelope.encryption.key_source),
-      source: envelope.encryption.key_source
+      key: await readPrivateLessonOutboxKey(outbox.encryption, envelope2.encryption.key_source),
+      source: envelope2.encryption.key_source
     };
     if (!input.dry_run) await writeDraft(next, { ...outbox, encryption }, true);
     return {
@@ -32486,11 +32616,11 @@ async function completePrivateLessonSubmission(draftId, input, options = {}) {
     let current;
     try {
       await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
-      const envelope = parseEnvelope(
+      const envelope2 = parseEnvelope(
         await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES),
         draftId
       );
-      current = await decryptDraft(envelope, outbox.encryption, true);
+      current = await decryptDraft(envelope2, outbox.encryption, true);
     } catch (error) {
       throw selectedPrivateLessonError(draftId, error);
     }
@@ -32644,9 +32774,9 @@ async function privateLessonOutboxSummary(options = {}) {
       replacedRecords += 1;
       continue;
     }
-    let envelope;
+    let envelope2;
     try {
-      envelope = parseEnvelope(
+      envelope2 = parseEnvelope(
         await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES),
         name.slice(0, -".lesson.json".length)
       );
@@ -32654,8 +32784,8 @@ async function privateLessonOutboxSummary(options = {}) {
       corruptFiles += 1;
       continue;
     }
-    counts[envelope.state] += 1;
-    if (envelope.state === "superseded_redactor") {
+    counts[envelope2.state] += 1;
+    if (envelope2.state === "superseded_redactor") {
       terminalBytes += metadata.size;
       try {
         const draft = await readPrivateLessonDraft(
@@ -32821,7 +32951,7 @@ async function inspectPrivateLessonOutboxSnapshotUnlocked(outbox, options) {
       }
       continue;
     }
-    let envelope;
+    let envelope2;
     let serialized;
     try {
       serialized = await readPrivateLessonCanonicalText(
@@ -32837,7 +32967,7 @@ async function inspectPrivateLessonOutboxSnapshotUnlocked(outbox, options) {
       continue;
     }
     try {
-      envelope = parseEnvelope(serialized, draftId);
+      envelope2 = parseEnvelope(serialized, draftId);
     } catch {
       recoveryItems.push(
         privateLessonRecoveryItem(draftId, "invalid_canonical_entry")
@@ -32845,10 +32975,10 @@ async function inspectPrivateLessonOutboxSnapshotUnlocked(outbox, options) {
       corruptFiles += 1;
       continue;
     }
-    counts[envelope.state] += 1;
+    counts[envelope2.state] += 1;
     let decrypted;
     try {
-      decrypted = await decryptDraft(envelope, outbox.encryption, true);
+      decrypted = await decryptDraft(envelope2, outbox.encryption, true);
     } catch (error) {
       if (isPrivateOutboxKeyAccessError(error)) {
         recoveryItems.push(
@@ -32871,7 +33001,7 @@ async function inspectPrivateLessonOutboxSnapshotUnlocked(outbox, options) {
       decrypted
     );
     if (replacement) {
-      counts[envelope.state] -= 1;
+      counts[envelope2.state] -= 1;
       replacedRecords += 1;
       await retireReplacedPrivateLessonUnlocked(
         outbox.directory,
@@ -32883,8 +33013,8 @@ async function inspectPrivateLessonOutboxSnapshotUnlocked(outbox, options) {
       continue;
     }
     const draft = reconcileStoredDraft(decrypted, now);
-    if (draft !== decrypted || staleSafetyRecheckHint(envelope, draft)) {
-      counts[envelope.state] -= 1;
+    if (draft !== decrypted || staleSafetyRecheckHint(envelope2, draft)) {
+      counts[envelope2.state] -= 1;
       counts[draft.state] += 1;
       await writeDraftUnlocked(draft, outbox, true, void 0, true);
     }
@@ -33099,9 +33229,9 @@ async function inspectPrivateLessonOutboxHealth(options = {}) {
       continue;
     }
     if (!name.endsWith(".lesson.json")) continue;
-    let envelope;
+    let envelope2;
     try {
-      envelope = parseEnvelope(
+      envelope2 = parseEnvelope(
         await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES),
         name.slice(0, -".lesson.json".length)
       );
@@ -33109,8 +33239,8 @@ async function inspectPrivateLessonOutboxHealth(options = {}) {
       corruptFiles += 1;
       continue;
     }
-    counts[envelope.state] += 1;
-    if (envelope.state === "superseded_redactor") {
+    counts[envelope2.state] += 1;
+    if (envelope2.state === "superseded_redactor") {
       terminalBytes += entry.size;
     }
   }
@@ -33551,7 +33681,7 @@ async function writeDraftUnlocked(draft, outbox, replace, _currentOutboxBytes, a
   const cipher = createCipheriv2("aes-256-gcm", outbox.encryption.key, nonce);
   cipher.setAAD(aad);
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  const envelope = {
+  const envelope2 = {
     version: "private-lesson-outbox-envelope-v1",
     draft_id: validated.draft_id,
     state: validated.state,
@@ -33572,7 +33702,7 @@ async function writeDraftUnlocked(draft, outbox, replace, _currentOutboxBytes, a
       auth_tag: cipher.getAuthTag().toString("base64url")
     }
   };
-  const serialized = `${JSON.stringify(envelope)}
+  const serialized = `${JSON.stringify(envelope2)}
 `;
   const serializedBytes = Buffer.byteLength(serialized, "utf8");
   if (!replace && await retainedPrivateLessonOutboxBytes(outbox.directory) + serializedBytes > outbox.ceilingBytes) {
@@ -33615,41 +33745,41 @@ async function writeDraftUnlocked(draft, outbox, replace, _currentOutboxBytes, a
     markCaptureLearningPersisted(validated.draft_id);
   }
 }
-async function decryptDraft(envelope, encryption, allowUnsupportedProfile = false) {
+async function decryptDraft(envelope2, encryption, allowUnsupportedProfile = false) {
   const aadFields = {
-    version: envelope.version,
-    draft_id: envelope.draft_id,
-    state: envelope.state,
-    payload_digest: envelope.payload_digest,
-    hold_telemetry_status: envelope.hold_telemetry_status,
-    next_retry_at: envelope.next_retry_at,
-    terminal_reason: envelope.terminal_reason,
-    ...Object.hasOwn(envelope, "last_error_code") ? { last_error_code: envelope.last_error_code ?? null } : {},
-    ...Object.hasOwn(envelope, "destination_binding") ? { destination_binding: envelope.destination_binding ?? null } : {}
+    version: envelope2.version,
+    draft_id: envelope2.draft_id,
+    state: envelope2.state,
+    payload_digest: envelope2.payload_digest,
+    hold_telemetry_status: envelope2.hold_telemetry_status,
+    next_retry_at: envelope2.next_retry_at,
+    terminal_reason: envelope2.terminal_reason,
+    ...Object.hasOwn(envelope2, "last_error_code") ? { last_error_code: envelope2.last_error_code ?? null } : {},
+    ...Object.hasOwn(envelope2, "destination_binding") ? { destination_binding: envelope2.destination_binding ?? null } : {}
   };
   const aad = Buffer.from(canonicalJson(aadFields), "utf8");
   const key = await readPrivateLessonOutboxKey(
     encryption,
-    envelope.encryption.key_source
+    envelope2.encryption.key_source
   );
   const decipher = createDecipheriv2(
     "aes-256-gcm",
     key,
-    Buffer.from(envelope.encryption.nonce, "base64url")
+    Buffer.from(envelope2.encryption.nonce, "base64url")
   );
   decipher.setAAD(aad);
-  decipher.setAuthTag(Buffer.from(envelope.encryption.auth_tag, "base64url"));
+  decipher.setAuthTag(Buffer.from(envelope2.encryption.auth_tag, "base64url"));
   let plaintext;
   try {
     plaintext = Buffer.concat([
-      decipher.update(Buffer.from(envelope.encryption.ciphertext, "base64url")),
+      decipher.update(Buffer.from(envelope2.encryption.ciphertext, "base64url")),
       decipher.final()
     ]).toString("utf8");
   } catch {
-    throw new PrivateOutboxDecryptionError("private_lesson", envelope.draft_id);
+    throw new PrivateOutboxDecryptionError("private_lesson", envelope2.draft_id);
   }
   const draft = validateDraft(JSON.parse(plaintext), allowUnsupportedProfile);
-  if (draft.draft_id !== envelope.draft_id || draft.state !== envelope.state || draft.payload_digest !== envelope.payload_digest || draft.hold_telemetry_status !== envelope.hold_telemetry_status || draft.next_retry_at !== envelope.next_retry_at || Object.hasOwn(envelope, "last_error_code") && draft.last_error_code !== (envelope.last_error_code ?? null) || Object.hasOwn(envelope, "destination_binding") && canonicalJson(draft.destination_binding) !== canonicalJson(envelope.destination_binding ?? null) || draft.terminal_reason !== envelope.terminal_reason) {
+  if (draft.draft_id !== envelope2.draft_id || draft.state !== envelope2.state || draft.payload_digest !== envelope2.payload_digest || draft.hold_telemetry_status !== envelope2.hold_telemetry_status || draft.next_retry_at !== envelope2.next_retry_at || Object.hasOwn(envelope2, "last_error_code") && draft.last_error_code !== (envelope2.last_error_code ?? null) || Object.hasOwn(envelope2, "destination_binding") && canonicalJson(draft.destination_binding) !== canonicalJson(envelope2.destination_binding ?? null) || draft.terminal_reason !== envelope2.terminal_reason) {
     throw new Error(
       "Private lesson outbox envelope does not match its payload."
     );
@@ -33742,8 +33872,8 @@ function validateDraft(value, allowUnsupportedProfile = false) {
     destination_binding: destinationBinding
   };
 }
-function staleSafetyRecheckHint(envelope, draft) {
-  return (envelope.safety_recheck ?? null) !== privateLessonSafetyRecheck(draft);
+function staleSafetyRecheckHint(envelope2, draft) {
+  return (envelope2.safety_recheck ?? null) !== privateLessonSafetyRecheck(draft);
 }
 function reconcileStoredDraft(draft, now) {
   return normalizeLegacyHeldSafetyDraft(
@@ -34284,8 +34414,8 @@ async function reconcilePrivateLessonTemporaryWrites(directory, encryption) {
       const raw = JSON.parse(value);
       draftId = String(raw.draft_id ?? "");
       assertDraftId(draftId);
-      const envelope = parseEnvelope(value, draftId);
-      await decryptDraft(envelope, encryption, true);
+      const envelope2 = parseEnvelope(value, draftId);
+      await decryptDraft(envelope2, encryption, true);
     } catch (error) {
       if (isPrivateOutboxKeyAccessError(error)) {
         if (draftId) unresolved.set(draftId, error);
@@ -34399,11 +34529,11 @@ async function validatePrivateLessonCanonicalPath(path, name, encryption) {
     );
     return null;
   }
-  const envelope = parseEnvelope(
+  const envelope2 = parseEnvelope(
     await readPrivateLessonCanonicalText(path, PRIVATE_LESSON_DRAFT_MAX_BYTES),
     draftId
   );
-  return await decryptDraft(envelope, encryption, true);
+  return await decryptDraft(envelope2, encryption, true);
 }
 async function readPrivateLessonCanonicalText(path, maxBytes) {
   try {
@@ -47221,7 +47351,7 @@ var require_timestamp = __commonJS({
       resolve: (str) => parseSexagesimal(str, false),
       stringify: stringifySexagesimal
     };
-    var timestamp2 = {
+    var timestamp3 = {
       identify: (value) => value instanceof Date,
       default: true,
       tag: "tag:yaml.org,2002:timestamp",
@@ -47230,7 +47360,7 @@ var require_timestamp = __commonJS({
       // assumed to be 00:00:00Z (start of day, UTC).
       test: RegExp("^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})(?:(?:t|T|[ \\t]+)([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2}(\\.[0-9]+)?)(?:[ \\t]*(Z|[-+][012]?[0-9](?::[0-9]{2})?))?)?$"),
       resolve(str) {
-        const match = str.match(timestamp2.test);
+        const match = str.match(timestamp3.test);
         if (!match)
           throw new Error("!!timestamp expects a date, starting with yyyy-mm-dd");
         const [, year, month, day, hour, minute, second] = match.map(Number);
@@ -47249,7 +47379,7 @@ var require_timestamp = __commonJS({
     };
     exports.floatTime = floatTime;
     exports.intTime = intTime;
-    exports.timestamp = timestamp2;
+    exports.timestamp = timestamp3;
   }
 });
 var require_schema3 = __commonJS({
@@ -47267,7 +47397,7 @@ var require_schema3 = __commonJS({
     var omap = require_omap();
     var pairs = require_pairs();
     var set = require_set();
-    var timestamp2 = require_timestamp();
+    var timestamp3 = require_timestamp();
     var schema = [
       map.map,
       seq.seq,
@@ -47287,9 +47417,9 @@ var require_schema3 = __commonJS({
       omap.omap,
       pairs.pairs,
       set.set,
-      timestamp2.intTime,
-      timestamp2.floatTime,
-      timestamp2.timestamp
+      timestamp3.intTime,
+      timestamp3.floatTime,
+      timestamp3.timestamp
     ];
     exports.schema = schema;
   }
@@ -47312,7 +47442,7 @@ var require_tags = __commonJS({
     var pairs = require_pairs();
     var schema$2 = require_schema3();
     var set = require_set();
-    var timestamp2 = require_timestamp();
+    var timestamp3 = require_timestamp();
     var schemas = /* @__PURE__ */ new Map([
       ["core", schema.schema],
       ["failsafe", [map.map, seq.seq, string.string]],
@@ -47326,11 +47456,11 @@ var require_tags = __commonJS({
       float: float.float,
       floatExp: float.floatExp,
       floatNaN: float.floatNaN,
-      floatTime: timestamp2.floatTime,
+      floatTime: timestamp3.floatTime,
       int: int.int,
       intHex: int.intHex,
       intOct: int.intOct,
-      intTime: timestamp2.intTime,
+      intTime: timestamp3.intTime,
       map: map.map,
       merge: merge.merge,
       null: _null.nullTag,
@@ -47338,7 +47468,7 @@ var require_tags = __commonJS({
       pairs: pairs.pairs,
       seq: seq.seq,
       set: set.set,
-      timestamp: timestamp2.timestamp
+      timestamp: timestamp3.timestamp
     };
     var coreKnownTags = {
       "tag:yaml.org,2002:binary": binary.binary,
@@ -47346,7 +47476,7 @@ var require_tags = __commonJS({
       "tag:yaml.org,2002:omap": omap.omap,
       "tag:yaml.org,2002:pairs": pairs.pairs,
       "tag:yaml.org,2002:set": set.set,
-      "tag:yaml.org,2002:timestamp": timestamp2.timestamp
+      "tag:yaml.org,2002:timestamp": timestamp3.timestamp
     };
     function getTags(customTags, schemaName, addMergeTag) {
       const schemaTags = schemas.get(schemaName);
@@ -51507,24 +51637,24 @@ function rsa(b, t, f) {
 function algorithmId(b, t) {
   if (!t?.complete || t.tag !== 48) return;
   const f = fields(b, t, 2);
-  const id = f?.[0];
-  if (!f || !id || !hex(b, id) || b[id.end - 1] & 128) return;
-  for (let p = id.body; p < id.end; p++) {
-    if ((p === id.body || !(b[p - 1] & 128)) && b[p] === 128) return;
+  const id2 = f?.[0];
+  if (!f || !id2 || !hex(b, id2) || b[id2.end - 1] & 128) return;
+  for (let p = id2.body; p < id2.end; p++) {
+    if ((p === id2.body || !(b[p - 1] & 128)) && b[p] === 128) return;
   }
-  return hex(b, id);
+  return hex(b, id2);
 }
 function algorithm(b, t) {
   if (!t?.complete || t.tag !== 48) return;
   const f = fields(b, t, 2);
   if (!f) return;
-  const id = hex(b, f[0]);
-  if (id === OID.rsa && (f.length === 1 || f[1]?.tag === 5 && f[1].body === f[1].end))
+  const id2 = hex(b, f[0]);
+  if (id2 === OID.rsa && (f.length === 1 || f[1]?.tag === 5 && f[1].body === f[1].end))
     return { name: "rsa" };
-  if (id === OID.ed && f.length === 1) return { name: "ed25519" };
+  if (id2 === OID.ed && f.length === 1) return { name: "ed25519" };
   const curve = hex(b, f[1]);
-  if (id === OID.ec && curve) return { name: "ec", curve };
-  if (id === OID.ec && f[1]?.tag === 48)
+  if (id2 === OID.ec && curve) return { name: "ec", curve };
+  if (id2 === OID.ec && f[1]?.tag === 48)
     return { name: "ec", curve: "explicit" };
 }
 function sec1(b, t, f, inheritedCurve) {
@@ -51570,10 +51700,10 @@ function encryptedAlgorithm(b, t) {
   const f = fields(b, t, 2);
   if (!f || f.length !== 2 || f[1]?.tag !== 48 || !f[1].complete)
     return false;
-  const id = hex(b, f[0]);
+  const id2 = hex(b, f[0]);
   const params = fields(b, f[1], 2);
   if (!params || params.length !== 2) return false;
-  if (id === OID.pbes2) {
+  if (id2 === OID.pbes2) {
     const kdf = params[0]?.tag === 48 && fields(b, params[0], 2);
     const cipher = params[1]?.tag === 48 && fields(b, params[1], 2);
     if (!kdf || kdf.length !== 2 || !cipher || cipher.length !== 2 || hex(b, kdf[0]) !== "2a864886f70d01050c" || kdf[1]?.tag !== 48)
@@ -51596,11 +51726,11 @@ function encryptedAlgorithm(b, t) {
     const ivSize = /^6086480165030401(02|16|2a)$/.test(cipherId) ? 16 : cipherId === "2a864886f70d0307" ? 8 : 0;
     return next === derivation.length && ivSize > 0 && cipher[1]?.tag === 4 && cipher[1].end - cipher[1].body === ivSize;
   }
-  return /^2a864886f70d010c010[1-6]$/.test(id) && params[0]?.tag === 4 && params[0].end > params[0].body && (integer(b, params[1]) ?? 0n) > 0n;
+  return /^2a864886f70d010c010[1-6]$/.test(id2) && params[0]?.tag === 4 && params[0].end > params[0].body && (integer(b, params[1]) ?? 0n) > 0n;
 }
 function encryptedPkcs8(b, t, f) {
-  const id = algorithmId(b, f[0]);
-  if (f.length !== 2 || !encryptedAlgorithm(b, f[0]) && id !== OID.pbes2 && !/^2a864886f70d010c010[1-6]$/.test(id ?? "") || f[1]?.tag !== 4 || f[1].body >= Math.min(f[1].end, b.length))
+  const id2 = algorithmId(b, f[0]);
+  if (f.length !== 2 || !encryptedAlgorithm(b, f[0]) && id2 !== OID.pbes2 && !/^2a864886f70d010c010[1-6]$/.test(id2 ?? "") || f[1]?.tag !== 4 || f[1].body >= Math.min(f[1].end, b.length))
     return;
   return { kind: "encrypted", format: "pkcs8-encrypted", complete: t.complete };
 }
@@ -51616,10 +51746,10 @@ function pkcs8(b, t, f) {
       return;
   }
   if (next !== f.length) return;
-  const id = algorithmId(b, f[1]);
+  const id2 = algorithmId(b, f[1]);
   const alg = algorithm(b, f[1]);
   const octets2 = f[2];
-  if (id === OID.pss && octets2.body < Math.min(octets2.end, b.length)) {
+  if (id2 === OID.pss && octets2.body < Math.min(octets2.end, b.length)) {
     return {
       kind: "private",
       format: "pkcs8-rsa-pss",
@@ -51630,9 +51760,9 @@ function pkcs8(b, t, f) {
   const inner = tlv(b, octets2.body, Math.min(octets2.end, b.length));
   if (!inner || inner.end !== octets2.end) return;
   if (!alg) {
-    const seedSize = id === "2b656e" ? 32 : id === "2b656f" ? 56 : id === "2b6571" ? 57 : 0;
+    const seedSize = id2 === "2b656e" ? 32 : id2 === "2b656f" ? 56 : id2 === "2b6571" ? 57 : 0;
     const knownSeed = seedSize && inner.tag === 4 && inner.end - inner.body === seedSize && inner.body < b.length;
-    const dsa = id === "2a8648ce380401" && (integer(b, inner) ?? 0n) > 0n;
+    const dsa = id2 === "2a8648ce380401" && (integer(b, inner) ?? 0n) > 0n;
     if (knownSeed || dsa)
       return {
         kind: "private",
@@ -51785,14 +51915,14 @@ function safeContents(b, t, out, depth, callbacks) {
     if (!f || f.length < 2 || f[2] && f[2].tag !== 49) return false;
     const value = wrapped(b, f[1], 160, true);
     if (!value) return false;
-    const id = hex(b, f[0]);
-    if (id === OID.safeBag) {
+    const id2 = hex(b, f[0]);
+    if (id2 === OID.safeBag) {
       if (!safeContents(b, value, out, depth + 1, callbacks)) return false;
-    } else if (id === OID.keyBag || id === OID.shroudedBag) {
+    } else if (id2 === OID.keyBag || id2 === OID.shroudedBag) {
       const children = value.tag === 48 && fields(b, value);
-      let evidence = children && (id === OID.keyBag ? pkcs8(b, value, children) : encryptedPkcs8(b, value, children));
+      let evidence = children && (id2 === OID.keyBag ? pkcs8(b, value, children) : encryptedPkcs8(b, value, children));
       if (!evidence && children) {
-        const offset = id === OID.keyBag ? 1 : 0;
+        const offset = id2 === OID.keyBag ? 1 : 0;
         const version = offset ? integer(b, children[0]) : 0n;
         const payload = children[offset + 1];
         if ((version === 0n || version === 1n) && algorithmId(b, children[offset]) && payload?.tag === 4 && payload.body < Math.min(payload.end, b.length)) {
@@ -51808,7 +51938,7 @@ function safeContents(b, t, out, depth, callbacks) {
       if (evidence.kind === "private") out.private = true;
       else out.encrypted = true;
       out.editable &&= evidence.complete && evidence.editable !== false;
-    } else if (id === OID.certBag) {
+    } else if (id2 === OID.certBag) {
       const cert = value.tag === 48 && fields(b, value, 2);
       const octets2 = cert && wrapped(b, cert[1], 160);
       const der = octets2 && wrapped(b, octets2, 4);
@@ -55823,8 +55953,8 @@ var DFA = class DFA2 {
     const matches = /* @__PURE__ */ new Set();
     const checkMatch = (state, currentPos) => {
       if (state.isMatch) if (anchor === RE2Flags.ANCHOR_BOTH) {
-        if (currentPos === endPos) state.matchIDs.forEach((id) => matches.add(id));
-      } else state.matchIDs.forEach((id) => matches.add(id));
+        if (currentPos === endPos) state.matchIDs.forEach((id2) => matches.add(id2));
+      } else state.matchIDs.forEach((id2) => matches.add(id2));
     };
     checkMatch(currentState, pos);
     let i = pos;
@@ -57131,12 +57261,12 @@ var Compiler = class Compiler2 {
     return f;
   }
   lookBehind(a, lb) {
-    const id = this.newInst(Inst.LB_WRITE);
-    this.prog.getInst(id.i).arg = lb;
+    const id2 = this.newInst(Inst.LB_WRITE);
+    this.prog.getInst(id2.i).arg = lb;
     const any = this.rune(Compiler2.ANY_RUNE(), 0);
     const dotStar = this.star(any, true);
     const lbAutomaton = this.cat(dotStar, a);
-    this.prog.patch(lbAutomaton.out, id.i);
+    this.prog.patch(lbAutomaton.out, id2.i);
     const checkId = this.newInst(Inst.LB_CHECK);
     this.prog.getInst(checkId.i).arg = lb;
     this.prog.lbStarts.push(lbAutomaton.i);
@@ -63174,7 +63304,7 @@ function parsePrivateSkillInspectionDecision(value) {
   });
 }
 function inspectPrivateSkillCandidate(candidate) {
-  const failure = (reason, stage, projectionBodyLength) => ({
+  const failure2 = (reason, stage, projectionBodyLength) => ({
     status: "invalid",
     error_code: reason === "source_projection_invalid" ? reason : "local_inspection_failure",
     decision: {
@@ -63188,13 +63318,13 @@ function inspectPrivateSkillCandidate(candidate) {
   try {
     const result = inspectBoundedPrivateLearningRoot(candidate);
     if (!record3(result) || result.inspector_digest !== PRIVATE_LEARNING_INSPECTOR_DIGEST)
-      return failure("inspector_contract_invalid", "original");
+      return failure2("inspector_contract_invalid", "original");
     if (result.status === "incomplete" && result.outcome === "operational_failure") {
       const reason = reasons.includes(result.reason) ? result.reason : "inspection_internal_failure";
       const stage = ["original", "candidate", "recovery_context"].includes(
         String(result.failure_stage)
       ) ? result.failure_stage : "original";
-      return failure(reason, stage);
+      return failure2(reason, stage);
     }
     if (result.status === "incomplete" && result.outcome === "positive_recovery_need" && (result.reason === "ambiguous_source_ownership" || result.reason === "encrypted_private_container" || result.reason === "declared_private_format_unverified")) {
       return {
@@ -63217,11 +63347,11 @@ function inspectPrivateSkillCandidate(candidate) {
       };
     }
     if (result.status !== "complete" || result.outcome !== "unchanged" && result.outcome !== "redacted" || typeof result.sensitiveMaterial !== "boolean" || typeof result.sensitiveObjectKeyMaterial !== "boolean")
-      return failure("inspector_contract_invalid", "original");
+      return failure2("inspector_contract_invalid", "original");
     const projected = privateSkillCaptureSchema.safeParse(result.redacted);
     if (!projected.success) {
       const body = record3(result.redacted) ? result.redacted.proposed_skill_md : void 0;
-      return failure(
+      return failure2(
         "source_projection_invalid",
         "candidate",
         typeof body === "string" && isOnlySkillBodyTooLong(projected.error) ? body.trim().length : void 0
@@ -63229,7 +63359,7 @@ function inspectPrivateSkillCandidate(candidate) {
     }
     const changed = canonicalJson(candidate) !== canonicalJson(projected.data);
     if (changed !== (result.outcome === "redacted") || changed !== result.sensitiveMaterial || !changed && result.sensitiveObjectKeyMaterial)
-      return failure("inspector_contract_invalid", "candidate");
+      return failure2("inspector_contract_invalid", "candidate");
     return {
       status: "complete",
       candidate: projected.data,
@@ -63241,7 +63371,7 @@ function inspectPrivateSkillCandidate(candidate) {
       }
     };
   } catch {
-    return failure("inspection_internal_failure", "original");
+    return failure2("inspection_internal_failure", "original");
   }
 }
 
@@ -65294,7 +65424,7 @@ async function recordPrivateSkillDeliveryResolution(draftId, rawResolution, opti
 }
 async function recordPrivateSkillDeliveryResolutionRouteUnavailable(draftId, rawRequest, options = {}) {
   assertPrivateSkillDraftId(draftId);
-  const request = privateSkillDeliveryResolveRequestSchema.parse(rawRequest);
+  const request2 = privateSkillDeliveryResolveRequestSchema.parse(rawRequest);
   return withPrivateSkillDraftLock(draftId, async () => {
     const outbox = await readyPrivateSkillOutbox(options);
     return withPrivateSkillOutboxLock(outbox.directory, async () => {
@@ -65304,7 +65434,7 @@ async function recordPrivateSkillDeliveryResolutionRouteUnavailable(draftId, raw
         outbox.encryption
       );
       const pending = current.delivery_resolution;
-      if (!pending || request.idempotency_key !== pending.idempotency_key || request.candidate_digest !== pending.candidate_digest) {
+      if (!pending || request2.idempotency_key !== pending.idempotency_key || request2.candidate_digest !== pending.candidate_digest) {
         throw new Error("Private skill delivery resolution binding changed.");
       }
       const now = options.now ?? /* @__PURE__ */ new Date();
@@ -65816,7 +65946,7 @@ async function writePrivateSkillDraft(draft, directory, encryption, env = proces
     cipher.update(canonicalJson(parsed), "utf8"),
     cipher.final()
   ]);
-  const envelope = {
+  const envelope2 = {
     ...metadata,
     encryption: {
       algorithm: "aes-256-gcm",
@@ -65826,7 +65956,7 @@ async function writePrivateSkillDraft(draft, directory, encryption, env = proces
       auth_tag: cipher.getAuthTag().toString("base64url")
     }
   };
-  const encoded = `${canonicalJson(envelope)}
+  const encoded = `${canonicalJson(envelope2)}
 `;
   const encodedBytes = Buffer.byteLength(encoded);
   const reserve = parsed.native_authority_state && !withdrawal ? PRIVATE_SKILL_NATIVE_WITHDRAWAL_RESERVE_BYTES : 0;
@@ -65860,46 +65990,46 @@ async function writePrivateSkillDraft(draft, directory, encryption, env = proces
   await atomicWritePrivateText(path, encoded, beforePublish);
 }
 async function readPrivateSkillDraftFrom(path, encryption) {
-  const envelope = parseEnvelope2(
+  const envelope2 = parseEnvelope2(
     readSecureLocalText(path, { maxBytes: PRIVATE_SKILL_DRAFT_MAX_BYTES })
   );
-  const metadata = envelopeMetadataFromEnvelope(envelope);
+  const metadata = envelopeMetadataFromEnvelope(envelope2);
   const key = await readPrivateLessonOutboxKey(
     encryption,
-    envelope.encryption.key_source
+    envelope2.encryption.key_source
   );
   const decipher = createDecipheriv3(
     "aes-256-gcm",
     key,
-    Buffer.from(envelope.encryption.nonce, "base64url")
+    Buffer.from(envelope2.encryption.nonce, "base64url")
   );
   decipher.setAAD(Buffer.from(canonicalJson(metadata)));
-  decipher.setAuthTag(Buffer.from(envelope.encryption.auth_tag, "base64url"));
+  decipher.setAuthTag(Buffer.from(envelope2.encryption.auth_tag, "base64url"));
   let plaintext;
   try {
     plaintext = Buffer.concat([
-      decipher.update(Buffer.from(envelope.encryption.ciphertext, "base64url")),
+      decipher.update(Buffer.from(envelope2.encryption.ciphertext, "base64url")),
       decipher.final()
     ]).toString("utf8");
   } catch {
-    throw new PrivateOutboxDecryptionError("private_skill", envelope.draft_id);
+    throw new PrivateOutboxDecryptionError("private_skill", envelope2.draft_id);
   }
   const parsed = validatePrivateSkillDraft(JSON.parse(plaintext));
-  if (envelope.version === "private-skill-outbox-envelope-v2" !== Boolean(parsed.native_authority_state))
+  if (envelope2.version === "private-skill-outbox-envelope-v2" !== Boolean(parsed.native_authority_state))
     throw new Error("Private skill native authority envelope is invalid.");
-  if (parsed.draft_id !== envelope.draft_id || parsed.state !== envelope.state || parsed.candidate_digest !== envelope.candidate_digest || parsed.next_retry_at !== envelope.next_retry_at || parsed.created_at !== envelope.created_at || parsed.updated_at !== envelope.updated_at) {
+  if (parsed.draft_id !== envelope2.draft_id || parsed.state !== envelope2.state || parsed.candidate_digest !== envelope2.candidate_digest || parsed.next_retry_at !== envelope2.next_retry_at || parsed.created_at !== envelope2.created_at || parsed.updated_at !== envelope2.updated_at) {
     throw new Error(
       "Private skill outbox metadata does not match its payload."
     );
   }
-  if (hasEnvelopeReformulationMetadata(envelope) && (envelope.reformulation_available !== privateSkillReformulationAvailable(
+  if (hasEnvelopeReformulationMetadata(envelope2) && (envelope2.reformulation_available !== privateSkillReformulationAvailable(
     parsed,
-    envelope.inspector_digest ?? PRIVATE_LEARNING_INSPECTOR_DIGEST
-  ) || envelope.reformulation_reason !== parsed.reformulation_reason || envelope.reformulation_attempt_count !== parsed.reformulation_attempts.length || envelope.recovery_epoch_attempt_count !== void 0 && envelope.recovery_epoch_attempt_count !== privateSkillCurrentEpochAttemptCount(parsed) || envelope.inspector_digest !== void 0 && envelope.inspector_digest !== (parsed.inspection?.inspector_digest ?? null) || envelope.native_context_pending !== void 0 && envelope.native_context_pending !== hasPendingNativeContext(parsed) || envelope.next_action !== void 0 && canonicalJson(envelope.next_action) !== canonicalJson(
+    envelope2.inspector_digest ?? PRIVATE_LEARNING_INSPECTOR_DIGEST
+  ) || envelope2.reformulation_reason !== parsed.reformulation_reason || envelope2.reformulation_attempt_count !== parsed.reformulation_attempts.length || envelope2.recovery_epoch_attempt_count !== void 0 && envelope2.recovery_epoch_attempt_count !== privateSkillCurrentEpochAttemptCount(parsed) || envelope2.inspector_digest !== void 0 && envelope2.inspector_digest !== (parsed.inspection?.inspector_digest ?? null) || envelope2.native_context_pending !== void 0 && envelope2.native_context_pending !== hasPendingNativeContext(parsed) || envelope2.next_action !== void 0 && canonicalJson(envelope2.next_action) !== canonicalJson(
     privateSkillRecoveryTransition(
       parsed,
       false,
-      envelope.inspector_digest ?? PRIVATE_LEARNING_INSPECTOR_DIGEST
+      envelope2.inspector_digest ?? PRIVATE_LEARNING_INSPECTOR_DIGEST
     ).next_action
   ))) {
     throw new Error(
@@ -66676,27 +66806,27 @@ function privateSkillInspectorRefreshAllowed(draft) {
   }
   return draft.inspection.outcome === "positive_recovery_need" || draft.inspection.outcome === "operational_failure" || draft.last_error_code === "submission_reinspection_source_projection_drift" || draft.last_error_code === "inspector_refresh_new_lineage_required";
 }
-function envelopeMetadataFromEnvelope(envelope) {
+function envelopeMetadataFromEnvelope(envelope2) {
   const base2 = {
-    version: envelope.version,
-    draft_id: envelope.draft_id,
-    state: envelope.state,
-    candidate_digest: envelope.candidate_digest,
-    next_retry_at: envelope.next_retry_at,
-    created_at: envelope.created_at,
-    updated_at: envelope.updated_at
+    version: envelope2.version,
+    draft_id: envelope2.draft_id,
+    state: envelope2.state,
+    candidate_digest: envelope2.candidate_digest,
+    next_retry_at: envelope2.next_retry_at,
+    created_at: envelope2.created_at,
+    updated_at: envelope2.updated_at
   };
-  return hasEnvelopeReformulationMetadata(envelope) ? {
+  return hasEnvelopeReformulationMetadata(envelope2) ? {
     ...base2,
-    reformulation_available: envelope.reformulation_available,
-    reformulation_reason: envelope.reformulation_reason,
-    reformulation_attempt_count: envelope.reformulation_attempt_count,
-    ...envelope.recovery_epoch_attempt_count === void 0 ? {} : {
-      recovery_epoch_attempt_count: envelope.recovery_epoch_attempt_count
+    reformulation_available: envelope2.reformulation_available,
+    reformulation_reason: envelope2.reformulation_reason,
+    reformulation_attempt_count: envelope2.reformulation_attempt_count,
+    ...envelope2.recovery_epoch_attempt_count === void 0 ? {} : {
+      recovery_epoch_attempt_count: envelope2.recovery_epoch_attempt_count
     },
-    ...envelope.inspector_digest === void 0 ? {} : { inspector_digest: envelope.inspector_digest },
-    ...envelope.native_context_pending === void 0 ? {} : { native_context_pending: envelope.native_context_pending },
-    ...envelope.next_action === void 0 ? {} : { next_action: envelope.next_action }
+    ...envelope2.inspector_digest === void 0 ? {} : { inspector_digest: envelope2.inspector_digest },
+    ...envelope2.native_context_pending === void 0 ? {} : { native_context_pending: envelope2.native_context_pending },
+    ...envelope2.next_action === void 0 ? {} : { next_action: envelope2.next_action }
   } : base2;
 }
 function parseEnvelope2(value) {
@@ -66704,14 +66834,14 @@ function parseEnvelope2(value) {
   if (!isRecord4(parsed) || !isRecord4(parsed.encryption)) {
     throw new Error("Private skill outbox envelope is invalid.");
   }
-  const envelope = parsed;
+  const envelope2 = parsed;
   if (![
     "private-skill-outbox-envelope-v1",
     "private-skill-outbox-envelope-v2"
-  ].includes(envelope.version) || envelope.encryption.algorithm !== "aes-256-gcm" || !/^[A-Za-z0-9_-]{16}$/u.test(envelope.encryption.nonce) || !/^[A-Za-z0-9_-]{16,}$/u.test(envelope.encryption.ciphertext) || !/^[A-Za-z0-9_-]{20,32}$/u.test(envelope.encryption.auth_tag)) {
+  ].includes(envelope2.version) || envelope2.encryption.algorithm !== "aes-256-gcm" || !/^[A-Za-z0-9_-]{16}$/u.test(envelope2.encryption.nonce) || !/^[A-Za-z0-9_-]{16,}$/u.test(envelope2.encryption.ciphertext) || !/^[A-Za-z0-9_-]{20,32}$/u.test(envelope2.encryption.auth_tag)) {
     throw new Error("Private skill outbox envelope is invalid.");
   }
-  assertPrivateSkillDraftId(envelope.draft_id);
+  assertPrivateSkillDraftId(envelope2.draft_id);
   const recoveryKeys = [
     "reformulation_available",
     "reformulation_reason",
@@ -66722,12 +66852,12 @@ function parseEnvelope2(value) {
     throw new Error("Private skill outbox recovery metadata is invalid.");
   }
   if (recoveryKeyCount === recoveryKeys.length) {
-    const epochCount = envelope.recovery_epoch_attempt_count ?? envelope.reformulation_attempt_count;
-    if (typeof envelope.reformulation_available !== "boolean" || !isPrivateSkillRecoveryReasonOrNull(envelope.reformulation_reason) || !Number.isSafeInteger(envelope.reformulation_attempt_count) || Number(envelope.reformulation_attempt_count) < 0 || Number(envelope.reformulation_attempt_count) > PRIVATE_SKILL_REFORMULATION_RECORD_MAX || !Number.isSafeInteger(epochCount) || Number(epochCount) < 0 || Number(epochCount) > PRIVATE_SKILL_REFORMULATION_MAX_ATTEMPTS || envelope.inspector_digest !== void 0 && envelope.inspector_digest !== null && !/^sha256:[a-f0-9]{64}$/u.test(envelope.inspector_digest) || envelope.native_context_pending !== void 0 && typeof envelope.native_context_pending !== "boolean" || !isPrivateSkillRecoveryActionOrNull(envelope.next_action) || envelope.next_action !== void 0 && envelope.next_action !== null && (envelope.next_action.draft_updated_at !== envelope.updated_at || envelope.next_action.inspector_digest !== (envelope.inspector_digest ?? null)) || envelope.reformulation_available && (!isPrivateSkillRecoveryReason(envelope.reformulation_reason) || Number(epochCount) >= PRIVATE_SKILL_REFORMULATION_MAX_ATTEMPTS)) {
+    const epochCount = envelope2.recovery_epoch_attempt_count ?? envelope2.reformulation_attempt_count;
+    if (typeof envelope2.reformulation_available !== "boolean" || !isPrivateSkillRecoveryReasonOrNull(envelope2.reformulation_reason) || !Number.isSafeInteger(envelope2.reformulation_attempt_count) || Number(envelope2.reformulation_attempt_count) < 0 || Number(envelope2.reformulation_attempt_count) > PRIVATE_SKILL_REFORMULATION_RECORD_MAX || !Number.isSafeInteger(epochCount) || Number(epochCount) < 0 || Number(epochCount) > PRIVATE_SKILL_REFORMULATION_MAX_ATTEMPTS || envelope2.inspector_digest !== void 0 && envelope2.inspector_digest !== null && !/^sha256:[a-f0-9]{64}$/u.test(envelope2.inspector_digest) || envelope2.native_context_pending !== void 0 && typeof envelope2.native_context_pending !== "boolean" || !isPrivateSkillRecoveryActionOrNull(envelope2.next_action) || envelope2.next_action !== void 0 && envelope2.next_action !== null && (envelope2.next_action.draft_updated_at !== envelope2.updated_at || envelope2.next_action.inspector_digest !== (envelope2.inspector_digest ?? null)) || envelope2.reformulation_available && (!isPrivateSkillRecoveryReason(envelope2.reformulation_reason) || Number(epochCount) >= PRIVATE_SKILL_REFORMULATION_MAX_ATTEMPTS)) {
       throw new Error("Private skill outbox recovery metadata is invalid.");
     }
   }
-  return envelope;
+  return envelope2;
 }
 function isPrivateSkillRecoveryActionOrNull(value) {
   if (value === void 0 || value === null) return true;
@@ -66743,8 +66873,8 @@ function isPrivateSkillRecoveryActionOrNull(value) {
     "capture_native_context"
   ].includes(String(value.kind)) && typeof value.candidate_digest === "string" && /^sha256:[a-f0-9]{64}$/u.test(value.candidate_digest) && (value.inspector_digest === null || typeof value.inspector_digest === "string" && /^sha256:[a-f0-9]{64}$/u.test(value.inspector_digest)) && typeof value.draft_updated_at === "string" && Number.isFinite(Date.parse(value.draft_updated_at));
 }
-function hasEnvelopeReformulationMetadata(envelope) {
-  return envelope.reformulation_available !== void 0 && envelope.reformulation_reason !== void 0 && envelope.reformulation_attempt_count !== void 0;
+function hasEnvelopeReformulationMetadata(envelope2) {
+  return envelope2.reformulation_available !== void 0 && envelope2.reformulation_reason !== void 0 && envelope2.reformulation_attempt_count !== void 0;
 }
 function parseSubmittedRecord2(value) {
   const parsed = JSON.parse(value);
@@ -67798,17 +67928,17 @@ var LOCAL_ONLY_HANDLERS = Object.freeze({
     context.privateLessonDestination
   ),
   delete_private_lesson_candidate: (payload, context) => {
-    const request = payload;
+    const request2 = payload;
     return context.persistence.deletePrivateLessonDraft(
-      request.draft_id,
-      request.confirm
+      request2.draft_id,
+      request2.confirm
     );
   },
   delete_private_skill_candidate: (payload, context) => {
-    const request = payload;
+    const request2 = payload;
     return context.persistence.deletePrivateSkillDraft(
-      request.draft_id,
-      request.confirm
+      request2.draft_id,
+      request2.confirm
     );
   }
 });
@@ -68969,131 +69099,139 @@ function createLocalPersistenceCapabilities(dependencies = {}) {
   });
 }
 
-// ../core/src/redaction-request-budget.ts
-import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
-var requests = new AsyncLocalStorage3();
-trackRedactionRequests(() => requests.getStore());
-function withRedactionRequestBudget(run) {
-  return requests.getStore() ? run() : requests.run({}, run);
+// src/admin-control-client.ts
+import { createHash as createHash9, randomBytes as randomBytes11 } from "node:crypto";
+import { unlinkSync as unlinkSync3 } from "node:fs";
+import { dirname as dirname9 } from "node:path";
+
+// src/admin-control-session-store.ts
+import { createHash as createHash6, randomBytes as randomBytes8 } from "node:crypto";
+import { mkdirSync as mkdirSync2, renameSync as renameSync2, unlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname6, join as join8 } from "node:path";
+
+// src/local-config-path.ts
+import { homedir as homedir6 } from "node:os";
+import { join as join7 } from "node:path";
+function remembranceConfigPath(env = process.env, homeDirectory = homedir6()) {
+  const configRoot = env.REMEMBRANCE_PLUGIN_HOST?.trim().toLowerCase() === "openclaw" ? join7(homeDirectory, ".config") : env.XDG_CONFIG_HOME ?? join7(homeDirectory, ".config");
+  return join7(configRoot, "remembrance", "config.json");
 }
 
-// src/review-repair-inspection.ts
-function inspectReviewRepairForTransport(value) {
-  const request = privateSkillReviewRepairRequestSchema.parse(value);
-  const inspection = inspectPrivateSkillCandidate(request.capture);
-  if (inspection.status === "complete" && inspection.decision.outcome === "unchanged") {
-    const values = [];
-    const pending = [request.expected_review_snapshot];
-    while (pending.length) {
-      const entry = pending.pop();
-      if (entry !== null && typeof entry === "object") pending.push(...Object.values(entry));
-      else values.push(entry);
+// src/admin-control-session-store.ts
+var id = external_exports.string().regex(/^aar_[A-Za-z0-9_-]{32}$/);
+var timestamp2 = external_exports.string().datetime();
+var pendingSchema = external_exports.object({
+  state: external_exports.literal("pending"),
+  base_url: external_exports.string(),
+  request_id: id,
+  device_secret: external_exports.string().regex(/^adev_[A-Za-z0-9_-]{43}$/),
+  code_verifier: external_exports.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  verification_uri: external_exports.string().url(),
+  user_code: external_exports.string().regex(/^[A-F0-9]{8}$/),
+  expires_at: timestamp2,
+  interval: external_exports.number().int().min(3).max(60),
+  next_poll_at: timestamp2
+}).strict();
+var activeSchema = external_exports.object({
+  state: external_exports.literal("active"),
+  base_url: external_exports.string(),
+  session_id: id,
+  access_token: external_exports.string().regex(/^radmin_[A-Za-z0-9_-]{43}$/),
+  expires_at: timestamp2
+}).strict();
+var stateSchema = external_exports.discriminatedUnion("state", [pendingSchema, activeSchema]);
+function storePath(baseUrl) {
+  const digest3 = createHash6("sha256").update(baseUrl).digest("hex");
+  return join8(dirname6(remembranceConfigPath()), "admin-sessions", `${digest3}.json`);
+}
+function secureDirectory(path) {
+  mkdirSync2(path, { recursive: true, mode: 448 });
+  assertSecurePrivateLocalDirectory(path);
+}
+function readState(baseUrl) {
+  try {
+    const state = stateSchema.parse(JSON.parse(readSecureLocalText(storePath(baseUrl), { maxBytes: 8192 })));
+    if (state.base_url !== baseUrl) throw new Error();
+    if (state.state === "pending") {
+      const expectedUri = new URL("/admin/authorize-agent", baseUrl);
+      expectedUri.searchParams.set("request_id", state.request_id);
+      if (state.verification_uri !== expectedUri.toString()) throw new Error();
     }
+    return state;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return null;
+    throw new Error("Administrative credential storage is unavailable. Restore its private permissions before continuing.");
+  }
+}
+function saveState(state) {
+  const path = storePath(state.base_url);
+  const temporary = `${path}.${randomBytes8(8).toString("hex")}.tmp`;
+  try {
+    writeFileSync2(temporary, JSON.stringify(state), { flag: "wx", mode: 384 });
+    renameSync2(temporary, path);
+  } finally {
     try {
-      if (canonicalJson(withRedactionRequestBudget(() => redactPayload(values))) !== canonicalJson(values)) {
-        return { ready: false, refusal: {
-          status: "held",
-          code: "review_repair_wire_inspection_hold",
-          delivery: "not_delivered",
-          candidate_sent: false,
-          candidate_stored: false,
-          original_disposition: "unchanged",
-          next_action: "Retain the original. Read a fresh normal content-free review snapshot; do not send suspected secrets, rewrite the held request, or use another transport."
-        } };
-      }
+      unlinkSync(temporary);
     } catch {
-      return { ready: false, refusal: {
-        status: "held",
-        code: "review_repair_wire_inspection_failure",
-        delivery: "not_delivered",
-        candidate_sent: false,
-        candidate_stored: false,
-        original_disposition: "unchanged",
-        next_action: "Retain the original. Correct the local inspection failure before retrying; do not reformulate around an operational failure."
-      } };
     }
-    return { ready: true, request };
   }
-  const reason = inspection.status === "complete" ? "authored_capture_changed_by_inspection" : inspection.status === "incomplete" ? inspection.reason : inspection.error_code;
-  return { ready: false, refusal: {
-    status: "held",
-    code: "review_repair_local_inspection_hold",
-    delivery: "not_delivered",
-    candidate_sent: false,
-    candidate_stored: false,
-    original_disposition: "unchanged",
-    reason_code: reason,
-    inspection: inspection.decision,
-    next_action: inspection.status === "invalid" ? "Retain the original. Correct the local inspection failure before retrying the same unchanged request; do not reformulate around an operational failure or use another transport." : "Retain the original. Prepare a complete safe replacement from authenticated task context and inspect it again. Do not recover suspected secrets, invent missing instructions, or bypass a host denial."
-  } };
+}
+function publicState(state) {
+  if (!state) return { status: "not_authenticated", server_validity_checked: false };
+  const expired = Date.parse(state.expires_at) <= Date.now();
+  return {
+    status: expired ? "expired" : state.state === "active" ? "authenticated_locally" : "authorization_pending",
+    expires_at: state.expires_at,
+    server_validity_checked: false,
+    ...state.state === "pending" && !expired ? {
+      verification_uri: state.verification_uri,
+      user_code: state.user_code,
+      interval: state.interval,
+      next_poll_at: state.next_poll_at
+    } : {}
+  };
+}
+function getLocalAdminSession(baseUrl) {
+  try {
+    return { ok: true, ...publicState(readState(baseUrl)) };
+  } catch {
+    return { ok: false, status: 0, server_validity_checked: false, body: {
+      code: "admin_local_storage_unavailable",
+      error: "Administrative credential storage is unavailable.",
+      delivery: "not_delivered"
+    } };
+  }
 }
 
-// src/network-transport.ts
-import { AsyncLocalStorage as AsyncLocalStorage4 } from "node:async_hooks";
-var networkExecutionAuthority = new AsyncLocalStorage4();
-var guardedFetches = /* @__PURE__ */ new WeakSet();
-function installRuntimeFetchGuard() {
-  const delegate = globalThis.fetch;
-  if (typeof delegate !== "function" || guardedFetches.has(delegate)) return;
-  const guardedFetch = (input, init) => {
-    assertRemembranceNetworkEgressAllowed("ambient fetch");
-    return delegate.call(globalThis, input, init);
-  };
-  guardedFetches.add(guardedFetch);
-  globalThis.fetch = guardedFetch;
-}
-installRuntimeFetchGuard();
-async function runWithRemembranceNetworkExecution(authority, operation) {
-  const effectiveAuthority = restrictNetworkExecutionAuthority(authority);
-  installRuntimeFetchGuard();
-  return networkExecutionAuthority.run(effectiveAuthority, operation);
-}
-function restrictNetworkExecutionAuthority(requested) {
-  const parent = networkExecutionAuthority.getStore();
-  return parent?.networkBehavior === "local_only" ? parent : requested;
-}
-function assertRemembranceNetworkEgressAllowed(capability) {
-  const authority = networkExecutionAuthority.getStore();
-  if (authority?.networkBehavior === "local_only") {
-    throw new Error(
-      `Local-only tool attempted network egress through ${capability}: ${authority.toolName}.`
-    );
-  }
-}
-function createRemembranceNetworkTransport(fetchImpl) {
-  assertRemembranceNetworkEgressAllowed("transport construction");
-  const delegate = fetchImpl ?? globalThis.fetch;
-  const request = (input, init) => {
-    assertRemembranceNetworkEgressAllowed("transport request");
-    return delegate.call(globalThis, input, init);
-  };
-  return Object.freeze({ request });
-}
+// src/admin-control-vault.ts
+import { createHash as createHash8, randomBytes as randomBytes10 } from "node:crypto";
+import { mkdirSync as mkdirSync4, renameSync as renameSync4, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { dirname as dirname8, join as join13 } from "node:path";
 
 // src/connection-status.ts
 import {
   chmodSync as chmodSync2,
   existsSync as existsSync5,
   lstatSync as lstatSync4,
-  mkdirSync as mkdirSync2,
-  renameSync as renameSync2,
+  mkdirSync as mkdirSync3,
+  renameSync as renameSync3,
   rmSync as rmSync2,
-  writeFileSync as writeFileSync2
+  writeFileSync as writeFileSync3
 } from "node:fs";
-import { createHash as createHash6, randomBytes as randomBytes8 } from "node:crypto";
+import { createHash as createHash7, randomBytes as randomBytes9 } from "node:crypto";
 import { isIP } from "node:net";
-import { homedir as homedir9 } from "node:os";
-import { join as join10 } from "node:path";
+import { homedir as homedir10 } from "node:os";
+import { join as join12 } from "node:path";
 
 // src/codex-hook-approval.ts
-import { homedir as homedir7 } from "node:os";
-import { basename as basename2, dirname as dirname6, join as join8 } from "node:path";
+import { homedir as homedir8 } from "node:os";
+import { basename as basename2, dirname as dirname7, join as join10 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/codex-managed-hooks.ts
 import { readFileSync, statSync } from "node:fs";
-import { homedir as homedir6, userInfo as userInfo3 } from "node:os";
-import { join as join7 } from "node:path";
+import { homedir as homedir7, userInfo as userInfo3 } from "node:os";
+import { join as join9 } from "node:path";
 var SETTING = "allow_managed_hooks_only";
 var PREFERENCE_FILE = "com.openai.codex.plist";
 var PREFERENCE_KEY = "requirements_toml_base64";
@@ -69102,27 +69240,27 @@ var MAX_SOURCE_BYTES = 1024 * 1024;
 function codexManagedPolicySources(env, platform = process.platform) {
   const root = env.REMEMBRANCE_CODEX_MANAGED_POLICY_ROOT ? String(env.REMEMBRANCE_CODEX_MANAGED_POLICY_ROOT) : "/";
   return {
-    requirementsFile: platform === "win32" ? null : join7(root, "etc", "codex", "requirements.toml"),
+    requirementsFile: platform === "win32" ? null : join9(root, "etc", "codex", "requirements.toml"),
     // Forced (MDM) values for this user, then for the device, then the
     // user's and the machine's own preferences. The ByHost and global
     // domains are not read.
     preferenceFiles: platform === "darwin" ? [
-      join7(
+      join9(
         root,
         "Library",
         "Managed Preferences",
         userInfo3().username,
         PREFERENCE_FILE
       ),
-      join7(root, "Library", "Managed Preferences", PREFERENCE_FILE),
-      join7(root, homedir6(), "Library", "Preferences", PREFERENCE_FILE),
-      join7(root, "Library", "Preferences", PREFERENCE_FILE)
+      join9(root, "Library", "Managed Preferences", PREFERENCE_FILE),
+      join9(root, homedir7(), "Library", "Preferences", PREFERENCE_FILE),
+      join9(root, "Library", "Preferences", PREFERENCE_FILE)
     ] : []
   };
 }
 function codexRunsOnlyManagedHooks(codexHome, sources) {
   const settings = /* @__PURE__ */ new Set([
-    cloudSetting(join7(codexHome, CLOUD_CACHE)),
+    cloudSetting(join9(codexHome, CLOUD_CACHE)),
     preferenceSetting(sources.preferenceFiles),
     sources.requirementsFile === null ? void 0 : fileSetting(sources.requirementsFile)
   ]);
@@ -69393,19 +69531,19 @@ function readCodexHookApproval(options = {}) {
   if (host.trim().toLowerCase() !== "codex") return null;
   const unknown = { status: "unknown" };
   try {
-    const root = options.pluginRoot ?? dirname6(dirname6(fileURLToPath(import.meta.url)));
-    let codexHome = dirname6(root);
+    const root = options.pluginRoot ?? dirname7(dirname7(fileURLToPath(import.meta.url)));
+    let codexHome = dirname7(root);
     for (const name of CACHE_LAYOUT) {
       if (basename2(codexHome) !== name) return unknown;
-      codexHome = dirname6(codexHome);
+      codexHome = dirname7(codexHome);
     }
     const hooksFile = readBounded(
-      join8(root, "hooks", "hooks.json"),
+      join10(root, "hooks", "hooks.json"),
       MAX_HOOKS_BYTES
     );
     const hooks = hooksFile && expectedHooks(hooksFile.toString("utf8"));
     const trusted = trustedHashes(
-      readBounded(join8(codexHome, "config.toml"), MAX_CONFIG_BYTES)?.toString(
+      readBounded(join10(codexHome, "config.toml"), MAX_CONFIG_BYTES)?.toString(
         "utf8"
       ) ?? ""
     );
@@ -69507,10 +69645,10 @@ function tablePath(text) {
   }
 }
 function sessionStartObserved(env, version) {
-  const directory = env.REMEMBRANCE_PLUGIN_HEALTH_DIR ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR) : join8(homedir7(), ".cache", "remembrance", "plugin-health");
+  const directory = env.REMEMBRANCE_PLUGIN_HEALTH_DIR ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR) : join10(homedir8(), ".cache", "remembrance", "plugin-health");
   try {
     const marker = JSON.parse(
-      String(readBounded(join8(directory, "codex.json"), MAX_MARKER_BYTES))
+      String(readBounded(join10(directory, "codex.json"), MAX_MARKER_BYTES))
     );
     return isRecord7(marker) && marker.plugin_version === version && isRecord7(marker.components) && Number.isFinite(Date.parse(String(marker.components.session_start)));
   } catch {
@@ -69530,8 +69668,8 @@ function isRecord7(value) {
 // src/local-agent-identity.ts
 import { createPrivateKey, createPublicKey as createPublicKey4 } from "node:crypto";
 import { existsSync as existsSync4 } from "node:fs";
-import { homedir as homedir8 } from "node:os";
-import { join as join9 } from "node:path";
+import { homedir as homedir9 } from "node:os";
+import { join as join11 } from "node:path";
 var nodeFileSystem = {
   exists: existsSync4,
   read: (path, maxBytes = MAX_LOCAL_IDENTITY_BYTES) => readSecureLocalText(path, {
@@ -69546,11 +69684,11 @@ var supportedProviders = /* @__PURE__ */ new Set([
   "cursor",
   "claude_code"
 ]);
-function localAgentIdentityPath(env = process.env, homeDirectory = homedir8()) {
+function localAgentIdentityPath(env = process.env, homeDirectory = homedir9()) {
   const explicit = env.REMEMBRANCE_AGENT_KEY_PATH?.trim();
   if (explicit) return explicit;
-  return join9(
-    env.XDG_CONFIG_HOME ?? join9(homeDirectory, ".config"),
+  return join11(
+    env.XDG_CONFIG_HOME ?? join11(homeDirectory, ".config"),
     "remembrance",
     "agent-key.json"
   );
@@ -69730,15 +69868,15 @@ function recordConnectionDoctorLifecycleProbe(options = {}) {
   const env = options.env ?? process.env;
   const rawSurface = String(env.REMEMBRANCE_PLUGIN_HOST ?? "").trim().toLowerCase();
   if (!isPluginHostSurface(rawSurface)) return false;
-  const healthDir = env.REMEMBRANCE_PLUGIN_HEALTH_DIR ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR) : join10(
-    options.homeDirectory ?? homedir9(),
+  const healthDir = env.REMEMBRANCE_PLUGIN_HEALTH_DIR ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR) : join12(
+    options.homeDirectory ?? homedir10(),
     ".cache",
     "remembrance",
     "plugin-health"
   );
-  const path = join10(healthDir, `${rawSurface}.json`);
+  const path = join12(healthDir, `${rawSurface}.json`);
   if (!existsSync5(path)) return false;
-  const temporaryPath = `${path}.${process.pid}.${randomBytes8(6).toString("hex")}.tmp`;
+  const temporaryPath = `${path}.${process.pid}.${randomBytes9(6).toString("hex")}.tmp`;
   try {
     const parsed = JSON.parse(
       readSecureLocalText(path, {
@@ -69748,13 +69886,13 @@ function recordConnectionDoctorLifecycleProbe(options = {}) {
     if (!isRecord9(parsed) || parsed.surface !== rawSurface) return false;
     const components = isRecord9(parsed.components) ? parsed.components : {};
     if (typeof components.session_start !== "string") return false;
-    mkdirSync2(healthDir, { recursive: true, mode: 448 });
+    mkdirSync3(healthDir, { recursive: true, mode: 448 });
     const directoryMetadata = lstatSync4(healthDir);
     if (directoryMetadata.isSymbolicLink() || !directoryMetadata.isDirectory()) {
       return false;
     }
     chmodSync2(healthDir, 448);
-    writeFileSync2(
+    writeFileSync3(
       temporaryPath,
       `${JSON.stringify({
         ...parsed,
@@ -69766,7 +69904,7 @@ function recordConnectionDoctorLifecycleProbe(options = {}) {
 `,
       { mode: 384, flag: "wx" }
     );
-    renameSync2(temporaryPath, path);
+    renameSync3(temporaryPath, path);
     chmodSync2(path, 384);
     return true;
   } catch {
@@ -69776,10 +69914,6 @@ function recordConnectionDoctorLifecycleProbe(options = {}) {
     }
     return false;
   }
-}
-function remembranceConfigPath(env = process.env, homeDirectory = homedir9()) {
-  const configRoot = env.REMEMBRANCE_PLUGIN_HOST?.trim().toLowerCase() === "openclaw" ? join10(homeDirectory, ".config") : env.XDG_CONFIG_HOME ?? join10(homeDirectory, ".config");
-  return join10(configRoot, "remembrance", "config.json");
 }
 function resolveApiCredential(env = process.env, fileSystem = nodeFileSystem2) {
   return resolveApiAccess(env, fileSystem).credential;
@@ -70015,7 +70149,7 @@ function localHostPolicyStatus(options) {
       explanation: "This host does not expose a reliable failed-tool or permission event to the plugin."
     };
   }
-  const directory = env.REMEMBRANCE_PLUGIN_ALERT_DIR ? String(env.REMEMBRANCE_PLUGIN_ALERT_DIR) : join10(homedir9(), ".cache", "remembrance", "plugin-alerts");
+  const directory = env.REMEMBRANCE_PLUGIN_ALERT_DIR ? String(env.REMEMBRANCE_PLUGIN_ALERT_DIR) : join12(homedir10(), ".cache", "remembrance", "plugin-alerts");
   const names = fileSystem.list ? (() => {
     try {
       return fileSystem.list?.(directory) ?? [];
@@ -70033,7 +70167,7 @@ function localHostPolicyStatus(options) {
       const sessionHash = name.split(".")[1];
       const parsed = JSON.parse(
         fileSystem.read(
-          join10(directory, name),
+          join12(directory, name),
           MAX_LOCAL_LIFECYCLE_MARKER_BYTES
         )
       );
@@ -70097,13 +70231,13 @@ function localPluginLifecycleHealth(options) {
   }
   const surface = rawSurface;
   const host = agentHostBySurface(surface);
-  const healthDir = env.REMEMBRANCE_PLUGIN_HEALTH_DIR ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR) : join10(homedir9(), ".cache", "remembrance", "plugin-health");
+  const healthDir = env.REMEMBRANCE_PLUGIN_HEALTH_DIR ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR) : join12(homedir10(), ".cache", "remembrance", "plugin-health");
   const paths = lifecycleMarkerPaths(surface, healthDir, fileSystem);
   if (paths.length === 0) {
     return missingPluginLifecycleHealth(surface);
   }
   const nowMs = (options.now ?? /* @__PURE__ */ new Date()).getTime();
-  const genericPath = join10(healthDir, `${surface}.json`);
+  const genericPath = join12(healthDir, `${surface}.json`);
   const markerEntries = [];
   for (const path of paths) {
     try {
@@ -70381,7 +70515,7 @@ function apiDestinationStatus(baseUrl, source) {
   return {
     kind: normalized2 === "https://remembrance.dev" ? "remembrance_cloud" : "custom",
     source,
-    fingerprint: createHash6("sha256").update(normalized2, "utf8").digest("hex").slice(0, 16)
+    fingerprint: createHash7("sha256").update(normalized2, "utf8").digest("hex").slice(0, 16)
   };
 }
 function missingPluginLifecycleHealth(surface) {
@@ -70413,7 +70547,7 @@ function emptyPluginComponents() {
   );
 }
 function lifecycleMarkerPaths(surface, healthDir, fileSystem) {
-  const legacyPath = join10(healthDir, `${surface}.json`);
+  const legacyPath = join12(healthDir, `${surface}.json`);
   const paths = fileSystem.exists(legacyPath) ? [legacyPath] : [];
   const listed = fileSystem.list ? (() => {
     try {
@@ -70424,7 +70558,7 @@ function lifecycleMarkerPaths(surface, healthDir, fileSystem) {
   })() : [];
   const sessionPaths = listed.filter(
     (name) => name.startsWith(`${surface}.`) && name.endsWith(".json") && /^[a-z_]+\.[a-f0-9]{24}\.json$/.test(name)
-  ).slice(0, MAX_LOCAL_LIFECYCLE_MARKERS - paths.length).map((name) => join10(healthDir, name));
+  ).slice(0, MAX_LOCAL_LIFECYCLE_MARKERS - paths.length).map((name) => join12(healthDir, name));
   paths.push(...sessionPaths);
   return [...new Set(paths)].slice(0, MAX_LOCAL_LIFECYCLE_MARKERS);
 }
@@ -70524,6 +70658,402 @@ function validLifecycleTimestamp(value, nowMs) {
 }
 function isRecord9(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+// src/admin-control-vault.ts
+var ADMIN_CREDENTIAL_ISSUANCE_OPERATIONS = Object.freeze(["api_keys.create", "agents.member_link.create"]);
+var recordSchema = external_exports.object({
+  version: external_exports.literal("admin-credential-vault-v1"),
+  base_url: external_exports.string(),
+  operation: external_exports.enum(["api_keys.create", "agents.member_link.create"]),
+  org_id: external_exports.string().regex(/^org_[a-f0-9]{18}$/).optional(),
+  request_id: external_exports.string().regex(/^acreq_[a-f0-9]{32}$/),
+  request_digest: external_exports.string().regex(/^[a-f0-9]{64}$/),
+  state: external_exports.enum(["pending", "not_delivered", "stored"]),
+  created_at: external_exports.string().datetime(),
+  secret: external_exports.string().min(1).max(4096).optional(),
+  key_id: external_exports.string().regex(/^key_[a-f0-9]{18}$/).optional(),
+  expires_at: external_exports.string().datetime().optional()
+}).strict();
+function pathFor(baseUrl, requestId) {
+  const destination = createHash8("sha256").update(baseUrl).digest("hex");
+  return join13(dirname8(remembranceConfigPath()), "admin-credential-vault", destination, `${requestId}.json`);
+}
+function privateDirectory(path) {
+  mkdirSync4(path, { recursive: true, mode: 448 });
+  assertSecurePrivateLocalDirectory(path);
+}
+function prepareAdminCredentialDelivery(baseUrl, payload) {
+  if (!ADMIN_CREDENTIAL_ISSUANCE_OPERATIONS.includes(String(payload.operation))) return null;
+  const requestId = external_exports.string().regex(/^acreq_[a-f0-9]{32}$/).parse(payload.request_id);
+  const path = pathFor(baseUrl, requestId);
+  privateDirectory(dirname8(dirname8(path)));
+  privateDirectory(dirname8(path));
+  const digest3 = createHash8("sha256").update(canonicalJson(payload)).digest("hex");
+  try {
+    const existing = recordSchema.parse(JSON.parse(readSecureLocalText(path, { maxBytes: 16384 })));
+    if (existing.base_url !== baseUrl || existing.request_digest !== digest3 || existing.request_id !== requestId || existing.operation !== payload.operation) throw Error("Credential delivery identity conflict.");
+    if (existing.state === "stored" && !existing.secret) throw Error("Stored credential is unavailable.");
+    return { path, record: existing, readyToIssue: existing.state === "not_delivered" };
+  } catch (error) {
+    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
+  }
+  const record4 = recordSchema.parse({
+    version: "admin-credential-vault-v1",
+    base_url: baseUrl,
+    operation: payload.operation,
+    request_id: requestId,
+    request_digest: digest3,
+    state: "pending",
+    created_at: (/* @__PURE__ */ new Date()).toISOString(),
+    ...payload.org_id ? { org_id: payload.org_id } : {}
+  });
+  writeFileSync4(path, JSON.stringify(record4), { mode: 384, flag: "wx" });
+  return { path, record: record4, readyToIssue: true };
+}
+function save(delivery, record4) {
+  const temporary = `${delivery.path}.${randomBytes10(8).toString("hex")}.tmp`;
+  try {
+    writeFileSync4(temporary, JSON.stringify(recordSchema.parse(record4)), { mode: 384, flag: "wx" });
+    renameSync4(temporary, delivery.path);
+    delivery.record = record4;
+  } finally {
+    try {
+      unlinkSync2(temporary);
+    } catch {
+    }
+  }
+}
+function adminCredentialDeliveryReceipt(delivery) {
+  return {
+    request_id: delivery.record.request_id,
+    operation: delivery.record.operation,
+    one_time_secret_stored: true,
+    vault_reference: delivery.path,
+    ...delivery.record.key_id ? { key_id: delivery.record.key_id } : {},
+    ...delivery.record.expires_at ? { expires_at: delivery.record.expires_at } : {},
+    instruction: "The one-time credential is in a separate mode-0600 local vault. Configure its intended client using local secret handling; never print it, copy it into chat, or replace the current organization credential implicitly."
+  };
+}
+function adminCredentialUnknownReceipt(delivery) {
+  return { ok: false, status: 0, body: {
+    code: "admin_credential_delivery_unknown",
+    delivery: "unknown",
+    request_id: delivery.record.request_id,
+    operation: delivery.record.operation,
+    retry_automatically: false,
+    next_action: { tool: "admin_read", arguments: {
+      operation: "admin.operations.status",
+      ...delivery.record.org_id ? { org_id: delivery.record.org_id } : {},
+      input: { request_id: delivery.record.request_id }
+    } },
+    instruction: delivery.record.operation === "api_keys.create" ? "Do not mint a replacement under a new request_id. Read this exact operation receipt, then inspect api_keys.list. If issuance succeeded but delivery was lost, explicitly revoke its issued key ID before requesting another. This vault reservation contains no recoverable secret yet." : "Do not mint a replacement under a new request_id. Read this exact operation receipt. An undelivered member-link credential expires automatically; confirm the existing link has expired before requesting another. This vault reservation contains no recoverable secret yet."
+  } };
+}
+function markAdminCredentialNotDelivered(delivery) {
+  save(delivery, { ...delivery.record, state: "not_delivered" });
+}
+function reserveAdminCredentialRetry(delivery) {
+  save(delivery, { ...delivery.record, state: "pending" });
+}
+function storeIssuedAdminCredential(delivery, body) {
+  const envelope2 = body && typeof body === "object" ? body : {};
+  if (envelope2.operation !== delivery.record.operation || envelope2.request_id !== delivery.record.request_id || !envelope2.result || typeof envelope2.result !== "object") return false;
+  const result = envelope2.result;
+  const secret = delivery.record.operation === "api_keys.create" ? result.api_key : result.token;
+  const grammar = delivery.record.operation === "api_keys.create" ? /^rem_[A-Za-z0-9_-]{43}$/ : /^mlink_[A-Za-z0-9_-]{43}$/;
+  if (typeof secret !== "string" || !grammar.test(secret)) return false;
+  const key = result.key && typeof result.key === "object" ? result.key : {};
+  save(delivery, {
+    ...delivery.record,
+    state: "stored",
+    secret,
+    ...typeof key.id === "string" && /^key_[a-f0-9]{18}$/.test(key.id) ? { key_id: key.id } : {},
+    ...external_exports.string().datetime().safeParse(result.expires_at).success ? { expires_at: result.expires_at } : {}
+  });
+  return true;
+}
+
+// src/admin-control-client.ts
+var MAX_RESPONSE_BYTES = ADMIN_CONTROL_MAX_RESPONSE_BYTES;
+function failure(code, status, delivery = "unknown", requestId) {
+  return { ok: false, status, body: {
+    code,
+    error: "Administrative operation unavailable.",
+    delivery,
+    ...requestId ? { request_id: requestId } : {},
+    retry_automatically: false,
+    ...code === "admin_session_unauthorized" || code === "admin_authorization_exchange_failed" ? { next_action: "Call end_admin_session, then begin_admin_login for fresh browser approval. Never replace ordinary organization credentials." } : code === "admin_session_expired" || code === "admin_authentication_required" ? { next_action: "Call begin_admin_login for browser approval, or configure an authorized organization admin key separately." } : code === "admin_credential_vault_unavailable" ? { next_action: "No credential issuance was sent. Restore user-owned, private and writable local vault storage, or inspect this request_id's existing vault reservation. Never change a reserved request's input or silently mint a replacement." } : {}
+  } };
+}
+async function readJson(response) {
+  if (!response.body) throw new Error();
+  const reader = response.body.getReader();
+  const chunks = [];
+  let bytes = 0;
+  try {
+    for (; ; ) {
+      const next = await reader.read();
+      if (next.done) break;
+      bytes += next.value.byteLength;
+      if (bytes > MAX_RESPONSE_BYTES) throw new Error();
+      chunks.push(next.value);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } finally {
+    await reader.cancel().catch(() => {
+    });
+    reader.releaseLock();
+  }
+}
+async function request(transport, baseUrl, path, method, payload, credential, requestId) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3e4);
+  try {
+    const headers = { "content-type": "application/json" };
+    if (credential?.adminToken) headers["x-remembrance-admin-token"] = credential.adminToken;
+    else if (credential?.apiKey) headers["x-remembrance-api-key"] = credential.apiKey;
+    if (requestId) headers["Idempotency-Key"] = requestId;
+    const response = await transport.request(`${baseUrl}${path}`, {
+      method,
+      headers,
+      redirect: "manual",
+      signal: controller.signal,
+      ...payload !== void 0 ? { body: JSON.stringify(payload) } : {}
+    });
+    if (response.status >= 300 && response.status < 400) return { response, body: null, redirect: true };
+    return { response, body: await readJson(response), redirect: false };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function callAdminControlTool(name, payload, access, transport) {
+  const baseUrl = access.configuration.baseUrl;
+  const requestId = name === "admin_write" ? String(payload.request_id) : void 0;
+  let reservedDelivery = null;
+  if (access.configuration.source.startsWith("unusable_")) return failure("admin_destination_unavailable", 0, "not_delivered", requestId);
+  try {
+    secureDirectory(dirname9(storePath(baseUrl)));
+    return await withPrivateOutboxLock(dirname9(storePath(baseUrl)), "admin-session", async () => {
+      const state = readState(baseUrl);
+      if (name === "begin_admin_login") {
+        if (state && Date.parse(state.expires_at) > Date.now()) return { ok: true, ...publicState(state) };
+        const verifier = randomBytes11(32).toString("base64url");
+        const result2 = await request(transport, baseUrl, "/api/v1/admin/agent-sessions/authorize", "POST", {
+          code_challenge: createHash9("sha256").update(verifier).digest("base64url"),
+          code_challenge_method: "S256"
+        });
+        if (!result2.response.ok || result2.redirect) return failure("admin_authorization_unavailable", result2.response.status);
+        const started = pendingSchema.omit({ state: true, base_url: true, code_verifier: true, next_poll_at: true }).parse(result2.body);
+        const expectedUri = new URL("/admin/authorize-agent", baseUrl);
+        expectedUri.searchParams.set("request_id", started.request_id);
+        if (started.verification_uri !== expectedUri.toString() || Date.parse(started.expires_at) <= Date.now())
+          return failure("admin_authorization_destination_invalid", 0, "not_delivered");
+        const pending = {
+          ...started,
+          state: "pending",
+          base_url: baseUrl,
+          code_verifier: verifier,
+          next_poll_at: new Date(Date.now() + started.interval * 1e3).toISOString()
+        };
+        saveState(pending);
+        return { ok: true, ...publicState(pending) };
+      }
+      if (name === "complete_admin_login") {
+        if (!state || state.state !== "pending") return { ok: Boolean(state), ...publicState(state) };
+        if (Date.parse(state.expires_at) <= Date.now()) return { ok: false, ...publicState(state) };
+        if (Date.parse(state.next_poll_at) > Date.now()) return { ok: true, ...publicState(state) };
+        saveState({ ...state, next_poll_at: new Date(Date.now() + state.interval * 1e3).toISOString() });
+        const result2 = await request(transport, baseUrl, "/api/v1/admin/agent-sessions/token", "POST", {
+          request_id: state.request_id,
+          device_secret: state.device_secret,
+          code_verifier: state.code_verifier
+        });
+        if (result2.response.status === 409 && result2.body && typeof result2.body === "object" && "code" in result2.body && result2.body.code === "authorization_pending")
+          return { ok: true, ...publicState(readState(baseUrl)) };
+        if (!result2.response.ok || result2.redirect) return failure("admin_authorization_exchange_failed", result2.response.status);
+        const issued2 = external_exports.object({ access_token: activeSchema.shape.access_token, token_type: external_exports.literal("Bearer"), expires_at: timestamp2, session_id: id }).strict().parse(result2.body);
+        if (issued2.session_id !== state.request_id || Date.parse(issued2.expires_at) <= Date.now()) return failure("admin_authorization_response_invalid", 0);
+        const active = { state: "active", base_url: baseUrl, access_token: issued2.access_token, session_id: issued2.session_id, expires_at: issued2.expires_at };
+        saveState(active);
+        return { ok: true, ...publicState(active) };
+      }
+      if (name === "end_admin_session") {
+        let revocationConfirmed = false;
+        let sessionAlreadyInvalid = false;
+        if (state?.state === "active") {
+          const result2 = await request(transport, baseUrl, "/api/v1/admin/agent-sessions/current", "DELETE", void 0, { adminToken: state.access_token });
+          const body = result2.body && typeof result2.body === "object" ? result2.body : {};
+          revocationConfirmed = result2.response.ok && body.revoked === true;
+          sessionAlreadyInvalid = result2.response.status === 401 && body.code === "admin_session_invalid" && body.delivery === "not_delivered";
+          if (!revocationConfirmed && !sessionAlreadyInvalid)
+            return failure("admin_revocation_outcome_unknown", result2.response.status);
+        }
+        if (state) unlinkSync3(storePath(baseUrl));
+        return {
+          ok: true,
+          status: "signed_out",
+          server_revocation_confirmed: revocationConfirmed,
+          ...sessionAlreadyInvalid ? { server_session_already_invalid: true } : {}
+        };
+      }
+      if (state && state.state === "active" && Date.parse(state.expires_at) <= Date.now())
+        return failure("admin_session_expired", 401, "not_delivered", requestId);
+      const adminToken = state?.state === "active" ? state.access_token : void 0;
+      if (!adminToken && (!access.credential.apiKey || access.credential.source.startsWith("unusable_")))
+        return failure("admin_authentication_required", 401, "not_delivered", requestId);
+      let delivery = null;
+      try {
+        delivery = name === "admin_write" ? prepareAdminCredentialDelivery(baseUrl, payload) : null;
+      } catch {
+        return failure("admin_credential_vault_unavailable", 0, "not_delivered", requestId);
+      }
+      reservedDelivery = delivery;
+      if (delivery?.record.state === "stored") return { ok: true, status: 200, body: adminCredentialDeliveryReceipt(delivery) };
+      if (delivery && !delivery.readyToIssue) return adminCredentialUnknownReceipt(delivery);
+      if (delivery?.record.state === "not_delivered") reserveAdminCredentialRetry(delivery);
+      const path = name === "get_admin_capabilities" ? `/api/v1/admin/control${payload.org_id ? `?org_id=${encodeURIComponent(String(payload.org_id))}` : ""}` : `/api/v1/admin/control/${name === "admin_read" ? "read" : "write"}`;
+      const result = await request(
+        transport,
+        baseUrl,
+        path,
+        name === "get_admin_capabilities" ? "GET" : "POST",
+        name === "get_admin_capabilities" ? void 0 : payload,
+        { adminToken, apiKey: adminToken ? void 0 : access.credential.apiKey },
+        requestId
+      );
+      if (!result.response.ok || result.redirect) {
+        const record4 = result.body && typeof result.body === "object" ? result.body : {};
+        if (delivery && record4.delivery === "not_delivered") markAdminCredentialNotDelivered(delivery);
+        return failure(
+          result.response.status === 401 ? "admin_session_unauthorized" : "admin_operation_failed",
+          result.response.status,
+          record4.delivery === "not_delivered" ? "not_delivered" : "unknown",
+          requestId
+        );
+      }
+      const serialized = JSON.stringify(result.body);
+      const secrets = [
+        ...access.credential.apiKey ? [access.credential.apiKey] : [],
+        ...state?.state === "active" ? [state.access_token] : state?.state === "pending" ? [state.code_verifier, state.device_secret] : []
+      ];
+      if (secrets.some((secret) => serialized.includes(secret))) return failure("admin_response_invalid", result.response.status, "unknown", requestId);
+      if (delivery) {
+        if (!storeIssuedAdminCredential(delivery, result.body)) return adminCredentialUnknownReceipt(delivery);
+        return { ok: true, status: result.response.status, body: adminCredentialDeliveryReceipt(delivery) };
+      }
+      return {
+        ok: true,
+        status: result.response.status,
+        body: result.body,
+        ...name === "get_admin_capabilities" ? { server_validity_checked: true } : {}
+      };
+    }, { waitMs: 1e3 });
+  } catch {
+    if (reservedDelivery) return adminCredentialUnknownReceipt(reservedDelivery);
+    return failure("admin_operation_unavailable", 0, "unknown", requestId);
+  }
+}
+
+// ../core/src/redaction-request-budget.ts
+import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
+var requests = new AsyncLocalStorage3();
+trackRedactionRequests(() => requests.getStore());
+function withRedactionRequestBudget(run) {
+  return requests.getStore() ? run() : requests.run({}, run);
+}
+
+// src/review-repair-inspection.ts
+function inspectReviewRepairForTransport(value) {
+  const request2 = privateSkillReviewRepairRequestSchema.parse(value);
+  const inspection = inspectPrivateSkillCandidate(request2.capture);
+  if (inspection.status === "complete" && inspection.decision.outcome === "unchanged") {
+    const values = [];
+    const pending = [request2.expected_review_snapshot];
+    while (pending.length) {
+      const entry = pending.pop();
+      if (entry !== null && typeof entry === "object") pending.push(...Object.values(entry));
+      else values.push(entry);
+    }
+    try {
+      if (canonicalJson(withRedactionRequestBudget(() => redactPayload(values))) !== canonicalJson(values)) {
+        return { ready: false, refusal: {
+          status: "held",
+          code: "review_repair_wire_inspection_hold",
+          delivery: "not_delivered",
+          candidate_sent: false,
+          candidate_stored: false,
+          original_disposition: "unchanged",
+          next_action: "Retain the original. Read a fresh normal content-free review snapshot; do not send suspected secrets, rewrite the held request, or use another transport."
+        } };
+      }
+    } catch {
+      return { ready: false, refusal: {
+        status: "held",
+        code: "review_repair_wire_inspection_failure",
+        delivery: "not_delivered",
+        candidate_sent: false,
+        candidate_stored: false,
+        original_disposition: "unchanged",
+        next_action: "Retain the original. Correct the local inspection failure before retrying; do not reformulate around an operational failure."
+      } };
+    }
+    return { ready: true, request: request2 };
+  }
+  const reason = inspection.status === "complete" ? "authored_capture_changed_by_inspection" : inspection.status === "incomplete" ? inspection.reason : inspection.error_code;
+  return { ready: false, refusal: {
+    status: "held",
+    code: "review_repair_local_inspection_hold",
+    delivery: "not_delivered",
+    candidate_sent: false,
+    candidate_stored: false,
+    original_disposition: "unchanged",
+    reason_code: reason,
+    inspection: inspection.decision,
+    next_action: inspection.status === "invalid" ? "Retain the original. Correct the local inspection failure before retrying the same unchanged request; do not reformulate around an operational failure or use another transport." : "Retain the original. Prepare a complete safe replacement from authenticated task context and inspect it again. Do not recover suspected secrets, invent missing instructions, or bypass a host denial."
+  } };
+}
+
+// src/network-transport.ts
+import { AsyncLocalStorage as AsyncLocalStorage4 } from "node:async_hooks";
+var networkExecutionAuthority = new AsyncLocalStorage4();
+var guardedFetches = /* @__PURE__ */ new WeakSet();
+function installRuntimeFetchGuard() {
+  const delegate = globalThis.fetch;
+  if (typeof delegate !== "function" || guardedFetches.has(delegate)) return;
+  const guardedFetch = (input, init) => {
+    assertRemembranceNetworkEgressAllowed("ambient fetch");
+    return delegate.call(globalThis, input, init);
+  };
+  guardedFetches.add(guardedFetch);
+  globalThis.fetch = guardedFetch;
+}
+installRuntimeFetchGuard();
+async function runWithRemembranceNetworkExecution(authority, operation) {
+  const effectiveAuthority = restrictNetworkExecutionAuthority(authority);
+  installRuntimeFetchGuard();
+  return networkExecutionAuthority.run(effectiveAuthority, operation);
+}
+function restrictNetworkExecutionAuthority(requested) {
+  const parent = networkExecutionAuthority.getStore();
+  return parent?.networkBehavior === "local_only" ? parent : requested;
+}
+function assertRemembranceNetworkEgressAllowed(capability) {
+  const authority = networkExecutionAuthority.getStore();
+  if (authority?.networkBehavior === "local_only") {
+    throw new Error(
+      `Local-only tool attempted network egress through ${capability}: ${authority.toolName}.`
+    );
+  }
+}
+function createRemembranceNetworkTransport(fetchImpl) {
+  assertRemembranceNetworkEgressAllowed("transport construction");
+  const delegate = fetchImpl ?? globalThis.fetch;
+  const request2 = (input, init) => {
+    assertRemembranceNetworkEgressAllowed("transport request");
+    return delegate.call(globalThis, input, init);
+  };
+  return Object.freeze({ request: request2 });
 }
 
 // src/private-skill-native-context-cli.ts
@@ -70666,7 +71196,7 @@ async function checkClientUpdate(input) {
 // src/installed-client-version.ts
 import { lstat as lstat4, readdir as readdir3, readFile as readFile2 } from "node:fs/promises";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { basename as basename3, dirname as dirname7, join as join11 } from "node:path";
+import { basename as basename3, dirname as dirname10, join as join14 } from "node:path";
 var MAX_MANIFEST_BYTES2 = 16 * 1024;
 var MAX_ANCESTORS = 5;
 var MAX_VERSION_SIBLINGS = 64;
@@ -70689,7 +71219,7 @@ async function detectInstalledClientVersion(input) {
   } catch {
     return unavailable3(input.runningVersion);
   }
-  const roots = ancestorDirectories(dirname7(bundlePath));
+  const roots = ancestorDirectories(dirname10(bundlePath));
   const discovered = /* @__PURE__ */ new Set();
   let versionedRoot = null;
   for (const root of roots) {
@@ -70700,9 +71230,9 @@ async function detectInstalledClientVersion(input) {
     break;
   }
   if (versionedRoot) {
-    const parent = dirname7(versionedRoot);
+    const parent = dirname10(versionedRoot);
     for (const name of await boundedSafeDirectoryNames(parent)) {
-      const siblingRoot = join11(parent, name);
+      const siblingRoot = join14(parent, name);
       const version = await readRemembranceVersion(siblingRoot, input.surface);
       if (version === name) discovered.add(version);
     }
@@ -70724,7 +71254,7 @@ function ancestorDirectories(start) {
   let current = start;
   for (let index = 0; index < MAX_ANCESTORS; index += 1) {
     roots.push(current);
-    const parent = dirname7(current);
+    const parent = dirname10(current);
     if (parent === current) break;
     current = parent;
   }
@@ -70732,7 +71262,7 @@ function ancestorDirectories(start) {
 }
 async function readRemembranceVersion(root, surface) {
   for (const relative of SURFACE_MANIFESTS[surface]) {
-    const manifest = await readBoundedRegularJson(join11(root, relative));
+    const manifest = await readBoundedRegularJson(join14(root, relative));
     if (!manifest || !isRemembranceManifest(manifest)) continue;
     const version = manifest.version;
     if (typeof version === "string" && parseStableClientVersion(version)) {
@@ -70783,15 +71313,15 @@ function isRecord10(value) {
 // src/legacy-lesson-destination-recovery.ts
 var CONTRACT_VERSION = "private-lesson-legacy-destination-recovery-v1";
 var DIGEST4 = /^sha256:[a-f0-9]{64}$/u;
-async function legacyLessonDestinationRecovery(draft, destination, request, dependencies) {
+async function legacyLessonDestinationRecovery(draft, destination, request2, dependencies) {
   const alreadyRecovered = isRecoveredForDestination(draft, destination);
   if (!ownerAttestedLegacyPrivateLessonRecoveryEligible(draft) && !alreadyRecovered) {
     return refused(draft, "private_lesson_destination_recovery_ineligible");
   }
-  if (request.action === "approve" && !validApproval(request)) {
+  if (request2.action === "approve" && !validApproval(request2)) {
     return refused(draft, "private_lesson_destination_recovery_approval_required");
   }
-  if (request.action === "approve" && (request.expected_payload_digest !== draft.payload_digest || canonicalJson(request.expected_destination) !== canonicalJson(destination))) {
+  if (request2.action === "approve" && (request2.expected_payload_digest !== draft.payload_digest || canonicalJson(request2.expected_destination) !== canonicalJson(destination))) {
     return refused(draft, "private_lesson_destination_recovery_review_stale");
   }
   let audience;
@@ -70805,7 +71335,7 @@ async function legacyLessonDestinationRecovery(draft, destination, request, depe
     return refused(draft, "private_lesson_destination_recovery_review_stale");
   }
   const plan = recoveryPlan(draft, destination, audience);
-  if (request.action === "review") {
+  if (request2.action === "review") {
     if (alreadyRecovered) return recovered(draft, plan, "already_recovered");
     return {
       ...base(draft),
@@ -70836,7 +71366,7 @@ async function legacyLessonDestinationRecovery(draft, destination, request, depe
       }
     };
   }
-  if (request.review_id !== plan.review_id || request.organization_audience_hash !== audience) {
+  if (request2.review_id !== plan.review_id || request2.organization_audience_hash !== audience) {
     return refused(draft, "private_lesson_destination_recovery_review_stale");
   }
   if (alreadyRecovered) {
@@ -70849,7 +71379,7 @@ async function legacyLessonDestinationRecovery(draft, destination, request, depe
       destination,
       organization_audience_hash: audience,
       owner_attested_single_organization: true,
-      owner_attestation_sha256: request.owner_attestation_sha256
+      owner_attestation_sha256: request2.owner_attestation_sha256
     });
     return {
       ...recovered(draft, plan, "destination_recovered"),
@@ -70878,7 +71408,7 @@ async function legacyLessonDestinationRecovery(draft, destination, request, depe
         tool: "retry_private_lesson_candidate",
         arguments: {
           draft_id: draft.draft_id,
-          legacy_destination_recovery: request
+          legacy_destination_recovery: request2
         }
       }
     };
@@ -70887,8 +71417,8 @@ async function legacyLessonDestinationRecovery(draft, destination, request, depe
 function isRecoveredForDestination(draft, destination) {
   return draft.attested_organization_audience_hash !== void 0 && draft.destination_binding !== null && canonicalJson(draft.destination_binding) === canonicalJson(destination) && draft.last_error_code !== "private_lesson_destination_attestation_mismatch" && draft.state !== "submitted" && draft.state !== "superseded_redactor";
 }
-function validApproval(request) {
-  return request.owner_attested_single_organization === true && request.all_outbox_readers_updated === true && DIGEST4.test(request.review_id) && DIGEST4.test(request.expected_payload_digest) && DIGEST4.test(request.owner_attestation_sha256) && DIGEST4.test(request.organization_audience_hash);
+function validApproval(request2) {
+  return request2.owner_attested_single_organization === true && request2.all_outbox_readers_updated === true && DIGEST4.test(request2.review_id) && DIGEST4.test(request2.expected_payload_digest) && DIGEST4.test(request2.owner_attestation_sha256) && DIGEST4.test(request2.organization_audience_hash);
 }
 function recoveryPlan(draft, destination, audience) {
   const fields2 = {
@@ -70958,7 +71488,7 @@ function inspectPrivateLearningOutbox2(input, dependencies = {}) {
 }
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.2.13" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.2.14" : "0.0.0-dev";
 var tools2 = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var nativeContextCliRequested = process.argv[2] === "--native-context";
@@ -70993,7 +71523,7 @@ var PRINCIPAL_SESSION_AWAITED_TOOLS = /* @__PURE__ */ new Set([
   "report_task_outcome"
 ]);
 function apiAccessKey(access) {
-  return createHash7("sha256").update(
+  return createHash10("sha256").update(
     [
       access.configuration.baseUrl,
       access.credential.source,
@@ -71090,16 +71620,16 @@ function readJsonRpcMessages(buffer) {
     }
   }
 }
-async function handleRequest(request) {
-  const response = await dispatchJsonRpcRequest(request);
+async function handleRequest(request2) {
+  const response = await dispatchJsonRpcRequest(request2);
   if (!response) {
     return;
   }
   writeResponse(response.id, response.result, response.error);
 }
-async function dispatchJsonRpcRequest(request) {
-  if (request.method === "initialize") {
-    connectedClientInfo = normalizedMcpClientInfo(request.params?.clientInfo);
+async function dispatchJsonRpcRequest(request2) {
+  if (request2.method === "initialize") {
+    connectedClientInfo = normalizedMcpClientInfo(request2.params?.clientInfo);
     const access = resolveApiAccess();
     const transport = createRemembranceNetworkTransport();
     warmPrincipalSession(access, transport);
@@ -71118,7 +71648,7 @@ async function dispatchJsonRpcRequest(request) {
       hookApproval.status === "pending_approval" ? CODEX_HOOKS_PENDING_APPROVAL_NOTICE : hookApproval.status === "managed_hooks_disabled" ? CODEX_MANAGED_HOOKS_ONLY_NOTICE : CODEX_HOOK_TRUST_UNREADABLE_NOTICE
     ) : withUpdate;
     return {
-      id: request.id,
+      id: request2.id,
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {}, resources: {} },
@@ -71130,10 +71660,10 @@ async function dispatchJsonRpcRequest(request) {
       }
     };
   }
-  if (request.method === "tools/list") {
+  if (request2.method === "tools/list") {
     const visibleTools = visibleLocalTools(resolveApiAccess());
     return {
-      id: request.id,
+      id: request2.id,
       result: {
         tools: visibleTools.map(
           ({ name, description, inputSchema, annotations }) => withRemembranceMcpToolMeta({
@@ -71146,19 +71676,19 @@ async function dispatchJsonRpcRequest(request) {
       }
     };
   }
-  if (request.method === "resources/list") {
+  if (request2.method === "resources/list") {
     try {
       return {
-        id: request.id,
-        result: await listSkillResources(request.params?.cursor)
+        id: request2.id,
+        result: await listSkillResources(request2.params?.cursor)
       };
     } catch (error) {
-      return { id: request.id, error: jsonRpcErrorForToolError(error) };
+      return { id: request2.id, error: jsonRpcErrorForToolError(error) };
     }
   }
-  if (request.method === "resources/templates/list") {
+  if (request2.method === "resources/templates/list") {
     return {
-      id: request.id,
+      id: request2.id,
       result: {
         resourceTemplates: [
           {
@@ -71171,18 +71701,18 @@ async function dispatchJsonRpcRequest(request) {
       }
     };
   }
-  if (request.method === "resources/read") {
+  if (request2.method === "resources/read") {
     try {
       return {
-        id: request.id,
-        result: await readSkillResource(request.params?.uri)
+        id: request2.id,
+        result: await readSkillResource(request2.params?.uri)
       };
     } catch (error) {
-      return { id: request.id, error: jsonRpcErrorForToolError(error) };
+      return { id: request2.id, error: jsonRpcErrorForToolError(error) };
     }
   }
-  if (request.method === "tools/call") {
-    const name = String(request.params?.name ?? "");
+  if (request2.method === "tools/call") {
+    const name = String(request2.params?.name ?? "");
     const access = resolveApiAccess();
     const definition = visibleLocalTools(access).find(
       (item) => item.name === name
@@ -71190,7 +71720,7 @@ async function dispatchJsonRpcRequest(request) {
     if (!definition) {
       if (privateCaptureModeEnabled(access) && isReplacedRoutineLearningTool(name)) {
         return {
-          id: request.id,
+          id: request2.id,
           error: {
             code: -32602,
             message: "This learning tool was replaced by capture_learning in private capture mode.",
@@ -71202,18 +71732,18 @@ async function dispatchJsonRpcRequest(request) {
         };
       }
       return {
-        id: request.id,
+        id: request2.id,
         error: { code: -32602, message: `Unknown tool: ${name}` }
       };
     }
     try {
       const execute = async () => {
-        const result2 = await callTool(definition, request.params?.arguments);
+        const result2 = await callTool(definition, request2.params?.arguments);
         markCaptureLearningStage("response");
         return remembranceMcpToolCallResult(result2, definition.name);
       };
       const result = name === "capture_learning" ? await withCaptureLearningDiagnostics(execute) : await execute();
-      return { id: request.id, result };
+      return { id: request2.id, result };
     } catch (error) {
       const capture2 = captureLearningDiagnostic(error);
       if (capture2) {
@@ -71237,17 +71767,17 @@ async function dispatchJsonRpcRequest(request) {
         }
       }
       return {
-        id: request.id,
+        id: request2.id,
         error: jsonRpcErrorForToolError(error)
       };
     }
   }
-  if (request.id !== void 0) {
+  if (request2.id !== void 0) {
     return {
-      id: request.id,
+      id: request2.id,
       error: {
         code: -32601,
-        message: `Method not found: ${request.method ?? "unknown"}`
+        message: `Method not found: ${request2.method ?? "unknown"}`
       }
     };
   }
@@ -71326,6 +71856,10 @@ async function callToolWithinExecution(runtimeDefinition, rawArguments, dependen
   const payload = dependencies.testSchemaOverride ? dependencies.testSchemaOverride.parse(rawPayload) : parseToolArguments(runtimeDefinition, rawPayload);
   assertToolPayloadBoundary(runtimeDefinition, payload, { sizeCheck: false });
   const access = resolveApiAccess();
+  if (runtimeDefinition.name === "get_admin_session") {
+    if (access.configuration.source.startsWith("unusable_")) return { ok: false, status: "destination_unavailable", server_validity_checked: false };
+    return getLocalAdminSession(access.configuration.baseUrl);
+  }
   if (runtimeDefinition.executionNetworkBehavior === "local_only") {
     if (!runtimeDefinition.local || !LOCAL_ONLY_HANDLER_NAMES.includes(
       runtimeDefinition.local
@@ -71356,6 +71890,9 @@ async function callToolWithinExecution(runtimeDefinition, rawArguments, dependen
   );
 }
 async function callNetworkToolWithinExecution(definition, payload, access, transport) {
+  if (ADMIN_CONTROL_TOOL_NAMES.includes(definition.name)) {
+    return callAdminControlTool(definition.name, payload, access, transport);
+  }
   if (definition.name === "repair_review_draft") {
     const inspection = inspectReviewRepairForTransport(payload);
     if (!inspection.ready) return inspection.refusal;
@@ -71646,11 +72183,11 @@ function retryAfterDelayMs(value, nowMs = Date.now()) {
       Number(trimmed) * 1e3
     );
   }
-  const timestamp2 = Date.parse(trimmed);
-  if (!Number.isFinite(timestamp2)) return null;
+  const timestamp3 = Date.parse(trimmed);
+  if (!Number.isFinite(timestamp3)) return null;
   return Math.min(
     PRIVATE_LEARNING_MAX_RETRY_DELAY_MS,
-    Math.max(0, timestamp2 - nowMs)
+    Math.max(0, timestamp3 - nowMs)
   );
 }
 function privateLessonDestinationForAccess(access) {
@@ -71669,17 +72206,17 @@ function privateLessonDestinationForAccess(access) {
     )
   });
 }
-async function getLocalPrivateLessonPolicy(access, transport, request = {
+async function getLocalPrivateLessonPolicy(access, transport, request2 = {
   supported_redactor_profiles: []
 }) {
   const verified = await fetchVerifiedPrivateLessonPolicy(
     access,
     transport,
-    request.required_redactor_profile,
-    request.supported_redactor_profiles,
+    request2.required_redactor_profile,
+    request2.supported_redactor_profiles,
     // Like the hosted tool, ask for the larger limit only when the caller
     // does; submission asks for it only for a lesson over the legacy limit.
-    request.supported_max_payload_bytes
+    request2.supported_max_payload_bytes
   );
   const outbox = await privateLessonOutboxSummary();
   return {
@@ -71795,16 +72332,16 @@ async function deliverPrivateSkillDraft(draftId, access, mode, transport) {
       );
       verifiedAudience = verified.policy.payload.organization_audience_hash;
     } catch (error) {
-      const failure = privateSkillDestinationProofFailure(error);
+      const failure2 = privateSkillDestinationProofFailure(error);
       draft = await persistPrivateSkillDestinationProofFailure(
         draft,
-        failure,
+        failure2,
         destination
       );
       return privateSkillDraftActionResult2(draft, {
         status: "not_submitted",
-        action_required: failure.action_required,
-        next_action: failure.state === "retry_scheduled" ? {
+        action_required: failure2.action_required,
+        next_action: failure2.state === "retry_scheduled" ? {
           tool: "retry_private_skill_candidate",
           arguments: { draft_id: draft.draft_id }
         } : null,
@@ -72051,15 +72588,15 @@ function privateSkillDestinationProofFailure(error) {
     action_required: "Local destination-proof validation failed unexpectedly. The frozen candidate remains encrypted and no candidate content was sent; it will not be retried automatically."
   };
 }
-async function persistPrivateSkillDestinationProofFailure(draft, failure, destination) {
+async function persistPrivateSkillDestinationProofFailure(draft, failure2, destination) {
   return updatePrivateSkillDraft(draft.draft_id, (current) => ({
     ...current,
-    state: failure.state,
-    destination_rejection: failure.state === "held_validation" ? destination : null,
-    next_retry_at: failure.state === "retry_scheduled" ? new Date(
+    state: failure2.state,
+    destination_rejection: failure2.state === "held_validation" ? destination : null,
+    next_retry_at: failure2.state === "retry_scheduled" ? new Date(
       Date.now() + privateSkillRetryDelayMs(current.attempts)
     ).toISOString() : null,
-    last_error_code: failure.error_code,
+    last_error_code: failure2.error_code,
     updated_at: (/* @__PURE__ */ new Date()).toISOString()
   }));
 }
@@ -72075,13 +72612,13 @@ async function holdPrivateSkillDestination(draft, errorCode) {
 async function persistPrivateSkillFailure(draft, result, destinationBodyLimit) {
   return updatePrivateSkillDraft(draft.draft_id, (current) => {
     const attempts = current.attempts;
-    const failure = remembranceMcpToolFailure(result, "propose_private_skill");
-    if (failure && failure.http_status >= 500 && failure.http_status <= 599 && !failure.retryable) {
+    const failure2 = remembranceMcpToolFailure(result, "propose_private_skill");
+    if (failure2 && failure2.http_status >= 500 && failure2.http_status <= 599 && !failure2.retryable) {
       return {
         ...current,
         state: "held_validation",
         next_retry_at: null,
-        last_error_code: failure.code === PRIVATE_SKILL_CONFIGURATION_REFUSAL ? PRIVATE_SKILL_CONFIGURATION_REFUSAL : PRIVATE_SKILL_PERMANENT_SERVICE_REFUSAL,
+        last_error_code: failure2.code === PRIVATE_SKILL_CONFIGURATION_REFUSAL ? PRIVATE_SKILL_CONFIGURATION_REFUSAL : PRIVATE_SKILL_PERMANENT_SERVICE_REFUSAL,
         updated_at: (/* @__PURE__ */ new Date()).toISOString()
       };
     }
@@ -72232,7 +72769,7 @@ async function fetchPrivateSkillDestinationCapability(access, transport) {
   } finally {
     clearTimeout(timeout);
   }
-  const envelope = isRecord11(body) ? body.capability : void 0;
+  const envelope2 = isRecord11(body) ? body.capability : void 0;
   for (const refreshKeys of [false, true]) {
     try {
       const keySet = await fetchValueProofKeySet(
@@ -72242,10 +72779,10 @@ async function fetchPrivateSkillDestinationCapability(access, transport) {
       );
       return {
         status: "verified",
-        capability: verifyPrivateSkillCapabilityEnvelope({ envelope, keySet }).payload
+        capability: verifyPrivateSkillCapabilityEnvelope({ envelope: envelope2, keySet }).payload
       };
     } catch {
-      if (!isRecord11(envelope)) break;
+      if (!isRecord11(envelope2)) break;
     }
   }
   return { status: "unverified", retry_after_ms: null };
@@ -72920,8 +73457,8 @@ function privateLessonRetryGate(draft) {
 }
 function retryDue(nextRetryAt) {
   if (!nextRetryAt) return true;
-  const timestamp2 = Date.parse(nextRetryAt);
-  return !Number.isFinite(timestamp2) || timestamp2 <= Date.now();
+  const timestamp3 = Date.parse(nextRetryAt);
+  return !Number.isFinite(timestamp3) || timestamp3 <= Date.now();
 }
 async function submitPrivateLessonHoldTelemetry(initialDraft, access, allowPolicyRefresh, transport) {
   let draft = initialDraft;
@@ -73192,7 +73729,7 @@ async function fetchVerifiedPrivateLessonPolicy(access, transport, requiredProfi
   });
   return { policy: verified, body };
 }
-async function verifyPrivateLessonEnvelopeWithKeyRefresh(envelope, kind, access, transport) {
+async function verifyPrivateLessonEnvelopeWithKeyRefresh(envelope2, kind, access, transport) {
   let keySet;
   try {
     keySet = await fetchValueProofKeySet(false, access, transport);
@@ -73207,7 +73744,7 @@ async function verifyPrivateLessonEnvelopeWithKeyRefresh(envelope, kind, access,
     );
   }
   try {
-    return verifyPrivateLessonEnvelope(envelope, kind, keySet);
+    return verifyPrivateLessonEnvelope(envelope2, kind, keySet);
   } catch (error) {
     rethrowPrivateLessonProfileVerificationError(error, kind);
     let refreshedKeySet;
@@ -73224,11 +73761,11 @@ async function verifyPrivateLessonEnvelopeWithKeyRefresh(envelope, kind, access,
       );
     }
     try {
-      return verifyPrivateLessonEnvelope(envelope, kind, refreshedKeySet);
+      return verifyPrivateLessonEnvelope(envelope2, kind, refreshedKeySet);
     } catch (error2) {
       rethrowPrivateLessonProfileVerificationError(error2, kind);
       if (kind === "policy") {
-        const policy = signedPrivateLessonPolicySchema.safeParse(envelope);
+        const policy = signedPrivateLessonPolicySchema.safeParse(envelope2);
         const keys = privateLessonVerificationKeySetSchema.safeParse(refreshedKeySet);
         if (!policy.success || canonicalJson(policy.data.payload) === policy.data.canonical_payload && (!keys.success || !keys.data.keys.some((key) => key.kid === policy.data.key_id))) {
           throw new PrivateLessonRemoteError(
@@ -73258,14 +73795,14 @@ function rethrowPrivateLessonProfileVerificationError(error, kind) {
     );
   }
 }
-function verifyPrivateLessonEnvelope(envelope, kind, keySet) {
+function verifyPrivateLessonEnvelope(envelope2, kind, keySet) {
   if (kind === "policy") {
-    return verifyPrivateLessonSignedEnvelope({ envelope, kind, keySet });
+    return verifyPrivateLessonSignedEnvelope({ envelope: envelope2, kind, keySet });
   }
   if (kind === "receipt") {
-    return verifyPrivateLessonSignedEnvelope({ envelope, kind, keySet });
+    return verifyPrivateLessonSignedEnvelope({ envelope: envelope2, kind, keySet });
   }
-  return verifyPrivateLessonSignedEnvelope({ envelope, kind, keySet });
+  return verifyPrivateLessonSignedEnvelope({ envelope: envelope2, kind, keySet });
 }
 var PRIVATE_LESSON_PAYLOAD_OVER_POLICY = "payload_exceeds_policy_limit";
 function privateLessonRefusalCode(body) {
@@ -73656,23 +74193,23 @@ function stringField(record4, key) {
   return value;
 }
 async function submitRemembrance(payload, access, transport) {
-  const { verified_attestation: verifiedAttestation, ...request } = payload;
+  const { verified_attestation: verifiedAttestation, ...request2 } = payload;
   if (!verifiedAttestation) {
-    return callRemembrance(mustFindTool("submit_remembrance"), request, {
+    return callRemembrance(mustFindTool("submit_remembrance"), request2, {
       access,
       transport
     });
   }
-  const skillSlug = request.skill?.slug;
+  const skillSlug = request2.skill?.slug;
   if (!skillSlug) {
     throw new McpPublicError("verified_attestation requires skill.slug.");
   }
   const evidence = {
-    trace_hash: request.evidence.trace_hash ?? null,
-    artifact_hashes: request.evidence.artifact_hashes ?? []
+    trace_hash: request2.evidence.trace_hash ?? null,
+    artifact_hashes: request2.evidence.artifact_hashes ?? []
   };
   const remembrancePayload = {
-    ...request,
+    ...request2,
     evidence
   };
   const attestation = await signedRemembranceAttestation(
@@ -73694,38 +74231,38 @@ async function submitRemembrance(payload, access, transport) {
   );
 }
 async function submitFeedback(payload, access, transport) {
-  const { verified_attestation: verifiedAttestation, ...request } = payload;
+  const { verified_attestation: verifiedAttestation, ...request2 } = payload;
   if (!verifiedAttestation) {
-    return callRemembrance(mustFindTool("submit_feedback"), request, {
+    return callRemembrance(mustFindTool("submit_feedback"), request2, {
       access,
       transport
     });
   }
   const identity2 = await ensureSigningIdentity(transport);
-  const agent = request.agent ?? {
+  const agent = request2.agent ?? {
     provider: agentProviderForIdentity(identity2.provider),
     agent_id: identity2.subject
   };
   const evidence = {
-    trace_hash: request.evidence?.trace_hash ?? null,
-    artifact_hashes: request.evidence?.artifact_hashes ?? []
+    trace_hash: request2.evidence?.trace_hash ?? null,
+    artifact_hashes: request2.evidence?.artifact_hashes ?? []
   };
-  const lesson = request.lesson?.trim() || (request.useful ? `The ${request.skill_slug} skill was useful.` : `The ${request.skill_slug} skill was not useful.`);
+  const lesson = request2.lesson?.trim() || (request2.useful ? `The ${request2.skill_slug} skill was useful.` : `The ${request2.skill_slug} skill was not useful.`);
   const remembrancePayload = {
     schema_version: "0.1",
     type: "skill_feedback",
     agent,
     task: {
       domain: "agent-feedback",
-      summary: `Feedback for ${request.skill_slug}: ${lesson}`,
+      summary: `Feedback for ${request2.skill_slug}: ${lesson}`,
       privacy: "redacted_public"
     },
-    skill: { slug: request.skill_slug },
+    skill: { slug: request2.skill_slug },
     outcome: {
-      success: request.useful,
-      usefulness_rating: request.rating ?? (request.useful ? 5 : 2),
+      success: request2.useful,
+      usefulness_rating: request2.rating ?? (request2.useful ? 5 : 2),
       confidence: 0.8,
-      user_accepted: request.useful,
+      user_accepted: request2.useful,
       failure_modes: []
     },
     lesson,
@@ -73734,14 +74271,14 @@ async function submitFeedback(payload, access, transport) {
   };
   const attestation = await signedRemembranceAttestation(
     remembrancePayload,
-    request.skill_slug,
+    request2.skill_slug,
     access,
     transport
   );
   return callRemembrance(
     mustFindTool("submit_feedback"),
     {
-      ...request,
+      ...request2,
       agent,
       evidence: {
         ...evidence,
@@ -73908,7 +74445,7 @@ async function createAndPersistIdentity(args, keyPath) {
     private_key: String(privateKey.export({ type: "pkcs8", format: "pem" })),
     created_at: (/* @__PURE__ */ new Date()).toISOString()
   };
-  await mkdir5(dirname8(keyPath), { recursive: true, mode: 448 });
+  await mkdir5(dirname11(keyPath), { recursive: true, mode: 448 });
   try {
     await writeFile2(keyPath, `${JSON.stringify(identity2, null, 2)}
 `, {
@@ -73984,7 +74521,7 @@ async function ensureSigningIdentity(transport) {
   return promise;
 }
 async function callPrivateSkillDeliveryResolution(rawRequest, predecessor, access, transport) {
-  const request = privateSkillDeliveryResolveRequestSchema.parse(rawRequest);
+  const request2 = privateSkillDeliveryResolveRequestSchema.parse(rawRequest);
   const headers = {
     "content-type": "application/json",
     "user-agent": `@remembrance-ai/mcp-server/${SERVER_VERSION}`,
@@ -74012,7 +74549,7 @@ async function callPrivateSkillDeliveryResolution(rawRequest, predecessor, acces
       {
         method: "POST",
         headers,
-        body: JSON.stringify(request),
+        body: JSON.stringify(request2),
         redirect: "manual",
         signal: controller.signal
       }
@@ -74234,7 +74771,7 @@ async function callRemembrance(definition, rawArguments, options) {
     clearTimeout(timeout);
   }
   if (["get_review_comparison", "repair_review_draft"].includes(definition.name) && (!response.ok || redirectRejected)) {
-    const failure = remembranceMcpToolFailure({
+    const failure2 = remembranceMcpToolFailure({
       ok: false,
       status: response.status,
       body,
@@ -74242,10 +74779,10 @@ async function callRemembrance(definition, rawArguments, options) {
       redirect_rejected: redirectRejected
     }, definition.name);
     body = {
-      error: failure?.message ?? "The review operation failed.",
-      code: failure?.code ?? "review_workflow_failed",
-      retryable: failure?.retryable ?? false,
-      delivery: failure?.delivery ?? "unknown",
+      error: failure2?.message ?? "The review operation failed.",
+      code: failure2?.code ?? "review_workflow_failed",
+      retryable: failure2?.retryable ?? false,
+      delivery: failure2?.delivery ?? "unknown",
       ...definition.name === "repair_review_draft" ? {
         request_id: parsed.request_id,
         next_action: "If delivery is unknown, repeat only the identical request_id, capture and snapshot to reconcile it. Never create a new replacement for an unresolved write."
@@ -74962,7 +75499,7 @@ function localRuntimeProfile(identity2) {
   const runtime = isPluginHostSurface(configuredSurface) ? configuredSurface : "other";
   const clientName = connectedClientInfo?.name ?? agentHostBySurface(runtime)?.host_name ?? "MCP";
   const hostSurface = localRuntimeHostSurface(runtime, clientName);
-  const profileDigest = createHash7("sha256").update(
+  const profileDigest = createHash10("sha256").update(
     [identity2.key_id, runtime, hostSurface, clientName.toLowerCase()].join(
       ":"
     ),
@@ -75020,13 +75557,13 @@ function agentProviderForIdentity(provider) {
   }
   return "generic";
 }
-function writeResponse(id, result, error) {
-  process.stdout.write(formatJsonRpcResponse(id, result, error));
+function writeResponse(id2, result, error) {
+  process.stdout.write(formatJsonRpcResponse(id2, result, error));
 }
-function formatJsonRpcResponse(id, result, error, framing = clientFraming) {
+function formatJsonRpcResponse(id2, result, error, framing = clientFraming) {
   const body = JSON.stringify({
     jsonrpc: "2.0",
-    id: id ?? null,
+    id: id2 ?? null,
     ...error ? { error } : { result }
   });
   if (framing === "content-length") {
