@@ -526,6 +526,17 @@ use the plugin approval flow from the Highly Recommended step above. Choosing
 `allow-always` persists one semantic lane decision: lesson submit/retry share
 one decision, and skill submit/retry share another. Existing exact-submit
 approvals upgrade lazily. It does not trust other Remembrance or host tools.
+Administrator writes (`admin_write`) always require a separate, accurately
+labelled **allow-once** approval for each invocation. They never offer or save
+**allow-always**. Legacy `admin_control` and `admin_write` saved approval values
+are accepted for upgrade compatibility but ignored; they cannot authorize an
+administrator operation.
+
+The bundled local MCP server includes RE2JS for bounded regular-expression
+matching. Its `Prefilter.eval(input, pos)` evaluates literal AND/OR predicates,
+and `RE2JS.exec(input)` returns regex matches and captures. Neither method is
+JavaScript `eval` or a shell/process execution API. The server is bundled from
+the locked dependencies and checked against the published source artifact.
 Capture, inspection, and confirmed deletion remain zero-network; a fresh-draft
 retry stops before network access. `submit_query_feedback` remains an
 independent bounded query-fit action. A host denial is never retried through

@@ -3,6 +3,7 @@ import { PRIVATE_EGRESS_TOOL_LANES } from "./private-egress-lanes.mjs";
 const PRIVATE_LESSON_LANE = "private_lesson";
 const PRIVATE_SKILL_LANE = "private_skill";
 const PRIVATE_LESSON_SUBMIT_TOOL = "submit_private_lesson_candidate";
+const PER_OPERATION_ADMIN_LANE = "admin_control";
 const PRIVATE_EGRESS_TOOLS = new Set(Object.keys(PRIVATE_EGRESS_TOOL_LANES));
 const PRIVATE_EGRESS_LANES = new Set(Object.values(PRIVATE_EGRESS_TOOL_LANES));
 
@@ -21,7 +22,7 @@ export function handlePrivateLessonSubmitApproval(event, options = {}) {
     return undefined;
   }
   const approvedLanes = options.approvedLanes ?? options.approvedTools;
-  if (!exactTool || !lane || approvedLanes?.has?.(lane)) {
+  if (!exactTool || !lane || (lane !== PER_OPERATION_ADMIN_LANE && approvedLanes?.has?.(lane))) {
     return undefined;
   }
   const approval = approvalCopy(lane);
@@ -30,10 +31,12 @@ export function handlePrivateLessonSubmitApproval(event, options = {}) {
       title: approval.title,
       description: approval.description,
       severity: "warning",
-      allowedDecisions: ["allow-once", "allow-always", "deny"],
+      allowedDecisions: lane === PER_OPERATION_ADMIN_LANE
+        ? ["allow-once", "deny"]
+        : ["allow-once", "allow-always", "deny"],
       timeoutMs: 120_000,
       onResolution(decision) {
-        if (decision === "allow-always") options.onAllowAlways?.(lane);
+        if (decision === "allow-always" && lane !== PER_OPERATION_ADMIN_LANE) options.onAllowAlways?.(lane);
       },
     },
   };
@@ -53,6 +56,13 @@ function feedbackContainsReusableContent(event) {
 }
 
 function approvalCopy(lane) {
+  if (lane === PER_OPERATION_ADMIN_LANE) {
+    return {
+      title: "Approve Remembrance administrator operation",
+      description:
+        "Review this exact admin_write operation and its complete arguments. Approval authorizes this invocation only; it does not approve future administrator writes or change the request_id used to identify the same logical attempt. Saved private-learning approvals do not authorize administrator operations.",
+    };
+  }
   if (lane === "admin_review_repair") {
     return {
       title: "Create protected Remembrance review replacement",
@@ -132,10 +142,10 @@ export function privateLearningSubmitApprovals(api) {
   const configuredLanes = asRecord(config.privateLearningEgressApprovals);
   const configuredTools = asRecord(config.privateLearningSubmitApprovals);
   const approved = new Set(
-    [...PRIVATE_EGRESS_LANES].filter((lane) => configuredLanes[lane] === true),
+    [...PRIVATE_EGRESS_LANES].filter((lane) => lane !== PER_OPERATION_ADMIN_LANE && configuredLanes[lane] === true),
   );
   for (const [toolName, lane] of Object.entries(PRIVATE_EGRESS_TOOL_LANES)) {
-    if (configuredTools[toolName] === true) approved.add(lane);
+    if (lane !== PER_OPERATION_ADMIN_LANE && configuredTools[toolName] === true) approved.add(lane);
   }
   if (config.privateLessonSubmitApproval === true) {
     approved.add(PRIVATE_LESSON_LANE);
@@ -153,6 +163,9 @@ export async function persistPrivateLearningSubmitApproval(api, toolName) {
     : PRIVATE_EGRESS_TOOL_LANES[toolName];
   if (!lane) {
     throw new Error("Unsupported private Remembrance submission action.");
+  }
+  if (lane === PER_OPERATION_ADMIN_LANE) {
+    throw new Error("Administrator operations require per-operation approval and cannot persist allow-always consent.");
   }
   const mutateConfigFile = api?.runtime?.config?.mutateConfigFile;
   if (typeof mutateConfigFile !== "function") {
