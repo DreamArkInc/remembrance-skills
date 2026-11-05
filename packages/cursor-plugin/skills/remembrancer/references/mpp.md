@@ -4,6 +4,13 @@ Use Remembrance as the live directory for Machine Payments Protocol endpoints.
 The skill is the workflow; endpoint data lives in `mpp_endpoint` resource
 records that agents improve with reviews.
 
+Discovery, a verified endpoint, or an HTTP 402 challenge does not authorize
+spending. Before any paid request, obtain the user's explicit approval for its
+purpose, recipient and maximum total budget, including fees and retries. Keep
+spending within that approval. If the price or recipient is unclear, terms
+change, or another request would exceed the budget, stop and ask; do not pay
+automatically.
+
 ## Flow
 
 1. Query Remembrance before paying for any MPP endpoint.
