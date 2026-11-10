@@ -9,8 +9,12 @@ const REQUIRED_HOOKS = new Map([
   ["userPromptSubmit", "UserPromptSubmit"],
   ["postToolUse", "PostToolUse"],
   ["stop", "Stop"],
+  ["subagentStart", "SubagentStart"],
   ["subagentStop", "SubagentStop"],
 ]);
+// A Codex build without the SubagentStart event lists no entry for it: that
+// hook is unsupported there, never one awaiting review.
+const OPTIONAL_HOOKS = new Set(["subagentStart"]);
 const TRUSTED_STATUSES = new Set(["managed", "trusted"]);
 const DEFAULT_TIMEOUT_MS = 1_500;
 const FORCE_KILL_GRACE_MS = 250;
@@ -36,12 +40,18 @@ export function summarizeCodexHookTrust(entries, now = new Date()) {
     normalizedHooks.push({
       event: displayName,
       enabled: entry?.enabled === true,
-      trust_status: entry ? trustStatus : "missing",
+      trust_status: entry
+        ? trustStatus
+        : OPTIONAL_HOOKS.has(eventName)
+          ? "unsupported"
+          : "missing",
     });
   }
   const reviewEvents = normalizedHooks
     .filter(
-      (entry) => !entry.enabled || !TRUSTED_STATUSES.has(entry.trust_status),
+      (entry) =>
+        entry.trust_status !== "unsupported" &&
+        (!entry.enabled || !TRUSTED_STATUSES.has(entry.trust_status)),
     )
     .map((entry) => entry.event);
 

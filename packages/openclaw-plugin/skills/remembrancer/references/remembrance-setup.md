@@ -161,8 +161,8 @@ older bundle paths, and stops at the first failed step.
 Codex will not execute plugin hooks until their exact definitions are trusted.
 In the Codex window opened by the installer, if Codex shows a **Hooks need
 review** screen, choose **Review hooks** and trust only the Remembrance
-`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, and
-`SubagentStop` hooks. If no review screen appears, continue: Codex may be
+`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, `SubagentStart`,
+and `SubagentStop` hooks. If no review screen appears, continue: Codex may be
 reusing an existing valid trust decision. Changed hook definitions
 show the same review screen again; never use the automation-only trust bypass
 for normal installation. Fully restart Codex, submit one prompt, use one
@@ -797,7 +797,7 @@ paths, or raw logs. Set `REMEMBRANCE_HEALTH_REPORTING=0` to disable that
 best-effort report.
 
 If no Remembrance MCP tool is visible, run
-`npx @remembrance-ai/mcp-server@0.2.18 doctor`. This safely verifies registry,
+`npx @remembrance-ai/mcp-server@0.2.19 doctor`. This safely verifies registry,
 credential, and catalog-read access outside the host, but it deliberately
 reports host registration as unobservable. Update or reinstall the native
 plugin, fully restart the host, then rerun `run_connection_doctor` inside it.
@@ -1991,7 +1991,7 @@ cloud-agent hooks can differ. See the official
 ### Approve other MCP clients
 
 Register exactly `https://remembrance.dev/api/mcp` or the exact local
-`npx @remembrance-ai/mcp-server@0.2.18` command. Use the recommended organization
+`npx @remembrance-ai/mcp-server@0.2.19` command. Use the recommended organization
 tool list above when the client supports tool filtering. Supply the
 organization key through the client's secret/header mechanism, then run
 `run_connection_doctor` and require organization scope before private writes.
@@ -2028,13 +2028,13 @@ https://remembrance.dev/api/mcp
 Local stdio MCP server:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.18
+npx @remembrance-ai/mcp-server@0.2.19
 ~~~
 
 Independent setup check when the host does not expose Remembrance tools:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.18 doctor
+npx @remembrance-ai/mcp-server@0.2.19 doctor
 ~~~
 
 This verifies registry, credential, and catalog-read access without submitting

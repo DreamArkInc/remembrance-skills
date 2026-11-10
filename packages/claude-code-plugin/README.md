@@ -134,10 +134,11 @@ requires it.
 
 If Codex shows a **Hooks need review** screen, choose **Review hooks** and trust
 only the Remembrance `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`,
-and `SubagentStop` hooks. If no review screen appears, continue: Codex may be
-reusing an existing valid trust decision. Codex skips untrusted hooks, and
-changed hook definitions show the same review screen again. Fully restart Codex
-before verification. With an organization key, then complete the Codex
+`SubagentStart`, and `SubagentStop` hooks. If no review screen appears,
+continue: Codex may be reusing an existing valid trust decision. Codex skips
+untrusted hooks, and changed hook definitions show the same review screen
+again. Fully restart Codex before verification. With an organization key, then
+complete the Codex
 [Highly Recommended step](../codex-plugin/README.md#highly-recommended-approve-private-submissions).
 
 The repository-level `.agents/plugins/marketplace.json` routes Codex to
@@ -230,16 +231,38 @@ generative preference call or second embedding request. Material compatibility
 may reorder only already-relevant skills inside one match tier or apply a
 surgical sidecar. Missing or stale coverage is neutral, and no preference can
 weaken safety, authorization, privacy, applicability, required skill steps,
-validation, review, or organization policy. Exact skill-version changes queue
+validation, review, or organization policy. A skill sets an ordinary
+preference aside only for a locked conflict confirmed by the organization,
+declared in the skill's reviewed metadata, or corroborated by verified members
+of the organization, and only while that skill is followed; a conflict that
+only a model check suggests is a note, not a block. Required organization
+settings are never set aside: a confirmed locked conflict with one makes the
+skill unavailable. Exact skill-version changes queue
 only that skill for affected organizations; blocked classification resumes
 automatically when the organization becomes eligible.
 
+With an organization credential, the hooks give Claude your working
+preferences for the project as a text snapshot: `SessionStart` at startup,
+resume, clear, compaction and fork, `UserPromptSubmit` on every prompt,
+whether or not it searches, and the new `SubagentStart` hook for each
+subagent. The project is the path in `REMEMBRANCE_PROJECT_PATH` when you set
+it, else `CLAUDE_PROJECT_DIR`, else the hook's working directory; a `prj_` key
+in `REMEMBRANCE_PROJECT_KEY` wins over all three, as in the MCP server. Each
+hook's whole context fits in 9,000 characters; a larger profile
+arrives as page 1, which lists the required settings first and opens with the
+`get_effective_preferences` call that fetches the rest. A preference changed
+during a turn applies from the next prompt. When the live read fails, a hook
+may show its saved copy for the same identity and project, at most 7 days old,
+marked incomplete with the call that recovers it.
+
 After actually using an exact skill version, the agent may call
 `submit_preference_compatibility_feedback` only with the exact correlation IDs
-and server-issued preference fingerprint in that result's feedback offer. The
-server verifies the fetch and active preference. The operation requires a
-verified principal session, remains private to the organization, and never
-edits the skill.
+and either the server-issued preference fingerprint in that result's feedback
+offer or the `preference_key` of a preference that was active for that skill
+use; a key that matches none, or more than one, of that use's preferences is
+refused. The server verifies the fetch and active preference. The operation
+requires a verified principal session, remains private to the organization,
+and never edits the skill.
 
 The hook runs on every user prompt, but it only calls Remembrance when the prompt
 mentions named services, APIs, CLIs, frameworks, deployment/CI/payment/migration
@@ -613,7 +636,11 @@ Environment:
   private/link-local HTTPS self-host. Remote HTTP is rejected except on loopback.
 - `REMEMBRANCE_HEALTH_REPORTING=0`: disables bounded degraded-activation
   reporting while retaining local diagnostics.
-- `REMEMBRANCE_AUTO_QUERY=0`: disables the prompt hook.
+- `REMEMBRANCE_AUTO_QUERY=0`: disables the prompt hook and every hook's
+  preference snapshot.
+- `REMEMBRANCE_PREFERENCE_SNAPSHOT_DIR`: where hooks keep the saved preference
+  copy they show when a live read fails. Defaults to
+  `~/.cache/remembrance/preference-snapshots`.
 - `REMEMBRANCE_AUTO_QUERY_LIMIT`: result limit, default `3`, max `10`.
 - `REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS`: hook request timeout. The search waits
   `3000` by default, so the server's relevance judge can take its longer

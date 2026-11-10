@@ -3,8 +3,13 @@
 //
 // Cursor's stop hook payload does not include a transcript. Record registry
 // consumption when the Remembrance MCP tools are used, and mark the current use
-// count as already handled when the agent contributes before stopping.
+// count as already handled when the agent contributes before stopping. Cursor
+// hands the result over as `result_json`, a JSON string (`tool_output` in
+// postToolUse). This module also keeps the conversation's preference
+// snapshot state, which the sessionStart, postToolUse and preCompact hooks
+// share.
 
+import { createHash } from "node:crypto";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
@@ -14,6 +19,10 @@ import {
   directSelectionFromResponse,
   highMatchFromResponse,
   observeSuccessfulCompletionTool,
+  parsePreferenceSnapshotHeader,
+  preferenceContextIdFromToken,
+  projectPreferenceSnapshot,
+  readHookStateFile,
   readRegistryUseCount,
   recordDirectiveFollowThroughForTool,
   recordDirectSelectionUse,
@@ -27,6 +36,7 @@ import {
   resolveApiCredential,
   toolResponseIndicatesFailure,
   valueEpisodeFromResponse,
+  writeHookStateFile,
 } from "./hook-core.mjs";
 
 const CONSUMPTION_TOOLS = new Set([
@@ -77,6 +87,141 @@ export function cursorNativeSessionId(input) {
     input?.input?.conversation_id ??
     input?.input?.session_id ??
     null
+  );
+}
+
+// The workspace a hook reads project preferences for, as the prompt hook's
+// preference writes name it; Cursor runs plugin hooks from the plugin's
+// install directory, never from the workspace.
+function cursorProjectPath(input) {
+  return (
+    input?.workspace_roots?.[0] ?? input?.workspaceRoot ?? input?.cwd ?? null
+  );
+}
+
+// Node start, a session warm-up (1.2 s at most) and this read fit Cursor's
+// 5-second hook timeout.
+const CURSOR_PREFERENCE_READ_TIMEOUT_MS = 2_500;
+
+// The hooks' project-context snapshot: the workspace's project key only,
+// never task entries; renderer input, or null without an organization key
+// or with REMEMBRANCE_AUTO_QUERY=0.
+export function readCursorProjectSnapshot(input, { env, fetchImpl }) {
+  return projectPreferenceSnapshot({
+    runtime: "cursor",
+    env,
+    fetchImpl,
+    projectPath: cursorProjectPath(input),
+    userAgent: "@remembrance/cursor-plugin",
+    deadline: Date.now() + CURSOR_PREFERENCE_READ_TIMEOUT_MS,
+  });
+}
+
+// --- The conversation's preference snapshot (DESIGN 4.6) ---------------------
+//
+// Per conversation: `delivered`, the digest and context id of the last
+// complete or unchanged project-context snapshot the conversation received
+// (from sessionStart, a postToolUse injection or an MCP result); `latest`,
+// those of the hooks' own latest project-context read; `compacted`, set by
+// preCompact; and `last_refresh_at`, the time of the latest read.
+
+function preferenceStateName(sessionId) {
+  const ledger = createHash("sha256")
+    .update(String(sessionId))
+    .digest("hex")
+    .slice(0, 16);
+  return `${ledger}.cursor-preferences.json`;
+}
+
+// A profile digest and the context id of its token. A read without a token
+// has the context id "unknown": comparable with the hooks' own reads of
+// their one context, never with an MCP result.
+function snapshotRef(value) {
+  return /^pd1_[0-9a-f]{16}$/.test(value?.digest ?? "") &&
+    /^(?:[0-9a-f]{8}|unknown)$/.test(value?.context_id ?? "")
+    ? { digest: value.digest, context_id: value.context_id }
+    : null;
+}
+
+export function sameSnapshot(a, b) {
+  return a?.digest === b?.digest && a?.context_id === b?.context_id;
+}
+
+export function readCursorPreferenceState(sessionId, env = process.env) {
+  const stored = readHookStateFile(preferenceStateName(sessionId), { env });
+  return {
+    delivered: snapshotRef(stored?.delivered),
+    latest: snapshotRef(stored?.latest),
+    compacted: stored?.compacted === true,
+    last_refresh_at: Number.isFinite(stored?.last_refresh_at)
+      ? stored.last_refresh_at
+      : null,
+  };
+}
+
+export function updateCursorPreferenceState(
+  sessionId,
+  change,
+  env = process.env,
+) {
+  return writeHookStateFile(
+    preferenceStateName(sessionId),
+    { ...readCursorPreferenceState(sessionId, env), ...change },
+    { env },
+  );
+}
+
+// The digest and context id of a live project-context read; null for a
+// failed read, a cached copy (freshness unverified) or an older server.
+export function projectSnapshotRef(snapshot) {
+  if (
+    snapshot?.reasons?.some((reason) => reason?.code === "freshness_unverified")
+  ) {
+    return null;
+  }
+  return snapshotRef({
+    digest: snapshot?.digest,
+    context_id: preferenceContextIdFromToken(snapshot?.pageToken ?? null),
+  });
+}
+
+// The digest, context id and status of a snapshot text, or null when its
+// header names no digest (a failed read, an older server).
+export function preferenceSnapshotRef(text) {
+  const header =
+    typeof text === "string" ? parsePreferenceSnapshotHeader(text) : null;
+  const ref =
+    header &&
+    snapshotRef({ digest: header.digest, context_id: header.contextId });
+  return ref ? { ...ref, status: header.status } : null;
+}
+
+// A get_effective_preferences result counts as delivered only for the hooks'
+// own project context (equal context ids) and only when complete or
+// unchanged. A query_skills or invoke_skill snapshot, or one from a server
+// that derived another project key, describes another context and changes
+// nothing.
+export function observePreferenceSnapshot(sessionId, input, env = process.env) {
+  if (toolName(input) !== "get_effective_preferences") return false;
+  const response = mcpResponseFromHook(input);
+  const body =
+    response?.body && typeof response.body === "object"
+      ? response.body
+      : response;
+  const ref = preferenceSnapshotRef(body?.preferences);
+  if (
+    !ref ||
+    ref.status === "incomplete" ||
+    ref.context_id === "unknown" ||
+    ref.context_id !==
+      readCursorPreferenceState(sessionId, env).latest?.context_id
+  ) {
+    return false;
+  }
+  return updateCursorPreferenceState(
+    sessionId,
+    { delivered: { digest: ref.digest, context_id: ref.context_id } },
+    env,
   );
 }
 
@@ -133,6 +278,7 @@ export async function handleMcpUse(input, options = {}) {
     );
     return { recorded: false, kind: "failed", tool };
   }
+  observePreferenceSnapshot(sessionId, input, env);
   if (tool === "invoke_skill") {
     const response = mcpResponseFromHook(input);
     const selection = directSelectionFromResponse(response);
@@ -295,36 +441,39 @@ function toolArguments(input) {
   return {};
 }
 
+// The MCP result a hook input carries. Cursor documents `result_json` for
+// afterMCPExecution and `tool_output` for postToolUse, each a JSON string
+// of the tool's result; an MCP tools/call result yields its JSON text.
 function mcpResponseFromHook(input) {
-  for (const value of [
+  for (let value of [
     input?.result,
     input?.output,
     input?.tool_result,
     input?.toolResult,
     input?.response,
+    input?.result_json,
+    input?.tool_output,
   ]) {
-    if (!value) continue;
-    if (typeof value === "object") {
-      if (value.body) return value;
-      const text = Array.isArray(value.content)
-        ? value.content.find((item) => item?.type === "text")?.text
-        : null;
-      if (typeof text === "string") {
-        try {
-          return JSON.parse(text);
-        } catch {
-          continue;
-        }
-      }
-      return value;
-    }
     if (typeof value === "string") {
       try {
-        return JSON.parse(value);
+        value = JSON.parse(value);
       } catch {
         continue;
       }
     }
+    if (!value || typeof value !== "object") continue;
+    if (value.body) return value;
+    const text = Array.isArray(value.content)
+      ? value.content.find((item) => item?.type === "text")?.text
+      : null;
+    if (typeof text === "string") {
+      try {
+        return JSON.parse(text);
+      } catch {
+        continue;
+      }
+    }
+    return value;
   }
   return null;
 }

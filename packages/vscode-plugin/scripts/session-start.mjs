@@ -5,6 +5,9 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import {
   checkForClientUpdate,
+  HOOK_CONTEXT_BUDGETS,
+  preferenceSnapshotText,
+  projectPreferenceSnapshot,
   recordPluginLifecycleHealth,
   resolveApiCredential,
   sessionIdFor,
@@ -58,19 +61,22 @@ export async function handleSessionStart(input, options = {}) {
     },
     env,
   ).catch(() => null);
+  // Every source, compaction included, warms the session the preference read
+  // below uses.
+  const warmup = (options.warmSession ?? warmPrincipalSession)(
+    {
+      runtime: "vs_code",
+      hostSurface: "extension",
+      clientVersion: version,
+      hostVersion,
+      fetchImpl: options.fetchImpl ?? fetch,
+    },
+    env,
+  ).catch(() => null);
   const [, clientUpdate] = isCompaction
-    ? [null, null]
+    ? [await warmup, null]
     : await Promise.all([
-        (options.warmSession ?? warmPrincipalSession)(
-          {
-            runtime: "vs_code",
-            hostSurface: "extension",
-            clientVersion: version,
-            hostVersion,
-            fetchImpl: options.fetchImpl ?? fetch,
-          },
-          env,
-        ).catch(() => null),
+        warmup,
         (options.checkUpdate ?? checkForClientUpdate)(
           {
             surface: "vs_code",
@@ -80,16 +86,28 @@ export async function handleSessionStart(input, options = {}) {
           env,
         ).catch(() => null),
       ]);
+  // The host's project, as the prompt hook reads it.
+  const snapshot = await projectPreferenceSnapshot({
+    runtime: "vs_code",
+    env,
+    fetchImpl: options.fetchImpl ?? fetch,
+    projectPath: input?.cwd ?? null,
+    userAgent: "@remembrance/vscode-plugin",
+  });
+  const context = [baseContext, clientUpdate?.notice, await sessionSkills]
+    .filter(Boolean)
+    .join("\n\n");
+  // The snapshot fits exactly into what remains of the budget: whole, or
+  // page 1 with its opening line.
+  const preferences =
+    snapshot &&
+    preferenceSnapshotText(snapshot, {
+      maxChars: HOOK_CONTEXT_BUDGETS.vscode.maxChars - context.length - 2,
+    });
   return {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
-      additionalContext: [
-        baseContext,
-        clientUpdate?.notice,
-        await sessionSkills,
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
+      additionalContext: preferences ? `${context}\n\n${preferences}` : context,
     },
   };
 }

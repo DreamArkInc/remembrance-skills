@@ -59,6 +59,19 @@ turn. Empty or unavailable queries never block the task. The plugin also
 observes successful tool calls and records pending feedback after meaningful
 use for bounded recovery on the next prompt.
 
+With an organization key, every turn carries your working preferences as a
+text snapshot, up to 9,000 characters, once in each model request of the
+turn; a larger profile arrives as page 1, which lists the required settings
+first and opens with the `get_effective_preferences` call that fetches the
+rest. The plugin takes the project from `REMEMBRANCE_PROJECT_PATH`, else the
+directory OpenCode opened, else its worktree, else the process's working
+directory. The bundled MCP server takes it from `REMEMBRANCE_PROJECT_PATH`,
+else its own working directory, so without `REMEMBRANCE_PROJECT_PATH` the two
+can name different projects, for example after `opencode <path>` started from another directory: the snapshots
+in MCP results then lack the project preferences the plugin shows, and the
+context ids in their headers differ. Set `REMEMBRANCE_PROJECT_KEY` to a `prj_`
+key to name the same project in both.
+
 ## Installation identity and preferences
 
 The bundled local MCP automatically reuses the local TOFU key as one stable
@@ -89,16 +102,24 @@ generative preference call or second embedding request. Material compatibility
 may reorder only already-relevant skills inside one match tier or apply a
 surgical sidecar. Missing or stale coverage is neutral, and no preference can
 weaken safety, authorization, privacy, applicability, required skill steps,
-validation, review, or organization policy. Exact skill-version changes queue
+validation, review, or organization policy. A skill sets an ordinary
+preference aside only for a locked conflict confirmed by the organization,
+declared in the skill's reviewed metadata, or corroborated by verified members
+of the organization, and only while that skill is followed; a conflict that
+only a model check suggests is a note, not a block. Required organization
+settings are never set aside: a confirmed locked conflict with one makes the
+skill unavailable. Exact skill-version changes queue
 only that skill for affected organizations; blocked classification resumes
 automatically when the organization becomes eligible.
 
 After actually using an exact skill version, the agent may call
 `submit_preference_compatibility_feedback` only with the exact correlation IDs
-and server-issued preference fingerprint in that result's feedback offer. The
-server verifies the fetch and active preference. The operation requires a
-verified principal session, remains private to the organization, and never
-edits the skill.
+and either the server-issued preference fingerprint in that result's feedback
+offer or the `preference_key` of a preference that was active for that skill
+use; a key that matches none, or more than one, of that use's preferences is
+refused. The server verifies the fetch and active preference. The operation
+requires a verified principal session, remains private to the organization,
+and never edits the skill.
 
 ## Organization key
 
@@ -234,7 +255,8 @@ them.
 Set `REMEMBRANCE_AUTO_QUERY_STRIP_INJECTED_CONTEXT=1` to search only the text
 after a leading `<compartment_examples_from_other_projects>` block (off by
 default).
-Set `REMEMBRANCE_AUTO_QUERY=0` to disable the query, or
+Set `REMEMBRANCE_AUTO_QUERY=0` to disable the query and the preference
+snapshot, or
 `REMEMBRANCE_AUTO_CONTRIBUTE=0` to disable silent completion recovery. The
 idle event does not emit routine contribution text as a toast or structured log;
 the next real user prompt receives only the exact bounded recovery actions.

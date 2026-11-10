@@ -319,16 +319,43 @@ generative preference call or second embedding request. Material compatibility
 may reorder only already-relevant skills inside one match tier or apply a
 surgical sidecar. Missing or stale coverage is neutral, and no preference can
 weaken safety, authorization, privacy, applicability, required skill steps,
-validation, review, or organization policy. Exact skill-version changes queue
+validation, review, or organization policy. A skill sets an ordinary
+preference aside only for a locked conflict confirmed by the organization,
+declared in the skill's reviewed metadata, or corroborated by verified members
+of the organization, and only while that skill is followed; a conflict that
+only a model check suggests is a note, not a block. Required organization
+settings are never set aside: a confirmed locked conflict with one makes the
+skill unavailable. Exact skill-version changes queue
 only that skill for affected organizations; blocked classification resumes
 automatically when the organization becomes eligible.
 
 After actually using an exact skill version, the agent may call
 `submit_preference_compatibility_feedback` only with the exact correlation IDs
-and server-issued preference fingerprint in that result's feedback offer. The
-server verifies the fetch and active preference. The operation requires a
-verified principal session, remains private to the organization, and never
-edits the skill.
+and either the server-issued preference fingerprint in that result's feedback
+offer or the `preference_key` of a preference that was active for that skill
+use; a key that matches none, or more than one, of that use's preferences is
+refused. The server verifies the fetch and active preference. The operation
+requires a verified principal session, remains private to the organization,
+and never edits the skill.
+
+**Project preferences on a gateway.** With an organization key, every run
+carries your working preferences as a text snapshot, appended to the system
+context, up to 9,000 characters; a larger profile arrives as page 1, which
+lists the required settings first and opens with the
+`get_effective_preferences` call that fetches the rest. A gateway serves
+several workspaces, so the plugin never takes the project from the gateway's
+own directory. To use project preferences, set `REMEMBRANCE_PROJECT_PATH` (the
+project's absolute path) or `REMEMBRANCE_PROJECT_KEY` (a `prj_` key) in the
+gateway's environment; when both are set, the key wins. The bundled MCP server needs the same variable in its
+own environment, for example in the `env` of its `mcp.servers.remembrance`
+entry; without it, MCP results carry no project preferences either. Without
+either variable, each run's preference snapshot says that this gateway
+does not know the agent's project, searches carry no project key, and a "for
+this project" preference is not saved: the agent is told why and asks the user
+before saving it for every project. An unexpanded placeholder such as
+`${workspaceFolder}` counts as unset. Project preferences that an earlier
+version saved under the gateway directory's key are found again only when
+`REMEMBRANCE_PROJECT_PATH` names that same directory.
 
 ## What it does
 
@@ -381,11 +408,11 @@ conversation hooks only after the operator's grant,
 
 Before the grant, OpenClaw (2026.7.1-2, the version this plugin is built and
 verified against) holds
-only `before_agent_finalize`. It loads and runs the plugin's other four hooks,
-and three of them receive conversation content: `before_prompt_build` the
-prompt (`prompt` and `messages`), `before_tool_call` each tool call, and
-`after_tool_call` each tool call's arguments and result. Before the grant,
-these hooks do the following:
+only `before_agent_finalize`. It loads and runs the plugin's other five hooks,
+and four of them receive conversation content: `before_prompt_build` the
+prompt (`prompt` and `messages`), `before_tool_call` each tool call,
+`after_tool_call` each tool call's arguments and result, and `reply_dispatch`
+each inbound message. Before the grant, these hooks do the following:
 
 - `before_prompt_build` reads the prompt, updates the session's local
   Remembrance ledger (task eligibility, query feedback, directives) and adds
@@ -396,17 +423,25 @@ these hooks do the following:
   and private-network URLs removed, at most 1,200 characters) goes as the
   task summary to `POST /api/v1/agent/query` on the configured API
   (`REMEMBRANCE_API_URL` or the shared config's `apiUrl`, default
-  `https://remembrance.dev`). The request carries the organization key and
-  the project key only when an organization key is configured; without one,
-  it carries no key, only the principal session of the plugin's local agent
-  key when it has one. The hook can also send a content-free "shown" record
-  for a contextual follow-up (`/api/v1/agent/directive-events`). Only with an
-  organization key, it reads the organization's effective preferences for
-  the prompt's inferred domain when a search-hygiene rule stops a search
-  (`/api/v1/agent/preferences/effective`), and it records a built-in
-  preference that the prompt states, as the setting, a SHA-256 hash of the
-  redacted prompt and an evidence hash, not the prompt text
-  (`/api/v1/agent/preferences`). `REMEMBRANCE_AUTO_QUERY=0` stops all of
+  `https://remembrance.dev`). With an organization key configured, the
+  request carries that key, the principal session of the plugin's local
+  agent key when it has one and, when `REMEMBRANCE_PROJECT_KEY` or
+  `REMEMBRANCE_PROJECT_PATH` names the project, its project key; without
+  one, it carries no key, only the principal session of the plugin's local
+  agent key when it has one. The hook can also send a
+  content-free "shown" record for a contextual follow-up
+  (`/api/v1/agent/directive-events`). Only with an organization key, it reads
+  the organization's effective preferences for the prompt's inferred domain
+  when a search-hygiene rule stops a search
+  (`/api/v1/agent/preferences/effective`). With an organization key, each
+  remaining prompt that makes no search makes one read of the same endpoint.
+  That read carries no conversation content: the organization key, the
+  plugin's principal session when it has one and, when
+  `REMEMBRANCE_PROJECT_KEY` or `REMEMBRANCE_PROJECT_PATH` names a project,
+  its project key. It carries no prompt text and no domain. The hook also
+  records a built-in preference that the prompt states, as the setting, a
+  SHA-256 hash of the redacted prompt and an evidence hash, not the prompt
+  text (`/api/v1/agent/preferences`). `REMEMBRANCE_AUTO_QUERY=0` stops all of
   these requests. With an organization key, while retained private-skill
   drafts await their original request, it also stores each prompt (or its
   redacted form), encrypted, in every such local draft, from any OpenClaw
@@ -425,6 +460,10 @@ these hooks do the following:
   Remembrance `query_skills` call that follows a contextual follow-up's
   directive, it sends the content-free "followed" record (directive id and
   query id) to `/api/v1/agent/directive-events`. It sends nothing else.
+- `reply_dispatch` receives each inbound message before OpenClaw replies.
+  Before the grant it compares the message text with the exact
+  `/remembrance-context-revoke` command only, then stops, because the plugin
+  acts on that hook only under the grant: it stores and sends nothing.
 - `subagent_ended` moves an ended subagent's debts between local ledger
   files. It reads no conversation content and makes no request.
 
@@ -445,13 +484,18 @@ tool argument or result content leaves the machine, only the Remembrance query
 id. `REMEMBRANCE_AUTO_QUERY=0` keeps the prompt off the network, but not out of
 the local draft capture above; `REMEMBRANCE_AUTO_CONTRIBUTE=0` turns that off.
 
-The grant adds two things. First, OpenClaw runs `before_agent_finalize`: it
+The grant adds three things. First, OpenClaw runs `before_agent_finalize`: it
 records what the session owes at completion (in visible recovery mode, it asks
 the agent once to settle it), reports content-free task outcomes for the
 skills the session used (`/api/v1/agent/task-outcomes`) and hands a
 finishing subagent's debts to the session that started it. Second,
 `openclaw remembrance setup`, which writes the grant, also registers the
-bundled MCP server, so the agent gets the explicit Remembrance tools. Without
+bundled MCP server, so the agent gets the explicit Remembrance tools. Third,
+`reply_dispatch` hands an authorized sender's exact `/remembrance-context` or
+`/remembrance-context-revoke` command, sent in a Telegram direct message, to
+a local command of the bundled server that binds that context to a
+private-skill draft retained on this machine, or withdraws it; that command
+makes no request. Without
 the grant, the run is not broken: OpenClaw names the held hook only in a
 `warn` diagnostic of `openclaw plugins inspect remembrance --runtime`, and
 `openclaw plugins doctor` reports no issue.
@@ -1044,7 +1088,11 @@ text is sent.
   `apiUrl` are stored together in the shared config.
 - `REMEMBRANCE_ALLOW_PRIVATE_REGISTRY=true`: explicit opt-in for a trusted
   private/link-local HTTPS self-host. Remote HTTP is rejected except on loopback.
-- `REMEMBRANCE_AUTO_QUERY=0`: disables the pre-prompt hook's network query.
+- `REMEMBRANCE_AUTO_QUERY=0`: disables the pre-prompt hook's network query
+  and the preference snapshot.
+- `REMEMBRANCE_PROJECT_PATH` or `REMEMBRANCE_PROJECT_KEY`: names the agent's
+  project, which a gateway cannot know; see "Project preferences on a
+  gateway" above.
 - `REMEMBRANCE_AUTO_QUERY_LIMIT`: result limit, default `3`, max `10`.
 - `REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS`: hook request timeout. The search waits
   `3000` by default, so the server's relevance judge can take its longer

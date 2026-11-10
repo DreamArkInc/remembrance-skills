@@ -19,6 +19,18 @@
         "timeout": 5
       }
     ],
+    "postToolUse": [
+      {
+        "command": "sh ./scripts/node-launcher ./scripts/post-tool-use.mjs",
+        "timeout": 5
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "sh ./scripts/node-launcher ./scripts/pre-compact.mjs",
+        "timeout": 5
+      }
+    ],
     "stop": [
       {
         "command": "sh ./scripts/node-launcher ./scripts/contribute-on-stop.mjs",

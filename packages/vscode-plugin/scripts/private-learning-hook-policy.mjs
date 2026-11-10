@@ -53,10 +53,15 @@ const OPTIONAL_CONTEXT_ORDER = ["preference", "candidate_additional", "other"];
 const REQUIRED_SETTINGS_KIND = "required_settings";
 const REQUIRED_SETTINGS_FALLBACK =
   "Required organization settings did not fit this context. Required next step before acting: call get_effective_preferences and apply every returned required organization setting in full. If the call is unavailable, say the complete required settings could not be loaded and do not claim they were applied.";
+// A preference snapshot addition is {id, kind, text, minimum, renderPage}:
+// text is the whole snapshot, minimum the length of its zero-entry form, and
+// renderPage(maxChars) the first page that fits. It is never split or merged.
+const PREFERENCE_SNAPSHOT_KIND = "preference_snapshot";
 const CONTEXT_OUTPUT_ORDER = [
   ...REQUIRED_CONTEXT_ORDER.flatMap((kind) =>
     kind === "authority" ? [kind, REQUIRED_SETTINGS_KIND] : [kind],
   ),
+  PREFERENCE_SNAPSHOT_KIND,
   "query_action",
   "candidate_primary",
   "correction",
@@ -66,6 +71,7 @@ const CONTEXT_OUTPUT_ORDER = [
 const KNOWN_CONTEXT_KINDS = new Set([
   ...REQUIRED_CONTEXT_ORDER,
   ...OPTIONAL_CONTEXT_ORDER,
+  PREFERENCE_SNAPSHOT_KIND,
   "query_action",
   "candidate_primary",
   "correction",
@@ -168,18 +174,55 @@ const USER_CORRECTION_CAPTURE_MATCHERS = USER_CORRECTION_CAPTURE_PATTERNS.map(
   (pattern) => new RegExp(pattern.source, `${pattern.flags}g`),
 );
 
-export function composeBoundedHookContext(context, additions = []) {
-  return composeBoundedHookContextResult(context, additions).context;
+export function composeBoundedHookContext(
+  context,
+  additions = [],
+  options = {},
+) {
+  return composeBoundedHookContextResult(context, additions, options).context;
 }
 
-export function composeBoundedHookContextResult(context, additions = []) {
+// `options.maxChars` (default 4,000) bounds the context's UTF-16 code units
+// and `options.maxEstimatedTokens` (default none) its estimated tokens.
+export function composeBoundedHookContextResult(
+  context,
+  additions = [],
+  options = {},
+) {
   const sections = hookContextSections(context, additions);
+  const maxTokens = options.maxEstimatedTokens;
+  let maxChars = options.maxChars ?? MAX_CONTEXT_CHARS;
+  let result = composeContextSections(sections, maxChars);
+  // A code unit costs at most one estimated token, so a character budget
+  // reduced by the excess each round ends within the token bound.
+  while (
+    maxTokens !== undefined &&
+    estimatePreferenceSnapshotTokens(result.context) > maxTokens
+  ) {
+    maxChars -= estimatePreferenceSnapshotTokens(result.context) - maxTokens;
+    result = composeContextSections(sections, maxChars);
+  }
+  return result;
+}
+
+/** ceil(ASCII code units / 4) plus one per other code point. */
+export function estimatePreferenceSnapshotTokens(text) {
+  let ascii = 0;
+  let other = 0;
+  for (const character of text) {
+    if (character.charCodeAt(0) < 0x80) ascii += 1;
+    else other += 1;
+  }
+  return Math.ceil(ascii / 4) + other;
+}
+
+function composeContextSections(sections, maxChars) {
   if (sections.length === 0) {
     return { context: "", deliveredAdditionIds: [] };
   }
   const ordered = orderedContextSections(sections);
   const full = ordered.map((section) => section.text).join("\n");
-  if (full.length <= MAX_CONTEXT_CHARS) {
+  if (full.length <= maxChars) {
     return {
       context: full,
       deliveredAdditionIds: deliveredAdditionIds(
@@ -189,7 +232,7 @@ export function composeBoundedHookContextResult(context, additions = []) {
     };
   }
 
-  const contentBudget = MAX_CONTEXT_CHARS - OMISSION_NOTICE.length - 1;
+  const contentBudget = maxChars - OMISSION_NOTICE.length - 1;
   const queryActions = sections.filter(
     (section) => section.kind === "query_action",
   );
@@ -243,16 +286,30 @@ export function composeBoundedHookContextResult(context, additions = []) {
     .reduce((best, next) => (next.length > best.length ? next : best));
   const exactActionLength = joinedSectionLength(reserved);
   const separatorCount = Math.max(0, coreGroups.length + reserved.length - 1);
+  // After the exact sections and the core minimums, the snapshot's zero-entry
+  // form and its separator are reserved; a snapshot that cannot keep even
+  // that is left out whole.
+  const [snapshot] = sections.filter(
+    (section) => section.kind === PREFERENCE_SNAPSHOT_KIND,
+  );
+  const snapshotReserve =
+    snapshot &&
+    minimumCoreLength +
+      exactActionLength +
+      separatorCount +
+      snapshot.minimum +
+      1 <=
+      contentBudget
+      ? snapshot.minimum + 1
+      : 0;
   const flexibleBudget = Math.max(
     0,
-    contentBudget - exactActionLength - separatorCount,
+    contentBudget - exactActionLength - separatorCount - snapshotReserve,
   );
-  const coreBudgets = allocateCoreContextBudgets(coreGroups, flexibleBudget);
-  const selectedSections = renderAndExpandCoreContext(
-    coreGroups,
-    coreBudgets,
-    flexibleBudget,
-  );
+  const selectedSections =
+    snapshotReserve > 0
+      ? allocateCoreContextWithSnapshot(coreGroups, snapshot, flexibleBudget)
+      : allocateCoreContext(coreGroups, flexibleBudget);
   selectedSections.push(...reserved);
 
   const optional = OPTIONAL_CONTEXT_ORDER.flatMap((kind) =>
@@ -269,7 +326,10 @@ export function composeBoundedHookContextResult(context, additions = []) {
       continue;
     }
     if (ATOMIC_OPTIONAL_KINDS.has(section.kind)) continue;
-    if (remaining >= 80) {
+    const unit = boundedCandidateUnit(section.text, remaining);
+    if (unit) {
+      selectedSections.push({ ...section, text: unit, complete: false });
+    } else if (unit === null && remaining >= 80) {
       selectedSections.push({
         ...section,
         text: boundedContextSection(section.text, remaining),
@@ -283,7 +343,7 @@ export function composeBoundedHookContextResult(context, additions = []) {
     .filter(Boolean)
     .join("\n");
   /* c8 ignore next 5 -- allocator arithmetic is fail-closed; source-mutation tests exercise this invariant */
-  if (bounded.length > MAX_CONTEXT_CHARS) {
+  if (bounded.length > maxChars) {
     throw new Error(
       "Remembrance hook context allocator exceeded its hard budget.",
     );
@@ -310,6 +370,54 @@ function mergeContextKind(sections, kind) {
     sourceIds: [...new Set(matches.flatMap((section) => section.sourceIds))],
     sourceKey: `merged:${kind}`,
   };
+}
+
+function allocateCoreContext(sections, totalBudget) {
+  return renderAndExpandCoreContext(
+    sections,
+    allocateCoreContextBudgets(sections, totalBudget),
+    totalBudget,
+  );
+}
+
+// Governance grows through every pass first, with the first candidate's floor
+// held back; the snapshot then takes what it needs up to its whole text, and
+// the first candidate grows from what remains.
+function allocateCoreContextWithSnapshot(coreGroups, snapshot, flexibleBudget) {
+  const candidate = coreGroups.filter(
+    (section) => section.kind === "candidate_primary",
+  );
+  const governance = coreGroups.filter(
+    (section) => section.kind !== "candidate_primary",
+  );
+  const candidateFloor = candidate.reduce(
+    (total, section) =>
+      total +
+      Math.min(section.text.length, CORE_CONTEXT_BUDGETS[section.kind].minimum),
+    0,
+  );
+  const selected = allocateCoreContext(
+    governance,
+    flexibleBudget - candidateFloor,
+  );
+  const governanceLength = selected.reduce(
+    (total, section) => total + section.text.length,
+    0,
+  );
+  const available =
+    snapshot.minimum + flexibleBudget - candidateFloor - governanceLength;
+  const text =
+    snapshot.text.length <= available
+      ? snapshot.text
+      : snapshot.renderPage(available);
+  selected.push({ ...snapshot, text, complete: text === snapshot.text });
+  selected.push(
+    ...allocateCoreContext(
+      candidate,
+      flexibleBudget - governanceLength - (text.length - snapshot.minimum),
+    ),
+  );
+  return selected;
 }
 
 function allocateCoreContextBudgets(sections, totalBudget) {
@@ -436,6 +544,8 @@ function growContextBudgets(budgets, targets, available) {
 function boundedRequiredContextSection(value, maxLength, kind) {
   const normalized = String(value).trim();
   if (normalized.length <= maxLength) return normalized;
+  const unit = boundedCandidateUnit(normalized, maxLength);
+  if (unit !== null) return unit;
   if (WHOLE_REQUIRED_CONTEXT_KINDS.has(kind)) {
     const marker = `[${contextKindLabel(kind)} context omitted as one complete directive.]`;
     return marker;
@@ -446,6 +556,74 @@ function boundedRequiredContextSection(value, maxLength, kind) {
   const marker = `\n[Remaining ${contextKindLabel(kind)} context omitted; do not infer omitted guidance.]`;
   const head = boundedContextHead(normalized, maxLength - marker.length);
   return `${head}${marker}`;
+}
+
+const SKILL_PREFERENCE_LINE_PREFIX =
+  "- For this skill (takes precedence over the snapshot): ";
+const SKILL_PREFERENCES_RECOVERY =
+  /^- (\d+) more preferences? for this skill (?:is|are) not shown here; (before following this skill, call get_effective_preferences .+)$/u;
+
+// A candidate and its skill notes are one unit. Optional detail of the
+// candidate goes first; then the notes' "For this skill" lines give way to
+// their one recovery line. Blocked lines are never cut, so a unit that cannot
+// keep its notes is left out (""). Null when the text has no skill notes.
+function boundedCandidateUnit(text, maxLength) {
+  const lines = text.split("\n");
+  const start = lines.findIndex((line) => line.startsWith("Skill notes for "));
+  if (start < 0) return null;
+  const head = lines.slice(0, start).join("\n");
+  // A shortened line keeps its "result <id>):" before the ellipsis, so the
+  // candidate whose notes are shown can still be fetched and rated.
+  const id = /\bresult [^\s)]+\)/u.exec(head);
+  const floor = Math.min(
+    head.length,
+    Math.max(80, id ? id.index + id[0].length + 4 : 0),
+  );
+  for (const notes of [
+    lines.slice(start),
+    reducedSkillNotes(lines.slice(start)),
+  ]) {
+    const room = maxLength - joinedLength(notes) - 1;
+    if (room >= floor) {
+      return [boundedContextSection(head, room), ...notes]
+        .filter(Boolean)
+        .join("\n");
+    }
+  }
+  return "";
+}
+
+// The notes with their "For this skill" lines replaced by one recovery line,
+// in the renderer's words; its call is the shown recovery call, or the
+// skill's own read when every line was shown.
+function reducedSkillNotes(notes) {
+  const shown = notes.filter((line) =>
+    line.startsWith(SKILL_PREFERENCE_LINE_PREFIX),
+  ).length;
+  if (shown === 0) return notes;
+  const recovery = notes
+    .map((line) => SKILL_PREFERENCES_RECOVERY.exec(line))
+    .find(Boolean);
+  const hidden = shown + Number(recovery?.[1] ?? 0);
+  const call =
+    recovery?.[2] ??
+    `before following this skill, call get_effective_preferences with skill_slug ${notes[0].slice("Skill notes for ".length, -1)}.`;
+  const kept = notes.filter(
+    (line) =>
+      !line.startsWith(SKILL_PREFERENCE_LINE_PREFIX) &&
+      !SKILL_PREFERENCES_RECOVERY.test(line),
+  );
+  const at = kept.findIndex(
+    (line, index) =>
+      index > 0 &&
+      !line.startsWith("- Set aside only while following this skill: "),
+  );
+  const position = at < 0 ? kept.length : at;
+  return [
+    ...kept.slice(0, position),
+    `- ${hidden} ${hidden === 1 ? "preference for this skill is" : "preferences for this skill are"} not shown here; ${call}`,
+    ...kept.slice(position),
+  ];
 }
 
 function boundedContextHead(value, maxLength) {
@@ -674,6 +852,10 @@ export function promptContainsFirstPartyCorrection(
   return correctionPromptContainsFirstPartyCorrection(String(prompt ?? ""));
 }
 
+const CANDIDATE_LINE = /^- \[(?:HIGH|POSSIBLE|EXPLORATORY) MATCH\]/u;
+const NOTED_CANDIDATE_LINE =
+  /^- \[(?:(?:HIGH|POSSIBLE) MATCH|EXPLORATORY(?: MATCH)?)\]/u;
+
 function hookContextSections(context, additions) {
   let candidateSeen = false;
   const values = [
@@ -684,6 +866,8 @@ function hookContextSections(context, additions) {
             text: addition.text,
             id: String(addition.id ?? "").trim() || null,
             kind: String(addition.kind ?? "").trim() || null,
+            minimum: addition.minimum,
+            renderPage: addition.renderPage,
           }
         : { text: addition, id: null, kind: null },
     ),
@@ -698,6 +882,8 @@ function hookContextSections(context, additions) {
           text,
           sourceIds: value.id ? [value.id] : [],
           sourceKey: `typed:${sections.length}:${value.id ?? ""}`,
+          minimum: value.minimum,
+          renderPage: value.renderPage,
         });
       }
       continue;
@@ -708,14 +894,36 @@ function hookContextSections(context, additions) {
       .map((line) => line.trim())
       .filter(Boolean);
     let current = null;
+    let skillNotes = false;
+    // The hook labels an exploratory candidate "- [EXPLORATORY]". Beside
+    // skill notes that line starts its own candidate unit, so no candidate's
+    // notes are bounded with, or credited to, another candidate; text
+    // without notes keeps its former sections.
+    const candidateLine = lines.some((line) =>
+      line.startsWith("Skill notes for "),
+    )
+      ? NOTED_CANDIDATE_LINE
+      : CANDIDATE_LINE;
     for (const line of lines) {
-      const explicitKind = explicitContextKindForLine(line, candidateSeen);
+      // A candidate's skill notes stay in its section, whatever their words.
+      if (skillNotes && line.startsWith("- ") && !candidateLine.test(line)) {
+        current.text += `\n${line}`;
+        continue;
+      }
+      skillNotes =
+        line.startsWith("Skill notes for ") &&
+        /^candidate_/u.test(current?.kind ?? "");
+      const explicitKind = explicitContextKindForLine(
+        line,
+        candidateSeen,
+        candidateLine,
+      );
       const genericKind = genericRequiredContextKindForLine(line);
       if (explicitKind) {
         if (
           current &&
           /^(?:Skills:|Resources:)$/u.test(current.text) &&
-          /^- \[(?:HIGH|POSSIBLE|EXPLORATORY) MATCH\]/u.test(line)
+          candidateLine.test(line)
         ) {
           current.text += `\n${line}`;
           candidateSeen = true;
@@ -723,7 +931,7 @@ function hookContextSections(context, additions) {
         }
         if (current) sections.push(current);
         current = { kind: explicitKind, text: line, sourceIds: [] };
-        if (/^- \[(?:HIGH|POSSIBLE|EXPLORATORY) MATCH\]/u.test(line)) {
+        if (candidateLine.test(line)) {
           candidateSeen = true;
         }
       } else if (
@@ -769,7 +977,7 @@ function hookContextSections(context, additions) {
   });
 }
 
-function explicitContextKindForLine(line, candidateSeen) {
+function explicitContextKindForLine(line, candidateSeen, candidateLine) {
   if (line === OMISSION_NOTICE) return "other";
   if (/^Required organization settings\b/iu.test(line)) {
     return REQUIRED_SETTINGS_KIND;
@@ -806,7 +1014,7 @@ function explicitContextKindForLine(line, candidateSeen) {
     )
   )
     return "completion";
-  if (/^- \[(?:POSSIBLE|EXPLORATORY) MATCH\]/u.test(line)) {
+  if (candidateLine.test(line)) {
     return candidateSeen ? "candidate_additional" : "candidate_primary";
   }
   if (/^(?:Skills:|Resources:)/u.test(line)) {

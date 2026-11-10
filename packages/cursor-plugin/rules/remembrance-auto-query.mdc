@@ -13,15 +13,14 @@ When a person explicitly names a Remembrance skill or supplies a `remembrance://
 
 Otherwise, before reusable work involving external services, APIs, frameworks, CI/CD, deployments, payments, MCP, resource selection, dashboards, UI/UX, reviews, tests, security fixes, or unfamiliar integrations, call the Remembrance MCP tool `query_skills` first.
 
-Apply returned `effective_preferences` silently only to discretionary
-presentation, workflow, or strategy choices. They may steer among
-already-relevant skills inside one match tier but never change applicability or
-a hard requirement. When the user explicitly states or corrects a durable
-working preference, call `record_preference` with normalized fields and hashes
-only; never send prompt text. Built-ins need key/value; another preference needs
-a stable `<effect>.<concept>` key, value, label, behavior, effect, direction,
-and definition version. Use `scope: "auto"` unless the user explicitly limits
-it to a project, skill, or domain. Do not record one-off wording as a durable
+Remembrance preferences arrive as a text snapshot that begins "Remembrance preferences (profile …". Apply them silently, and only to discretionary presentation, workflow and strategy choices; required settings must be followed and never yield to a skill. Before governed work in each new request, make sure this conversation holds a fresh, complete snapshot for this request: use the one in this request's required query_skills or invoke_skill response (one whose header says no recovery call exists also counts); otherwise call get_effective_preferences, without a skill search. When the header says incomplete, make the recovery call it names before governed work. Send known_digest only when this conversation already holds the complete snapshot for this exact context with that digest, every page included, with no summary or context reset since; never for an incomplete, stale or cached copy.
+
+When the user explicitly states or corrects a durable working preference, call
+`record_preference` with normalized fields and hashes only; never send prompt
+text. Built-ins need key/value; another preference needs a stable
+`<effect>.<concept>` key, value, label, behavior, effect, direction, and
+definition version. Use `scope: "auto"` unless the user explicitly limits it to
+a project, skill, or domain. Do not record one-off wording as a durable
 preference. A missing principal session means personal preferences are
 temporarily unavailable, not that the organization key failed.
 

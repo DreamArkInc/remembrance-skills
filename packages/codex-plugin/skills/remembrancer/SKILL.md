@@ -146,15 +146,44 @@ Do not use this skill when:
    plugin-instruction compliance loop and never affects ranking or trust.
 3. Use `match_tier` as a decision aid, not rank alone. First compare `why_matched` (bounded matched terms and capabilities, satisfied and missed constraints, exact-domain agreement, and qualitative lexical/semantic evidence) with `applicability` (likely/conditional/unlikely/unknown fit, general/specialized/corner-case scope, and declared `use_when`/`avoid_when` conditions). Raw numerical ranking scores are intentionally not exposed. Unknown applicability never means general applicability. Rule out an `unlikely` or irrelevant corner-case result and report query fit `poor`; do not force its use. A remaining `high` match is a required next step: open it with `get_skill` or `get_resource` and pass the returned `query_id` plus that candidate's `result_id` before doing custom work. `possible` and `exploratory` matches remain optional. Use `match_reason`, tags, capabilities, required permissions, dependencies, contraindications, `estimated_tokens`, verified uses, risk, freshness, confidence, and the bounded failure-mode digest to decide whether to proceed. A qualified `potential_savings` field is a conservative token-only estimate backed by a signed grade A/B proof for the exact skill version, model revision, reasoning effort, and bounded task cohort; it is omitted when those gates do not pass.
 4. Read `skill_access` on every query response. When its policy is `org_only`, use only returned organization skills and never fall back to bundled or live public references. Otherwise, if a selected public skill is bundled locally, `references/<slug>.md` remains the offline fallback. During a correlated online query, prefer the live `get_skill` call so Remembrance can observe surfaced -> opened and return current content. See "Specialized skills" below.
-5. Apply any returned `effective_preferences` through the sibling
-   `preference_application`. A preference may steer among already-relevant
+5. Apply the preference snapshot. MCP `query_skills` and `invoke_skill`
+   results carry it in `preferences` and add `skill_notes` for each skill;
+   native hooks inject the project's snapshot. Its header reads
+   `Remembrance preferences (profile <digest>, context <id>; complete)`, or
+   names after `incomplete:` the reason, what is missing, and the exact
+   recovery call: make that call before governed work. Page 1 of a large
+   profile opens with "Before any other action, call get_effective_preferences
+   with page_token <t> until complete." (or "... for the remaining pages."
+   when the header says no recovery call exists; the last page then stays
+   incomplete and needs no further call); repeat that call, with the same
+   `keys` and `task_preferences` when the status asks for them, until the
+   header says complete. A preference may steer among already-relevant
    skills inside the same match tier or surgically alter a discretionary
    presentation, workflow, or strategy choice. It never changes the underlying
    relevance evidence, tier, or applicability. Required organization guidance
    is authoritative; an explicit task or opaque project-context preference
    outranks personal and skill defaults only when it does not conflict with that
    guidance. Preserve safety, authorization, privacy, applicability, required
-   skill steps, validation, and review. When the user states a durable working
+   skill steps, validation, and review. A skill note "Set aside only while
+   following this skill" marks a conflict confirmed by your organization, the
+   skill's reviewed metadata, or verified members: keep applying that
+   preference to all other work. A conflict that only a model check suggests
+   is a note, not a block, so the preference still applies. A required setting
+   is never set aside: if a step the skill requires cannot be done while
+   following it, do not do that step and report the conflict. On a host without
+   per-prompt injection, hold a fresh, complete snapshot before governed work
+   in each new request: the one in that request's `query_skills` or
+   `invoke_skill` response counts, and so does one whose header says no
+   recovery call exists; otherwise call `get_effective_preferences` without a
+   skill search. Send `known_digest` only when this conversation
+   holds the complete snapshot for that exact context with that digest, every
+   page included, with no summary or context reset since, and never for an
+   incomplete, stale, or cached copy; an unchanged profile then returns one
+   short line. After using a skill, `submit_preference_compatibility_feedback`
+   takes a fingerprint from that result's offer or the `preference_key` of any
+   preference that was active for that use. REST callers apply
+   `effective_preferences` through the sibling `preference_application`
+   instead. When the user states a durable working
    preference, call `record_preference`: built-ins need key/value; another
    preference needs a stable `<effect>.<concept>` key, stable value, short label,
    normalized behavior, `presentation|workflow|strategy_selection` effect,
@@ -173,9 +202,10 @@ Do not use this skill when:
    captured. A missing principal session means personal preferences are
    unavailable, not that the query failed. An empty `effective_preferences` list
    only proves an empty profile when the accompanying `personalization` block
-   says `available: true`; `organization_scope_only` means the personal scopes
-   in `omitted_scopes` were never read, so a stored personal preference may
-   exist and simply not be listed.
+   says `available: true` and, on a current server, `completeness.complete` is
+   true; `organization_scope_only` means the personal scopes in
+   `omitted_scopes` were never read, so a stored personal preference may exist
+   and simply not be listed.
 
    Installation and member preferences reach every agent runtime on that
    identity, so another agent family may have written one, and one preference

@@ -14,7 +14,10 @@
 //
 //   PRE-prompt  (before_prompt_build): matches the user's prompt via the shared
 //     heuristic, queries Remembrance, and injects the matching skills/resources
-//     as extra system context (appendSystemContext). It records task eligibility
+//     as extra system context (appendSystemContext). With an organization key
+//     every run also carries the preference snapshot; its project is the one
+//     REMEMBRANCE_PROJECT_KEY or REMEMBRANCE_PROJECT_PATH names, never the
+//     gateway's directory. It records task eligibility
 //     independently from completed query use, so a contextual follow-up or
 //     failed query can be recovered at completion. Respects
 //     REMEMBRANCE_AUTO_QUERY=0. Fail-open: query errors inject bounded recovery
@@ -66,6 +69,7 @@ import {
   directSelectionFromResponse,
   foldTurnLedgerIntoSession,
   highMatchFromResponse,
+  HOOK_CONTEXT_BUDGETS,
   markHostPolicyAlertDelivered,
   observeSuccessfulCompletionTool,
   readPendingHostPolicyAlert,
@@ -508,7 +512,9 @@ export async function handlePrePrompt(event, options = {}) {
     );
     const prompt = promptFromEvent(event);
     const nativePrompt = nativeUserPromptFromEvent(event);
+    const budget = HOOK_CONTEXT_BUDGETS.openclaw;
     const result = await runPromptHook(prompt, {
+      ...budget,
       env,
       fetchImpl: options.fetchImpl ?? fetch,
       stderr: options.stderr,
@@ -531,12 +537,23 @@ export async function handlePrePrompt(event, options = {}) {
       nativeSessionId:
         nativePrompt === null ? null : nativeSessionIdFromEvent(event),
       nativeContextBridge: options.nativeContextBridge,
+      // A gateway serves several workspaces, so its own directory names no
+      // project: reads and project-scoped writes use only the project that
+      // REMEMBRANCE_PROJECT_KEY or REMEMBRANCE_PROJECT_PATH names.
+      projectKeyFallback: false,
       userAgent: "@remembrance/openclaw-plugin",
     });
-    if (!result) {
-      if (!updateNotice) return undefined;
-      markClientUpdateDelivered(options.updateDeliveredSessions, ledgerId);
-      return { appendSystemContext: updateNotice };
+    // Nothing, or only the preference snapshot, which records nothing. A
+    // pending update notice goes with it when both fit the host budget, and
+    // otherwise waits for a later run.
+    if (!result || result.preferencesOnly) {
+      const snapshot = result?.context ?? "";
+      const withNotice = [updateNotice, snapshot].filter(Boolean).join("\n\n");
+      if (updateNotice && (!snapshot || withNotice.length <= budget.maxChars)) {
+        markClientUpdateDelivered(options.updateDeliveredSessions, ledgerId);
+        return { appendSystemContext: withNotice };
+      }
+      return snapshot ? { appendSystemContext: snapshot } : undefined;
     }
     if (result.deliveredContextAdditionIds?.includes("client_update")) {
       markClientUpdateDelivered(options.updateDeliveredSessions, ledgerId);

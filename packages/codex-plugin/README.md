@@ -61,18 +61,26 @@ older bundle paths, and stops at the first failed step.
 Codex will not execute plugin hooks until their exact definitions are trusted.
 In the Codex window opened by the installer, if Codex shows a **Hooks need
 review** screen, choose **Review hooks** and trust only the Remembrance
-`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, and `SubagentStop`
-hooks (press `t` on each). If no review screen appears, continue: Codex may be
-reusing an existing valid trust decision. Changed hook definitions show the
-same review screen again; this is a Codex security boundary and the installer
-does not bypass it. Fully restart Codex before verification.
+`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, `SubagentStart`, and
+`SubagentStop` hooks (press `t` on each). If no review screen appears, continue:
+Codex may be reusing an existing valid trust decision. Changed hook definitions
+show the same review screen again; this is a Codex security boundary and the
+installer does not bypass it. Fully restart Codex before verification.
 
-**After an update.** Codex trusts a hook by the hash of its definition, so an
-update that changes a hook holds it until you approve it again. Updating from
-0.1.x to 0.2.0 changes all five: Codex holds `SessionStart`,
-`UserPromptSubmit`, `PostToolUse`, and `Stop` as modified and the new
-`SubagentStop` as new, and runs no Remembrance hook until you approve them in
-the review above; the MCP tools keep working. While Codex holds any of them,
+**After an update.** Codex trusts a hook by the hash of its registration (its
+event, matcher and command, not the script's content), so an update that
+changes a registration holds that hook until you approve it again. Updating
+from 0.1.x to 0.2.0 changed all five then registered: Codex held
+`SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` as modified and
+the new `SubagentStop` as new, and ran no Remembrance hook until you approved
+them in the review above. Updating from 0.2.18 asks for a review of one hook
+only: the new `SubagentStart`, which gives subagents the preference snapshot.
+Until you approve it, a subagent starts without that snapshot and, before
+governed work, uses the one in its own `query_skills` or `invoke_skill` result
+or calls `get_effective_preferences`. `SessionStart`, `UserPromptSubmit`,
+`PostToolUse`, `Stop`, and `SubagentStop` keep their 0.2.18 registrations and
+their trust, so every prompt still gets its search and its preference
+snapshot. The MCP tools keep working throughout. While Codex holds any hook,
 the bundled MCP server says so where the agent sees it:
 
 - Its initialize instructions carry one line after the core rules:
@@ -336,19 +344,27 @@ generative preference call or second embedding request. Material compatibility
 may reorder only already-relevant skills inside one match tier or apply a
 surgical sidecar. Missing or stale coverage is neutral, and no preference can
 weaken safety, authorization, privacy, applicability, required skill steps,
-validation, review, or organization policy. Exact skill-version changes queue
+validation, review, or organization policy. A skill sets an ordinary
+preference aside only for a locked conflict confirmed by the organization,
+declared in the skill's reviewed metadata, or corroborated by verified members
+of the organization, and only while that skill is followed; a conflict that
+only a model check suggests is a note, not a block. Required organization
+settings are never set aside: a confirmed locked conflict with one makes the
+skill unavailable. Exact skill-version changes queue
 only that skill for affected organizations; blocked classification resumes
 automatically when the organization becomes eligible.
 
 After actual use of an exact skill version, native hooks silently instruct the
 agent to call `submit_preference_compatibility_feedback` only when observed
 behavior clearly supports or conflicts with a normalized preference. The call
-uses the exact correlation IDs and server-issued preference fingerprint from
-that result's feedback offer, which the server verifies against the recorded
-fetch and active preference. Hooks do not ask the user to confirm routine
-telemetry or replay an existing classifier label as new evidence. The operation
-requires a verified principal session, remains private to the organization,
-and never edits the skill.
+uses the exact correlation IDs and either the server-issued preference
+fingerprint from that result's feedback offer or the `preference_key` of a
+preference that was active for that skill use, which the server verifies
+against the recorded fetch and active preference; a key that matches none, or
+more than one, of that use's preferences is refused. Hooks do not ask the user
+to confirm routine telemetry or replay an existing classifier label as new
+evidence. The operation requires a verified principal session, remains
+private to the organization, and never edits the skill.
 
 ## Manual install (config.toml)
 
@@ -378,6 +394,11 @@ command = 'sh "/abs/path/to/codex-plugin/scripts/node-launcher" "/abs/path/to/co
 [[hooks.Stop.hooks]]
 type = "command"
 command = 'sh "/abs/path/to/codex-plugin/scripts/node-launcher" "/abs/path/to/codex-plugin/scripts/contribute-on-stop.mjs"'
+
+[[hooks.SubagentStart]]
+[[hooks.SubagentStart.hooks]]
+type = "command"
+command = 'sh "/abs/path/to/codex-plugin/scripts/node-launcher" "/abs/path/to/codex-plugin/scripts/subagent-start.mjs"'
 
 [mcp_servers.remembrance]
 command = "sh"
@@ -636,6 +657,21 @@ skills/resources. It is enabled by default; set
 `REMEMBRANCE_AUTO_QUERY=0` to disable network auto-query. The v0.1 heuristic is
 English-first, so multilingual workflows should call `query_skills` explicitly
 when useful.
+
+With an organization credential, the hooks also give the agent your working
+preferences for the session's project as a text snapshot: `SessionStart` at
+startup, resume, clear and compaction, `UserPromptSubmit` on every prompt,
+whether or not it searches, and `SubagentStart` for each subagent.
+The project is the path in `REMEMBRANCE_PROJECT_PATH` when you set it, else
+the session's working directory; a `prj_` key in `REMEMBRANCE_PROJECT_KEY`
+wins over both, as in the MCP server.
+Each hook's whole context fits in 7,000 characters and 2,000 estimated tokens;
+a larger profile arrives as page 1, which lists the required settings first
+and opens with the `get_effective_preferences` call that fetches the rest. A
+preference changed during a turn applies from the next prompt. When the live
+read fails, a hook may show its saved copy for the same identity and project,
+at most 7 days old, marked incomplete with the call that recovers it.
+`REMEMBRANCE_AUTO_QUERY=0` stops the snapshots together with the search.
 
 The `Stop` (completion) hook is a silent recovery checkpoint. When the session
 used Remembrance or an eligible task missed a query, it records bounded pending

@@ -70,6 +70,7 @@ import {
   boundedContextSection,
   composeBoundedHookContext,
   composeBoundedHookContextResult,
+  estimatePreferenceSnapshotTokens,
   PRIVATE_LEARNING_INSPECTOR_DIGEST,
   promptContainsFirstPartyCorrection,
   userCorrectionCaptureDirectiveText,
@@ -94,16 +95,12 @@ const MAX_SUMMARY_CHARS = 1200;
 const MAX_CONTEXT_CHARS = 4000;
 const MAX_CONTEXT_FIELD_CHARS = 280;
 const MAX_DIRECTIVE_CHARS = 900;
-// Room for the rules, one complete custom preference (96-char label, 320-char
-// behavior), and an omission note that points to the rest.
-const MAX_PREFERENCE_CONTEXT_CHARS = 1200;
-const MAX_MANDATORY_PREFERENCE_CONTEXT_CHARS = 1200;
-// Mirrors MAX_MANDATORY_ORG_PREFERENCES in core: up to eight exact keys
-// (1,313 characters at the 96-character key limit) fit the required fetch.
-const MAX_REQUIRED_SETTING_KEYS = 8;
 const VALUE_EPISODE_MARKER_LIMIT = 20;
 const VALUE_EPISODE_MARKER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DIRECT_SELECTION_MARKER_LIMIT = 20;
+// Twenty records of 64 maximal offered preferences can pass this bound, so a
+// write drops the oldest records until the file fits it.
+const MAX_DIRECT_SELECTION_BYTES = 1024 * 1024;
 const DIRECT_SELECTION_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
 const COMPLETION_OBLIGATION_LIMIT = 64;
 // The most pointer entries one read of a ledger examines over its two pointer
@@ -202,27 +199,14 @@ const COMPLETION_CONTRIBUTION_TOOLS = new Set([
   "submit_resource_review",
 ]);
 const PREFERENCE_EVIDENCE_SKILL_LIMIT = 2;
-const PREFERENCE_EVIDENCE_SETTING_LIMIT = 4;
+// Offered preferences kept per skill-use record; the record also counts
+// every offered one.
+const PREFERENCE_EVIDENCE_SETTING_LIMIT = 64;
 const PREFERENCE_EVIDENCE_CONTEXT_CHARS = 520;
 // submit_preference_compatibility_feedback accepts a query_id, result_id,
 // skill_slug and skill_version_id of up to 160 characters each, so the hook
 // carries them that far unchanged: a shortened ID is a wrong ID.
 const MAX_FEEDBACK_IDENTIFIER_CHARS = 160;
-// Mirrors MAX_EFFECTIVE_PREFERENCES in core: a response never states more.
-const MAX_EFFECTIVE_PREFERENCE_STATEMENTS = 32;
-const EFFECTIVE_PREFERENCE_SOURCES = new Set([
-  "mandatory_org",
-  "explicit_task",
-  "explicit_project",
-  "explicit_member_runtime",
-  "explicit_member",
-  "learned_member_runtime",
-  "learned_member",
-  "explicit_installation",
-  "learned_installation",
-  "recommended_org",
-  "skill_default",
-]);
 const PREFERENCE_EVIDENCE_SOURCES = new Set([
   "mandatory_org",
   "explicit_project",
@@ -244,6 +228,10 @@ const PLUGIN_ALERT_LIMIT = 32;
 const CLIENT_UPDATE_CACHE_TTL_MS = 5 * 60 * 1000;
 const CLIENT_UPDATE_TIMEOUT_MS = 1200;
 const PRINCIPAL_SESSION_TIMEOUT_MS = 1200;
+// How long a warm-up the registry refused spares reads and searches made
+// without a session from starting another one; also the longest a busy
+// registry's Retry-After (408 or 429) does so.
+const PRINCIPAL_SESSION_REFUSAL_COOLDOWN_MS = 10 * 60 * 1000;
 const MAX_LOCAL_PRINCIPAL_SESSION_BYTES = 16 * 1024;
 // The recovery reminders parse a private skill draft's whole encrypted envelope
 // to read its state. 4 MiB holds a 56,000-character skill with its projection,
@@ -251,6 +239,8 @@ const MAX_LOCAL_PRINCIPAL_SESSION_BYTES = 16 * 1024;
 // the reminders, never read partly. This is not a submission limit.
 const MAX_PRIVATE_SKILL_ENVELOPE_BYTES = 4 * 1024 * 1024;
 const principalSessionWarmups = new Map();
+// Warm-up keys whose last warm-up in this process hit its time bound.
+const principalSessionWarmupTimeouts = new Set();
 export const HOST_POLICY_ALERT_TEXT =
   "The host blocked this Remembrance action. Do not treat it as submitted. Earlier successful actions are unaffected; querying remains available.";
 export const PRIVATE_LESSON_HOST_POLICY_ALERT_TEXT =
@@ -1041,12 +1031,14 @@ export function clientUserAgent(base = DEFAULT_USER_AGENT) {
   return version ? `${normalized}/${version}` : normalized;
 }
 
+// `options.projectKeyFallback: false` is projectKeyForHook's `fallback`.
 export function buildQueryPayload(
   prompt,
   env = process.env,
   identity = DEFAULT_AGENT_IDENTITY,
   clientContext = null,
   projectPath = null,
+  options = {},
 ) {
   const redacted = redactPrompt(prompt).trim();
   const summary =
@@ -1058,7 +1050,9 @@ export function buildQueryPayload(
     Boolean(credential.apiKey) &&
     !isUnusableConfigurationSource(credential.source);
   const projectKey = organizationCredentialAvailable
-    ? projectKeyForHook(env, projectPath)
+    ? projectKeyForHook(env, projectPath, {
+        fallback: options.projectKeyFallback !== false,
+      })
     : null;
   const resolvedClientContext = clientContext
     ? (() => {
@@ -1091,12 +1085,20 @@ export function buildQueryPayload(
   };
 }
 
-export function projectKeyForHook(env = process.env, projectPath = null) {
+// `fallback: false` keeps a host that cannot name the agent's project (an
+// OpenClaw gateway) from using its own directory: only REMEMBRANCE_PROJECT_KEY,
+// REMEMBRANCE_PROJECT_PATH or the project path argument count. A configured
+// path that still holds an unexpanded ${...} placeholder reads as unset. A
+// user-set REMEMBRANCE_PROJECT_PATH wins over the host's path, as it does in
+// the MCP server, so both name the same project.
+export function projectKeyForHook(
+  env = process.env,
+  projectPath = null,
+  { fallback = true } = {},
+) {
   const configured = String(env.REMEMBRANCE_PROJECT_KEY ?? "").trim();
   if (/^prj_[A-Za-z0-9_-]{12,120}$/.test(configured)) return configured;
-  const localPath = String(
-    projectPath ?? env.REMEMBRANCE_PROJECT_PATH ?? env.PWD ?? process.cwd(),
-  ).trim();
+  const localPath = hookProjectPath(env, projectPath, fallback);
   if (!localPath) return null;
   const identity = readHookIdentity(env);
   if (!identity?.private_key) return null;
@@ -1104,6 +1106,27 @@ export function projectKeyForHook(env = process.env, projectPath = null) {
     .update(`remembrance-project-v1:${localPath}`, "utf8")
     .digest("base64url")
     .slice(0, 32)}`;
+}
+
+// The path projectKeyForHook keys, or "" when the host names none.
+function hookProjectPath(env, projectPath, fallback) {
+  const configuredPath = String(env.REMEMBRANCE_PROJECT_PATH ?? "").includes(
+    "${",
+  )
+    ? undefined
+    : env.REMEMBRANCE_PROJECT_PATH;
+  return String(
+    configuredPath ??
+      projectPath ??
+      (fallback ? (env.PWD ?? process.cwd()) : ""),
+  ).trim();
+}
+
+// Whether the host names a project, keyed or not: without a key, a named
+// project only lacks the local identity that keys it (a first prompt before
+// the warm-up created one), and naming it again would not help.
+function hookProjectNamed(env, projectPath, fallback) {
+  return fallback || hookProjectPath(env, projectPath, false) !== "";
 }
 
 export function buildEconomicsContext(summary, env, identity) {
@@ -1302,6 +1325,8 @@ export async function queryRemembrance(payload, options = {}) {
     const sessionStatus = response.headers?.get?.(
       "x-remembrance-principal-session-status",
     );
+    const warming =
+      sessionStatus === "refresh_required" || !principalSession?.token;
     if (sessionStatus === "refresh_required") {
       clearHookPrincipalSession(runtime, env, access);
       void warmPrincipalSession(
@@ -1313,7 +1338,10 @@ export async function queryRemembrance(payload, options = {}) {
         },
         env,
       ).catch(() => null);
-    } else if (!principalSession?.token) {
+    } else if (
+      !principalSession?.token &&
+      !principalSessionRecentlyRefused(runtime, env, access)
+    ) {
       // SessionStart is not guaranteed on every host. Retry registration and
       // exchange opportunistically without delaying or failing this query.
       void warmPrincipalSession(
@@ -1342,7 +1370,13 @@ export async function queryRemembrance(payload, options = {}) {
       debugLog(env, "malformed_response", { error: errorName(error) }, options);
       return null;
     }
-    return { body };
+    // Sent without a usable session, the search read organization settings
+    // only. While the warm-up it started can still bring a session,
+    // get_effective_preferences recovers the rest (DESIGN 4.3).
+    return {
+      body,
+      coldStart: warming && principalSessionMayArrive(runtime, env, access),
+    };
   } catch (error) {
     debugLog(
       env,
@@ -1357,16 +1391,17 @@ export async function queryRemembrance(payload, options = {}) {
 }
 
 // A search the hygiene rules stopped still delivers what it would have
-// governed the task with. An organization credential reads the policy,
-// required settings and preferences from the effective-preferences endpoint
-// for the would-be query's domain and project, with the query's credential
-// and principal session; a caller without a credential has none to read.
-// `context` opens with the header a search's context opens with; `governs`
-// is false when it carries nothing past it, and the hook then delivers it
-// only beside another addition. `search` is true when the read failed, the
-// policy was not confirmed or the shared config is unusable: the hook then
-// runs the search the rule stopped, exactly as without the rule, so a failed
-// read never costs a delivery, and a search that fails too fails closed.
+// governed the task with. An organization credential reads the policy and
+// preferences from the effective-preferences endpoint for the would-be
+// query's domain and project, with the query's credential and principal
+// session; a caller without a credential has none to read. `context` opens
+// with the header a search's context opens with; `governs` is false when it
+// carries nothing past it, and the hook then delivers it only beside another
+// addition. `read` is the preference read, the source of the prompt's
+// snapshot. `search` is true when the read failed, the policy was not
+// confirmed or the shared config is unusable: the hook then runs the search
+// the rule stopped, exactly as without the rule, so a failed read never costs
+// a delivery, and a search that fails too fails closed.
 export async function stoppedSearchGovernance(payload, options = {}) {
   const env = options.env ?? process.env;
   const access = resolveApiAccessSnapshot(env);
@@ -1380,7 +1415,7 @@ export async function stoppedSearchGovernance(payload, options = {}) {
   };
   if (!access.credential.apiKey) return nothing;
   const projectKey = payload?.client_context?.project_key;
-  const body = await readEffectivePreferences(
+  const read = await readEffectivePreferences(
     {
       keys: [],
       domains: [payload?.task?.domain].filter(Boolean),
@@ -1393,64 +1428,16 @@ export async function stoppedSearchGovernance(payload, options = {}) {
       runtime: normalizeRuntime(payload?.client_context?.runtime),
     },
   );
-  if (!body || !["allow", "org_only"].includes(body.skill_access?.policy)) {
+  if (
+    !read.ok ||
+    !["allow", "org_only"].includes(read.body.skill_access?.policy)
+  ) {
     return { search: true };
   }
-  const context = governanceContext(body, {
-    maxChars: options.maxChars ?? 32_000,
-  });
-  return context ? { search: false, governs: true, context } : nothing;
-}
-
-async function readEffectivePreferences(request, options) {
-  const env = options.env;
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    autoQueryTimeoutMs(env, DEFAULT_TIMEOUT_MS),
-  );
-  try {
-    const { headers } = hookRegistryHeaders(
-      options.access,
-      options.runtime,
-      env,
-      options.userAgent,
-    );
-    const response = await (options.fetchImpl ?? fetch)(
-      `${options.access.apiConfiguration.apiUrl}/api/v1/agent/preferences/effective`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify(request),
-        signal: controller.signal,
-      },
-    );
-    if (!response.ok) {
-      debugLog(
-        env,
-        "effective_preferences_http_error",
-        { status: response.status },
-        options,
-      );
-      return null;
-    }
-    const body = await response.json();
-    return body && typeof body === "object" && !Array.isArray(body)
-      ? body
-      : null;
-  } catch (error) {
-    debugLog(
-      env,
-      errorName(error) === "AbortError"
-        ? "effective_preferences_timeout"
-        : "effective_preferences_error",
-      { error: errorName(error) },
-      options,
-    );
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
+  const context = governanceContext(read.body);
+  return context
+    ? { search: false, governs: true, context, read }
+    : { ...nothing, read };
 }
 
 export async function createContinuationDirective(options = {}) {
@@ -1640,8 +1627,10 @@ export function highMatchFromResponse(response) {
 
 // Format the query response into the plain context string Codex injects via
 // additionalContext. Returns null when there is nothing useful to inject.
+// Working preferences arrive separately as the preference snapshot; each
+// skill candidate carries its own skill notes.
 // `options.env` selects the capture guidance of the empty-result context that
-// carries a filtered response's organization policy and required settings.
+// carries a filtered response's organization policy.
 // `options.querySummary`, the summary the query sent, keeps a proposal that
 // repeats it out of the context.
 export function formatContext(
@@ -1664,13 +1653,12 @@ export function formatContext(
         .slice(0, itemLimit)
     : [];
   const noResults = body?.no_results ?? null;
-  const { governanceLines, discretionaryPreferenceLines } =
-    governanceContextLines(body);
+  const governanceLines = governanceContextLines(body);
   if (skills.length === 0 && resources.length === 0 && !noResults) {
     // The server sends no_results only for raw-empty arrays, so a response
     // whose every candidate was filtered out arrives without it. Its
-    // governance still applies, in the empty-result context and without any
-    // filtered candidate, ID, or offer.
+    // organization policy still applies, in the empty-result context and
+    // without any filtered candidate or ID.
     return governanceLines.length > 0
       ? emptyQueryContext(reason, options.env, governanceLines)
       : null;
@@ -1709,7 +1697,6 @@ export function formatContext(
   // append-then-truncate order let rich per-candidate decision labels push
   // them past MAX_CONTEXT_CHARS, silently evicting the directive.
   const requiredTailLines = [];
-  const optionalItems = [];
   if (noResults) {
     const proposedSkillIdea = safeProposedSkillIdeaPayload(
       noResults,
@@ -1728,13 +1715,6 @@ export function formatContext(
       `After using Remembrance: ${safeText(contributionDirective, MAX_DIRECTIVE_CHARS)}`,
     );
   }
-  const preferenceEvidence = preferenceCompatibilityEvidenceFromResponse(body);
-  if (preferenceEvidence.length > 0) {
-    optionalItems.push({
-      line: preferenceCompatibilityEvidenceInstruction(preferenceEvidence),
-      fallback: null,
-    });
-  }
   if (skills.length > 0 || resources.length > 0) {
     requiredTailLines.push(
       "Delegating this task? Pass the selected slug, query_id, and result_id to the subagent; it should fetch that result or run its own full-context query before custom work.",
@@ -1743,11 +1723,22 @@ export function formatContext(
 
   const candidateSections = [];
   if (skills.length > 0) {
+    // Each skill's notes stay in its line, so no allocator splits them.
+    const notes = new Map(
+      (preferenceSnapshotModel(body)?.candidates ?? []).map((candidate) => [
+        candidate.slug,
+        renderSkillPreferenceNotes(candidate),
+      ]),
+    );
     candidateSections.push({
       header: "Skills:",
-      lines: skills.map(
-        (skill) =>
+      lines: skills.map((skill) =>
+        [
           `- [${matchTierLabel(skill.match_tier)}] ${safeText(skill.slug, 80)} (${candidateEvidenceLabel(skill)}${skill.result_id ? `, result ${safeText(skill.result_id, 80)}` : ""}): ${safeText(skill.description, MAX_CONTEXT_FIELD_CHARS)}${candidateDecisionLabel(skill)}`,
+          notes.get(String(skill.slug ?? "")),
+        ]
+          .filter(Boolean)
+          .join("\n"),
       ),
     });
   }
@@ -1763,10 +1754,7 @@ export function formatContext(
   return prioritizedQueryContext({
     criticalLines: lines,
     candidateSections,
-    optionalItems: [
-      ...optionalItems,
-      ...discretionaryPreferenceItems(discretionaryPreferenceLines),
-    ],
+    optionalItems: [],
     requiredTailLines,
     maxChars: options.maxChars ?? MAX_CONTEXT_CHARS,
   });
@@ -1777,82 +1765,33 @@ const AUTO_QUERY_CONTEXT_HEADER = "Remembrance auto-query context:";
 const ORGANIZATION_ONLY_POLICY_LINE =
   "Organization policy: use organization skills only. Do not use public skills or bundled public skill references, including as an offline fallback.";
 
-// The organization policy and required settings govern the task whether or
-// not any returned candidate applies to it; discretionary preferences follow.
+// The organization policy governs the task whether or not any returned
+// candidate applies to it.
 function governanceContextLines(body) {
-  const governanceLines = [];
-  if (body?.skill_access?.policy === "org_only") {
-    governanceLines.push(ORGANIZATION_ONLY_POLICY_LINE);
-  }
-  const effectivePreferenceLines = effectivePreferencesContextLines(
-    body?.effective_preferences,
-  );
-  governanceLines.push(
-    ...effectivePreferenceLines.filter((line) =>
-      line.startsWith("Required organization settings"),
-    ),
-  );
-  const discretionaryPreferenceLines = effectivePreferenceLines.filter(
-    (line) => !line.startsWith("Required organization settings"),
-  );
-  return { governanceLines, discretionaryPreferenceLines };
+  return body?.skill_access?.policy === "org_only"
+    ? [ORGANIZATION_ONLY_POLICY_LINE]
+    : [];
 }
 
-function discretionaryPreferenceItems(lines) {
-  return lines.map((line) => ({
-    line,
-    fallback:
-      "Discretionary preferences omitted from this bounded hook context; call get_effective_preferences when they could affect the task.",
-  }));
-}
-
-// What a query context says whatever the results: the organization policy,
-// required settings and discretionary preferences of a query or
-// effective-preferences response body, in a query context's own words and
-// order. Null when there are none.
-export function governanceContext(body, options = {}) {
-  const { governanceLines, discretionaryPreferenceLines } =
-    governanceContextLines(body);
-  if (
-    governanceLines.length === 0 &&
-    discretionaryPreferenceLines.length === 0
-  ) {
-    return null;
-  }
-  return prioritizedQueryContext({
-    criticalLines: [AUTO_QUERY_CONTEXT_HEADER, ...governanceLines],
-    candidateSections: [],
-    optionalItems: discretionaryPreferenceItems(discretionaryPreferenceLines),
-    requiredTailLines: [],
-    maxChars: options.maxChars ?? MAX_CONTEXT_CHARS,
-  });
+// What a query context says whatever the results: the organization policy of
+// a query or effective-preferences response body, in a query context's own
+// words and order. Null when there is none.
+export function governanceContext(body) {
+  const governanceLines = governanceContextLines(body);
+  return governanceLines.length > 0
+    ? [AUTO_QUERY_CONTEXT_HEADER, ...governanceLines].join("\n")
+    : null;
 }
 
 // What an empty task-shape search delivers (owner decision 34C): exactly what
-// a keyword-triggered empty search delivers without its no-match block. That
-// is the organization policy and required settings, and the discretionary
-// preferences when the server reported the empty result itself (no_results);
-// formatContext leaves those out of an answer whose every candidate the
-// client dropped. `governs` is false when there is none of them, and the
-// header then only introduces the prompt's own additions.
-export function emptyTaskShapeContext(response, options = {}) {
-  const body = responseBodyFromToolResponse(response);
-  const { governanceLines, discretionaryPreferenceLines } =
-    governanceContextLines(body);
-  const discretionary = body?.no_results ? discretionaryPreferenceLines : [];
-  if (governanceLines.length === 0 && discretionary.length === 0) {
-    return { governs: false, context: AUTO_QUERY_CONTEXT_HEADER };
-  }
-  return {
-    governs: true,
-    context: prioritizedQueryContext({
-      criticalLines: [AUTO_QUERY_CONTEXT_HEADER, ...governanceLines],
-      candidateSections: [],
-      optionalItems: discretionaryPreferenceItems(discretionary),
-      requiredTailLines: [],
-      maxChars: options.maxChars ?? 32_000,
-    }),
-  };
+// a keyword-triggered empty search delivers without its no-match block, the
+// organization policy. `governs` is false when there is none, and the header
+// then only introduces the prompt's own additions.
+export function emptyTaskShapeContext(response) {
+  const context = governanceContext(responseBodyFromToolResponse(response));
+  return context
+    ? { governs: true, context }
+    : { governs: false, context: AUTO_QUERY_CONTEXT_HEADER };
 }
 
 function joinedLength(lines) {
@@ -2005,67 +1944,22 @@ function candidateDecisionLabel(candidate) {
       );
     }
   }
-  const preferenceApplication = sanitizePreferenceApplication(
-    candidate?.preference_application,
-    candidate?.effective_preferences,
-  );
-  const details = [
-    ...evidence,
-    ...applicabilityParts,
-    ...(preferenceApplication ? [preferenceApplication] : []),
-  ];
+  const details = [...evidence, ...applicabilityParts];
   return details.length > 0
     ? ` Decision: ${safeText(details.join("; "), 640)}.`
     : "";
 }
 
-function sanitizePreferenceApplication(value, effectivePreferences) {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    !["skill_defaults", "surgical_overlay"].includes(value.mode)
-  ) {
-    return null;
-  }
-  // The decision note is capped, so it carries discretionary preferences only;
-  // required settings stay in their own line, complete or fetched by key.
-  const settings = sanitizeEffectivePreferenceEntries(effectivePreferences)
-    .filter((entry) => !entry.mandatory)
-    .map((entry) => entry.text);
-  if (settings.length === 0) return null;
-  const overridden = Array.isArray(value.overridden_skill_defaults)
-    ? value.overridden_skill_defaults
-        .filter(
-          (item) =>
-            item && typeof item === "object" && typeof item.key === "string",
-        )
-        .slice(0, 8)
-        .map((item) => safeText(item.key, 96))
-    : [];
-  const blocked = Array.isArray(value.blocked_preferences)
-    ? value.blocked_preferences
-        .filter(
-          (item) =>
-            item && typeof item === "object" && typeof item.key === "string",
-        )
-        .slice(0, 8)
-        .map(
-          (item) =>
-            `${safeText(item.key, 96)} (${safeText(item.reason ?? "skill requirement wins", 160)})`,
-        )
-    : [];
-  return value.mode === "surgical_overlay"
-    ? `preference sidecar ${settings.join("; ")}${overridden.length > 0 ? `; replaces discretionary skill defaults for ${overridden.join(", ")}` : ""}${blocked.length > 0 ? `; blocked by skill requirements: ${blocked.join(", ")}` : ""}; preserve every hard constraint`
-    : `skill preference defaults ${settings.join("; ")}`;
-}
-
-// Reads both offer shapes. REST responses, and MCP results from a server that
+// Reads three offer shapes. REST responses, and MCP results from a server that
 // does not shape them, carry the full per-result offer: query_id, result_id and
-// each setting beside its fingerprint. A shaped MCP query_skills result states
-// each preference once, so its compact offer lists only
+// each setting beside its fingerprint. An older shaped MCP query_skills result
+// states each preference once, so its compact offer lists only
 // `preference_fingerprints`; the query_id is the response's, the result_id the
 // result's own, and each setting is the top-level effective_preferences entry
-// that carries that fingerprint.
+// that carries that fingerprint. A current MCP view carries the flat offer
+// {query_id, result_id, skill_version_id, offer: [{preference_fingerprint,
+// key, label, behavior, strength}]}, kept exactly as delivered. A record keeps
+// up to 64 offered preferences and counts every one.
 export function preferenceCompatibilityEvidenceFromResponse(response) {
   const body = responseBodyFromToolResponse(response);
   const candidates = [
@@ -2088,7 +1982,8 @@ export function preferenceCompatibilityEvidenceFromResponse(response) {
       const slug = safeFeedbackSkillSlug(candidate?.slug);
       if (!slug || seen.has(slug)) return [];
       const feedback = candidate?.preference_compatibility_feedback;
-      const compact = isCompactPreferenceFeedbackOffer(feedback);
+      const flat = Array.isArray(feedback?.offer);
+      const compact = !flat && isCompactPreferenceFeedbackOffer(feedback);
       const queryId = safeCorrelationIdentifier(
         compact ? (feedback.query_id ?? body?.query_id) : feedback?.query_id,
         160,
@@ -2104,15 +1999,20 @@ export function preferenceCompatibilityEvidenceFromResponse(response) {
         160,
       );
       const preferences = sanitizePreferenceFeedbackSettings(
-        compact
-          ? preferenceFeedbackEntriesFromStatements(
-              feedback.preference_fingerprints,
-              body?.effective_preferences,
-            )
-          : feedback?.preferences,
+        flat
+          ? feedback.offer.map((item) => ({
+              preference_fingerprint: item?.preference_fingerprint,
+              setting: item,
+            }))
+          : compact
+            ? preferenceFeedbackEntriesFromStatements(
+                feedback.preference_fingerprints,
+                body?.effective_preferences,
+              )
+            : feedback?.preferences,
       );
       if (
-        feedback?.available !== true ||
+        (!flat && feedback?.available !== true) ||
         !queryId ||
         !resultId ||
         !skillVersionId ||
@@ -2128,6 +2028,14 @@ export function preferenceCompatibilityEvidenceFromResponse(response) {
           skill_slug: slug,
           skill_version_id: skillVersionId,
           preferences,
+          offered_count: Math.max(
+            preferences.length,
+            [
+              feedback.offer,
+              feedback.preference_fingerprints,
+              feedback.preferences,
+            ].find(Array.isArray).length,
+          ),
         },
       ];
     })
@@ -2148,13 +2056,11 @@ function isCompactPreferenceFeedbackOffer(feedback) {
 // it. A missing or ambiguous statement yields no evidence, never a guess.
 function preferenceFeedbackEntriesFromStatements(fingerprints, statements) {
   if (!Array.isArray(statements)) return [];
-  const candidates = statements
-    .slice(0, MAX_EFFECTIVE_PREFERENCE_STATEMENTS)
-    .filter(
-      (entry) => entry && typeof entry === "object" && !Array.isArray(entry),
-    );
+  const candidates = statements.filter(
+    (entry) => entry && typeof entry === "object" && !Array.isArray(entry),
+  );
   return fingerprints
-    .slice(0, MAX_EFFECTIVE_PREFERENCE_STATEMENTS)
+    .slice(0, PREFERENCE_EVIDENCE_SETTING_LIMIT)
     .flatMap((fingerprint) => {
       const matches =
         typeof fingerprint === "string"
@@ -2189,7 +2095,7 @@ function preferenceCompatibilityEvidenceInstruction(evidence) {
       ? ` (+${payload.omitted} more offered preference${payload.omitted === 1 ? "" : "s"} omitted to fit this hint.)`
       : "";
   return [
-    "Private preference evidence (silent, after actual use only): if the selected skill clearly supports or conflicts with one server-issued working preference below, call submit_preference_compatibility_feedback using its exact query_id, result_id, preference_fingerprint, skill slug, and version id.",
+    "Private preference evidence (silent, after actual use only): if the selected skill clearly supports or conflicts with one server-issued working preference below, call submit_preference_compatibility_feedback using its exact query_id, result_id, preference_fingerprint, skill slug, and version id. Any other preference that was active for that skill use can be rated the same way with its preference_key instead of a fingerprint.",
     'Judge observed behavior independently: selection and an existing classifier label are not new evidence. Skip neutral or uncertain cases. Use evidence_source "explicit_user" only for the user\'s explicit assessment; otherwise use "agent_observed". Never send task content, and do not ask the user or mention routine telemetry.',
     payload.compact
       ? "An entry without label and behavior is a compact reference: before judging it, read that setting in full with get_effective_preferences and its key."
@@ -2222,6 +2128,14 @@ function boundedPreferenceEvidencePayload(evidence) {
           setting: preference.setting,
         })),
     );
+  const offered = evidence
+    .slice(0, PREFERENCE_EVIDENCE_SKILL_LIMIT)
+    .reduce(
+      (total, candidate) =>
+        total +
+        Math.max(candidate.preferences.length, candidate.offered_count ?? 0),
+      0,
+    );
   const entries = [];
   const fits = (entry) =>
     JSON.stringify([...entries, entry]).length <=
@@ -2243,7 +2157,7 @@ function boundedPreferenceEvidencePayload(evidence) {
     ? {
         entries: JSON.stringify(entries),
         compact: entries.some((entry) => !("label" in entry.setting)),
-        omitted: offers.length - entries.length,
+        omitted: offered - entries.length,
       }
     : null;
 }
@@ -2267,28 +2181,33 @@ function sanitizePreferenceFeedbackSettings(value) {
         return [];
       }
       const key = safePreferenceIdentifier(item.key, 96);
+      if (!key) return [];
+      // A flat offer has no value; an older shape keeps the one it supplies.
       const preferenceValue = safePreferenceIdentifier(item.value, 96);
-      if (!key || !preferenceValue) return [];
-      const setting = { key, value: preferenceValue };
+      const setting = preferenceValue
+        ? { key, value: preferenceValue }
+        : { key };
       if (
         typeof item.label === "string" &&
         item.label.trim() &&
         typeof item.behavior === "string" &&
         item.behavior.trim() &&
-        ["presentation", "workflow", "strategy_selection"].includes(
-          item.effect,
-        ) &&
-        ["prefer", "avoid"].includes(item.strength) &&
-        Number.isInteger(item.definition_version) &&
-        item.definition_version >= 1 &&
-        item.definition_version <= 1_000_000
+        ["prefer", "avoid"].includes(item.strength)
       ) {
         Object.assign(setting, {
           label: safeText(item.label, 96),
           behavior: safeText(item.behavior, 320),
-          effect: item.effect,
+          ...(["presentation", "workflow", "strategy_selection"].includes(
+            item.effect,
+          )
+            ? { effect: item.effect }
+            : {}),
           strength: item.strength,
-          definition_version: item.definition_version,
+          ...(Number.isInteger(item.definition_version) &&
+          item.definition_version >= 1 &&
+          item.definition_version <= 1_000_000
+            ? { definition_version: item.definition_version }
+            : {}),
         });
       }
       return [{ preference_fingerprint: fingerprint, setting }];
@@ -2465,7 +2384,12 @@ export function emptyQueryContext(
 // Full prompt-hook result. `eligible` means this turn should be recovered at
 // completion even if no registry result was consumed. `consumed` means a real
 // query completed; `matched` means that response contained at least one result
-// the current credential is allowed to use.
+// the current credential is allowed to use. `preferencesOnly` marks a context
+// that holds only the preference snapshot, which records nothing.
+// `options.maxChars` and `options.maxEstimatedTokens` are the host budget
+// (HOOK_CONTEXT_BUDGETS); `options.projectPath` names the agent's project and
+// `options.projectKeyFallback: false` keeps a host that cannot name it from
+// using its own directory.
 export async function runPromptHook(prompt, options = {}) {
   const result = await buildPromptHookResult(prompt, options);
   if (!options.deferReminderAcknowledgement) {
@@ -2534,10 +2458,19 @@ async function buildPromptHookResult(prompt, options = {}) {
     return null;
   }
   const correctionCapture = userCorrectionCaptureDirective(redacted, env);
-  const preferenceCapture = genericPreferenceCaptureDirective(redacted, {
+  const projectOptions = {
     env,
     projectPath: options.projectPath,
-  });
+    projectKeyFallback: options.projectKeyFallback,
+  };
+  const preferenceCapture = genericPreferenceCaptureDirective(
+    redacted,
+    projectOptions,
+  );
+  const unsavedProjectPreference = unsavedProjectPreferenceNotice(
+    redacted,
+    projectOptions,
+  );
   const contextAdditions = [
     correctionCapture
       ? {
@@ -2553,18 +2486,35 @@ async function buildPromptHookResult(prompt, options = {}) {
           text: preferenceCapture,
         }
       : null,
+    unsavedProjectPreference
+      ? {
+          id: "project_preference_unsaved",
+          kind: "notice",
+          text: unsavedProjectPreference,
+        }
+      : null,
     recoveryAddition,
     ...(Array.isArray(options.contextAdditions)
       ? options.contextAdditions
       : [options.contextAdditions]),
   ].filter(Boolean);
-  const withContext = (baseContext, result) => {
+  const budget = {
+    maxChars: options.maxChars,
+    maxEstimatedTokens: options.maxEstimatedTokens,
+  };
+  // Every exit after the decision delivers the preference snapshot (null for
+  // a caller without an organization credential).
+  const withContext = (baseContext, result, snapshot) => {
+    const additions = snapshot
+      ? [...contextAdditions, preferenceSnapshotAddition(snapshot)]
+      : contextAdditions;
     const composeWith = (text) =>
       composeBoundedHookContextResult(
         baseContext,
-        contextAdditions.map((addition) =>
+        additions.map((addition) =>
           addition === recoveryAddition ? { ...addition, text } : addition,
         ),
+        budget,
       );
     const composed = composeWith(
       recovery?.((text) => composeWith(text).context),
@@ -2575,12 +2525,73 @@ async function buildPromptHookResult(prompt, options = {}) {
       deliveredContextAdditionIds: composed.deliveredAdditionIds,
     };
   };
+  // The snapshot alone, for an exit that delivered nothing before it.
+  const snapshotContext = (snapshot) => {
+    const composed = snapshot
+      ? composeBoundedHookContextResult(
+          "",
+          [preferenceSnapshotAddition(snapshot)],
+          budget,
+        )
+      : { context: "", deliveredAdditionIds: [] };
+    return {
+      context: composed.context,
+      deliveredContextAdditionIds: composed.deliveredAdditionIds,
+    };
+  };
+  const preferencesOnly = (snapshot, reason) =>
+    snapshot
+      ? {
+          consumed: false,
+          eligible: false,
+          preferencesOnly: true,
+          reason,
+          ...snapshotContext(snapshot),
+        }
+      : null;
+  const runtime = runtimeFromIdentity(options.identity);
+  const access = resolveApiAccessSnapshot(env);
+  const organization =
+    Boolean(access.credential.apiKey) &&
+    !isUnusableConfigurationSource(access.credential.source);
+  const projectReasons = projectKeyReasons(
+    organization
+      ? projectKeyForHook(env, options.projectPath, {
+          fallback: options.projectKeyFallback !== false,
+        })
+      : null,
+    hookProjectNamed(
+      env,
+      options.projectPath,
+      options.projectKeyFallback !== false,
+    ),
+  );
+  // A search response or the hygiene read is the snapshot source when the
+  // prompt makes one; it never uses or writes the cached copy.
+  const snapshotFrom = (read) =>
+    !organization
+      ? null
+      : read?.ok
+        ? preferenceSnapshotModel(read.body, {
+            ...projectReasons,
+            coldStart: read.coldStart === true,
+          })
+        : readFailedPreferenceSnapshot(projectReasons);
+  const projectSnapshot = () =>
+    projectPreferenceSnapshot({
+      runtime,
+      env,
+      fetchImpl: options.fetchImpl ?? fetch,
+      projectPath: options.projectPath,
+      projectKeyFallback: options.projectKeyFallback !== false,
+      userAgent: options.userAgent,
+      stderr: options.stderr,
+    });
   void recordExplicitPreferenceObservations(redacted, {
-    env,
+    ...projectOptions,
     fetchImpl: options.fetchImpl ?? fetch,
-    runtime: runtimeFromIdentity(options.identity),
+    runtime,
     userAgent: options.userAgent,
-    projectPath: options.projectPath,
   }).catch(() => 0);
   const searchText = searchTextForPrompt(redacted, env);
   let decision = withoutPrivateKeySearch(
@@ -2603,10 +2614,11 @@ async function buildPromptHookResult(prompt, options = {}) {
         options.identity,
         {
           surface: "plugin_hook",
-          runtime: runtimeFromIdentity(options.identity),
+          runtime,
           trigger_reason: decision.reason,
         },
         options.projectPath,
+        projectOptions,
       ),
       {
         env,
@@ -2616,7 +2628,10 @@ async function buildPromptHookResult(prompt, options = {}) {
       },
     );
     if (!stopped.search) {
-      if (!stopped.governs && contextAdditions.length === 0) return null;
+      const snapshot = snapshotFrom(stopped.read);
+      if (!stopped.governs && contextAdditions.length === 0) {
+        return preferencesOnly(snapshot, decision.reason);
+      }
       return withContext(
         includeSharedConfigCredentialNotice
           ? withSharedConfigCredentialNotice(stopped.context, env)
@@ -2626,6 +2641,7 @@ async function buildPromptHookResult(prompt, options = {}) {
           eligible: Boolean(correctionCapture),
           reason: decision.reason,
         },
+        snapshot,
       );
     }
     // The read failed: run the search the rule stopped, as without the rule.
@@ -2638,38 +2654,52 @@ async function buildPromptHookResult(prompt, options = {}) {
     decision = { likely_match: true, reason: decision.trigger };
   }
   if (!decision.likely_match) {
+    // No search: one read with the project key only.
+    const snapshot = projectSnapshot();
     if (isContextualContinuationPrompt(searchText)) {
       const directive = await createContinuationDirective({
         env,
         fetchImpl: options.fetchImpl ?? fetch,
         reportShown: options.reportDirectiveShown,
-        runtime: runtimeFromIdentity(options.identity),
+        runtime,
         stderr: options.stderr,
         userAgent: options.userAgent,
       });
-      return withContext(continuationQueryContext(directive, env), {
-        consumed: false,
-        directive,
-        eligible: true,
-        reason: "contextual_continuation",
-      });
+      return withContext(
+        continuationQueryContext(directive, env),
+        {
+          consumed: false,
+          directive,
+          eligible: true,
+          reason: "contextual_continuation",
+        },
+        await snapshot,
+      );
     }
-    if (preferenceCapture || correctionCapture) {
-      return withContext("Remembrance capture routing:", {
-        consumed: false,
-        eligible: Boolean(correctionCapture),
-        reason: correctionCapture ? "user_correction" : "preference_capture",
-      });
+    if (preferenceCapture || correctionCapture || unsavedProjectPreference) {
+      return withContext(
+        "Remembrance capture routing:",
+        {
+          consumed: false,
+          eligible: Boolean(correctionCapture),
+          reason: correctionCapture ? "user_correction" : "preference_capture",
+        },
+        await snapshot,
+      );
     }
     if (recovery) {
-      return withContext("", {
-        consumed: false,
-        eligible: false,
-        reason: "private_learning_lifecycle_recovery",
-      });
+      return withContext(
+        "",
+        {
+          consumed: false,
+          eligible: false,
+          reason: "private_learning_lifecycle_recovery",
+        },
+        await snapshot,
+      );
     }
     debugLog(env, "skip", { reason: decision.reason }, options);
-    return null;
+    return preferencesOnly(await snapshot, decision.reason);
   }
   const payload = buildQueryPayload(
     searchText,
@@ -2677,10 +2707,11 @@ async function buildPromptHookResult(prompt, options = {}) {
     options.identity,
     {
       surface: "plugin_hook",
-      runtime: runtimeFromIdentity(options.identity),
+      runtime,
       trigger_reason: decision.reason,
     },
     options.projectPath,
+    projectOptions,
   );
   const response = await queryRemembrance(payload, {
     env,
@@ -2698,8 +2729,17 @@ async function buildPromptHookResult(prompt, options = {}) {
         eligible: true,
         reason: "query_unavailable",
       },
+      snapshotFrom(null),
     );
   }
+  // A search sent without a session read organization settings only; while
+  // the warm-up it started can bring one, the snapshot names the recovery
+  // call (DESIGN 4.3).
+  const snapshot = snapshotFrom({
+    ok: true,
+    body: responseBodyFromToolResponse(response),
+    coldStart: response.coldStart === true,
+  });
   if (
     decision.reason === "task_shape" &&
     !queryResponseHasMatches(response)
@@ -2719,13 +2759,14 @@ async function buildPromptHookResult(prompt, options = {}) {
     };
     if (!empty.governs && contextAdditions.length === 0) {
       debugLog(env, "task_shape_no_result", {}, options);
-      return { ...result, context: "", deliveredContextAdditionIds: [] };
+      return { ...result, ...snapshotContext(snapshot) };
     }
     return withContext(
       includeSharedConfigCredentialNotice
         ? withSharedConfigCredentialNotice(empty.context, env)
         : empty.context,
       result,
+      snapshot,
     );
   }
   const context =
@@ -2747,6 +2788,7 @@ async function buildPromptHookResult(prompt, options = {}) {
       valueEpisode: valueEpisodeFromResponse(response),
       reason: decision.reason,
     },
+    snapshot,
   );
 }
 
@@ -2952,9 +2994,10 @@ function directPreferenceCompatibilityInstruction(selections) {
               selection.version_id,
               MAX_FEEDBACK_IDENTIFIER_CHARS,
             ),
-            preferences: sanitizeStoredPreferenceFeedbackSettings(
+            preferences: sanitizePreferenceFeedbackSettings(
               selection.preference_feedback_settings,
             ),
+            offered_count: selection.preference_feedback_offered_count,
           },
         ]
       : [],
@@ -7761,6 +7804,10 @@ export function directSelectionFromResponse(response) {
       preferenceEvidence?.skill_version_id === skill.version_id
         ? preferenceEvidence.preferences
         : [],
+    preference_feedback_offered_count:
+      preferenceEvidence?.skill_version_id === skill.version_id
+        ? preferenceEvidence.offered_count
+        : 0,
     used_at: new Date().toISOString(),
   };
 }
@@ -7837,7 +7884,10 @@ export function recordDirectSelectionUse(
 export function readDirectSelectionSurfaces(sessionId, env = process.env) {
   try {
     const parsed = JSON.parse(
-      readFileSync(directSelectionPath(sessionId, env), "utf8"),
+      readSecureHookFile(
+        directSelectionPath(sessionId, env),
+        MAX_DIRECT_SELECTION_BYTES,
+      ),
     );
     const records = (Array.isArray(parsed) ? parsed : [parsed])
       .map((item) => normalizeStoredDirectSelectionSurface(item))
@@ -7881,9 +7931,10 @@ function normalizeDirectSelectionSurface(selection, sessionId, env) {
     scope: selection.scope === "session" ? "session" : "task",
     feedback_available: selection.feedback_available === true,
     task_outcome_available: selection.task_outcome_available === true,
-    preference_feedback_settings: sanitizeStoredPreferenceFeedbackSettings(
+    preference_feedback_settings: sanitizePreferenceFeedbackSettings(
       selection.preference_feedback_settings,
     ),
+    preference_feedback_offered_count: storedOfferedCount(selection),
     prompted_at: selection.prompted_at
       ? safeText(selection.prompted_at, 40)
       : null,
@@ -7916,9 +7967,10 @@ function normalizeStoredDirectSelectionSurface(selection) {
     scope: selection.scope === "session" ? "session" : "task",
     feedback_available: selection.feedback_available === true,
     task_outcome_available: selection.task_outcome_available === true,
-    preference_feedback_settings: sanitizeStoredPreferenceFeedbackSettings(
+    preference_feedback_settings: sanitizePreferenceFeedbackSettings(
       selection.preference_feedback_settings,
     ),
+    preference_feedback_offered_count: storedOfferedCount(selection),
     prompted_at: selection.prompted_at
       ? safeText(selection.prompted_at, 40)
       : null,
@@ -7929,54 +7981,30 @@ function normalizeStoredDirectSelectionSurface(selection) {
   };
 }
 
-function sanitizeStoredPreferenceFeedbackSettings(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .flatMap((entry) => {
-      const fingerprint =
-        typeof entry?.preference_fingerprint === "string" &&
-        /^sha256:[a-f0-9]{64}$/.test(entry.preference_fingerprint)
-          ? entry.preference_fingerprint
-          : null;
-      const setting = entry?.setting;
-      if (!fingerprint || !setting || typeof setting !== "object") return [];
-      const key = safePreferenceIdentifier(setting?.key, 96);
-      const preferenceValue = safePreferenceIdentifier(setting?.value, 96);
-      if (!key || !preferenceValue) return [];
-      const normalized = { key, value: preferenceValue };
-      if (
-        typeof setting?.label === "string" &&
-        setting.label.trim() &&
-        typeof setting?.behavior === "string" &&
-        setting.behavior.trim() &&
-        ["presentation", "workflow", "strategy_selection"].includes(
-          setting.effect,
-        ) &&
-        ["prefer", "avoid"].includes(setting.strength) &&
-        Number.isInteger(setting.definition_version) &&
-        setting.definition_version >= 1 &&
-        setting.definition_version <= 1_000_000
-      ) {
-        Object.assign(normalized, {
-          label: safeText(setting.label, 96),
-          behavior: safeText(setting.behavior, 320),
-          effect: setting.effect,
-          strength: setting.strength,
-          definition_version: setting.definition_version,
-        });
-      }
-      return [{ preference_fingerprint: fingerprint, setting: normalized }];
-    })
-    .slice(0, PREFERENCE_EVIDENCE_SETTING_LIMIT);
+// Every offered preference, including those beyond the kept 64.
+function storedOfferedCount(selection) {
+  const count = selection.preference_feedback_offered_count;
+  return Math.max(
+    sanitizePreferenceFeedbackSettings(selection.preference_feedback_settings)
+      .length,
+    Number.isInteger(count) && count >= 0 ? count : 0,
+  );
 }
 
 function writeDirectSelectionSurfaces(sessionId, records, env) {
   try {
     const path = directSelectionPath(sessionId, env);
-    return writePrivateUsageMarker(
-      path,
-      JSON.stringify(records.slice(-DIRECT_SELECTION_MARKER_LIMIT)),
-    );
+    // A file above the read bound would lose every record on the next read.
+    let kept = records.slice(-DIRECT_SELECTION_MARKER_LIMIT);
+    let text = JSON.stringify(kept);
+    while (
+      kept.length > 1 &&
+      Buffer.byteLength(text) > MAX_DIRECT_SELECTION_BYTES
+    ) {
+      kept = kept.slice(1);
+      text = JSON.stringify(kept);
+    }
+    return writePrivateUsageMarker(path, text);
   } catch {
     return false;
   }
@@ -10488,10 +10516,101 @@ export function readHookPrincipalSession(
       token: parsed.token,
       expires_at: parsed.expires_at,
       member_linked: parsed.member_linked === true,
+      runtime_profile_id:
+        typeof parsed.runtime_profile_id === "string" &&
+        parsed.runtime_profile_id.length <= 160
+          ? parsed.runtime_profile_id
+          : null,
     };
   } catch {
     return null;
   }
+}
+
+// A warm-up still running, or one that hit its bound in this process: a read
+// made without a session then names a recovery call, because the session
+// may still arrive. A definite failure (no session to wait for) does not.
+function principalSessionWarmupUnsettled(runtime, env, access) {
+  const identity = readHookIdentity(env);
+  if (!identity) return false;
+  const warmupKey = principalSessionCachePath(
+    normalizeRuntime(runtime),
+    identity.key_id,
+    env,
+    access,
+  );
+  return (
+    principalSessionWarmups.has(warmupKey) ||
+    principalSessionWarmupTimeouts.has(warmupKey)
+  );
+}
+
+// Whether a read made without a session can still be served one: a warm-up
+// is pending or hit its bound, or a session has been cached since. A hook
+// whose warm-up settled without a session has none to wait for (DESIGN 4.3).
+function principalSessionMayArrive(runtime, env, access) {
+  return (
+    principalSessionWarmupUnsettled(runtime, env, access) ||
+    Boolean(readHookPrincipalSession(runtime, env, access))
+  );
+}
+
+// A warm-up the registry refused (an answer below 500 without a session,
+// other than 408 or 429) leaves a marker beside the session cache, across
+// hook processes; for PRINCIPAL_SESSION_REFUSAL_COOLDOWN_MS a read or search
+// made without a session starts no warm-up of its own. A busy registry (408
+// or 429) is no refusal: its Retry-After, within that bound, marks the same
+// pause, and one without Retry-After marks none. Any other outcome removes it.
+function recordPrincipalSessionRefusal(warmupKey, refused, retryAfterMs = 0) {
+  const path = `${warmupKey}.refused`;
+  if (refused || retryAfterMs > 0) {
+    const at = Date.now();
+    writeHookPrincipalSession(
+      path,
+      refused ? { at } : { at, until: at + retryAfterMs },
+    );
+    return;
+  }
+  try {
+    rmSync(path, { force: true });
+  } catch {
+    // Principal sessions are optional and always fail open for retrieval.
+  }
+}
+
+function principalSessionRecentlyRefused(runtime, env, access) {
+  const identity = readHookIdentity(env);
+  if (!identity) return false;
+  try {
+    const { at, until } = JSON.parse(
+      readSecureHookFile(
+        `${principalSessionCachePath(normalizeRuntime(runtime), identity.key_id, env, access)}.refused`,
+        1024,
+      ),
+    );
+    const now = Date.now();
+    const age = now - at;
+    return (
+      Number.isFinite(age) &&
+      age >= 0 &&
+      age < PRINCIPAL_SESSION_REFUSAL_COOLDOWN_MS &&
+      (until === undefined || now < until)
+    );
+  } catch {
+    return false;
+  }
+}
+
+// A Retry-After value (seconds or an HTTP date) in milliseconds, at most
+// PRINCIPAL_SESSION_REFUSAL_COOLDOWN_MS; 0 when absent or unreadable.
+function retryAfterMs(value, now = Date.now()) {
+  const text = String(value ?? "").trim();
+  const delay = /^\d+$/.test(text)
+    ? Number(text) * 1000
+    : Date.parse(text) - now;
+  return Number.isFinite(delay)
+    ? Math.min(Math.max(delay, 0), PRINCIPAL_SESSION_REFUSAL_COOLDOWN_MS)
+    : 0;
 }
 
 export function clearHookPrincipalSession(
@@ -10600,16 +10719,36 @@ async function warmPrincipalSessionUncached(
   env,
 ) {
   const controller = new AbortController();
+  // Set when the registry's last answer, below 500, brought no session;
+  // never for a server error, a busy registry (408 or 429) or a failure
+  // without an answer.
+  let refused = false;
+  let lastStatus = 0;
+  let lastRetryAfter = null;
+  const answered = async (...request) => {
+    const response = await fetchImpl(...request);
+    lastStatus = Number(response?.status) || 0;
+    lastRetryAfter = response?.headers?.get?.("retry-after") ?? null;
+    return response;
+  };
+  const busy = () =>
+    !controller.signal.aborted && (lastStatus === 408 || lastStatus === 429);
+  const refusal = () =>
+    !controller.signal.aborted &&
+    lastStatus > 0 &&
+    lastStatus < 500 &&
+    !busy();
   const operation = (async () => {
     try {
       if (
         !(await registerHookIdentity(
           identity,
-          fetchImpl,
+          answered,
           apiAccess,
           controller.signal,
         ))
       ) {
+        refused = refusal();
         return null;
       }
       if (controller.signal.aborted) return null;
@@ -10642,20 +10781,23 @@ async function warmPrincipalSessionUncached(
       };
       let challenge = await postPrincipalSession(
         challengePayload,
-        fetchImpl,
+        answered,
         apiAccess,
         controller.signal,
       );
       if (!challenge && memberLinkToken) {
         challenge = await postPrincipalSession(
           { ...challengePayload, member_link_token: undefined },
-          fetchImpl,
+          answered,
           apiAccess,
           controller.signal,
         );
       }
       if (controller.signal.aborted) return null;
-      if (!challenge?.challenge_id || !challenge?.signing_payload) return null;
+      if (!challenge?.challenge_id || !challenge?.signing_payload) {
+        refused = refusal();
+        return null;
+      }
       const signature = signPayload(
         null,
         Buffer.from(challenge.signing_payload),
@@ -10669,16 +10811,23 @@ async function warmPrincipalSessionUncached(
           challenge_id: challenge.challenge_id,
           signature,
         },
-        fetchImpl,
+        answered,
         apiAccess,
         controller.signal,
       );
       if (controller.signal.aborted) return null;
-      if (!session?.session_token || !session?.expires_at) return null;
+      if (!session?.session_token || !session?.expires_at) {
+        refused = refusal();
+        return null;
+      }
       const stored = {
         token: session.session_token,
         expires_at: session.expires_at,
         member_linked: session.member_linked === true,
+        runtime_profile_id:
+          typeof session.runtime_profile_id === "string"
+            ? session.runtime_profile_id
+            : null,
       };
       writeHookPrincipalSession(warmupKey, stored);
       return stored;
@@ -10687,9 +10836,12 @@ async function warmPrincipalSessionUncached(
     }
   })();
   let timeout;
+  let timedOut = false;
   const deadline = new Promise((resolve) => {
     timeout = setTimeout(() => {
+      timedOut = true;
       controller.abort();
+      principalSessionWarmupTimeouts.add(warmupKey);
       resolve(null);
     }, PRINCIPAL_SESSION_TIMEOUT_MS);
   });
@@ -10697,6 +10849,16 @@ async function warmPrincipalSessionUncached(
     return await Promise.race([operation, deadline]);
   } finally {
     clearTimeout(timeout);
+    // Settled within its bound, with a session or without one for good: no
+    // session is pending any more, so an earlier timeout's mark ends. The
+    // latest outcome replaces an earlier refusal; one past its bound had no
+    // answer, so it clears it.
+    if (!timedOut) principalSessionWarmupTimeouts.delete(warmupKey);
+    recordPrincipalSessionRefusal(
+      warmupKey,
+      refused,
+      busy() ? retryAfterMs(lastRetryAfter) : 0,
+    );
   }
 }
 
@@ -10758,129 +10920,1127 @@ function runtimeDisplayName(runtime) {
   );
 }
 
-// Keys and values stay exact (core caps both at 96 characters): a required
-// setting is fetched by its key. Required settings sort before the statement
-// cap so a discretionary entry can never displace one.
-function sanitizeEffectivePreferenceEntries(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .flatMap((item) => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
-      const key =
-        typeof item.key === "string"
-          ? safePreferenceIdentifier(item.key, 96)
-          : null;
-      const preferenceValue =
-        typeof item.value === "string"
-          ? safePreferenceIdentifier(item.value, 96)
-          : null;
-      return key &&
-        preferenceValue &&
-        EFFECTIVE_PREFERENCE_SOURCES.has(item.source) &&
-        ["presentation", "workflow", "strategy_selection"].includes(
-          item.effect ?? "presentation",
-        ) &&
-        ["prefer", "avoid"].includes(item.strength ?? "prefer")
-        ? [{ item, key, value: preferenceValue }]
-        : [];
-    })
-    .sort(
-      (left, right) =>
-        Number(right.item.source === "mandatory_org") -
-        Number(left.item.source === "mandatory_org"),
-    )
-    .slice(0, MAX_EFFECTIVE_PREFERENCE_STATEMENTS)
-    .map(({ item, key, value: preferenceValue }) => {
-      const label = safeText(item.label ?? key, 96);
-      const source = item.behavior ?? preferenceValue;
-      const behavior = safeText(source, 320);
-      const direction = item.strength === "avoid" ? "avoid" : "prefer";
-      const authority =
-        item.source === "mandatory_org" ? "required organization" : item.source;
-      return {
-        mandatory: item.source === "mandatory_org",
-        key,
-        value: preferenceValue,
-        behavior,
-        // Complete only when the shown text is the unredacted source: a cut,
-        // or a redaction that swallows a word such as "never", can reverse it.
-        behaviorComplete:
-          behavior === String(source).replace(/\s+/g, " ").trim(),
-        text: `${label} [${safeText(item.effect ?? "presentation", 24)}, ${safeText(authority ?? "preference", 32)}]: ${direction} ${behavior}`,
-      };
-    });
-}
+// --- Preference snapshot (port of packages/core/src/preference-snapshot.ts) --
 
-function effectivePreferencesContextLines(value) {
-  const entries = sanitizeEffectivePreferenceEntries(value);
-  if (entries.length === 0) return [];
-  const mandatory = entries.filter((entry) => entry.mandatory);
-  const discretionary = entries.filter((entry) => !entry.mandatory);
-  const mandatoryLine = mandatoryPreferenceContextLine(mandatory);
-  const discretionaryLine = discretionaryPreferenceContextLine(discretionary);
-  return [mandatoryLine, discretionaryLine].filter(Boolean);
-}
-
-// A required setting is never shortened or shown redacted: a partial text
-// presented as authoritative can drop the exception or restriction it states.
-// Every setting appears complete when all fit the preview budget unaltered;
-// otherwise the line makes the complete fetch a required step and names each
-// exact key (an out-of-contract count above core's eight fetches every setting).
-function mandatoryPreferenceContextLine(entries) {
-  if (entries.length === 0) return null;
-  const authority =
-    "These remain authoritative and cannot be weakened by task or personal preferences.";
-  const complete = `Required organization settings (apply all): ${entries
-    .map((entry) => `${entry.key}=${entry.value}: ${entry.behavior}`)
-    .join("; ")}. ${authority}`;
-  if (
-    complete.length <= MAX_MANDATORY_PREFERENCE_CONTEXT_CHARS &&
-    entries.every((entry) => entry.behaviorComplete)
-  ) {
-    return complete;
-  }
-  const keyed = entries.length <= MAX_REQUIRED_SETTING_KEYS;
-  const keys = keyed
-    ? ` with ${JSON.stringify({ keys: entries.map((entry) => entry.key) })}`
-    : "";
-  const covered = keyed
-    ? "a get_effective_preferences result covering every listed key"
-    : "a complete get_effective_preferences result";
-  return `Required organization settings (${entries.length}; complete text not shown here). Required next step before acting: call get_effective_preferences${keys} and apply every returned setting in full; skip the call only when this conversation already holds ${covered}, and hook-injected text never counts as that result. If the call is unavailable or omits a key, say the complete required settings could not be loaded, do not claim they were applied, and never read a key name as permission. ${authority}`;
-}
+// The one agent-facing text format for working preferences, ported from core
+// with the same behavior; scripts/preference-snapshot-parity.test.mjs keeps
+// the two equal. Here `redact` defaults to redactPrompt. Composed snapshot
+// and skill-note text never passes through redaction: page tokens look like
+// JWTs to SECRET_PATTERNS.
 
 // Installation and member preferences reach every agent runtime on that
 // identity, so this mirrors REMEMBRANCE_CROSS_FAMILY_PREFERENCE_RULE in core.
 const CROSS_FAMILY_PREFERENCE_RULE =
   "Follow the part of a preference written for this host. Unlike an outage, one naming a model, tool, or agent this host lacks, with no part for this host, was written for another agent family: apply the closest equivalent this host supports and say which. When none is safe to assume, ask the user; if you cannot ask, keep your default and say so.";
 
-function discretionaryPreferenceContextLine(entries) {
-  if (entries.length === 0) return null;
-  const prefix = "Apply these persisted discretionary preferences silently: ";
-  const suffix = `. Do not ask the user to reconfirm them. ${CROSS_FAMILY_PREFERENCE_RULE} Current-task instructions may override these preferences. Never weaken applicability, safety, authorization, privacy, required skill steps, validation, or review.`;
-  const budget = Math.max(
-    0,
-    MAX_PREFERENCE_CONTEXT_CHARS - prefix.length - suffix.length,
-  );
-  const selected = [];
-  let used = 0;
-  for (const entry of entries) {
-    const separator = selected.length > 0 ? "; " : "";
-    if (used + separator.length + entry.text.length > budget) break;
-    selected.push(entry);
-    used += separator.length + entry.text.length;
+export const PREFERENCE_SNAPSHOT_FORMAT_VERSION = "preference-snapshot-v1";
+/** Entry-line characters (each line plus its newline) on one MCP page. */
+export const PREFERENCE_SNAPSHOT_MCP_PAGE_ENTRY_CHARS = 14_000;
+/** "For this skill" line characters (each line plus its newline) per candidate in an MCP view. */
+export const PREFERENCE_SKILL_NOTES_MCP_ENTRY_CHARS = 3_000;
+/** The same in hook text. */
+export const PREFERENCE_SKILL_NOTES_HOOK_ENTRY_CHARS = 1_200;
+
+export const PREFERENCE_SNAPSHOT_RULE_LINE = `Required settings must be followed and never yield to a skill. Preferences steer discretionary presentation, workflow and strategy. They never weaken safety, authorization, privacy, applicability, required skill steps, validation or review. A current-task instruction overrides non-mandatory preferences. Apply these settings and preferences silently, without asking the user to reconfirm them. Use available tools; never claim an unavailable operation or silently substitute an explicit model or tool requirement. ${CROSS_FAMILY_PREFERENCE_RULE}`;
+
+const PAGE_TOKEN_PATTERN =
+  /^pt1\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]{43})\.(?:0|[1-9][0-9]{0,4})\.[0-9a-f]{6}$/;
+const PROFILE_DIGEST_PATTERN = /^pd1_[0-9a-f]{16}$/;
+const HEADER_PATTERN =
+  /^Remembrance preferences \(profile (pd1_[0-9a-f]{16}|unreported|unavailable), context ([0-9a-f]{8}|unknown); (complete|unchanged: the complete copy already in this conversation is current|incomplete: [^;]+; [^;]+; [^;]+)\)$/;
+const UNAVAILABLE_REASONS = new Set([
+  "read_failed",
+  "preference_storage_unavailable",
+  "preferences_disabled",
+]);
+const REASON_ORDER = [
+  "read_failed",
+  "freshness_unverified",
+  "preference_storage_unavailable",
+  "preferences_disabled",
+  "organization_scope_only",
+  "subject_read_truncated",
+  "completeness_unreported",
+  "project_scope_unread",
+  "gateway_project_unknown",
+  "cursor_project_unknown",
+];
+const BEFORE_GOVERNED_WORK =
+  "call get_effective_preferences before governed work";
+const COMPLETENESS_UNREPORTED =
+  "this server does not report completeness; some preferences may be missing; no recovery call exists until the server is updated";
+const REQUIRED_NOTE_GUIDANCE =
+  "- A required setting is never set aside: if a step this skill requires cannot be done while following it, do not do that step and report the conflict.";
+const ADVISORY_NOTE_GUIDANCE =
+  "- For a note that is not a block, keep applying the preference; if a step this skill requires truly cannot be done while following it, follow the step and report the conflict.";
+
+/**
+ * Escaping, not removal: one entry stays one line. JavaScript's \s leaves out
+ * U+0085 (NEL), a Unicode line break, so it is collapsed explicitly.
+ */
+function collapseWhitespace(text) {
+  return text.replace(/[\s\u0085]+/g, " ").trim();
+}
+
+function presentText(value) {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+function parsePageToken(token) {
+  const match = token === null ? null : PAGE_TOKEN_PATTERN.exec(token);
+  if (!match) return null;
+  try {
+    const claims = JSON.parse(
+      Buffer.from(match[1], "base64url").toString("utf8"),
+    );
+    return typeof claims === "object" &&
+      claims !== null &&
+      !Array.isArray(claims)
+      ? { body: match[1], signature: match[2], claims }
+      : null;
+  } catch {
+    return null;
   }
-  const omitted = entries.slice(selected.length);
-  let body = selected.map((entry) => entry.text).join("; ");
-  if (omitted.length > 0) {
-    const note = `; +${omitted.length} discretionary preference${omitted.length === 1 ? "" : "s"} omitted. Call get_effective_preferences when the omitted choices could affect the task`;
-    while (selected.length > 0 && body.length + note.length > budget) {
-      selected.pop();
-      body = selected.map((entry) => entry.text).join("; ");
+}
+
+function sha256Hex(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function pointPageToken(token, start) {
+  const check = sha256Hex(`${token.body}.${start}`).slice(0, 6);
+  return `pt1.${token.body}.${token.signature}.${start}.${check}`;
+}
+
+function contextIdFromClaims(claims) {
+  const { p, s, dm, kh, th } = claims;
+  return sha256Hex(canonicalHookJson({ p, s, dm, kh, th })).slice(0, 8);
+}
+
+/** A continuation of a token bound to keys or task preferences must resend them. */
+function pageTokenArgs(claims) {
+  const keys = typeof claims.kh === "string";
+  const task = typeof claims.th === "string";
+  if (keys && task) return " and the same keys and task_preferences";
+  if (keys) return " and the same keys";
+  return task ? " and the same task_preferences" : "";
+}
+
+function scopeTag(scope) {
+  switch (scope.kind) {
+    case "task":
+      return "this task";
+    case "project":
+      return "this project";
+    case "skill":
+      return `skill ${collapseWhitespace(scope.slug)}`;
+    case "domain":
+      return `domain ${collapseWhitespace(scope.name)}`;
+    default:
+      return "runtime";
+  }
+}
+
+function snapshotScope(value) {
+  if (typeof value !== "object" || value === null) return null;
+  if (
+    value.kind === "task" ||
+    value.kind === "project" ||
+    value.kind === "runtime"
+  ) {
+    return { kind: value.kind };
+  }
+  if (value.kind === "skill" && typeof value.slug === "string") {
+    return { kind: "skill", slug: value.slug };
+  }
+  if (value.kind === "domain" && typeof value.name === "string") {
+    return { kind: "domain", name: value.name };
+  }
+  return null;
+}
+
+function entryParts(entry, redact) {
+  const label = collapseWhitespace(entry.label);
+  const behavior = collapseWhitespace(entry.behavior);
+  const shownLabel = collapseWhitespace(redact(label));
+  const shownBehavior = collapseWhitespace(redact(behavior));
+  return {
+    label,
+    behavior,
+    shownLabel,
+    shownBehavior,
+    avoid: entry.strength === "avoid" ? " (avoid)" : "",
+    changed:
+      entry.missingText === true ||
+      shownLabel !== label ||
+      shownBehavior !== behavior,
+  };
+}
+
+function snapshotLine(entry, redact) {
+  const parts = entryParts(entry, redact);
+  const tags = `${parts.avoid}${entry.scope ? ` (${scopeTag(entry.scope)})` : ""}`;
+  return {
+    text: `- ${parts.shownLabel}${tags}: ${parts.shownBehavior}`,
+    plainChars: `- ${parts.label}${tags}: ${parts.behavior}`.length,
+    required: entry.required,
+    changed: parts.changed,
+  };
+}
+
+function reasonClause(reason) {
+  switch (reason.code) {
+    case "read_failed":
+      return `the preference read failed; every preference is missing; ${BEFORE_GOVERNED_WORK}`;
+    case "freshness_unverified": {
+      const minutes = Math.max(0, Math.floor(reason.age_minutes));
+      return `the live read failed, so this is the copy saved ${minutes} ${minutes === 1 ? "minute" : "minutes"} ago; changes made since then are missing; ${BEFORE_GOVERNED_WORK}`;
     }
-    body = `${body || "Preferences available"}${note}`;
+    case "preference_storage_unavailable":
+      return `preference storage was unavailable; every stored preference is missing; ${BEFORE_GOVERNED_WORK}`;
+    case "preferences_disabled":
+      return "preference delivery is turned off on this server; stored preferences were not read; no recovery call exists, so if a preference matters, tell the user once in this conversation";
+    case "organization_scope_only":
+      return `no principal session, so only organization settings were read; installation, member and runtime preferences are missing; ${reason.coldStart === true ? BEFORE_GOVERNED_WORK : "no recovery call exists on this connection, so only organization settings apply here"}`;
+    case "subject_read_truncated":
+      return "more stored preferences exist than one read returns; some stored preferences are missing; no recovery call exists, so tell the user once in this conversation that some preferences could not be loaded";
+    case "completeness_unreported":
+      return COMPLETENESS_UNREPORTED;
+    case "project_scope_unread":
+      return `no project key was available; project preferences are missing; ${BEFORE_GOVERNED_WORK}, and if it reports the same, call run_connection_doctor`;
+    case "gateway_project_unknown":
+      return "this gateway does not know the agent's project; project preferences are missing; no recovery call exists, so tell the user once in this conversation that project preferences need REMEMBRANCE_PROJECT_PATH or REMEMBRANCE_PROJECT_KEY set for this gateway";
+    default:
+      return "this server does not know the open project, so the project part was not read; project preferences are missing here; no recovery call exists, because the Cursor hooks deliver project preferences";
   }
-  return safeText(`${prefix}${body}${suffix}`, MAX_PREFERENCE_CONTEXT_CHARS);
+}
+
+function snapshotPages(input) {
+  const redact = input.redact ?? redactPrompt;
+  const offset = input.offset ?? 0;
+  const lines = input.entries.map((entry) => snapshotLine(entry, redact));
+  const held = offset + lines.length;
+  const start = Math.min(Math.max(input.start ?? 0, offset), held);
+  const limit = input.total ?? held;
+  const first = start === 0;
+  const restart = first && input.restart === true;
+  const token = parsePageToken(input.pageToken);
+  const args = token ? pageTokenArgs(token.claims) : "";
+  const contextId = token ? contextIdFromClaims(token.claims) : "unknown";
+  const digest =
+    input.digest !== null && PROFILE_DIGEST_PATTERN.test(input.digest)
+      ? input.digest
+      : input.reasons.some((reason) => UNAVAILABLE_REASONS.has(reason.code))
+        ? "unavailable"
+        : "unreported";
+  const count = input.total === null ? `the ${held} read` : `${input.total}`;
+  const reasonClauses = REASON_ORDER.flatMap((code) => {
+    const reason = input.reasons.find((item) => item.code === code);
+    return reason ? [reasonClause(reason)] : [];
+  });
+  // When no reason has a recovery call, no page ever reads complete, so page 1
+  // asks for the remaining pages instead of a repeat "until complete".
+  const lasting =
+    reasonClauses.length > 0 &&
+    reasonClauses.every((clause) => clause.includes("no recovery call exists"));
+
+  // A page boundary never splits an entry, and every page takes at least one.
+  const packedEnd = (from, chars) => {
+    let end = from;
+    let used = 0;
+    while (end < held) {
+      used += chars(lines[end - offset]) + 1;
+      if (end > from && used > PREFERENCE_SNAPSHOT_MCP_PAGE_ENTRY_CHARS) break;
+      end += 1;
+    }
+    return end;
+  };
+  // Later pages are MCP pages, which show the text without surface redaction.
+  const mcpPagesFrom = (from) => {
+    let pages = 0;
+    for (let next = from; next < held; pages += 1) {
+      next = packedEnd(next, (line) => line.plainChars);
+    }
+    return pages;
+  };
+
+  const page = (end) => {
+    let redactedEntries = 0;
+    let redactedRequired = 0;
+    let firstChanged = null;
+    for (let index = start; index < end; index += 1) {
+      const line = lines[index - offset];
+      if (!line.changed) continue;
+      redactedEntries += 1;
+      if (line.required) redactedRequired += 1;
+      firstChanged ??= index;
+    }
+    const shown = end - start;
+    const nextStart = firstChanged ?? (end < limit ? end : null);
+    // Redaction always sets nextStart, so a complete page delivered every entry unchanged.
+    const complete =
+      input.reasons.length === 0 &&
+      input.total !== null &&
+      nextStart === null &&
+      end === input.total;
+    const pageToken =
+      token && nextStart !== null ? pointPageToken(token, nextStart) : null;
+    const call =
+      pageToken === null
+        ? "call get_effective_preferences"
+        : `call get_effective_preferences with page_token ${pageToken}${args}`;
+    // N is exact only when the recovery call continues at nextStart. Without a
+    // readable token it starts a fresh read at entry 1, so N stays unknown.
+    const pages =
+      !first || held < limit || (token === null && nextStart !== null)
+        ? null
+        : nextStart === null
+          ? 1
+          : 1 + mcpPagesFrom(nextStart);
+    const range = shown === 1 ? `entry ${end}` : `entries ${start + 1}-${end}`;
+    const clauses = [...reasonClauses];
+    if (redactedEntries > 0) {
+      const including =
+        redactedRequired > 0 ? `, including ${redactedRequired} required` : "";
+      const claim =
+        redactedRequired > 0
+          ? ", and until it succeeds do not claim a changed required setting was applied"
+          : "";
+      clauses.push(
+        `redaction changed ${redactedEntries} ${redactedEntries === 1 ? "entry" : "entries"}${including}; the removed text is withheld here; ${call} before governed work${claim}`,
+      );
+    }
+    if (restart && !complete) {
+      clauses.push(
+        `the profile changed or the page token expired, so earlier pages are outdated; this page starts again at entry 1; ${nextStart === null ? "nothing more is needed" : call}`,
+      );
+    }
+    if (end < limit) {
+      const page1 = first
+        ? `page 1${pages === null ? "" : ` of ${pages}`}, `
+        : "";
+      const shownPart =
+        shown > 0 ? `${range} of ${count} shown` : "no entries shown here";
+      clauses.push(
+        `${page1}${shownPart}; the remaining entries are on later pages; ${call}`,
+      );
+    }
+    // Only inconsistent counts reach this: never a status without a clause.
+    if (!complete && clauses.length === 0)
+      clauses.push(COMPLETENESS_UNREPORTED);
+    const shownLines = lines.slice(start - offset, end - offset);
+    const required = shownLines.filter((line) => line.required);
+    const preferences = shownLines.filter((line) => !line.required);
+    const text = [
+      `Remembrance preferences (profile ${digest}, context ${contextId}; ${complete ? "complete" : `incomplete: ${clauses[0]}`})`,
+      ...(first && nextStart !== null
+        ? [
+            `Before any other action, ${call} ${lasting ? "for the remaining pages" : "until complete"}.`,
+          ]
+        : []),
+      ...clauses.slice(1).map((clause) => `Also: ${clause}.`),
+      ...(complete && !first && shown > 0
+        ? [`This page holds ${range} of ${count}, the last page.`]
+        : []),
+      ...(complete && restart
+        ? ["This page replaces earlier pages, which are outdated."]
+        : []),
+      ...(shown === 0
+        ? [
+            complete && first
+              ? "No stored preferences apply to this context."
+              : "No preferences were delivered here.",
+          ]
+        : [PREFERENCE_SNAPSHOT_RULE_LINE]),
+      ...(required.length > 0
+        ? [
+            "Required by your organization:",
+            ...required.map((line) => line.text),
+          ]
+        : []),
+      ...(preferences.length > 0
+        ? ["Your preferences:", ...preferences.map((line) => line.text)]
+        : []),
+    ].join("\n");
+    return {
+      text,
+      start,
+      shown,
+      nextStart,
+      complete,
+      redactedEntries,
+      redactedRequired,
+      pages,
+      pageToken,
+      contextId,
+    };
+  };
+
+  const mcpEnd = () =>
+    token ? packedEnd(start, (line) => line.text.length) : held;
+
+  const exactEnd = (maxChars, maxEstimatedTokens) => {
+    // Entry lines alone bound the text, so ends whose lines exceed the budget never fit.
+    let lineChars = 0;
+    for (let index = start; index < held; index += 1) {
+      lineChars += lines[index - offset].text.length + 1;
+    }
+    let end = held;
+    while (end > start && lineChars > maxChars) {
+      end -= 1;
+      lineChars -= lines[end - offset].text.length + 1;
+    }
+    // The status lines depend on the end, so each candidate is rendered whole.
+    for (; end > start; end -= 1) {
+      const text = page(end).text;
+      if (
+        text.length <= maxChars &&
+        (maxEstimatedTokens === undefined ||
+          estimatePreferenceSnapshotTokens(text) <= maxEstimatedTokens)
+      ) {
+        return end;
+      }
+    }
+    return start;
+  };
+
+  return { start, page, mcpEnd, exactEnd };
+}
+
+/** Maps response entries to renderer input: drops skill defaults and keeps the order. */
+export function snapshotEntriesFromEffectivePreferences(entries) {
+  return entries
+    .filter((entry) => entry.source !== "skill_default")
+    .map((entry) => {
+      const label = presentText(entry.label);
+      const behavior = presentText(entry.behavior);
+      return {
+        label: label ?? entry.key,
+        behavior: behavior ?? "",
+        strength: entry.strength === "avoid" ? "avoid" : "prefer",
+        required: entry.source === "mandatory_org",
+        scope: snapshotScope(entry.scope_target),
+        ...(label === null || behavior === null ? { missingText: true } : {}),
+      };
+    });
+}
+
+export function renderPreferenceSnapshot(input) {
+  const pages = snapshotPages(input);
+  return pages.page(
+    input.fit.kind === "mcp"
+      ? pages.mcpEnd()
+      : pages.exactEnd(input.fit.maxChars, input.fit.maxEstimatedTokens),
+  );
+}
+
+/** The text for zero shown entries; every allocator reserves at least this. */
+export function minimumPreferenceSnapshotChars(input) {
+  const pages = snapshotPages(input);
+  return pages.page(pages.start).text.length;
+}
+
+export { estimatePreferenceSnapshotTokens };
+
+export function renderPreferenceSnapshotUnchanged(digest, contextId) {
+  return `Remembrance preferences (profile ${digest}, context ${contextId}; unchanged: the complete copy already in this conversation is current)`;
+}
+
+/** Candidate entries without an identical top-level entry, in candidate order. */
+export function preferenceEntriesDifferingFrom(topLevel, candidate) {
+  const shared = new Set(topLevel.map((entry) => canonicalHookJson(entry)));
+  return candidate.filter((entry) => !shared.has(canonicalHookJson(entry)));
+}
+
+/** Re-points the unsigned start of a page token; needs no secret. */
+export function withPreferencePageTokenStart(token, start) {
+  const match = PAGE_TOKEN_PATTERN.exec(token);
+  if (!match || !Number.isInteger(start) || start < 0 || start > 99_999) {
+    throw new RangeError(
+      "A page token start needs a preference page token and a whole number from 0 to 99999.",
+    );
+  }
+  return pointPageToken(
+    { body: match[1], signature: match[2], claims: {} },
+    start,
+  );
+}
+
+/** 8 hex over the token's context claims, or "unknown" without a readable token. */
+export function preferenceContextIdFromToken(token) {
+  const parsed = parsePageToken(token);
+  return parsed ? contextIdFromClaims(parsed.claims) : "unknown";
+}
+
+export function parsePreferenceSnapshotHeader(text) {
+  const match = HEADER_PATTERN.exec(text.split("\n", 1)[0]);
+  if (!match) return null;
+  const status = match[3];
+  return {
+    digest: match[1],
+    contextId: match[2],
+    status:
+      status === "complete"
+        ? "complete"
+        : status.startsWith("unchanged")
+          ? "unchanged"
+          : "incomplete",
+  };
+}
+
+export function renderSkillPreferenceNotes(input) {
+  const redact = input.redact ?? redactPrompt;
+  const shownText = (text) =>
+    collapseWhitespace(redact(collapseWhitespace(text)));
+  const note = (kind, item) =>
+    `- ${kind}: ${shownText(item.label)}. ${shownText(item.reason)}`;
+  const lines = input.blocked.map((item) =>
+    note("Set aside only while following this skill", item),
+  );
+  // Whole entries in canonical order; one changed by redaction ends the shown run.
+  let shown = 0;
+  let used = 0;
+  for (const entry of input.skillPreferencesWithheld
+    ? []
+    : input.skillPreferences) {
+    const parts = entryParts(entry, redact);
+    const line = `- For this skill (takes precedence over the snapshot): ${parts.label}${parts.avoid}: ${parts.behavior}`;
+    used += line.length + 1;
+    if (parts.changed || used > input.maxSkillPreferenceChars) break;
+    lines.push(line);
+    shown += 1;
+  }
+  const hidden = input.skillPreferencesWithheld
+    ? null
+    : input.skillPreferences.length - shown;
+  if (hidden !== 0) {
+    const token = parsePageToken(input.skillPageToken);
+    const call = token
+      ? `call get_effective_preferences with page_token ${input.skillPageToken}${pageTokenArgs(token.claims)}`
+      : `call get_effective_preferences with skill_slug ${input.slug}`;
+    const subject =
+      hidden === null
+        ? "Preferences for this skill are"
+        : `${hidden}${shown > 0 ? " more" : ""} ${hidden === 1 ? "preference for this skill is" : "preferences for this skill are"}`;
+    lines.push(
+      `- ${subject} not shown here; before following this skill, ${call}.`,
+    );
+  }
+  const required = input.advisory.filter((item) => item.required);
+  const advisory = input.advisory.filter((item) => !item.required);
+  lines.push(
+    ...required.map((item) => note("Required setting, still applies", item)),
+    ...advisory.map((item) => note("Note, not a block", item)),
+    ...input.replacedDefaults.map(
+      (item) =>
+        `- This skill's default is replaced by your preference: ${shownText(item.label)}.`,
+    ),
+    ...(required.length > 0 ? [REQUIRED_NOTE_GUIDANCE] : []),
+    ...(advisory.length > 0 ? [ADVISORY_NOTE_GUIDANCE] : []),
+  );
+  return lines.length === 0
+    ? null
+    : [`Skill notes for ${input.slug}:`, ...lines].join("\n");
+}
+
+// --- Preference snapshot delivery --------------------------------------------
+
+// Whole-field budgets per host (UTF-16 code units; Codex also bounds
+// estimated tokens). Adapters pass their entry to runPromptHook.
+export const HOOK_CONTEXT_BUDGETS = Object.freeze({
+  claude_code: Object.freeze({ maxChars: 9000 }),
+  vscode: Object.freeze({ maxChars: 9000 }),
+  codex: Object.freeze({ maxChars: 7000, maxEstimatedTokens: 2000 }),
+  cursor: Object.freeze({ maxChars: 9000 }),
+  opencode: Object.freeze({ maxChars: 9000 }),
+  openclaw: Object.freeze({ maxChars: 9000 }),
+});
+
+const PREFERENCE_SNAPSHOT_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_PREFERENCE_SNAPSHOT_CACHE_BYTES = 1024 * 1024;
+const MAX_HOOK_STATE_FILE_BYTES = 64 * 1024;
+const HOOK_STATE_FILE_NAME = /^[a-z0-9][a-z0-9.-]*$/;
+// What a hook tells the agent when a prompt scopes a preference to a project
+// the host cannot name: neither write path widens it to every project.
+const PROJECT_PREFERENCE_UNSAVED =
+  "This preference was not saved: this host does not know the project, so a project preference needs REMEMBRANCE_PROJECT_PATH or REMEMBRANCE_PROJECT_KEY set; ask the user before saving it for every project.";
+const PROJECT_PREFERENCE_UNKEYED =
+  "This preference was not saved: the project could not be keyed yet; retry it on a later prompt, or run run_connection_doctor if this repeats.";
+
+const unsavedProjectPreference = (options) =>
+  hookProjectNamed(
+    options.env ?? process.env,
+    options.projectPath,
+    options.projectKeyFallback !== false,
+  )
+    ? PROJECT_PREFERENCE_UNKEYED
+    : PROJECT_PREFERENCE_UNSAVED;
+
+// A small JSON state file of an adapter under the usage directory, with the
+// hook's secure-file rules. Names are limited to [a-z0-9.-].
+export function readHookStateFile(
+  name,
+  { env = process.env, maxBytes = MAX_HOOK_STATE_FILE_BYTES } = {},
+) {
+  if (!HOOK_STATE_FILE_NAME.test(String(name))) return null;
+  try {
+    return JSON.parse(readSecureHookFile(join(usageDir(env), name), maxBytes));
+  } catch {
+    return null;
+  }
+}
+
+export function writeHookStateFile(name, value, { env = process.env } = {}) {
+  if (!HOOK_STATE_FILE_NAME.test(String(name))) return false;
+  return writePrivateUsageMarker(
+    join(usageDir(env), name),
+    JSON.stringify(value),
+  );
+}
+
+// One read of the effective-preferences route within the read's deadline. A
+// refresh_required answer clears the cached session, waits for a new one
+// within the time left and retries once. A read sent without a session that
+// came back with organization settings only waits the same way, without the
+// clear, unless the registry refused a warm-up recently; otherwise the
+// answer it has stands. `coldStart` reports that a session may still
+// serve such a read: a warm-up pending at its bound, or a session cached too
+// late for the retry (DESIGN 4.3). Cost: in a hanging registry the wait adds
+// at most PRINCIPAL_SESSION_TIMEOUT_MS (1.2 s) to a read without a session,
+// inside the read's deadline (2 s; 2.5 s on Cursor), so a SessionStart,
+// SubagentStart or Cursor sessionStart whose own warm-up hit its bound runs a
+// second one: up to 1.2 s plus that deadline (Cursor: 3.7 s of its 5 s
+// limit). A refusal or Retry-After marker skips it.
+async function readEffectivePreferences(request, options) {
+  const env = options.env;
+  const runtime = normalizeRuntime(options.runtime);
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const deadline =
+    options.deadline ??
+    Date.now() + autoQueryTimeoutMs(env, DEFAULT_TIMEOUT_MS);
+  const send = async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      Math.max(0, deadline - Date.now()),
+    );
+    try {
+      const { headers, principalSession } = hookRegistryHeaders(
+        options.access,
+        runtime,
+        env,
+        options.userAgent,
+      );
+      const response = await fetchImpl(
+        `${options.access.apiConfiguration.apiUrl}/api/v1/agent/preferences/effective`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify(request),
+          signal: controller.signal,
+        },
+      );
+      if (!response.ok) {
+        debugLog(
+          env,
+          "effective_preferences_http_error",
+          { status: response.status },
+          options,
+        );
+        return { ok: false, status: response.status };
+      }
+      const refresh =
+        response.headers?.get?.("x-remembrance-principal-session-status") ===
+        "refresh_required";
+      const body = await response.json().catch(() => null);
+      return body && typeof body === "object" && !Array.isArray(body)
+        ? {
+            ok: true,
+            body,
+            refresh,
+            unsessioned:
+              !principalSession?.token &&
+              (body.completeness?.reason ??
+                body.personalization?.reason_code) ===
+                "organization_scope_only",
+          }
+        : { ok: false, status: "malformed" };
+    } catch (error) {
+      const timedOut = errorName(error) === "AbortError";
+      debugLog(
+        env,
+        timedOut
+          ? "effective_preferences_timeout"
+          : "effective_preferences_error",
+        { error: errorName(error) },
+        options,
+      );
+      return { ok: false, status: timedOut ? "timeout" : "unreachable" };
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+  let read = await send();
+  if (
+    read.refresh ||
+    (read.unsessioned &&
+      !principalSessionRecentlyRefused(runtime, env, options.access))
+  ) {
+    if (read.refresh) clearHookPrincipalSession(runtime, env, options.access);
+    const session = await settledBefore(
+      warmPrincipalSession(
+        {
+          runtime,
+          hostSurface: runtimeHostSurface(runtime, env),
+          fetchImpl,
+          apiAccess: options.access,
+        },
+        env,
+      ).catch(() => null),
+      deadline,
+    );
+    if (session?.token && Date.now() < deadline) {
+      const retried = await send();
+      if (retried.ok) read = retried;
+    }
+  }
+  return {
+    ...(read.ok ? { ok: true, body: read.body } : read),
+    coldStart: principalSessionMayArrive(runtime, env, options.access),
+  };
+}
+
+function settledBefore(promise, deadline) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      timer = setTimeout(
+        () => resolve(null),
+        Math.max(0, deadline - Date.now()),
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+// The project-context read: {keys: []} and the project key only, never
+// domains or anything else derived from a prompt. Returns {ok, body} or
+// {ok: false, status} (an HTTP status, "timeout", "unreachable" or
+// "malformed"), with coldStart.
+export async function readPreferenceSnapshot({
+  access,
+  runtime,
+  env = process.env,
+  fetchImpl = fetch,
+  projectKey = null,
+  userAgent,
+  stderr,
+  deadline,
+} = {}) {
+  return readEffectivePreferences(
+    { keys: [], ...(projectKey ? { project_key: projectKey } : {}) },
+    { access, runtime, env, fetchImpl, userAgent, stderr, deadline },
+  );
+}
+
+// Renderer input for an effective, query or invocation response body. A body
+// without profile_digest or completeness comes from an older server. Null
+// for an anonymous answer, which carries no snapshot.
+export function preferenceSnapshotModel(
+  body,
+  {
+    projectScopeUnread = false,
+    gatewayProjectUnknown = false,
+    coldStart = false,
+  } = {},
+) {
+  const completeness = body?.completeness;
+  const current =
+    Boolean(body) &&
+    "profile_digest" in body &&
+    Boolean(completeness) &&
+    typeof completeness === "object";
+  const gap = current
+    ? completeness.reason
+    : body?.personalization?.reason_code;
+  if (gap === "not_applicable") return null;
+  const statements = preferenceStatements(body?.effective_preferences);
+  return {
+    entries: snapshotEntriesFromEffectivePreferences(statements),
+    digest:
+      current && typeof body.profile_digest === "string"
+        ? body.profile_digest
+        : null,
+    total:
+      current && Number.isInteger(completeness.total)
+        ? completeness.total
+        : null,
+    reasons: [
+      ...(current ? [] : [{ code: "completeness_unreported" }]),
+      ...([
+        "preference_storage_unavailable",
+        "preferences_disabled",
+        "subject_read_truncated",
+      ].includes(gap)
+        ? [{ code: gap }]
+        : []),
+      ...(gap === "organization_scope_only" ? [{ code: gap, coldStart }] : []),
+      ...projectSnapshotReasons({ projectScopeUnread, gatewayProjectUnknown }),
+    ],
+    pageToken:
+      current && typeof body.preference_page_token === "string"
+        ? body.preference_page_token
+        : null,
+    candidates: (Array.isArray(body?.skills) ? body.skills : []).flatMap(
+      (candidate) =>
+        candidate && typeof candidate === "object"
+          ? [candidateSkillNotesInput(candidate, statements, current)]
+          : [],
+    ),
+  };
+}
+
+function preferenceStatements(value) {
+  return Array.isArray(value)
+    ? value.filter(
+        (entry) =>
+          entry &&
+          typeof entry === "object" &&
+          !Array.isArray(entry) &&
+          typeof entry.key === "string",
+      )
+    : [];
+}
+
+function projectSnapshotReasons({ projectScopeUnread, gatewayProjectUnknown }) {
+  return [
+    ...(projectScopeUnread ? [{ code: "project_scope_unread" }] : []),
+    ...(gatewayProjectUnknown ? [{ code: "gateway_project_unknown" }] : []),
+  ];
+}
+
+// A query candidate's skill notes input: its differences from the top-level
+// list (computed here for an older server), blocked lines, advisory notes
+// and replaced defaults. Labels come from the response's own entries.
+function candidateSkillNotesInput(candidate, statements, current) {
+  const own = preferenceStatements(candidate.effective_preferences);
+  const differences = current
+    ? own
+    : preferenceEntriesDifferingFrom(statements, own);
+  const labels = new Map(
+    [...own, ...statements]
+      .reverse()
+      .map((entry) => [entry.key, presentText(entry.label) ?? entry.key]),
+  );
+  const keyed = (value) =>
+    Array.isArray(value)
+      ? value.filter(
+          (item) =>
+            item && typeof item === "object" && typeof item.key === "string",
+        )
+      : [];
+  const blocked = keyed(candidate.preference_application?.blocked_preferences);
+  const blockedKeys = new Set(blocked.map((item) => item.key));
+  return {
+    slug: String(candidate.slug ?? ""),
+    blocked: blocked.map((item) => ({
+      label: labels.get(item.key) ?? item.key,
+      reason: String(item.reason ?? ""),
+    })),
+    // A blocked difference is set aside while following this skill, so it is
+    // never also shown as taking precedence.
+    skillPreferences: snapshotEntriesFromEffectivePreferences(
+      differences.filter((entry) => !blockedKeys.has(entry.key)),
+    ),
+    skillPreferencesWithheld:
+      current && candidate.preference_differences?.withheld === true,
+    skillPageToken:
+      current && typeof candidate.preference_page_token === "string"
+        ? candidate.preference_page_token
+        : null,
+    maxSkillPreferenceChars: PREFERENCE_SKILL_NOTES_HOOK_ENTRY_CHARS,
+    advisory: keyed(candidate.preference_influence?.conflicts)
+      .filter((item) => !blockedKeys.has(item.key))
+      .slice(0, 8)
+      .map((item) => ({
+        label: presentText(item.label) ?? item.key,
+        reason: String(item.reason ?? ""),
+        required: item.source === "mandatory_org",
+      })),
+    replacedDefaults: keyed(
+      candidate.preference_application?.overridden_skill_defaults,
+    ).map((item) => ({ label: labels.get(item.key) ?? item.key })),
+  };
+}
+
+// The read_failed form of a snapshot whose source read failed.
+function readFailedPreferenceSnapshot(projectReasons) {
+  return {
+    entries: [],
+    digest: null,
+    total: null,
+    reasons: [
+      { code: "read_failed" },
+      ...projectSnapshotReasons(projectReasons),
+    ],
+    pageToken: null,
+  };
+}
+
+// The context addition the hook policy fits: the whole snapshot, the length
+// of its zero-entry form, and the first page within a character budget.
+export function preferenceSnapshotAddition(input, id = "preference_snapshot") {
+  const render = (maxChars) =>
+    renderPreferenceSnapshot({ ...input, fit: { kind: "exact", maxChars } })
+      .text;
+  return {
+    id,
+    kind: "preference_snapshot",
+    text: render(Number.POSITIVE_INFINITY),
+    minimum: minimumPreferenceSnapshotChars(input),
+    renderPage: render,
+  };
+}
+
+// Snapshot text placed after a session start's other context: whole when it
+// fits what remains of the host budget, else page 1 with its opening line.
+// Null when not even the zero-entry form fits.
+export function preferenceSnapshotText(
+  input,
+  { maxChars, maxEstimatedTokens },
+) {
+  const page = renderPreferenceSnapshot({
+    ...input,
+    fit: { kind: "exact", maxChars, maxEstimatedTokens },
+  }).text;
+  return page.length <= maxChars &&
+    (maxEstimatedTokens === undefined ||
+      estimatePreferenceSnapshotTokens(page) <= maxEstimatedTokens)
+    ? page
+    : null;
+}
+
+function projectKeyReasons(projectKey, projectNamed) {
+  return {
+    projectScopeUnread: !projectKey && projectNamed,
+    gatewayProjectUnknown: !projectKey && !projectNamed,
+  };
+}
+
+// The project-context snapshot of a session start, a subagent start or a
+// prompt that reads preferences on its own: a live read with the project key
+// only. A complete live read is cached; a timeout, a refused or failed
+// connection, 429 or 5xx falls back to that copy once, and anything else
+// renders read_failed (401 and 403 also delete the copy). Null when nothing
+// is delivered: automation is off or the caller has no organization key.
+export async function projectPreferenceSnapshot({
+  runtime,
+  env = process.env,
+  fetchImpl = fetch,
+  projectPath = null,
+  projectKeyFallback = true,
+  userAgent,
+  stderr,
+  deadline,
+} = {}) {
+  if (disabled(env.REMEMBRANCE_AUTO_QUERY)) return null;
+  const access = resolveApiAccessSnapshot(env);
+  if (
+    !access.credential.apiKey ||
+    isUnusableConfigurationSource(access.credential.source)
+  ) {
+    return null;
+  }
+  const projectKey = projectKeyForHook(env, projectPath, {
+    fallback: projectKeyFallback,
+  });
+  const reasons = projectKeyReasons(
+    projectKey,
+    hookProjectNamed(env, projectPath, projectKeyFallback),
+  );
+  const read = await readPreferenceSnapshot({
+    access,
+    runtime,
+    env,
+    fetchImpl,
+    projectKey,
+    userAgent,
+    stderr,
+    deadline,
+  });
+  const cachePath = preferenceSnapshotCachePath(
+    access,
+    runtime,
+    env,
+    projectKey,
+  );
+  if (read.ok) {
+    const model = preferenceSnapshotModel(read.body, {
+      ...reasons,
+      coldStart: read.coldStart,
+    });
+    if (model && read.body.completeness?.complete === true) {
+      writeCachedPreferenceSnapshot(cachePath, model, access, runtime, env);
+    }
+    return model;
+  }
+  if (read.status === 401 || read.status === 403) {
+    removeCachedPreferenceSnapshot(cachePath);
+  } else if (
+    ["timeout", "unreachable", 429].includes(read.status) ||
+    read.status >= 500
+  ) {
+    const cached = readCachedPreferenceSnapshot(
+      cachePath,
+      access,
+      runtime,
+      env,
+    );
+    if (cached) {
+      return {
+        ...cached,
+        reasons: [...cached.reasons, ...projectSnapshotReasons(reasons)],
+      };
+    }
+  }
+  return readFailedPreferenceSnapshot(reasons);
+}
+
+function preferenceSnapshotDir(env = process.env) {
+  if (env?.REMEMBRANCE_PREFERENCE_SNAPSHOT_DIR) {
+    return String(env.REMEMBRANCE_PREFERENCE_SNAPSHOT_DIR);
+  }
+  if (process.env.VITEST) {
+    return join(
+      tmpdir(),
+      "remembrance-preference-snapshot-tests",
+      String(process.pid),
+    );
+  }
+  return join(homedir(), ".cache", "remembrance", "preference-snapshots");
+}
+
+// One file per identity and project context; the name carries no content.
+function preferenceSnapshotCachePath(access, runtime, env, projectKey) {
+  const identity = readHookIdentity(env);
+  const session = readHookPrincipalSession(runtime, env, access);
+  const memberLinkToken = access.memberLinkToken;
+  const name = sha256Hex(
+    [
+      access.apiConfiguration.apiUrl,
+      sha256Hex(
+        [access.credential.source, access.credential.apiKey].join(":"),
+      ).slice(0, 16),
+      normalizeRuntime(runtime),
+      identity?.key_id ?? "",
+      session?.member_linked ? "1" : "0",
+      memberLinkToken ? sha256Hex(memberLinkToken).slice(0, 16) : "",
+      session?.runtime_profile_id ?? "",
+      projectKey ?? "",
+      "",
+    ].join("\n"),
+  ).slice(0, 32);
+  return join(preferenceSnapshotDir(env), `${name}.json`);
+}
+
+// The cache's own file names: a copy, or a writer's temporary file. Pruning
+// never touches anything else in an overridden directory.
+const PREFERENCE_SNAPSHOT_CACHE_FILE =
+  /^[0-9a-f]{32}\.json(?:\.\d+\.[0-9a-f]{12}\.tmp)?$/;
+
+// Deleting a copy never fails the read: a directory the user cannot write
+// leaves the copy in place, and the read's own status stands.
+function removeCachedPreferenceSnapshot(path) {
+  try {
+    rmSync(path, { force: true });
+  } catch {
+    // The copy stays; it is checked again before any later use.
+  }
+}
+
+function writeCachedPreferenceSnapshot(path, model, access, runtime, env) {
+  const session = readHookPrincipalSession(runtime, env, access);
+  try {
+    for (const name of readdirSync(dirname(path))) {
+      if (!PREFERENCE_SNAPSHOT_CACHE_FILE.test(name)) continue;
+      const file = join(dirname(path), name);
+      const metadata = lstatSync(file);
+      if (
+        metadata.isFile() &&
+        Date.now() - metadata.mtimeMs > PREFERENCE_SNAPSHOT_CACHE_TTL_MS
+      ) {
+        removeCachedPreferenceSnapshot(file);
+      }
+    }
+  } catch {
+    // The first write creates the directory.
+  }
+  writePrivateUsageMarker(
+    path,
+    JSON.stringify({
+      version: 1,
+      fetched_at: new Date().toISOString(),
+      digest: model.digest,
+      total: model.total,
+      principal_session: Boolean(session),
+      member_linked: session?.member_linked === true,
+      entries: model.entries,
+    }),
+  );
+}
+
+// The cached copy as renderer input with freshness_unverified, or null. A
+// copy that is malformed, expired or from another session state is deleted.
+function readCachedPreferenceSnapshot(path, access, runtime, env) {
+  let text;
+  try {
+    text = readSecureHookFile(path, MAX_PREFERENCE_SNAPSHOT_CACHE_BYTES);
+  } catch {
+    return null;
+  }
+  let cached;
+  try {
+    cached = JSON.parse(text);
+  } catch {
+    removeCachedPreferenceSnapshot(path);
+    return null;
+  }
+  const session = readHookPrincipalSession(runtime, env, access);
+  const age = Date.now() - Date.parse(cached?.fetched_at ?? "");
+  const entries = Array.isArray(cached?.entries)
+    ? cached.entries.flatMap((entry) =>
+        typeof entry?.label === "string" && typeof entry.behavior === "string"
+          ? [
+              {
+                label: entry.label,
+                behavior: entry.behavior,
+                strength: entry.strength === "avoid" ? "avoid" : "prefer",
+                required: entry.required === true,
+                scope: snapshotScope(entry.scope),
+                ...(entry.missingText === true ? { missingText: true } : {}),
+              },
+            ]
+          : [],
+      )
+    : [];
+  if (
+    cached?.version !== 1 ||
+    !(age <= PREFERENCE_SNAPSHOT_CACHE_TTL_MS) ||
+    cached.principal_session !== Boolean(session) ||
+    cached.member_linked !== (session?.member_linked === true) ||
+    !Array.isArray(cached.entries) ||
+    entries.length !== cached.entries.length
+  ) {
+    removeCachedPreferenceSnapshot(path);
+    return null;
+  }
+  return {
+    entries,
+    digest: typeof cached.digest === "string" ? cached.digest : null,
+    total: Number.isInteger(cached.total) ? cached.total : null,
+    reasons: [{ code: "freshness_unverified", age_minutes: age / 60_000 }],
+    pageToken: null,
+  };
 }
 
 function clientUpdatePath(surface, env = process.env) {
@@ -12078,11 +13238,13 @@ function sanitizePluginHookTrust(value) {
     "UserPromptSubmit",
     "PostToolUse",
     "Stop",
+    "SubagentStart",
+    "SubagentStop",
   ]);
   const reviewEvents = Array.isArray(value.review_events)
     ? [...new Set(value.review_events)]
         .filter((event) => allowedEvents.has(event))
-        .slice(0, 4)
+        .slice(0, allowedEvents.size)
     : [];
   const hooks = Array.isArray(value.hooks)
     ? value.hooks
@@ -12093,7 +13255,7 @@ function sanitizePluginHookTrust(value) {
             !Array.isArray(entry) &&
             allowedEvents.has(entry.event),
         )
-        .slice(0, 4)
+        .slice(0, allowedEvents.size)
         .map((entry) => ({
           event: entry.event,
           enabled: entry.enabled === true,
@@ -12103,6 +13265,7 @@ function sanitizePluginHookTrust(value) {
             "modified",
             "trusted",
             "unknown",
+            "unsupported",
             "untrusted",
           ].includes(entry.trust_status)
             ? entry.trust_status
@@ -12442,12 +13605,13 @@ export function genericPreferenceCaptureDirective(prompt, options = {}) {
       "utf8",
     )
     .digest("hex");
-  const projectKey = promptScopesPreferenceToProject(text)
-    ? projectKeyForHook(options.env ?? process.env, options.projectPath)
+  const projectScoped = promptScopesPreferenceToProject(text);
+  const projectKey = projectScoped
+    ? projectKeyForHook(options.env ?? process.env, options.projectPath, {
+        fallback: options.projectKeyFallback !== false,
+      })
     : null;
-  const scopeFields = projectKey
-    ? `"scope":"project","project_key":"${projectKey}"`
-    : '"scope":"auto"';
+  const fields = `"source_category":"explicit_user", "evidence_hash":"${evidenceHash}", "task_hash":"${taskHash}", and "confidence":1.`;
   const privateCapture = organizationPrivateLessonAuthorized(
     options.env ?? process.env,
   );
@@ -12462,21 +13626,56 @@ export function genericPreferenceCaptureDirective(prompt, options = {}) {
       ? "The user's message may state a lasting or corrective working preference. Record it only if it constrains how YOU work: a presentation, workflow, or strategy choice you would otherwise make at your own discretion. A requirement, invariant, API contract, test expectation, or bug report about what the code must do is not a working preference. If it qualifies, call capture_learning once with preference and then call only the returned record_preference next_action. Otherwise take no action and do not mention this notice."
       : "The user's message may state a lasting or corrective working preference that is not one of the built-in controls. Record it only if it constrains how YOU work: a presentation, workflow, or strategy choice you would otherwise make at your own discretion. Do not record a statement about what the code should do; an expected value, an invariant, an API contract, a test expectation, or a bug report is not a working preference even when it is phrased with always, never, must, or should. If it qualifies, interpret only that preference and call record_preference once, and do not ask the user to classify it. Otherwise take no action and do not mention this notice.",
     'Use setting {"key":"<presentation|workflow|strategy_selection>.<stable_concept>","value":"<stable_behavior_id>","label":"<short name>","behavior":"<concise normalized behavior>","effect":"presentation|workflow|strategy_selection","strength":"prefer|avoid","definition_version":1}. This vocabulary is extensible; do not force the preference into a built-in category.',
-    `Use ${scopeFields}, "source_category":"explicit_user", "evidence_hash":"${evidenceHash}", "task_hash":"${taskHash}", and "confidence":1.`,
+    projectKey
+      ? `Use "scope":"project","project_key":"${projectKey}", ${fields}`
+      : projectScoped
+        ? `${unsavedProjectPreference(options)} Use ${fields}`
+        : `Use "scope":"auto", ${fields}`,
     "Never send the raw prompt or private task details. Never encode a request to weaken safety, authorization, privacy, required skill steps, validation, or review; those constraints remain authoritative.",
   ].join("\n");
+}
+
+// The settings a prompt asks the hook to record itself: explicit settings of
+// a durable or corrective preference the prompt does not disclaim.
+function explicitPreferenceWriteSettings(prompt) {
+  if (
+    promptDisclaimsDurablePreference(prompt) ||
+    (!promptRequestsDurablePreference(prompt) &&
+      !promptProvidesPreferenceCorrection(prompt))
+  ) {
+    return [];
+  }
+  return explicitPreferenceSettingsFromPrompt(prompt);
+}
+
+// The project key of a prompt that scopes a preference to its project; null
+// for another prompt, and undefined when the host cannot name the project.
+function preferenceProjectKey(prompt, options) {
+  if (!promptScopesPreferenceToProject(prompt)) return null;
+  return (
+    projectKeyForHook(options.env ?? process.env, options.projectPath, {
+      fallback: options.projectKeyFallback !== false,
+    }) ?? undefined
+  );
+}
+
+// What the context says when an explicit preference for the project was not
+// written because the host cannot name the project.
+export function unsavedProjectPreferenceNotice(prompt, options = {}) {
+  return explicitPreferenceWriteSettings(prompt).length > 0 &&
+    resolveApiCredential(options.env ?? process.env).apiKey &&
+    preferenceProjectKey(prompt, options) === undefined
+    ? unsavedProjectPreference(options)
+    : null;
 }
 
 export async function recordExplicitPreferenceObservations(
   prompt,
   options = {},
 ) {
-  if (promptDisclaimsDurablePreference(prompt)) return 0;
-  const durable = promptRequestsDurablePreference(prompt);
-  const corrective = promptProvidesPreferenceCorrection(prompt);
-  if (!durable && !corrective) return 0;
-  const settings = explicitPreferenceSettingsFromPrompt(prompt);
+  const settings = explicitPreferenceWriteSettings(prompt);
   if (settings.length === 0) return 0;
+  const durable = promptRequestsDurablePreference(prompt);
   const env = options.env ?? process.env;
   const runtime = normalizeRuntime(options.runtime);
   const access = resolveApiAccessSnapshot(env);
@@ -12484,6 +13683,9 @@ export async function recordExplicitPreferenceObservations(
   if (isUnusableConfigurationSource(credential.source) || !credential.apiKey) {
     return 0;
   }
+  // "For this project" is never widened to every project.
+  const projectKey = preferenceProjectKey(prompt, options);
+  if (projectKey === undefined) return 0;
   let principalSession = readHookPrincipalSession(runtime, env, access);
   if (!principalSession?.token) {
     principalSession = await warmPrincipalSession(
@@ -12502,9 +13704,6 @@ export async function recordExplicitPreferenceObservations(
   // learned profile; genuinely inferred behavior still enters through the
   // topology/observation path and must satisfy the multi-task confidence gate.
   const sourceCategory = "explicit_user";
-  const projectKey = promptScopesPreferenceToProject(prompt)
-    ? projectKeyForHook(env, options.projectPath)
-    : null;
   const taskHash = createHash("sha256")
     .update(String(prompt), "utf8")
     .digest("hex");

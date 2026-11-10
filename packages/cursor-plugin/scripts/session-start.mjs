@@ -4,7 +4,10 @@
 // Cursor plugins cannot inject prompt-specific context from beforeSubmitPrompt;
 // Cursor's documented injection point is sessionStart.additional_context, and
 // the plugin's always-apply rule handles per-task behavior. This hook gives the
-// agent one compact reminder that the plugin's MCP server is available.
+// agent one compact reminder that the plugin's MCP server is available, then
+// the workspace's project-context preference snapshot. Cursor does not wait
+// for this hook, so postToolUse delivers the snapshot again at the first tool
+// call.
 
 import { readFileSync } from "node:fs";
 import process from "node:process";
@@ -12,12 +15,20 @@ import { pathToFileURL } from "node:url";
 import {
   checkForClientUpdate,
   disabled,
+  HOOK_CONTEXT_BUDGETS,
+  preferenceSnapshotText,
   recordPluginLifecycleHealth,
   resolveApiCredential,
   sessionSkillsDirective,
   warmPrincipalSession,
 } from "./hook-core.mjs";
-import { cursorNativeSessionId, cursorSessionId } from "./record-mcp-use.mjs";
+import {
+  cursorNativeSessionId,
+  cursorSessionId,
+  projectSnapshotRef,
+  readCursorProjectSnapshot,
+  updateCursorPreferenceState,
+} from "./record-mcp-use.mjs";
 
 export const CURSOR_REMEMBRANCE_CONTEXT = [
   "Remembrance is installed in Cursor; this SessionStart hook is active.",
@@ -72,6 +83,7 @@ export async function handleSessionStart(input, options = {}) {
   const hostVersion = String(
     input?.cursor_version ?? input?.app_version ?? input?.version ?? "",
   ).trim();
+  const fetchImpl = options.fetchImpl ?? fetch;
   // Cursor sends no start source and runs sessionStart only when a
   // conversation is created, so this fetches once; it never re-runs after a
   // compaction, so no cache is kept.
@@ -79,41 +91,64 @@ export async function handleSessionStart(input, options = {}) {
     {
       source: input?.source,
       nativeSessionId: cursorNativeSessionId(input),
-      fetchImpl: options.fetchImpl ?? fetch,
+      fetchImpl,
       cache: false,
     },
     env,
   ).catch(() => null);
-  const [, clientUpdate] = isCompaction
-    ? [null, null]
-    : await Promise.all([
-        (options.warmSession ?? warmPrincipalSession)(
-          {
-            runtime: "cursor",
-            hostSurface: "extension",
-            clientVersion: version,
-            hostVersion,
-            fetchImpl: options.fetchImpl ?? fetch,
-          },
-          env,
-        ).catch(() => null),
-        (options.checkUpdate ?? checkForClientUpdate)(
-          {
-            surface: "cursor",
-            currentVersion: version,
-            fetchImpl: options.fetchImpl ?? fetch,
-          },
-          env,
-        ).catch(() => null),
-      ]);
+  const warmup = isCompaction
+    ? null
+    : (options.warmSession ?? warmPrincipalSession)(
+        {
+          runtime: "cursor",
+          hostSurface: "extension",
+          clientVersion: version,
+          hostVersion,
+          fetchImpl,
+        },
+        env,
+      ).catch(() => null);
+  const clientUpdate = isCompaction
+    ? null
+    : (options.checkUpdate ?? checkForClientUpdate)(
+        { surface: "cursor", currentVersion: version, fetchImpl },
+        env,
+      ).catch(() => null);
+  // The snapshot read starts once the session is warm and has its own
+  // timeout, so warm-up, read and Node start fit Cursor's 5-second limit.
+  const snapshot = Promise.resolve(warmup)
+    .then(() => readCursorProjectSnapshot(input, { env, fetchImpl }))
+    .catch(() => null);
+  const context = [
+    CURSOR_REMEMBRANCE_CONTEXT,
+    (await clientUpdate)?.notice,
+    await sessionSkills,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const preferences = await snapshot;
+  if (!preferences) return { additional_context: context };
+  // Whole when it fits what remains of the budget, else page 1 with its
+  // opening line. Cursor does not wait for this hook, so nothing shows that
+  // this copy reached the conversation, and on Cursor no other path delivers
+  // project preferences. It never counts as delivered and records no
+  // refresh: the first postToolUse reads once and delivers the snapshot with
+  // the whole budget (at most one repeat in a conversation).
+  const text = preferenceSnapshotText(preferences, {
+    maxChars: HOOK_CONTEXT_BUDGETS.cursor.maxChars - context.length - 2,
+  });
+  updateCursorPreferenceState(
+    sessionId,
+    {
+      latest: projectSnapshotRef(preferences),
+      delivered: null,
+      compacted: false,
+      last_refresh_at: null,
+    },
+    env,
+  );
   return {
-    additional_context: [
-      CURSOR_REMEMBRANCE_CONTEXT,
-      clientUpdate?.notice,
-      await sessionSkills,
-    ]
-      .filter(Boolean)
-      .join("\n\n"),
+    additional_context: text ? `${context}\n\n${text}` : context,
   };
 }
 

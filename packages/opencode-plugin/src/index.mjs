@@ -20,9 +20,11 @@
 //   PROMPT (chat.message -> experimental.chat.system.transform): queries from
 //     the current user turn, then injects the bounded result into the system
 //     context of every model request of that turn (the host rebuilds the
-//     system prompt per request and asks its title model first). Legacy
-//     message events remain a fallback for older builds and are deduplicated
-//     by message id.
+//     system prompt per request and asks its title model first). With an
+//     organization key that result always holds the preference snapshot of
+//     the session's project, so each request of every turn carries it once.
+//     Legacy message events remain a fallback for older builds and are
+//     deduplicated by message id.
 //
 //   TOOL OBSERVER (tool.execute.after): correlates Remembrance tool calls with
 //     the active directive exactly like the other hosts.
@@ -51,6 +53,7 @@ import {
   acknowledgePrivateAuthorizationReminders,
   directSelectionFromResponse,
   highMatchFromResponse,
+  HOOK_CONTEXT_BUDGETS,
   isRecordedMainSession,
   markHostPolicyAlertDelivered,
   observeSuccessfulCompletionTool,
@@ -419,7 +422,10 @@ export const Remembrance = async (context = {}) => {
     recordLifecycle("prompt_hook", sessionId);
     const ledgerId = sessionTreeLedgerId(sessionId, env);
     const result = await (context.runPromptHook ?? runPromptHook)(prompt, {
+      ...HOOK_CONTEXT_BUDGETS.opencode,
       env,
+      // The project OpenCode opened, never the plugin process's directory.
+      projectPath: context.directory ?? context.worktree,
       contextAdditions: pendingClientUpdates.has(sessionId)
         ? [
             {
@@ -459,6 +465,7 @@ export const Remembrance = async (context = {}) => {
         highMatch: result?.highMatch ?? null,
         text: guidance.trim(),
         deliveredContextAdditionIds: result?.deliveredContextAdditionIds ?? [],
+        preferencesOnly: result?.preferencesOnly === true,
         countsAsUse: Boolean(result?.consumed && result?.matched),
         queryFeedback: result?.queryFeedback ?? null,
         valueEpisode: result?.valueEpisode ?? null,
@@ -473,13 +480,15 @@ export const Remembrance = async (context = {}) => {
   async function handleChatMessage(input, output) {
     try {
       if (!isUserMessageEvent(input, output)) return;
+      // A user message without text (only a file, image or subtask part)
+      // still starts a turn: the core never searches an empty prompt, so the
+      // turn carries the snapshot alone, without native recovery capture.
       const prompt = promptFromMessageEvent(input, output);
-      if (!prompt) return;
       await handlePrompt(
         prompt,
         sessionIdFromEvent(input, output),
         messageIdFromEvent(input, output),
-        nativeSessionIdFromEvent(input, output),
+        prompt ? nativeSessionIdFromEvent(input, output) : null,
       );
     } catch (error) {
       debugLog(env, "opencode_chat_message_failed", {
@@ -498,10 +507,18 @@ export const Remembrance = async (context = {}) => {
       // turn, and on a session's first turn its title request comes first:
       // what this turn delivered goes into each of them, recorded once.
       const delivered = turnContext.get(sessionId) ?? [];
-      // The raw update notice is only for a turn that carries nothing else;
-      // a notice the bounded hook withheld waits for a later turn's hook, as
+      // The raw update notice is only for a turn that carries nothing else,
+      // or only the preference snapshot when both fit the host budget; a
+      // notice the bounded hook withheld waits for a later turn's hook, as
       // does one still pending when the session went idle (handleSessionIdle).
-      if (updateNotice && !guidance && !turnContext.has(sessionId)) {
+      if (
+        updateNotice &&
+        !turnContext.has(sessionId) &&
+        (!guidance ||
+          (guidance.preferencesOnly &&
+            `${updateNotice}\n\n${guidance.text}`.length <=
+              HOOK_CONTEXT_BUDGETS.opencode.maxChars))
+      ) {
         delivered.push(updateNotice);
         pendingClientUpdates.delete(sessionId);
       }
@@ -509,6 +526,12 @@ export const Remembrance = async (context = {}) => {
       if (delivered.length > 0) turnContext.set(sessionId, delivered);
       output.system.push(...delivered);
       if (!guidance) return;
+      if (guidance.preferencesOnly) {
+        // The preference snapshot alone is no registry use, and it neither
+        // shows nor ends a directive.
+        pendingGuidance.delete(sessionId);
+        return;
+      }
       acknowledgePrivateAuthorizationReminders(
         guidance.text,
         env,

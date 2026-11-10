@@ -6,6 +6,10 @@ import { pathToFileURL } from "node:url";
 import { inspectCodexHookTrust } from "./codex-hook-trust.mjs";
 import {
   checkForClientUpdate,
+  estimatePreferenceSnapshotTokens,
+  HOOK_CONTEXT_BUDGETS,
+  preferenceSnapshotText,
+  projectPreferenceSnapshot,
   recordPluginLifecycleHealth,
   resolveApiCredential,
   sessionIdFor,
@@ -52,28 +56,31 @@ export async function handleSessionStart(input, options = {}) {
     },
     env,
   ).catch(() => null);
+  // Every source, compaction included, warms the session the preference read
+  // below uses.
+  const warmup = (options.warmSession ?? warmPrincipalSession)(
+    {
+      runtime: "codex",
+      hostSurface:
+        input?.host_surface === "desktop" || input?.host_surface === "cli"
+          ? input.host_surface
+          : input?.app_version || input?.codex_desktop_version
+            ? "desktop"
+            : "unknown",
+      clientVersion: version,
+      hostVersion,
+      fetchImpl: options.fetchImpl ?? fetch,
+    },
+    env,
+  ).catch(() => null);
   const [hookTrust, , clientUpdate] = isCompaction
-    ? [null, null, null]
+    ? [null, await warmup, null]
     : await Promise.all([
         (options.inspectHookTrust ?? inspectCodexHookTrust)({
           env,
           cwd: options.cwd,
         }).catch(() => null),
-        (options.warmSession ?? warmPrincipalSession)(
-          {
-            runtime: "codex",
-            hostSurface:
-              input?.host_surface === "desktop" || input?.host_surface === "cli"
-                ? input.host_surface
-                : input?.app_version || input?.codex_desktop_version
-                  ? "desktop"
-                  : "unknown",
-            clientVersion: version,
-            hostVersion,
-            fetchImpl: options.fetchImpl ?? fetch,
-          },
-          env,
-        ).catch(() => null),
+        warmup,
         (options.checkUpdate ?? checkForClientUpdate)(
           {
             surface: "codex",
@@ -83,6 +90,12 @@ export async function handleSessionStart(input, options = {}) {
           env,
         ).catch(() => null),
       ]);
+  const snapshot = await projectPreferenceSnapshot({
+    runtime: "codex",
+    env,
+    fetchImpl: options.fetchImpl ?? fetch,
+    projectPath: input?.cwd ?? null,
+  });
   if (!isCompaction) {
     recordHealth(
       {
@@ -99,20 +112,29 @@ export async function handleSessionStart(input, options = {}) {
   }
   const trustNotice =
     hookTrust?.status === "review_required"
-      ? `Remembrance hook trust review is required for ${hookTrust.review_events.join(", ")}. Querying, opening skills, bounded feedback, and private submissions remain available; only automatic skill-use or completion tracking for those hooks is paused. Run run_connection_doctor and follow its exact Codex review steps before claiming full activation.`
+      ? `Remembrance hook trust review is required for ${hookTrust.review_events.join(", ")}. Querying, opening skills, bounded feedback, and private submissions remain available; until those hooks are approved, only what they add is paused (SubagentStart: each subagent's preference snapshot; UserPromptSubmit: each prompt's search and preference snapshot; the others: automatic skill-use or completion tracking). Run run_connection_doctor and follow its exact Codex review steps before claiming full activation.`
       : null;
   const notices = [
     trustNotice,
     clientUpdate?.notice,
     await sessionSkills,
   ].filter(Boolean);
+  const context = [baseContext, ...notices].join("\n\n");
+  // The snapshot fits exactly into what remains of the Codex budget: whole,
+  // or page 1 with its opening line.
+  const budget = HOOK_CONTEXT_BUDGETS.codex;
+  const preferences =
+    snapshot &&
+    preferenceSnapshotText(snapshot, {
+      maxChars: budget.maxChars - context.length - 2,
+      maxEstimatedTokens:
+        budget.maxEstimatedTokens -
+        estimatePreferenceSnapshotTokens(`${context}\n\n`),
+    });
   return {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
-      additionalContext:
-        notices.length > 0
-          ? `${baseContext}\n\n${notices.join("\n\n")}`
-          : baseContext,
+      additionalContext: preferences ? `${context}\n\n${preferences}` : context,
     },
   };
 }

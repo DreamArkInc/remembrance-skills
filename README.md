@@ -384,10 +384,10 @@ Codex sees.
 Codex will not run new or changed plugin hooks until their exact definitions are
 trusted. If Codex shows a **Hooks need review** screen, choose **Review hooks**
 and trust only the Remembrance `SessionStart`, `UserPromptSubmit`,
-`PostToolUse`, `Stop`, and `SubagentStop` hooks. If no review screen appears,
-continue: Codex may be reusing an existing valid trust decision. Changed hook
-definitions show the same review screen again. Fully restart Codex before
-verification.
+`PostToolUse`, `Stop`, `SubagentStart`, and `SubagentStop` hooks. If no review
+screen appears, continue: Codex may be reusing an existing valid trust
+decision. Changed hook definitions show the same review screen again. Fully
+restart Codex before verification.
 
 ### OpenClaw — plugin (skill + tools + conversation hooks)
 

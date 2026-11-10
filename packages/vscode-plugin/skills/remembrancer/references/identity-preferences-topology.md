@@ -79,10 +79,12 @@ not a closed vocabulary:
 - `output_organization`: `compact`, `structured`, `step_by_step`
 
 Use `get_effective_preferences` or
-`POST /api/v1/agent/preferences/effective` to resolve task-relevant values.
-Normal query and invocation responses also include
-`preference_definition_version`, `effective_preferences`, and, for a selected
-skill, `preference_application`. Extensible settings use a stable dotted key,
+`POST /api/v1/agent/preferences/effective` to resolve the preferences of one
+context. MCP query and invocation results carry them as the text snapshot
+described under [Preference delivery](#preference-delivery); REST query and
+invocation responses also include `preference_definition_version`,
+`effective_preferences`, and, for a selected skill, `preference_application`.
+Extensible settings use a stable dotted key,
 stable value, short label, concise normalized behavior, effect
 (`presentation`, `workflow`, or `strategy_selection`), direction (`prefer` or
 `avoid`), and definition version. Native hooks record recognized built-ins
@@ -136,7 +138,9 @@ lane. Built-in settings are refused along with custom ones because they shared
 that same clear-text lane.
 
 An empty `effective_preferences` list is not by itself a claim that the profile
-is empty. Read the `personalization` block that accompanies it. `available: true`
+is empty. Read the `personalization` block that accompanies it, and in a REST
+response the `completeness` block too; a snapshot states the same in its
+header. `available: true`
 with `reason_code: "resolved"` means every scope that applies to this caller was
 read, and `resolved_scopes` names them. `available: false` names what was not:
 
@@ -166,9 +170,15 @@ preference versions can then reorder candidates only inside that same tier.
 The response reports qualitative matched/conflicted relationships plus
 `relevance_rank` and `personalized_rank`; it never exposes the internal bounded
 adjustment. A single selected skill still receives a surgical preference
-sidecar for discretionary behavior. A locked skill requirement blocks an
-incompatible personal preference. A locked conflict with Required organization
-guidance makes the skill ineligible. No preference weakens a hard constraint.
+sidecar for discretionary behavior. A skill sets an ordinary preference aside
+only for a locked conflict confirmed by the organization, declared in the
+skill's reviewed metadata, or corroborated by verified members of the
+organization, and only while that skill is followed; the preference keeps
+applying to all other work. A conflict that only a model check suggests is a
+note, not a block, so the preference still applies. Required organization
+settings are never set aside: a confirmed locked conflict with one makes the
+skill ineligible, so queries exclude it and direct invocation answers HTTP 409.
+No preference weakens a hard constraint.
 
 Compatibility is classified asynchronously. Query and invocation do not add a
 generative preference call or a second embedding request. Missing, stale, or
@@ -178,9 +188,13 @@ affected organizations. An ineligible organization is visibly blocked and
 resumes automatically instead of retrying classification work continuously.
 After actual use, submit compatibility
 feedback only with the exact `query_id`, `result_id`, skill/version, evidence
-source, and server-issued preference fingerprint from that result's feedback
-offer. The server derives the evidence identity and rejects expired,
-unfetched, cross-principal, stale-version, or unoffered claims.
+source, and either the server-issued preference fingerprint from that result's
+feedback offer or the `preference_key` of a preference that was active for that
+skill use, offered or not. A key that matches none, or more than one, of that
+use's preferences is refused with HTTP 422, and a key sent with a fingerprint
+must name the same preference. The server derives the evidence identity and
+rejects expired, unfetched, cross-principal, stale-version, or unauthorized
+claims.
 
 - An explicit instruction applies to the current task immediately. Known
   built-ins activate durably without background work. A custom setting remains
@@ -194,6 +208,116 @@ unfetched, cross-principal, stale-version, or unoffered claims.
 - Explicit values persist until changed.
 - Each activation creates a reversible profile revision; the dashboard supports
   undo and reset.
+
+## Preference delivery
+
+Agents receive preferences as a text snapshot, not as JSON entries. Its first
+line is a header such as:
+
+```text
+Remembrance preferences (profile pd1_3f9c2a7d1e5b8c04, context 7c1e94a2; complete)
+```
+
+The header names a short, content-free profile digest, a context id and the
+status. An incomplete status names the reason, what is missing and the exact
+recovery call, for example `incomplete: page 1 of 2, entries 1-6 of 18 shown;
+the remaining entries are on later pages; call get_effective_preferences with
+page_token <t>`; each further reason follows on its own `Also:` line. A
+rule line follows, then "Required by your organization:" and "Your
+preferences:" with one line per entry: the stored label, `(avoid)` for an
+avoid preference, the scope it applies to (`this task`, `this project`,
+`skill <slug>`, `domain <name>` or `runtime`) and the stored behavior, never
+paraphrased or cut. Apply the entries silently, without asking the user to
+reconfirm them. Two snapshots with equal digests describe the same profile
+only when their context ids are equal too.
+
+- **Where it arrives.** An MCP `query_skills` result carries the snapshot of
+  its context (project, task domain and task preferences) in `preferences`; an
+  `invoke_skill` result carries the snapshot of the skill's context. Each
+  result adds `skill_notes`: preferences set aside only while that skill is
+  followed, preferences scoped to that skill, which take precedence over the
+  snapshot, notes that are not blocks, and replaced skill defaults.
+  `get_effective_preferences` returns `{preferences, keys}`, and `fingerprints`
+  with `include_fingerprints: true`. Native hooks inject the project's snapshot
+  themselves, as listed below.
+- **Paging.** A profile larger than the space for it arrives in pages. Page 1
+  holds the required settings first and opens with "Before any other action,
+  call get_effective_preferences with page_token <t> until complete." (or
+  "... for the remaining pages." when the header says no recovery call exists;
+  the last page then stays incomplete and needs no further call). Call
+  `get_effective_preferences` with that token, plus the same `keys` and
+  `task_preferences` when the status asks for them, until the header says
+  complete; only the last page does. A restart page means that the profile
+  changed or the token expired, so earlier pages are outdated. A damaged token,
+  or one issued to another caller, is refused with HTTP 422 and a message that
+  names the call that starts over.
+- **Truthful status.** Missing personal scopes (`organization_scope_only`),
+  unavailable storage, disabled preferences, more stored settings than one read
+  returns, a hook's redaction of an entry, or a cached copy each make a
+  snapshot incomplete, and the header says what to do. When such a state lasts
+  the whole conversation, its recovery asks for one notice to the user, never
+  one per prompt.
+- **Freshness.** A snapshot is current as of each prompt on a host that injects
+  it on every prompt, and as of each request start everywhere else. A change
+  made while a request runs applies from the next request. Without per-prompt
+  injection, hold a fresh, complete snapshot before governed work in each new
+  request: the snapshot in that request's own `query_skills` or `invoke_skill`
+  response counts, and so does one whose header says no recovery call exists;
+  otherwise call `get_effective_preferences`, without a skill search. A
+  background refresh only picks changes up earlier and never counts as
+  verified current delivery.
+- **Cached copy.** When a hook's live read fails, it may show its saved copy for
+  the same identity and project context, at most 7 days old, marked incomplete
+  with its age. A cached copy never qualifies for `known_digest`.
+- **`known_digest`.** Send `known_digest` to `get_effective_preferences` or
+  `query_skills` only when this conversation already holds the complete
+  snapshot for that exact context with that digest, every page included, with
+  no summary or context reset since; never for an incomplete, stale or cached
+  copy. The server answers `unchanged` only for a successful, complete, fully
+  personalized resolution with the same digest, and the MCP view is then one
+  short line. Any other resolution returns its real status. Hooks never send
+  `known_digest`.
+
+Native hooks inject the snapshot of the project context, never a parent
+session's task entries, at these points; each budget covers the whole hook
+field:
+
+- Claude Code: `SessionStart` (startup, resume, clear, compaction and fork),
+  every `UserPromptSubmit`, and `SubagentStart` for each subagent; 9,000
+  characters.
+- Codex: `SessionStart`, every `UserPromptSubmit`, and `SubagentStart`; 7,000
+  characters and 2,000 estimated tokens.
+- VS Code: `SessionStart` and every `UserPromptSubmit`; a subagent's task
+  prompt gets the project snapshot; 9,000 characters. Delivery to the VS Code
+  model is not yet proven, so VS Code agents also follow the request-start
+  rule.
+- Cursor: `sessionStart`, which Cursor does not wait for, so the first
+  `postToolUse` delivers the snapshot again; then `postToolUse` after a
+  compaction or when a background read, every 5 minutes by default, finds a
+  changed profile. The always-apply rule adds the request-start rule.
+- OpenCode: once in every model request of a turn; 9,000 characters.
+- OpenClaw: every run, appended to the system context; 9,000 characters. A
+  gateway serves several workspaces, so project preferences need
+  `REMEMBRANCE_PROJECT_PATH` or `REMEMBRANCE_PROJECT_KEY`. Without either, the
+  snapshot says that the gateway does not know the agent's project, and a "for
+  this project" preference is not saved; the agent is told why.
+- Raw MCP, hosted MCP and REST clients follow the request-start rule.
+
+REST callers read the same contract as fields. The effective route returns
+`effective_preferences`, `personalization`, `profile_digest`, `completeness`
+(`complete`, `total`, `delivered`, `omitted`, `reason`), `preference_page_token`,
+`page` and `unchanged`. `POST /api/v1/agent/query` adds the same top-level
+fields except `page`. Each query candidate's `effective_preferences` holds only
+the entries that differ from the top-level list (preferences scoped to that
+skill and its declared defaults), with `preference_differences` and its own
+`preference_page_token`. An `applied_preferences` item is a `{key, authority}`
+reference only when that key occurs exactly once across the top-level list and
+the candidate's differences; otherwise it is the full entry. Bodies stay within
+3.5 MiB: above that, a route cuts whole entries, reports the cut through
+`completeness` (`response_size_limited`) or `preference_differences.withheld`,
+and its page token recovers the entries. A cut sequence ends when `page.start`
+plus `completeness.delivered` equals `completeness.total`; do not follow the
+token then.
 
 ## Evidence topology
 

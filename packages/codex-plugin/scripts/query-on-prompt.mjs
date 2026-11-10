@@ -17,6 +17,7 @@ import {
   agentLedgerIdFor,
   debugLog,
   foldTurnLedgerIntoSession,
+  HOOK_CONTEXT_BUDGETS,
   hostedMcpSplitNotice,
   recordHighMatchSurface,
   recordDirectiveSurface,
@@ -140,6 +141,7 @@ export async function handleQuery(input, options = {}) {
       : null,
   ].filter(Boolean);
   const result = await runPromptHook(prompt, {
+    ...HOOK_CONTEXT_BUDGETS.codex,
     env,
     fetchImpl: options.fetchImpl ?? fetch,
     includeSharedConfigCredentialNotice: false,
@@ -153,6 +155,8 @@ export async function handleQuery(input, options = {}) {
   if (!result) {
     return null;
   }
+  // A context that holds only the preference snapshot records nothing.
+  if (result.preferencesOnly) return promptOutput(result.context);
   if (result.eligible) {
     const recordEligibility =
       options.recordEligibility ?? recordTaskEligibility;
@@ -178,11 +182,14 @@ export async function handleQuery(input, options = {}) {
     recordQueryFeedback(ledgerId, result.queryFeedback, env);
   }
   // An empty task-shape search with nothing to deliver (owner decision 34C).
-  if (!result.context) return null;
+  return result.context ? promptOutput(result.context) : null;
+}
+
+function promptOutput(context) {
   return {
     hookSpecificOutput: {
       hookEventName: "UserPromptSubmit",
-      additionalContext: result.context,
+      additionalContext: context,
     },
   };
 }

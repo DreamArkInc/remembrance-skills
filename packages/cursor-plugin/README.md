@@ -95,16 +95,24 @@ generative preference call or second embedding request. Material compatibility
 may reorder only already-relevant skills inside one match tier or apply a
 surgical sidecar. Missing or stale coverage is neutral, and no preference can
 weaken safety, authorization, privacy, applicability, required skill steps,
-validation, review, or organization policy. Exact skill-version changes queue
+validation, review, or organization policy. A skill sets an ordinary
+preference aside only for a locked conflict confirmed by the organization,
+declared in the skill's reviewed metadata, or corroborated by verified members
+of the organization, and only while that skill is followed; a conflict that
+only a model check suggests is a note, not a block. Required organization
+settings are never set aside: a confirmed locked conflict with one makes the
+skill unavailable. Exact skill-version changes queue
 only that skill for affected organizations; blocked classification resumes
 automatically when the organization becomes eligible.
 
 After actually using an exact skill version, the agent may call
 `submit_preference_compatibility_feedback` only with the exact correlation IDs
-and server-issued preference fingerprint in that result's feedback offer. The
-server verifies the fetch and active preference. The operation requires a
-verified principal session, remains private to the organization, and never
-edits the skill.
+and either the server-issued preference fingerprint in that result's feedback
+offer or the `preference_key` of a preference that was active for that skill
+use; a key that matches none, or more than one, of that use's preferences is
+refused. The server verifies the fetch and active preference. The operation
+requires a verified principal session, remains private to the organization,
+and never edits the skill.
 
 ## Organization key
 
@@ -386,12 +394,56 @@ uses.
   the Remembrance MCP `query_skills` tool before reusable service/API/tool,
   workflow, deployment, MCP, resource-selection, dashboard, UI/UX, review,
   test, and security tasks, including short follow-ups interpreted from the full
-  conversation.
+  conversation. It also tells the agent to apply the Remembrance preference
+  snapshot silently and, before governed work in each new request, to hold a
+  fresh, complete snapshot: the one in that request's `query_skills` or
+  `invoke_skill` response (one whose header says no recovery call exists also
+  counts), otherwise one from `get_effective_preferences`.
 - `mcp.json` registers the Remembrance MCP server through the plugin, so users do
-  not have to hand-edit `~/.cursor/mcp.json` for the standard install path.
-- `sessionStart` adds compact session context. Cursor's documented
+  not have to hand-edit `~/.cursor/mcp.json` for the standard install path. It
+  sets no project path: Cursor does not document `${workspaceFolder}` for a
+  plugin's `mcp.json`, and in a native session of 2026-11-09 Cursor 3.24.18
+  started the plugin's server in the home folder and filled in no
+  `${workspaceFolder}`. So the server reads no project: the preference
+  snapshot of its own reads says the project part was not read because this
+  server does not know the open project, and names no call to repeat. The
+  hooks below deliver the workspace's project preferences; a
+  `get_effective_preferences` call with the `page_token` of the hooks'
+  snapshot continues that snapshot, project part included. For one fixed
+  project, a person can set `REMEMBRANCE_PROJECT_PATH`, or a `prj_` key in
+  `REMEMBRANCE_PROJECT_KEY`, in the server's environment.
+- `sessionStart` adds compact session context and, with an organization key,
+  the workspace's project-context preference snapshot: whole when it fits
+  Cursor's 9,000-character context, otherwise page 1, which names the call for
+  the rest. The workspace is `workspace_roots[0]`, then `workspaceRoot`, then
+  `cwd`; a `REMEMBRANCE_PROJECT_PATH` set in the hooks' environment wins over
+  the workspace, and a `prj_` key in `REMEMBRANCE_PROJECT_KEY` wins over both,
+  as in the MCP server. The read waits for the session warm-up and has a 2.5-second timeout,
+  so the hook ends within Cursor's 5-second limit. Cursor's documented
   `beforeSubmitPrompt` output can block or show a message, but cannot inject
-  prompt-specific context, so the rule plus MCP server is the low-friction path.
+  prompt-specific context, and Cursor does not wait for `sessionStart`, so the
+  rule plus MCP server remains the per-request path, without the project part,
+  which the hooks deliver.
+- `postToolUse` runs after every tool call and delivers the project snapshot
+  after the tool result when the conversation was compacted, or when the
+  hooks' latest read differs from the snapshot the conversation last received
+  whole. It reads at most every `REMEMBRANCE_CURSOR_PREFERENCE_REFRESH_MS`
+  milliseconds (default `300000`, five minutes) and after a compaction; a
+  failed read adds nothing, except after a compaction. Each read first warms
+  the hooks' session as `sessionStart` does, because that session can expire
+  during a long conversation and a read without it returns only organization
+  settings: a cached session needs no request, a new one waits at most 1.2
+  seconds, and the 2.5-second read still ends within Cursor's 5-second limit.
+  A complete or unchanged `get_effective_preferences` result for the same
+  context id counts as delivered; a `query_skills` or `invoke_skill` snapshot,
+  or one for another context, does not. Otherwise it prints `{}`. This is
+  earlier pickup, never delivery before an action. Cursor does not wait for
+  `sessionStart`, so its copy never counts as received: the first tool call of
+  a conversation delivers the snapshot once more, at most one repeat. Cloud
+  agents run no `sessionStart`, so their first tool call also warms the
+  session.
+- `preCompact` only marks the conversation so that the next `postToolUse`
+  delivers the snapshot again; it shows no message.
 - `beforeSubmitPrompt` observes relevant/contextual prompts without modifying
   them and records an eligibility marker so the stop hook can recover a missed
   query.
@@ -410,7 +462,9 @@ uses.
   `get_resource`, or successfully loaded an explicit selection through
   `invoke_skill`. `list_skills` and MCP resource-handle reads do not count as
   use. If the agent later calls a contribution tool, the hook marks that use as
-  already handled.
+  already handled. It reads the result from Cursor's `result_json` string (and
+  `tool_output`, which `postToolUse` receives), so direct selections, query use
+  and feedback offers are recorded in Cursor as on the other hosts.
 - `capture_learning` is the sole routine local reusable-learning router. It
   returns an exact private lesson/private skill action or the existing
   preference action. Local MCP also provides the zero-network
@@ -488,12 +542,17 @@ uses.
   `REMEMBRANCE_DIRECTIVE_EVENT_TIMEOUT_MS` controls the fail-open request
   timeout (default `750`, bounded to `100`-`2000` milliseconds).
 - `stop` records bounded pending obligations when Remembrance was used or an
-  eligible task missed its query, then allows the current final answer. The next
-  real user prompt receives only the exact query, unopened-match,
-  `submit_query_feedback`, categorical `submit_feedback`, or
-  `capture_learning` recovery actions. Routine hook narration, tool receipts,
-  and correlation IDs never obscure the final answer; only a failure,
-  host-policy block, or required user action is surfaced.
+  eligible task missed its query, then allows the current final answer.
+  Cursor has no hook that adds context to a prompt, so by default these
+  recorded recovery actions are not shown to the agent. Routine hook
+  narration, tool receipts, and correlation IDs never obscure the final
+  answer; only a failure, host-policy block, or required user action is
+  surfaced. With `REMEMBRANCE_VISIBLE_COMPLETION_RECOVERY=1`, a stop after a
+  recorded direct selection or query use instead returns one
+  `followup_message` that names the pending `submit_feedback` or
+  `submit_query_feedback` action; `loop_limit: 1` allows at most one follow-up
+  per stop. With that setting, Cursor sessions that use Remembrance tools get
+  these follow-ups as the other hosts do, which adds a turn and its tokens.
 
 ## Cursor docs alignment
 
@@ -503,8 +562,8 @@ This package follows Cursor's documented plugin structure:
 - `skills/`, `rules/`, `hooks/hooks.json`, and `mcp.json` use Cursor's automatic
   component discovery.
 - Hook scripts communicate over stdin/stdout JSON.
-- `sessionStart`, `beforeSubmitPrompt`, `afterMCPExecution`, and `stop` are
-  Cursor agent hooks.
+- `sessionStart`, `beforeSubmitPrompt`, `afterMCPExecution`, `postToolUse`,
+  `preCompact`, and `stop` are Cursor agent hooks.
 - Cursor now documents conversation hooks for cloud agents, but a local plugin
   install does not automatically provision cloud agents. Distribute the plugin
   through a team marketplace, register Remembrance as a Team MCP server under

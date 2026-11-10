@@ -108,16 +108,24 @@ generative preference call or second embedding request. Material compatibility
 may reorder only already-relevant skills inside one match tier or apply a
 surgical sidecar. Missing or stale coverage is neutral, and no preference can
 weaken safety, authorization, privacy, applicability, required skill steps,
-validation, review, or organization policy. Exact skill-version changes queue
+validation, review, or organization policy. A skill sets an ordinary
+preference aside only for a locked conflict confirmed by the organization,
+declared in the skill's reviewed metadata, or corroborated by verified members
+of the organization, and only while that skill is followed; a conflict that
+only a model check suggests is a note, not a block. Required organization
+settings are never set aside: a confirmed locked conflict with one makes the
+skill unavailable. Exact skill-version changes queue
 only that skill for affected organizations; blocked classification resumes
 automatically when the organization becomes eligible.
 
 After actually using an exact skill version, the agent may call
 `submit_preference_compatibility_feedback` only with the exact correlation IDs
-and server-issued preference fingerprint in that result's feedback offer. The
-server verifies the fetch and active preference. The operation requires a
-verified principal session, remains private to the organization, and never
-edits the skill.
+and either the server-issued preference fingerprint in that result's feedback
+offer or the `preference_key` of a preference that was active for that skill
+use; a key that matches none, or more than one, of that use's preferences is
+refused. The server verifies the fetch and active preference. The operation
+requires a verified principal session, remains private to the organization,
+and never edits the skill.
 
 ## Organization key
 
@@ -196,13 +204,13 @@ cannot see a persisted approval.
 
 ## What the hooks do
 
-| Hook                             | Event                           | Behavior                                                                                                                  |
-| -------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `scripts/session-start.mjs`      | `SessionStart`                  | Records activation health and states how to verify setup.                                                                 |
-| `scripts/query-on-prompt.mjs`    | `UserPromptSubmit`              | Queries Remembrance before non-trivial reusable work and injects matching skills as context. Fail-open.                   |
-| `scripts/record-detail-open.mjs` | `PostToolUse`                   | Correlates Remembrance tool calls with the active directive.                                                              |
-| `scripts/contribute-on-stop.mjs` | `Stop`                          | Silently records bounded pending work for exact recovery on the next prompt.                                              |
-| `scripts/contribute-on-stop.mjs` | `SubagentStart`, `SubagentStop` | Marks a subagent's start so its task prompt is not taken for yours, and leaves a subagent's unpaid actions to its parent. |
+| Hook                             | Event                           | Behavior                                                                                                                                               |
+| -------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scripts/session-start.mjs`      | `SessionStart`                  | Records activation health, states how to verify setup, and adds the preference snapshot of the workspace's project.                                    |
+| `scripts/query-on-prompt.mjs`    | `UserPromptSubmit`              | Queries Remembrance before non-trivial reusable work, injects matching skills as context, and adds the preference snapshot to every prompt. Fail-open. |
+| `scripts/record-detail-open.mjs` | `PostToolUse`                   | Correlates Remembrance tool calls with the active directive.                                                                                           |
+| `scripts/contribute-on-stop.mjs` | `Stop`                          | Silently records bounded pending work for exact recovery on the next prompt.                                                                           |
+| `scripts/contribute-on-stop.mjs` | `SubagentStart`, `SubagentStop` | Marks a subagent's start so its task prompt is not taken for yours, and leaves a subagent's unpaid actions to its parent.                              |
 
 Host-generated text a trigger word matches (a Codex commit or pull-request
 generation prompt, a subagent hand-back, pasted `git status` output, an explicit
@@ -239,7 +247,8 @@ platform generated them or a person reviewed them. A use condition only
 promotes a result, and only an exclusion its author stated or a person
 reviewed makes it `unlikely`; `applicability.provenance` says who stated
 them.
-Set `REMEMBRANCE_AUTO_QUERY=0` to disable the prompt hook, or
+Set `REMEMBRANCE_AUTO_QUERY=0` to disable the prompt hook and the preference
+snapshots, or
 `REMEMBRANCE_AUTO_CONTRIBUTE=0` to disable automatic contribution closure. The
 Stop hook allows the current final answer and defers routine recovery to the
 next real user prompt. That prompt receives only the exact pending query,
@@ -254,11 +263,29 @@ and delivers its own lessons. Leave it unset for sessions a person uses.
 
 VS Code names a subagent only in `SubagentStart` and `SubagentStop`, and sends
 the subagent's task through `UserPromptSubmit` under your session right after
-its start. The prompt hook skips a prompt VS Code stamped within 10 seconds
-after a recorded subagent start as that subagent's task. If a request is
-cancelled between those two hooks, a prompt of yours stamped within those 10
-seconds is skipped the same way: it gets no query and no pending-action
-reminder, and your next prompt does.
+its start. The prompt hook takes a prompt VS Code stamped within 10 seconds
+after a recorded subagent start as that subagent's task and gives it only the
+project's preference snapshot: no query and no pending-action reminder. If a
+request is cancelled between those two hooks, a prompt of yours stamped within
+those 10 seconds is treated the same way, and your next prompt gets its query
+and reminders.
+
+With an organization credential, the hooks give the agent your working
+preferences for the workspace's project as a text snapshot: `SessionStart` at
+startup, resume, clear and compaction, and `UserPromptSubmit` on every prompt,
+whether or not it searches. The project is the path in
+`REMEMBRANCE_PROJECT_PATH` when you set it, else the working directory VS Code
+gives the hook; a `prj_` key in `REMEMBRANCE_PROJECT_KEY` wins over both, as
+in the MCP server. Each hook's whole context fits in 9,000
+characters; a larger profile arrives as page 1, which lists the required
+settings first and opens with the `get_effective_preferences` call that
+fetches the rest. When the live read fails, a hook may show its saved copy for
+the same identity and project, at most 7 days old, marked incomplete with the
+call that recovers it. That VS Code passes hook context to its model is not
+yet proven, so agents in VS Code also hold a fresh, complete snapshot before
+governed work in each request: the one in that request's `query_skills` or
+`invoke_skill` response (one whose header says no recovery call exists also
+counts), or else one `get_effective_preferences` call.
 
 ## Host policy
 

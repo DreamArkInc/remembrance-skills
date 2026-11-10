@@ -9,13 +9,17 @@
 // re-synced by `npm run sync:hook-core`). This file keeps only the Claude glue:
 //   • the per-prompt disk cache (Claude fires this hook synchronously on every
 //     prompt, so repeated matching prompts are served from cache without a
-//     re-query — Codex/OpenClaw have no such cache);
+//     re-query — Codex/OpenClaw have no such cache). It holds no preference
+//     snapshot: every prompt reads that once, from its search response, its
+//     hygiene read or one read with the project key only;
 //   • the `provider: "vscode"` payload agent identity;
 //   • a Claude-branded query wrapper (its own user-agent) that layers the shared
 //     apiUrl / resolveApiKey / timeout logic;
 //   • Claude's stdin/stdout shape.
-// Fail-open: true no-matches and disabled hooks print nothing. Query failures
-// inject a bounded direct-query recovery instruction and still exit 0.
+// Fail-open: disabled hooks print nothing, and a prompt with nothing else to
+// say prints only the organization's preference snapshot (nothing without an
+// organization key). Query failures inject a bounded direct-query recovery
+// instruction and still exit 0.
 
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
@@ -36,6 +40,7 @@ import {
   emptyQueryContext,
   emptyTaskShapeContext,
   formatContext,
+  HOOK_CONTEXT_BUDGETS,
   highMatchFromResponse,
   isHostNotificationPrompt,
   isContextualContinuationPrompt,
@@ -53,16 +58,22 @@ import {
   queryResponseHasMatches,
   pendingCompletionRecovery,
   acknowledgePrivateAuthorizationReminders,
+  preferenceSnapshotAddition,
+  preferenceSnapshotModel,
+  projectKeyForHook,
+  projectPreferenceSnapshot,
   queryFeedbackTrackingFromResponse,
   queryRemembrance as querySharedRemembrance,
   resolveApiKey,
   resolveApiCredential,
+  responseBodyFromToolResponse,
   sessionIdFor,
   sharedConfigCredentialNotice,
   shouldQueryPrompt,
   stoppedSearchGovernance,
   continuationQueryContext,
   unavailableQueryContext,
+  unsavedProjectPreferenceNotice,
   userCorrectionCaptureDirective,
   valueEpisodeFromResponse,
   withoutPrivateKeySearch,
@@ -112,10 +123,13 @@ export const formatAdditionalContext = formatContext;
 // else (redaction, summary truncation, domain/constraint inference, limit) comes
 // straight from the shared core. Exported because the plugin test and any
 // importer expect this module's payload to carry the Claude identity.
+// `projectPath` names the host's project, so the project key is the one the
+// session-start read sends.
 export function buildQueryPayload(
   prompt,
   env = process.env,
   triggerReason = "trigger_match",
+  projectPath = null,
 ) {
   const payload = buildSharedQueryPayload(
     prompt,
@@ -126,6 +140,7 @@ export function buildQueryPayload(
       runtime: "vs_code",
       trigger_reason: triggerReason,
     },
+    projectPath,
   );
   payload.agent = { provider: "vscode", model: "vs-code-agent" };
   return payload;
@@ -133,6 +148,10 @@ export function buildQueryPayload(
 
 export async function handleHookInput(input, options = {}) {
   const env = options.env ?? process.env;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  // Every preference read and write of this prompt names the host's project,
+  // as the session-start read does.
+  const projectPath = input?.cwd ?? null;
   const sessionId = sessionIdFor(input);
   const recordHealth = options.recordHealth ?? recordPluginLifecycleHealth;
   recordHealth(
@@ -144,11 +163,22 @@ export async function handleHookInput(input, options = {}) {
     },
     env,
   );
+  // The project-context snapshot: one read with the project key only (null
+  // without an organization key or with REMEMBRANCE_AUTO_QUERY=0).
+  const projectSnapshot = () =>
+    projectPreferenceSnapshot({
+      runtime: "vs_code",
+      env,
+      fetchImpl,
+      projectPath,
+      userAgent: "@remembrance/vscode-plugin",
+      stderr: options.stderr,
+    });
   // A subagent's task can arrive here like a user's prompt; it is neither
-  // the user's nor its parent's, so nothing here applies to it.
+  // the user's nor its parent's, so only the project's preferences apply.
   if (claimSubagentStart(input, env)) {
     debugLog(env, "skip", { reason: "subagent_prompt" }, options);
-    return null;
+    return withAllContext(null, env, await projectSnapshot());
   }
   const prompt = String(input?.prompt ?? "");
   if (isHostNotificationPrompt(prompt)) {
@@ -180,12 +210,61 @@ export async function handleHookInput(input, options = {}) {
   const recoveryInstruction = recovery
     ? { id: "private_learning_recovery", kind: "completion", render: recovery }
     : null;
+  // "For this project" is never saved for every project: when the host
+  // cannot name the project, the agent is told the preference was not saved.
+  const unsavedProjectPreference = unsavedProjectPreferenceNotice(redacted, {
+    env,
+    projectPath,
+  });
+  // Every exit from here on delivers this prompt's lines and the preference
+  // snapshot (null for none) beside its output (null when it has none).
+  const respond = (output, snapshot) =>
+    withAllContext(
+      output,
+      env,
+      snapshot,
+      recoveryInstruction,
+      correctionCapture,
+      unsavedProjectPreference && {
+        id: "project_preference_unsaved",
+        kind: "notice",
+        text: unsavedProjectPreference,
+      },
+    );
   void recordExplicitPreferenceObservations(redacted, {
     env,
-    fetchImpl: options.fetchImpl ?? fetch,
+    fetchImpl,
+    projectPath,
     runtime: "vs_code",
     userAgent: "@remembrance/vscode-plugin",
   }).catch(() => 0);
+  // A search response or the hygiene read is the snapshot source when the
+  // prompt makes one; it never uses or writes the cached copy, so a failed
+  // read renders read_failed.
+  const organization = Boolean(resolveApiCredential(env).apiKey);
+  // Decided before any search, as the search payload's project key is: a
+  // search's background warm-up can create the local identity, and with it a
+  // project key that search never sent.
+  const projectScopeUnread =
+    organization && !projectKeyForHook(env, projectPath);
+  const snapshotFrom = (read) => {
+    if (!organization) return null;
+    return read?.ok
+      ? preferenceSnapshotModel(read.body, {
+          projectScopeUnread,
+          coldStart: read.coldStart === true,
+        })
+      : {
+          entries: [],
+          digest: null,
+          total: null,
+          reasons: [
+            { code: "read_failed" },
+            ...(projectScopeUnread ? [{ code: "project_scope_unread" }] : []),
+          ],
+          pageToken: null,
+        };
+  };
   let decision = withoutPrivateKeySearch(
     shouldQueryPrompt(redacted, env),
     prompt,
@@ -200,27 +279,23 @@ export async function handleHookInput(input, options = {}) {
       options,
     );
     const stopped = await stoppedSearchGovernance(
-      buildQueryPayload(redacted, env, decision.reason),
+      buildQueryPayload(redacted, env, decision.reason, projectPath),
       {
         env,
-        fetchImpl: options.fetchImpl ?? fetch,
+        fetchImpl,
         stderr: options.stderr,
         userAgent: "@remembrance/vscode-plugin",
       },
     );
     if (!stopped.search) {
+      const snapshot = snapshotFrom(stopped.read);
       if (correctionCapture || recoveryInstruction) {
         recordEligibility(input, env, options);
         recordDirective(input, null, env, options);
       } else if (!stopped.governs) {
-        return null;
+        return respond(null, snapshot);
       }
-      return withAllContext(
-        outputForContext(stopped.context),
-        env,
-        recoveryInstruction,
-        correctionCapture,
-      );
+      return respond(outputForContext(stopped.context), snapshot);
     }
     // The read failed: run the search the rule stopped, as without the rule.
     debugLog(
@@ -232,35 +307,33 @@ export async function handleHookInput(input, options = {}) {
     decision = { likely_match: true, reason: decision.trigger };
   }
   if (!decision.likely_match) {
+    // No search: one read with the project key only.
+    const snapshot = projectSnapshot();
     if (isContextualContinuationPrompt(redacted)) {
       const directive = await createContinuationDirective({
         env,
-        fetchImpl: options.fetchImpl ?? fetch,
+        fetchImpl,
         runtime: "vs_code",
         stderr: options.stderr,
         userAgent: "@remembrance/vscode-plugin",
       });
       recordEligibility(input, env, options);
       recordDirective(input, directive, env, options);
-      return withAllContext(
+      return respond(
         outputForContext(continuationQueryContext(directive, env)),
-        env,
-        recoveryInstruction,
-        correctionCapture,
+        await snapshot,
       );
     }
     if (correctionCapture || recoveryInstruction) {
       recordEligibility(input, env, options);
       recordDirective(input, null, env, options);
-      return withAllContext(
+      return respond(
         outputForContext("Remembrance capture routing:"),
-        env,
-        recoveryInstruction,
-        correctionCapture,
+        await snapshot,
       );
     }
     debugLog(env, "skip", { reason: decision.reason }, options);
-    return null;
+    return respond(null, await snapshot);
   }
   // Owner decision 34C: an empty task-shape search makes the turn eligible
   // for completion recovery only through its correction or recovery line, so
@@ -271,22 +344,20 @@ export async function handleHookInput(input, options = {}) {
   // An empty task-shape search shows no no-match block and records no
   // query-feedback obligation; its governance (`output`, null for none) and
   // this prompt's capture and recovery lines arrive as for any search.
-  const emptyTaskShapeOutput = (output) => {
+  const emptyTaskShapeOutput = (output, snapshot) => {
     if (correctionCapture || recoveryInstruction) {
       recordEligibility(input, env, options);
     } else if (!output) {
       debugLog(env, "task_shape_no_result", {}, options);
-      return null;
+      return respond(null, snapshot);
     }
-    return withAllContext(
+    return respond(
       output ?? outputForContext(emptyTaskShapeContext(null).context),
-      env,
-      recoveryInstruction,
-      correctionCapture,
+      snapshot,
     );
   };
 
-  const cacheKey = cacheKeyForPrompt(redacted, env);
+  const cacheKey = cacheKeyForPrompt(redacted, env, projectPath);
   const cached = await readCachedOutput(cacheKey, env, options);
   if (cached.hit) {
     debugLog(
@@ -298,8 +369,9 @@ export async function handleHookInput(input, options = {}) {
       },
       options,
     );
+    const snapshot = await projectSnapshot();
     if (taskShape && !cached.matched) {
-      return emptyTaskShapeOutput(cached.output);
+      return emptyTaskShapeOutput(cached.output, snapshot);
     }
     if (taskShape) recordEligibility(input, env, options);
     const output =
@@ -309,31 +381,42 @@ export async function handleHookInput(input, options = {}) {
       recordUse(input, env, options, cached.highMatch ?? null);
     }
     recordQueryFeedback(input, cached.queryFeedback, env, options);
-    return withAllContext(output, env, recoveryInstruction, correctionCapture);
+    return respond(output, snapshot);
   }
   debugLog(env, "cache_miss", { key: shortCacheKey(cacheKey) }, options);
 
-  const payload = buildQueryPayload(redacted, env, decision.reason);
+  const payload = buildQueryPayload(
+    redacted,
+    env,
+    decision.reason,
+    projectPath,
+  );
   const response = await queryRemembrance(payload, {
     env,
-    fetchImpl: options.fetchImpl ?? fetch,
+    fetchImpl,
     stderr: options.stderr,
   });
   if (!response) {
     if (taskShape) recordEligibility(input, env, options);
-    return withAllContext(
+    return respond(
       outputForContext(unavailableQueryContext(env)),
-      env,
-      recoveryInstruction,
-      correctionCapture,
+      snapshotFrom(null),
     );
   }
+  // A search sent without a session read organization settings only; while
+  // the warm-up it started can bring one, the snapshot names the recovery
+  // call (DESIGN 4.3).
+  const snapshot = snapshotFrom({
+    ok: true,
+    body: responseBodyFromToolResponse(response),
+    coldStart: response.coldStart === true,
+  });
   const matched = queryResponseHasMatches(response);
   if (taskShape && !matched) {
     const empty = emptyTaskShapeContext(response);
     const output = empty.governs ? outputForContext(empty.context) : null;
     await writeCachedOutput(cacheKey, output, null, false, null, env, options);
-    return emptyTaskShapeOutput(output);
+    return emptyTaskShapeOutput(output, snapshot);
   }
   if (taskShape) recordEligibility(input, env, options);
   const context =
@@ -344,20 +427,24 @@ export async function handleHookInput(input, options = {}) {
   const output = outputForContext(context);
   const highMatch = highMatchFromResponse(response);
   const queryFeedback = queryFeedbackTrackingFromResponse(response);
-  await writeCachedOutput(
-    cacheKey,
-    output,
-    highMatch,
-    matched,
-    queryFeedback,
-    env,
-    options,
-  );
+  // The cache holds no preference text (DESIGN 4.3), so a context with a
+  // candidate's skill notes is searched again instead of cached.
+  if (!/^Skill notes for /mu.test(context)) {
+    await writeCachedOutput(
+      cacheKey,
+      output,
+      highMatch,
+      matched,
+      queryFeedback,
+      env,
+      options,
+    );
+  }
   if (matched) {
     recordUse(input, env, options, highMatch, response);
   }
   recordQueryFeedback(input, queryFeedback, env, options);
-  return withAllContext(output, env, recoveryInstruction, correctionCapture);
+  return respond(output, snapshot);
 }
 
 function outputForContext(context) {
@@ -369,25 +456,29 @@ function outputForContext(context) {
   };
 }
 
-function withAllContext(output, env, ...contexts) {
-  const notice = sharedConfigCredentialNotice(env);
+// The output (null for none) with the credential notice, `contexts` and the
+// preference snapshot (null for none), composed within the Claude Code
+// budget; null when nothing remains to say.
+function withAllContext(output, env, snapshot, ...contexts) {
+  const additions = [
+    ...contexts,
+    output ? sharedConfigCredentialNotice(env) : null,
+    snapshot ? preferenceSnapshotAddition(snapshot) : null,
+  ];
   const compose = (text) =>
-    composeBoundedHookContext(output.hookSpecificOutput.additionalContext, [
-      ...contexts.map((context) =>
+    composeBoundedHookContext(
+      output?.hookSpecificOutput.additionalContext ?? "",
+      additions.map((context) =>
         context?.render ? { ...context, text } : context,
       ),
-      notice,
-    ]);
+      HOOK_CONTEXT_BUDGETS.vscode,
+    );
   const additionalContext = compose(
     contexts.find((context) => context?.render)?.render(compose),
   );
+  if (!additionalContext) return null;
   acknowledgePrivateAuthorizationReminders(additionalContext, env);
-  return {
-    hookSpecificOutput: {
-      ...output.hookSpecificOutput,
-      additionalContext,
-    },
-  };
+  return outputForContext(additionalContext);
 }
 
 // Usage and debts belong to the agent that received the context (see
@@ -497,14 +588,19 @@ async function writeCachedOutput(
   }
 }
 
+// Version 2 outputs hold no preference snapshot; a version 1 file, whose
+// outputs carried preference lines, reads as empty.
+const CACHE_VERSION = 2;
+
 async function readCacheFile(env) {
   const path = cachePath(env);
   try {
     const parsed = JSON.parse(await readFile(path, "utf8"));
     return {
-      entries: Array.isArray(parsed.entries)
-        ? parsed.entries.filter((entry) => typeof entry?.key === "string")
-        : [],
+      entries:
+        parsed.version === CACHE_VERSION && Array.isArray(parsed.entries)
+          ? parsed.entries.filter((entry) => typeof entry?.key === "string")
+          : [],
     };
   } catch {
     return { entries: [] };
@@ -513,16 +609,17 @@ async function readCacheFile(env) {
 
 async function writeCacheFile(cache, env) {
   const path = cachePath(env);
-  await mkdir(dirname(path), { recursive: true });
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const tempPath = `${path}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   await writeFile(
     tempPath,
-    JSON.stringify({ version: 1, entries: cache.entries }),
+    JSON.stringify({ version: CACHE_VERSION, entries: cache.entries }),
+    { mode: 0o600 },
   );
   await rename(tempPath, path);
 }
 
-function cacheKeyForPrompt(prompt, env) {
+function cacheKeyForPrompt(prompt, env, projectPath) {
   return hashText(
     JSON.stringify({
       prompt: normalizeForCache(prompt),
@@ -533,6 +630,9 @@ function cacheKeyForPrompt(prompt, env) {
       // one anonymous) must not share a cached response. Hashed one-way here, so
       // the raw key is never written to the on-disk cache. null = anonymous.
       api_key: resolveApiKey(env) ?? null,
+      // A search carries the context of its project, and its skill notes
+      // follow that project's preferences.
+      project_path: projectPath,
     }),
   );
 }
