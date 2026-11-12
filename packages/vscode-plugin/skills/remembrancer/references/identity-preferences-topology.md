@@ -173,12 +173,19 @@ adjustment. A single selected skill still receives a surgical preference
 sidecar for discretionary behavior. A skill sets an ordinary preference aside
 only for a locked conflict confirmed by the organization, declared in the
 skill's reviewed metadata, or corroborated by verified members of the
-organization, and only while that skill is followed; the preference keeps
-applying to all other work. A conflict that only a model check suggests is a
-note, not a block, so the preference still applies. Required organization
-settings are never set aside: a confirmed locked conflict with one makes the
-skill ineligible, so queries exclude it and direct invocation answers HTTP 409.
-No preference weakens a hard constraint.
+organization, and only for the required step that conflicts; the preference
+keeps applying to every compatible step and all other work. A conflict that
+only a model check suggests is a note, not a block, so the preference still
+applies. Required organization
+settings are never set aside. When such a confirmed conflict involves a
+Required setting, the skill gives way instead: for every member of the
+organization, queries leave it out and invocation, including an organization
+session skill's start-of-session load, is refused with HTTP 409
+`required_preference_conflict` until an administrator clears the conflict or
+the setting changes. An administrator's or members' confirmation covers one
+exact skill version, and an earlier version requested by `version_id` (for
+example by a pinned session skill) is refused only for a conflict its own
+reviewed metadata declares. No preference weakens a hard constraint.
 
 Compatibility is classified asynchronously. Query and invocation do not add a
 generative preference call or a second embedding request. Missing, stale, or
@@ -234,9 +241,9 @@ only when their context ids are equal too.
 - **Where it arrives.** An MCP `query_skills` result carries the snapshot of
   its context (project, task domain and task preferences) in `preferences`; an
   `invoke_skill` result carries the snapshot of the skill's context. Each
-  result adds `skill_notes`: preferences set aside only while that skill is
-  followed, preferences scoped to that skill, which take precedence over the
-  snapshot, notes that are not blocks, and replaced skill defaults.
+  result adds `skill_notes`: preferences set aside only for the required step
+  that conflicts, preferences scoped to that skill, which take precedence over
+  the snapshot, notes that are not blocks, and replaced skill defaults.
   `get_effective_preferences` returns `{preferences, keys}`, and `fingerprints`
   with `include_fingerprints: true`. Native hooks inject the project's snapshot
   themselves, as listed below.

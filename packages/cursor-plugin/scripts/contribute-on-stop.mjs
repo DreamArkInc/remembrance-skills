@@ -6,12 +6,12 @@
 // chooses contribution or full-context query recovery accordingly.
 
 import process from "node:process";
-import { pathToFileURL } from "node:url";
 import {
   completionContinuationReason,
   hostPolicyAlertTextForOperation,
   hostPolicyAlertWasReported,
   decideStop,
+  isEntryScript,
   markHostPolicyAlertDelivered,
   readPendingHostPolicyAlert,
   recordPluginLifecycleHealth,
@@ -125,10 +125,7 @@ async function main() {
   }
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isEntryScript(import.meta.url)) {
   main().catch(() => {
     // Never block stop on hook errors.
   });

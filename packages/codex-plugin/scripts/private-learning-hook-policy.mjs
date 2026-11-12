@@ -616,7 +616,9 @@ function reducedSkillNotes(notes) {
   const at = kept.findIndex(
     (line, index) =>
       index > 0 &&
-      !line.startsWith("- Set aside only while following this skill: "),
+      !line.startsWith(
+        "- Set aside only for the required step that conflicts; keep applying the preference to every compatible step and all other work: ",
+      ),
   );
   const position = at < 0 ? kept.length : at;
   return [

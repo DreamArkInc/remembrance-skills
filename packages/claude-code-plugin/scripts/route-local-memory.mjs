@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 import process from "node:process";
-import { pathToFileURL } from "node:url";
 import {
   contributeDisabled,
+  isEntryScript,
   recordTaskEligibility,
   sessionIdFor,
 } from "./hook-core.mjs";
@@ -71,10 +71,7 @@ async function main() {
   if (output) process.stdout.write(`${JSON.stringify(output)}\n`);
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isEntryScript(import.meta.url)) {
   main().catch(() => {});
 }
 /* c8 ignore stop */

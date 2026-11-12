@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import process from "node:process";
-import { pathToFileURL } from "node:url";
 import {
   agentLedgerIdFor,
   bindPrivateSkillNativeCapture,
@@ -9,6 +8,7 @@ import {
   clearHighMatchSurfaceForExplicitSelection,
   directSelectionFromResponse,
   highMatchFromResponse,
+  isEntryScript,
   observeSuccessfulCompletionTool,
   recordDirectiveFollowThroughForTool,
   recordDirectSelectionUse,
@@ -269,9 +269,6 @@ async function main() {
   }
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isEntryScript(import.meta.url)) {
   void main();
 }

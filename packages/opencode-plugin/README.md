@@ -105,10 +105,13 @@ weaken safety, authorization, privacy, applicability, required skill steps,
 validation, review, or organization policy. A skill sets an ordinary
 preference aside only for a locked conflict confirmed by the organization,
 declared in the skill's reviewed metadata, or corroborated by verified members
-of the organization, and only while that skill is followed; a conflict that
-only a model check suggests is a note, not a block. Required organization
-settings are never set aside: a confirmed locked conflict with one makes the
-skill unavailable. Exact skill-version changes queue
+of the organization, and only for the required step that conflicts; a
+conflict that only a model check suggests is a note, not a block. Required
+organization
+settings are never set aside: when a conflict with one is confirmed, the skill
+becomes unavailable to the whole organization (left out of queries, invocation
+refused with HTTP 409 `required_preference_conflict`). Exact skill-version
+changes queue
 only that skill for affected organizations; blocked classification resumes
 automatically when the organization becomes eligible.
 
@@ -331,18 +334,25 @@ unavailable by default locally. `submit_query_feedback` remains independently
 available for one complete good/partial/poor query-fit verdict set;
 `submit_feedback` is categorical post-use feedback. A host denial is held and
 is never retried through another transport: the denied call's own arguments
-park only that draft, as a decline does. A parked draft returns as a user
+park only that draft, as a decline does. A lesson draft no active session is
+handling, or one an agent declined with any reason but `host_policy_denied`
+(after its first wait), is sent by default:
+the next main-session prompt on the machine that uses the API base and
+organization key it was captured for sends it silently, unless the host is
+denying private lesson submissions. Any other parked draft returns as a user
 decision 1, 7 and 30 days later (each wait counted from the park or the last
 showing), whether or not the host allows its lane. A client update, and for a
 host-denied draft the host letting that lane through again, makes the next
 return come right away instead (or adds one more, if all three were shown). It
 is sent only through its exact submit or retry action after the user agrees.
-Drafts no active session is handling are offered as a user decision too, until
-the user delivers, keeps or deletes them; a kept draft is parked. These
-decisions go to the next main-session prompt on the machine, at most once a
-day, unless the run sets `REMEMBRANCE_UNATTENDED=1`; set it for unattended runs
-such as `opencode run`, which then neither show nor use up a decision. The
-drafts stay listed by `inspect_private_learning_outbox`, and none is sent or
+Other drafts no active session is handling (skill drafts, and lesson drafts
+captured for another destination or for none) are offered as a user decision
+too, until the user delivers, keeps or deletes them; a kept draft is parked
+and is not sent by default. These decisions go to the next main-session prompt
+on the machine, at most once a day, unless the run sets
+`REMEMBRANCE_UNATTENDED=1`; set it for unattended runs such as `opencode run`,
+which then neither show nor use up a decision and send no other session's
+draft. The drafts stay listed by `inspect_private_learning_outbox`, and none is
 deleted without the user.
 
 ### Routing metadata on complete skill proposals

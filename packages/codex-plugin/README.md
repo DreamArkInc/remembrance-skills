@@ -347,10 +347,13 @@ weaken safety, authorization, privacy, applicability, required skill steps,
 validation, review, or organization policy. A skill sets an ordinary
 preference aside only for a locked conflict confirmed by the organization,
 declared in the skill's reviewed metadata, or corroborated by verified members
-of the organization, and only while that skill is followed; a conflict that
-only a model check suggests is a note, not a block. Required organization
-settings are never set aside: a confirmed locked conflict with one makes the
-skill unavailable. Exact skill-version changes queue
+of the organization, and only for the required step that conflicts; a
+conflict that only a model check suggests is a note, not a block. Required
+organization
+settings are never set aside: when a conflict with one is confirmed, the skill
+becomes unavailable to the whole organization (left out of queries, invocation
+refused with HTTP 409 `required_preference_conflict`). Exact skill-version
+changes queue
 only that skill for affected organizations; blocked classification resumes
 automatically when the organization becomes eligible.
 

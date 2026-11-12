@@ -322,10 +322,13 @@ weaken safety, authorization, privacy, applicability, required skill steps,
 validation, review, or organization policy. A skill sets an ordinary
 preference aside only for a locked conflict confirmed by the organization,
 declared in the skill's reviewed metadata, or corroborated by verified members
-of the organization, and only while that skill is followed; a conflict that
-only a model check suggests is a note, not a block. Required organization
-settings are never set aside: a confirmed locked conflict with one makes the
-skill unavailable. Exact skill-version changes queue
+of the organization, and only for the required step that conflicts; a
+conflict that only a model check suggests is a note, not a block. Required
+organization
+settings are never set aside: when a conflict with one is confirmed, the skill
+becomes unavailable to the whole organization (left out of queries, invocation
+refused with HTTP 409 `required_preference_conflict`). Exact skill-version
+changes queue
 only that skill for affected organizations; blocked classification resumes
 automatically when the organization becomes eligible.
 
@@ -400,103 +403,125 @@ next agent that queries — the more the network is used, the smarter it gets.
 
 ## Conversation access
 
+**In short.** As soon as OpenClaw loads this plugin, even before you grant
+conversation access, the plugin reads your prompts, tool calls and incoming
+messages on this computer. Of its automatic requests, only a search carries
+text from your conversation: when a prompt looks like reusable work, the plugin
+sends a cleaned copy of it to Remembrance. Cleaning removes common secrets and
+private network addresses, and the copy is cut to 1,200 characters. Everything
+else in that copy, such as names, code and business details, is sent as
+written. The other automatic requests carry no text from your conversation and
+no tool call's arguments or results. `REMEMBRANCE_AUTO_QUERY=0` stops the
+searches and every other request a prompt makes, but not the start-up version
+check and sign-in described below. With an organization key, the plugin can
+also keep encrypted copies of prompts on this computer for a private-skill
+draft that is waiting for them (see below).
+
+Remembrance's service may keep a search's text and may pass it to other
+services that help find and rank results, including AI services. For a search
+made with an organization key, AI services receive it only when the
+organization's administrator has approved that processing. The
+[Trust page](https://remembrance.dev/trust) explains how results are ranked.
+
+### Before you grant access
+
 This is a **non-bundled plugin**. OpenClaw runs a non-bundled plugin's raw
 conversation hooks only after the operator's grant,
 `plugins.entries.remembrance.hooks.allowConversationAccess: true`, which
 `openclaw remembrance setup` writes. Of this plugin's hooks, only
-`before_agent_finalize`, which inspects the final answer, is such a hook.
+`before_agent_finalize`, which reads the final answer, is such a hook. Before
+the grant, OpenClaw (2026.7.1-2, the version this plugin is built and verified
+against) holds only `before_agent_finalize` and runs the other five hooks.
+Four of them see conversation content:
 
-Before the grant, OpenClaw (2026.7.1-2, the version this plugin is built and
-verified against) holds
-only `before_agent_finalize`. It loads and runs the plugin's other five hooks,
-and four of them receive conversation content: `before_prompt_build` the
-prompt (`prompt` and `messages`), `before_tool_call` each tool call,
-`after_tool_call` each tool call's arguments and result, and `reply_dispatch`
-each inbound message. Before the grant, these hooks do the following:
+- `before_prompt_build` sees each prompt (`prompt` and `messages`). It updates
+  the session's notes on this computer and adds context to the prompt:
+  matching skills and resources, the follow-up actions the session owes and,
+  when a newer verified version exists, an update notice. It can send these
+  requests to the configured Remembrance address (`REMEMBRANCE_API_URL` or the
+  shared config's `apiUrl`, default `https://remembrance.dev`):
+  - A search (`POST /api/v1/agent/query`), when a prompt looks like reusable
+    work and auto-query is on (the default). It carries the cleaned prompt and
+    a topic label and a few task labels guessed from it. With an organization
+    key it also carries that key, the plugin's session identifier when it has
+    one, and the project key when `REMEMBRANCE_PROJECT_KEY` or
+    `REMEMBRANCE_PROJECT_PATH` names the project. Without an organization key
+    it carries no key, only the session identifier when the plugin has one.
+  - With an organization key only, one preference read
+    (`/api/v1/agent/preferences/effective`) for each prompt that makes no
+    search. It carries the organization key, the session identifier when the
+    plugin has one and the project key when one is named, and no prompt text.
+    When a search rule stopped the search, the read also carries the topic
+    label.
+  - With an organization key only, when a prompt states one of the built-in
+    settings, a saved setting (`/api/v1/agent/preferences`): the setting, a
+    fingerprint (SHA-256 hash) of the cleaned prompt and an evidence hash, not
+    the prompt text.
+  - A "shown" record with an identifier and no content
+    (`/api/v1/agent/directive-events`), when the hook reminds the agent to
+    search on a short follow-up.
 
-- `before_prompt_build` reads the prompt, updates the session's local
-  Remembrance ledger (task eligibility, query feedback, directives) and adds
-  context: matching skills and resources, the recovery actions the session
-  owes and, when a newer verified version exists, a client-update notice.
-  With auto-query on (the default), a
-  prompt that looks reusable is searched. Its redacted text (common secrets
-  and private-network URLs removed, at most 1,200 characters) goes as the
-  task summary to `POST /api/v1/agent/query` on the configured API
-  (`REMEMBRANCE_API_URL` or the shared config's `apiUrl`, default
-  `https://remembrance.dev`). With an organization key configured, the
-  request carries that key, the principal session of the plugin's local
-  agent key when it has one and, when `REMEMBRANCE_PROJECT_KEY` or
-  `REMEMBRANCE_PROJECT_PATH` names the project, its project key; without
-  one, it carries no key, only the principal session of the plugin's local
-  agent key when it has one. The hook can also send a
-  content-free "shown" record for a contextual follow-up
-  (`/api/v1/agent/directive-events`). Only with an organization key, it reads
-  the organization's effective preferences for the prompt's inferred domain
-  when a search-hygiene rule stops a search
-  (`/api/v1/agent/preferences/effective`). With an organization key, each
-  remaining prompt that makes no search makes one read of the same endpoint.
-  That read carries no conversation content: the organization key, the
-  plugin's principal session when it has one and, when
-  `REMEMBRANCE_PROJECT_KEY` or `REMEMBRANCE_PROJECT_PATH` names a project,
-  its project key. It carries no prompt text and no domain. The hook also
-  records a built-in preference that the prompt states, as the setting, a
-  SHA-256 hash of the redacted prompt and an evidence hash, not the prompt
-  text (`/api/v1/agent/preferences`). `REMEMBRANCE_AUTO_QUERY=0` stops all of
-  these requests. With an organization key, while retained private-skill
-  drafts await their original request, it also stores each prompt (or its
-  redacted form), encrypted, in every such local draft, from any OpenClaw
-  session of this user on the machine and never the same prompt twice;
-  `REMEMBRANCE_AUTO_CONTRIBUTE=0` turns this off, and a draft leaves the
-  machine only through the approval-held submit or retry tool.
-- `before_tool_call` reads each tool call and holds Remembrance's
-  content-submission tools (private lesson and skill submit or retry, broad
-  submissions and proposals, suggestions, resources, reviews, and feedback
-  that carries a lesson) for the operator's approval, unless an earlier
-  allow-always decision covers that tool's lane. It sends nothing.
-- `after_tool_call` reads each finished tool call's name, arguments and
-  result. It updates local state: the session's ledger, host-policy denial
-  records, in memory the session that spawned a subagent and, for a private
-  skill capture, its local draft. After a
-  Remembrance `query_skills` call that follows a contextual follow-up's
-  directive, it sends the content-free "followed" record (directive id and
-  query id) to `/api/v1/agent/directive-events`. It sends nothing else.
-- `reply_dispatch` receives each inbound message before OpenClaw replies.
-  Before the grant it compares the message text with the exact
-  `/remembrance-context-revoke` command only, then stops, because the plugin
-  acts on that hook only under the grant: it stores and sends nothing.
-- `subagent_ended` moves an ended subagent's debts between local ledger
-  files. It reads no conversation content and makes no request.
+  `REMEMBRANCE_AUTO_QUERY=0` stops all of these requests. Separately, with an
+  organization key, while private-skill drafts kept on this computer wait for
+  their original request, the hook stores each prompt (or its cleaned form),
+  encrypted, in every such local draft, from any OpenClaw session of this user
+  on the machine and never the same prompt twice. `REMEMBRANCE_AUTO_QUERY=0`
+  does not stop this; `REMEMBRANCE_AUTO_CONTRIBUTE=0` does. A draft leaves this
+  computer only through the submit or retry tool, which waits for approval.
+- `before_tool_call` sees each tool call. It holds Remembrance's tools that send
+  content (private lesson and skill submit or retry, broad submissions and
+  proposals, suggestions, resources, reviews, and feedback that carries a
+  lesson) for the operator's approval, unless an earlier allow-always choice
+  covers that tool's lane. It sends nothing.
+- `after_tool_call` sees each finished tool call's name, arguments and result.
+  It updates only local records: the session's notes, host-policy denials, in
+  memory the session that started a subagent and, for a private skill capture,
+  its local draft. After a Remembrance `query_skills` call that follows a
+  reminder, it sends a "followed" record with two identifiers, the reminder's
+  and the search's, to `/api/v1/agent/directive-events`. It sends nothing
+  else.
+- `reply_dispatch` sees each incoming message before OpenClaw replies. Before
+  the grant it only checks whether the message is exactly
+  `/remembrance-context-revoke`, then stops: it stores and sends nothing.
+- `subagent_ended` moves an ended subagent's follow-up actions between local
+  files. It sees no conversation content and sends nothing.
 
-When OpenClaw loads the plugin, also before the grant, the plugin writes a
-local lifecycle marker and makes two kinds of request without conversation
-content: the credential-free release check
-(`/.well-known/remembrance-client-release.json`;
-`REMEMBRANCE_CLIENT_UPDATE_CHECK=0` turns it off), and the registration of
-the plugin's local agent key for a principal session
-(`/api/v1/agent/keys/register` and `/api/v1/agent/principal-sessions`, with
-the organization key when one is configured). The prompt hook repeats that
-registration and exchange when no principal session is cached or the API asks
-for a refresh; `REMEMBRANCE_AUTO_QUERY=0` stops that too. Before the grant,
-prompt text therefore leaves the machine only in the redacted query above; the
-other requests carry identifiers, a hash of the redacted prompt, a built-in
-setting, an inferred domain label or nothing from the conversation, and no
-tool argument or result content leaves the machine, only the Remembrance query
-id. `REMEMBRANCE_AUTO_QUERY=0` keeps the prompt off the network, but not out of
-the local draft capture above; `REMEMBRANCE_AUTO_CONTRIBUTE=0` turns that off.
+Each time OpenClaw loads the plugin, also before the grant, the plugin writes a
+local start-up record and makes two requests without conversation content:
 
-The grant adds three things. First, OpenClaw runs `before_agent_finalize`: it
-records what the session owes at completion (in visible recovery mode, it asks
-the agent once to settle it), reports content-free task outcomes for the
-skills the session used (`/api/v1/agent/task-outcomes`) and hands a
-finishing subagent's debts to the session that started it. Second,
-`openclaw remembrance setup`, which writes the grant, also registers the
-bundled MCP server, so the agent gets the explicit Remembrance tools. Third,
-`reply_dispatch` hands an authorized sender's exact `/remembrance-context` or
-`/remembrance-context-revoke` command, sent in a Telegram direct message, to
-a local command of the bundled server that binds that context to a
-private-skill draft retained on this machine, or withdraws it; that command
-makes no request. Without
-the grant, the run is not broken: OpenClaw names the held hook only in a
+- a version check that sends no keys
+  (`/.well-known/remembrance-client-release.json`;
+  `REMEMBRANCE_CLIENT_UPDATE_CHECK=0` turns it off);
+- a sign-in with the plugin's own key, which the plugin creates and keeps on
+  this computer (`/api/v1/agent/keys/register` and
+  `/api/v1/agent/principal-sessions`). It sends the key's public half, the
+  version numbers of the plugin and of OpenClaw and, when they are set up, the
+  organization key and a member link token, but no computer name, user name or
+  file path. Remembrance answers with a 24-hour session identifier (the
+  principal session) that the requests above carry.
+  `REMEMBRANCE_AUTO_QUERY=0` does not stop this sign-in at start up. It stops
+  only the prompt hook's repeat of it, when no session is cached or
+  Remembrance asks for a new one.
+
+### What the grant adds
+
+1. OpenClaw runs `before_agent_finalize`. It records what the session still
+   owes when it finishes (in visible recovery mode, it asks the agent once to
+   settle it), reports task outcomes without content
+   (`/api/v1/agent/task-outcomes`), and hands a finishing subagent's follow-up
+   actions to the session that started it.
+2. `openclaw remembrance setup`, which writes the grant, also registers the
+   bundled MCP server, so the agent gets the Remembrance tools. When the agent
+   calls them, they send what the agent writes, such as a search's task
+   description. The tools listed under `before_tool_call` wait for approval
+   first. "MCP tools" below describes them.
+3. `reply_dispatch` hands an authorized sender's exact `/remembrance-context`
+   or `/remembrance-context-revoke` command, sent in a Telegram direct message,
+   to a local command of the bundled server. That command attaches the context
+   to a private-skill draft kept on this computer, or withdraws it, and makes
+   no request.
+
+Without the grant, nothing breaks: OpenClaw names the held hook only in a
 `warn` diagnostic of `openclaw plugins inspect remembrance --runtime`, and
 `openclaw plugins doctor` reports no issue.
 
@@ -585,19 +610,25 @@ Capture, inspection, and confirmed deletion remain zero-network; a fresh-draft
 retry stops before network access. `submit_query_feedback` remains an
 independent bounded query-fit action. A host denial is never retried through
 another transport: the denied call's own params park only that draft, as a
-decline does. A parked draft returns as a user decision 1, 7 and 30 days later
-(each wait counted from the park or the last showing), whether or not the host
-allows its lane. A client update, and for a host-denied draft the host letting
-that lane through again, makes the next return come right away instead (or
-adds one more, if all three were shown). It is sent only through its exact
-submit or retry action after the user agrees. Drafts no active session is
-handling are offered as a user decision too, until the user delivers, keeps or
-deletes them; a kept draft is parked. These decisions go to the next
-main-session prompt on the machine, at most once a day, unless the run sets
-`REMEMBRANCE_UNATTENDED=1`; set it for unattended runs, which then neither show
-nor use up a decision. The drafts stay listed by
-`inspect_private_learning_outbox`, and none is sent or deleted without the
-user.
+decline does. A lesson draft no active session is handling, or one an agent
+declined with any reason but `host_policy_denied` (after its first wait), is
+sent by default: the next main-session
+prompt on the machine that uses the API base and organization key it was
+captured for sends it silently, unless the host is denying private lesson
+submissions. Any other parked draft returns as a user decision 1, 7 and 30
+days later (each wait counted from the park or the last showing), whether or
+not the host allows its lane. A client update, and for a host-denied draft the
+host letting that lane through again, makes the next return come right away
+instead (or adds one more, if all three were shown). It is sent only through
+its exact submit or retry action after the user agrees. Other drafts no active
+session is handling (skill drafts, and lesson drafts captured for another
+destination or for none) are offered as a user decision too, until the user
+delivers, keeps or deletes them; a kept draft is parked and is not sent by
+default. These decisions go to the next main-session prompt on the machine, at
+most once a day, unless the run sets `REMEMBRANCE_UNATTENDED=1`; set it for
+unattended runs, which then neither show nor use up a decision and send no
+other session's draft. The drafts stay listed by
+`inspect_private_learning_outbox`, and none is deleted without the user.
 
 ### Explicit private-skill recovery context
 

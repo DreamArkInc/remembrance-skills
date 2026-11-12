@@ -12,13 +12,13 @@
 // instruction; malformed hook input and true no-matches print nothing.
 
 import process from "node:process";
-import { pathToFileURL } from "node:url";
 import {
   agentLedgerIdFor,
   debugLog,
   foldTurnLedgerIntoSession,
   HOOK_CONTEXT_BUDGETS,
   hostedMcpSplitNotice,
+  isEntryScript,
   recordHighMatchSurface,
   recordDirectiveSurface,
   recordPluginLifecycleHealth,
@@ -219,10 +219,7 @@ export async function main() {
   }
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isEntryScript(import.meta.url)) {
   main().catch((error) => {
     debugLog(process.env, "hook_error", { error: errorName(error) });
     process.exitCode = 0;

@@ -38,6 +38,7 @@ import {
   readFileSync,
   readSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmdirSync,
   rmSync,
@@ -48,7 +49,7 @@ import { isIP } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   acknowledgeFeedbackDenial,
   feedbackDenialAcknowledged,
@@ -132,14 +133,19 @@ const COMPLETION_OBLIGATION_GROWN_FIELDS = Object.freeze({
 });
 const PRIVATE_AUTHORIZATION_RETRY_INTERVAL_MS = 6 * 60 * 60 * 1000;
 // A private draft whose session tree has had no user prompt for this long is
-// offered to other sessions, and only as a user decision (owner decision,
-// 0.2.3; recorded in DEPLOYMENT.md, "Private draft reminders"). The notice
-// offering such drafts shows at most once per interval on a machine.
+// offered to other sessions (owner decision, 0.2.3; recorded in
+// DEPLOYMENT.md, "Private draft reminders"): a lesson draft captured for the
+// reading run's API base and key is sent by default, any other is a user
+// decision (owner decision 2026-11-11, D1). The notice offering drafts to the
+// user shows at most once per interval on a machine.
 const PRIVATE_ORPHAN_AFTER_MS = 24 * 60 * 60 * 1000;
 const PRIVATE_ORPHAN_NOTICE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 // A declined or host-denied draft returns in that notice after these waits,
 // then not again until its lane is allowed, the user asks for it, or the
-// client updates (owner decision, 0.2.3; recorded in DEPLOYMENT.md).
+// client updates (owner decision, 0.2.3; recorded in DEPLOYMENT.md). A
+// declined lesson draft sent by default instead returns after the first wait
+// and stays in the silent text until it is sent (owner decision 2026-11-11,
+// D1).
 const PRIVATE_PARKED_NOTICE_DELAYS_MS = [1, 7, 30].map(
   (days) => days * 24 * 60 * 60 * 1000,
 );
@@ -259,7 +265,7 @@ const PENDING_ACTION_DECLINE_GUIDANCE =
 // acknowledge_feedback_denial.
 const PRIVATE_DECLINE_REASON = "host_policy_denied";
 const PRIVATE_DECLINE_GUIDANCE =
-  "If the host denies a private line's exact action, decline that line with reason host_policy_denied; a declined private draft stays retained, returns later only as a user decision, and is never deleted automatically.";
+  "If the host denies a private line's exact action, decline that line with reason host_policy_denied; that draft stays retained, returns later only as a user decision, and is never deleted automatically.";
 // The private notice for drafts awaiting the user is not a ledger record;
 // it has one fixed action_id, which a decline names. The held-safety notice
 // names none: its delivery marks the drafts it showed, and it needs no reply.
@@ -2098,7 +2104,7 @@ function preferenceCompatibilityEvidenceInstruction(evidence) {
     "Private preference evidence (silent, after actual use only): if the selected skill clearly supports or conflicts with one server-issued working preference below, call submit_preference_compatibility_feedback using its exact query_id, result_id, preference_fingerprint, skill slug, and version id. Any other preference that was active for that skill use can be rated the same way with its preference_key instead of a fingerprint.",
     'Judge observed behavior independently: selection and an existing classifier label are not new evidence. Skip neutral or uncertain cases. Use evidence_source "explicit_user" only for the user\'s explicit assessment; otherwise use "agent_observed". Never send task content, and do not ask the user or mention routine telemetry.',
     payload.compact
-      ? "An entry without label and behavior is a compact reference: before judging it, read that setting in full with get_effective_preferences and its key."
+      ? "An entry without label and behavior is a compact reference: judge it only by its offer in your invoke_skill result, never by current preferences, and skip it if that result is no longer available."
       : null,
     `Candidates: ${payload.entries}${omitted}`,
   ]
@@ -2108,7 +2114,8 @@ function preferenceCompatibilityEvidenceInstruction(evidence) {
 
 // Inline evidence stays within PREFERENCE_EVIDENCE_CONTEXT_CHARS. An offer too
 // large to repeat in full keeps its exact IDs, fingerprint, key and value as a
-// compact reference, so its meaning is fetched rather than truncated. The
+// compact reference, judged by its offer in the invoke_skill result rather
+// than truncated or re-read from the current profile. The
 // first offer is always kept, at least in that form, instead of dropping the
 // feedback opportunity; field limits then bound it (160-character IDs and
 // slug, 96-character key and value: 1,033 characters at most). Later offers
@@ -3263,8 +3270,9 @@ export function decideStop(input, options = {}) {
     eligibilityCount > readClosed(sessionId, env) &&
     newDirectSelections.length === 0;
   const privateLessonAuthorized = organizationPrivateLessonAuthorized(env);
-  // Scoped to this ledger's session tree: another session's drafts appear
-  // only as a user decision, never as silent recovery.
+  // Scoped to this ledger's session tree: drafts no active session handles
+  // appear as lesson drafts sent by default or as a user decision
+  // (privateLearningSessionRecovery).
   const privateLessonRecovery = privateLessonAuthorized
     ? privateLearningSessionRecovery(
         sessionId,
@@ -3962,7 +3970,8 @@ function completionObligationIsDue(obligation, env, drafts = null) {
   if (privateAuthorizationTerminalIsKnown(obligation.draft_id, env))
     return false;
   if (!organizationPrivateLessonAuthorized(env)) return false;
-  // A parked draft returns only as a user decision, never as a silent line.
+  // A parked draft gets no line: it returns sent by default or as a user
+  // decision (privateLearningSessionRecovery).
   if (
     drafts
       ? drafts.parked.has(obligation.draft_id)
@@ -7055,7 +7064,7 @@ function preferenceOfferPointer(obligation, directSelections) {
   ];
   if (keys.length === 0) return "";
   const label = keys.length === 1 ? "preference" : "preferences";
-  const tail = ": see your invoke_skill result or get_effective_preferences";
+  const tail = ": see your invoke_skill result";
   for (let shown = keys.length; shown > 0; shown -= 1) {
     const more = keys.length - shown;
     const pointer = `; ${label} ${keys.slice(0, shown).join(", ")}${more > 0 ? ` +${more}` : ""}${tail}`;
@@ -7279,8 +7288,9 @@ export function pendingCompletionRecoveryInstruction(
 // shown.
 // The outboxes are read once for the whole prompt (readPrivateDrafts); the
 // ledger once, with every private hint on the machine, of which this session
-// tree's own become lines and the rest only feed the user decisions, which
-// a session the host runs for a subagent does not get (`notices: false`).
+// tree's own become lines and the rest only feed the drafts sent by default
+// and the user decisions, which a session the host runs for a subagent does
+// not get (`notices: false`).
 export function pendingCompletionRecovery(
   sessionId,
   env = process.env,
@@ -8784,6 +8794,12 @@ function unattendedRun(env = process.env) {
   );
 }
 
+// Only a main thread of an attended run gets the user decisions and sends
+// drafts by default.
+function attendedMainThread(sessionId, env) {
+  return !unattendedRun(env) && !String(sessionId ?? "").includes(":agent:");
+}
+
 function organizationPrivateLessonAuthorized(env = process.env) {
   if (contributeDisabled(env?.REMEMBRANCE_AUTO_CONTRIBUTE)) return false;
   const credential = resolveApiCredential(env);
@@ -8878,7 +8894,13 @@ function privateLessonDraftAction(envelope, env) {
   if (state === "ready") return { tool: submit, count: "ready", due: true };
   if (state === "retry_scheduled" || state === "awaiting_compatible_profile")
     return whenDue(state);
-  if (state === "awaiting_authorization") return authorization();
+  // Every local capture starts here. A bound one no refusal named was only
+  // not sent yet: its first submit is due now (owner decision 2026-11-11,
+  // D1). A refusal and a legacy unbound draft keep the authorization backoff.
+  if (state === "awaiting_authorization")
+    return envelope.last_error_code == null && envelope.destination_binding
+      ? { tool: submit, count: "ready", due: true }
+      : authorization();
   if (state === "held_policy") {
     return PRIVATE_POLICY_REFRESH_CODES.includes(envelope.last_error_code)
       ? { tool: retry, count: "held_policy_refresh", due: true }
@@ -9640,13 +9662,15 @@ function privateLearningLifecycleText(lessons, skills, own = null) {
 
 // --- Private drafts: ownership, parking and the user decisions ---------------
 //
-// Silent recovery names only drafts the reading session tree holds a hint
+// Silent recovery names the drafts the reading session tree holds a hint
 // for. Every other due draft (captured by another session, or by one with no
 // user prompt for PRIVATE_ORPHAN_AFTER_MS, or by an earlier client, or with
-// no hint at all) and every parked one reaches a main thread only as one
-// user decision. Parking (a decline, or a host's denial of that exact draft)
-// is a content-free marker beside the hints; neither touches a draft, and
-// only the confirmed delete tool removes one.
+// no hint at all) and every parked one reaches a main thread of an attended
+// run: a lesson draft sent by default (privateDraftsSentByDefault) in its
+// silent recovery, any other only as one user decision. Parking (a decline,
+// or a host's denial of that exact draft) is a content-free marker beside
+// the hints; neither touches a draft, and only the confirmed delete tool
+// removes one.
 
 // This prompt's one read of both outboxes and of the drafts' markers.
 function readPrivateDrafts(env) {
@@ -9724,11 +9748,12 @@ function privateHintsOnMachine(sessionId, env) {
 }
 
 // This ledger's share of the lifecycle recovery for one prompt or stop: its
-// silent lines count and name only drafts its own session tree holds an
-// unparked hint for; a main thread of an attended run also gets the user
-// decisions (privateDraftNotices), unless the host says it runs this session
-// for a subagent (`notices: false`). `hints` are every private hint on the
-// machine. Null when nothing is due.
+// silent lines count and name the drafts its own session tree holds an
+// unparked hint for and, on a main thread of an attended run, the lesson
+// drafts it sends by default (privateDraftsSentByDefault); that thread also
+// gets the user decisions about the rest (privateDraftNotices), unless the
+// host says it runs this session for a subagent (`notices: false`). `hints`
+// are every private hint on the machine. Null when nothing is due.
 function privateLearningSessionRecovery(
   sessionId,
   hints,
@@ -9744,6 +9769,14 @@ function privateLearningSessionRecovery(
       )
       .map((hint) => hint.draft_id),
   );
+  const decides = notices && attendedMainThread(sessionId, env);
+  const awaiting = decides
+    ? privateDraftsAwaitingUser(sessionId, hints, drafts, env)
+    : [];
+  const sent = new Set(
+    privateDraftsSentByDefault(sessionId, awaiting, drafts, env),
+  );
+  for (const draftId of sent) own.add(draftId);
   const only = (scan) => ({
     readable: scan.readable,
     drafts: new Map([...scan.drafts].filter(([draftId]) => own.has(draftId))),
@@ -9753,10 +9786,18 @@ function privateLearningSessionRecovery(
       privateLearningLifecycleText(
         readPrivateLessonLifecycleState(env, only(drafts.lessons)),
         readPrivateSkillLifecycleState(env, only(drafts.skills)),
-        // In hint order (created_at, then id), the order of their lines.
+        // In hint order (created_at, then id), the order of their lines,
+        // then the drafts sent by default in draft id order.
         [...own].filter((draftId) => privateDraftDue(draftId, drafts)),
       ),
-      ...(notices ? privateDraftNotices(sessionId, hints, drafts, env) : []),
+      ...(decides
+        ? privateDraftNotices(
+            sessionId,
+            awaiting.filter((draftId) => !sent.has(draftId)),
+            drafts,
+            env,
+          )
+        : []),
     ]
       .filter(Boolean)
       .join("\n") || null
@@ -9787,18 +9828,14 @@ function rememberPrivateNotice(sessionId, text, shown) {
 // directive unit, which the context allocator keeps whole or drops, so its
 // exact text in the delivered context acknowledges it
 // (acknowledgePrivateDraftNotices). Retained drafts awaiting the user
-// (privateDraftsAwaitingUser), at most once per
-// PRIVATE_ORPHAN_NOTICE_INTERVAL_MS on this machine, with the action_id that
-// keeps them; lesson drafts a safety hold left with nothing to send, once
-// per draft, with no reply asked; and held lesson drafts the current safety
-// check would send, once per draft, to deliver, keep or delete. Main threads
-// of attended runs only (unattendedRun).
-function privateDraftNotices(sessionId, hints, drafts, env) {
-  if (unattendedRun(env) || String(sessionId ?? "").includes(":agent:")) {
-    return [];
-  }
+// (`awaiting`: privateDraftsAwaitingUser less the drafts sent by default),
+// at most once per PRIVATE_ORPHAN_NOTICE_INTERVAL_MS on this machine, with
+// the action_id that keeps them; lesson drafts a safety hold left with
+// nothing to send, once per draft, with no reply asked; and held lesson
+// drafts the current safety check would send, once per draft, to deliver,
+// keep or delete. Main threads of attended runs only (attendedMainThread).
+function privateDraftNotices(sessionId, awaiting, drafts, env) {
   const notices = [];
-  const awaiting = privateDraftsAwaitingUser(sessionId, hints, drafts, env);
   if (awaiting.length > 0 && privateOrphanNoticeDue(env)) {
     const lessons = awaiting.filter((id) => id.startsWith("pld_")).length;
     const skills = awaiting.length - lessons;
@@ -9839,11 +9876,11 @@ function privateDraftNotices(sessionId, hints, drafts, env) {
   return notices;
 }
 
-// Due drafts no session of the reader's tree holds a hint for: none or an
-// earlier client's, another session's whose hint is idle
-// (privateHintIdle), and parked drafts, whoever holds them, whose next
-// notice is due. In draft id order, whatever order the file system lists
-// them in.
+// Due drafts no session of the reader's tree holds a hint for: none (once
+// no longer a fresh capture, privateFreshUnsentCapture) or an earlier
+// client's, another session's whose hint is idle (privateHintIdle), and
+// parked drafts, whoever holds them, whose next notice is due. In draft id
+// order, whatever order the file system lists them in.
 function privateDraftsAwaitingUser(sessionId, hints, drafts, env) {
   const own = sessionHash(sessionId);
   const held = new Map(hints.map((hint) => [hint.draft_id, hint]));
@@ -9861,12 +9898,76 @@ function privateDraftsAwaitingUser(sessionId, hints, drafts, env) {
     if (
       parked
         ? privateParkedNoticeDue(parked)
-        : owner !== own && (!owner || privateHintIdle(hint, isIdle))
+        : owner !== own &&
+          (owner
+            ? privateHintIdle(hint, isIdle)
+            : !privateFreshUnsentCapture(draftId, drafts))
     ) {
       awaiting.push(draftId);
     }
   }
   return awaiting.sort();
+}
+
+// A never-sent capture no hint names (made by a client without the hooks,
+// or not yet recorded by its session's hook) may still be in the hands of
+// the session that made it, which nothing here can see: it awaits the user,
+// or a send by default, only once unchanged for PRIVATE_ORPHAN_AFTER_MS
+// (owner decision 2026-11-11, D1). A future or unreadable time does not hold
+// it back.
+function privateFreshUnsentCapture(draftId, drafts) {
+  const envelope = drafts.lessons.drafts.get(draftId)?.envelope;
+  const at = Date.parse(envelope?.updated_at ?? "");
+  return (
+    envelope?.state === "awaiting_authorization" &&
+    envelope.last_error_code == null &&
+    Boolean(envelope.destination_binding) &&
+    Number.isFinite(at) &&
+    at <= Date.now() &&
+    at + PRIVATE_ORPHAN_AFTER_MS > Date.now()
+  );
+}
+
+// Owner decision 2026-11-11 (D1): of the drafts awaiting the user, the
+// lesson drafts a main thread's prompt or stop that names its session sends
+// by default, as its own: those the local MCP server bound to the API base
+// and organization key this run uses, that no host denied and that the user
+// did not keep. While the host denies the private lesson lane, which holds
+// back the silent text, they stay a user decision, as do drafts bound to
+// another destination or to none, and skill drafts, whose envelopes keep no
+// readable destination.
+function privateDraftsSentByDefault(sessionId, awaiting, drafts, env) {
+  const lessons = awaiting.filter((draftId) => {
+    const parked = drafts.parked.get(draftId);
+    return (
+      draftId.startsWith("pld_") &&
+      parked?.reason !== PRIVATE_DECLINE_REASON &&
+      !parked?.kept_by_user
+    );
+  });
+  if (
+    lessons.length === 0 ||
+    typeof sessionId !== "string" ||
+    ["", "unknown"].includes(sessionId) ||
+    !attendedMainThread(sessionId, env) ||
+    recentPrivateLessonHostDenial(env)
+  ) {
+    return [];
+  }
+  const { apiConfiguration, credential } = resolveApiAccessSnapshot(env);
+  if (!credential.apiKey) return [];
+  // As privateLessonDestinationForAccess (mcp-server) digests them.
+  const digest = (purpose, value) =>
+    `sha256:${sha256Hex(JSON.stringify({ purpose, value }))}`;
+  const apiBase = digest("private_lesson_api_base_v1", apiConfiguration.apiUrl);
+  const key = digest("private_lesson_api_credential_v1", credential.apiKey);
+  return lessons.filter((draftId) => {
+    const bound =
+      drafts.lessons.drafts.get(draftId)?.envelope?.destination_binding;
+    return (
+      bound?.api_base_sha256 === apiBase && bound?.credential_sha256 === key
+    );
+  });
 }
 
 // Whether a draft allows an agent action now (the native-context wait asks
@@ -9951,21 +10052,25 @@ function privateOrphanNoticePath(env) {
 // The last delivered notice for drafts awaiting the user: when, and the
 // draft ids it offered while they are at most PRIVATE_ORPHAN_NOTICE_DRAFT_LIMIT,
 // so the record stays within the bytes read back; a longer offer is recorded
-// without them. Content-free.
+// without them, with the parked drafts it showed while those are at most as
+// many. Content-free.
 const PRIVATE_ORPHAN_NOTICE_DRAFT_LIMIT = 256;
 
 function readPrivateOrphanNotice(env) {
+  const draftIds = (value) =>
+    Array.isArray(value)
+      ? value.filter((draftId) =>
+          /^(?:pld|psd)_[A-Za-z0-9_-]{8,96}$/.test(draftId ?? ""),
+        )
+      : null;
   try {
     const value = JSON.parse(
       readSecureHookFile(privateOrphanNoticePath(env), 32 * 1024),
     );
     return {
       shown_at: Date.parse(value?.shown_at ?? ""),
-      drafts: Array.isArray(value?.drafts)
-        ? value.drafts.filter((draftId) =>
-            /^(?:pld|psd)_[A-Za-z0-9_-]{8,96}$/.test(draftId ?? ""),
-          )
-        : null,
+      drafts: draftIds(value?.drafts),
+      parked: draftIds(value?.parked),
     };
   } catch {
     return null;
@@ -10039,16 +10144,19 @@ function newerClientVersion(recorded) {
     : (installed ?? recorded ?? null);
 }
 
-// Parks one draft: its line stops and it returns only in the user-decision
-// notice, on its schedule. A repeated park keeps the count already shown.
-// The parked marker now holds the draft, so its hint goes, whoever held it,
-// and leaves room in the machine's bound; its authorization backoff stays,
-// and an explicit submit or retry records a hint again.
+// Parks one draft: its line stops and it returns on its schedule, sent by
+// default or in the user-decision notice (privateLearningSessionRecovery).
+// A repeated park keeps the count already shown. A draft the user kept from
+// that notice (`keptByUser`) is never sent by default. The parked marker now
+// holds the draft, so its hint goes, whoever held it, and leaves room in the
+// machine's bound; its authorization backoff stays, and an explicit submit
+// or retry records a hint again.
 function parkPrivateDraft(
   draftId,
   reason,
   env,
   prior = readPrivateParkedMarker(draftId, env),
+  keptByUser = false,
 ) {
   const notices = prior?.notices ?? 0;
   const parked = writePrivateParkedMarker(
@@ -10059,6 +10167,7 @@ function parkPrivateDraft(
       notices,
       next_notice_at: privateParkedNoticeAt(notices),
       client_version: newerClientVersion(prior?.client_version),
+      ...(keptByUser ? { kept_by_user: true } : {}),
     },
     env,
   );
@@ -10153,7 +10262,10 @@ function acknowledgePrivateDraftNotices(context, env, ledgerId) {
         shown_at: now,
         ...(shown.awaiting.length <= PRIVATE_ORPHAN_NOTICE_DRAFT_LIMIT
           ? { drafts: shown.awaiting }
-          : {}),
+          : shown.parked.length > 0 &&
+              shown.parked.length <= PRIVATE_ORPHAN_NOTICE_DRAFT_LIMIT
+            ? { parked: shown.parked }
+            : {}),
       })}\n`,
     );
     for (const draftId of shown.parked) {
@@ -10184,10 +10296,22 @@ function acknowledgePrivateDraftNotices(context, env, ledgerId) {
 // offered it. A parked draft keeps its own schedule and comes with the next
 // notice: a delivery moves on each parked draft it shows, so one due now has
 // come due since (its wait ran out, the host let its lane through, or a
-// client update brought it back), whether or not that offer showed it.
+// client update brought it back), whether or not that offer showed it. A
+// draft a recorded offer showed is marked kept by the user, so it is never
+// sent by default (owner decision 2026-11-11, D1): one already parked, which
+// the delivery moved to its next wait, keeps its schedule and gains the mark.
+// After a delivered offer too long to record, each draft this parks is
+// marked kept too, as is each parked draft it showed that the record names.
 function parkPrivateDraftsAwaitingUser(sessionId, reason, env) {
   const drafts = readPrivateDrafts(env);
-  const offered = readPrivateOrphanNotice(env)?.drafts;
+  const notice = readPrivateOrphanNotice(env);
+  const offered = notice?.drafts;
+  for (const draftId of offered ?? notice?.parked ?? []) {
+    const marker = drafts.parked.get(draftId);
+    if (marker && !marker.kept_by_user) {
+      writePrivateParkedMarker(draftId, { ...marker, kept_by_user: true }, env);
+    }
+  }
   for (const draftId of privateDraftsAwaitingUser(
     sessionId,
     privateHintsOnMachine(sessionId, env),
@@ -10195,7 +10319,13 @@ function parkPrivateDraftsAwaitingUser(sessionId, reason, env) {
     env,
   )) {
     if (offered ? !offered.includes(draftId) : drafts.parked.has(draftId)) continue;
-    parkPrivateDraft(draftId, reason, env, drafts.parked.get(draftId));
+    parkPrivateDraft(
+      draftId,
+      reason,
+      env,
+      drafts.parked.get(draftId),
+      offered ? true : Number.isFinite(notice?.shown_at),
+    );
   }
 }
 
@@ -11395,9 +11525,15 @@ export function renderSkillPreferenceNotes(input) {
   const note = (kind, item) =>
     `- ${kind}: ${shownText(item.label)}. ${shownText(item.reason)}`;
   const lines = input.blocked.map((item) =>
-    note("Set aside only while following this skill", item),
+    note(
+      "Set aside only for the required step that conflicts; keep applying the preference to every compatible step and all other work",
+      item,
+    ),
   );
-  // Whole entries in canonical order; one changed by redaction ends the shown run.
+  // Whole entries in canonical order; one changed by redaction ends the shown
+  // run. The cap applies only with a token that continues this context: without
+  // one, the differences arrive whole, as a token-less MCP page does.
+  const token = parsePageToken(input.skillPageToken);
   let shown = 0;
   let used = 0;
   for (const entry of input.skillPreferencesWithheld
@@ -11406,7 +11542,7 @@ export function renderSkillPreferenceNotes(input) {
     const parts = entryParts(entry, redact);
     const line = `- For this skill (takes precedence over the snapshot): ${parts.label}${parts.avoid}: ${parts.behavior}`;
     used += line.length + 1;
-    if (parts.changed || used > input.maxSkillPreferenceChars) break;
+    if (parts.changed || (token && used > input.maxSkillPreferenceChars)) break;
     lines.push(line);
     shown += 1;
   }
@@ -11414,7 +11550,6 @@ export function renderSkillPreferenceNotes(input) {
     ? null
     : input.skillPreferences.length - shown;
   if (hidden !== 0) {
-    const token = parsePageToken(input.skillPageToken);
     const call = token
       ? `call get_effective_preferences with page_token ${input.skillPageToken}${pageTokenArgs(token.claims)}`
       : `call get_effective_preferences with skill_slug ${input.slug}`;
@@ -11747,8 +11882,8 @@ function candidateSkillNotesInput(candidate, statements, current) {
       label: labels.get(item.key) ?? item.key,
       reason: String(item.reason ?? ""),
     })),
-    // A blocked difference is set aside while following this skill, so it is
-    // never also shown as taking precedence.
+    // A blocked difference is named by its blocked line, so it is never also
+    // shown as taking precedence.
     skillPreferences: snapshotEntriesFromEffectivePreferences(
       differences.filter((entry) => !blockedKeys.has(entry.key)),
     ),
@@ -14450,6 +14585,22 @@ function directiveEventTimeoutMs(env) {
   return Number.isFinite(parsed) && parsed >= 100 && parsed <= 2_000
     ? parsed
     : DEFAULT_DIRECTIVE_EVENT_TIMEOUT_MS;
+}
+
+// A hook script runs its main() only when Node started it, not when a test or
+// another script imports it. Node names the started module by its real path,
+// while process.argv[1] keeps the path the host gave, which can cross a
+// symbolic link: macOS /var -> /private/var, or a linked ~/.claude, ~/.codex
+// or plugin folder. Either path matches; one that cannot be resolved keeps
+// the plain comparison.
+export function isEntryScript(moduleUrl, argvPath = process.argv[1]) {
+  if (!argvPath) return false;
+  if (moduleUrl === pathToFileURL(argvPath).href) return true;
+  try {
+    return moduleUrl === pathToFileURL(realpathSync(argvPath)).href;
+  } catch {
+    return false;
+  }
 }
 
 export function debugLog(env, event, fields = {}, options = {}) {

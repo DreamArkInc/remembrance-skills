@@ -11,10 +11,10 @@
 // records that one as delivered, so nothing repeats. Otherwise it prints {}.
 
 import process from "node:process";
-import { pathToFileURL } from "node:url";
 import {
   disabled,
   HOOK_CONTEXT_BUDGETS,
+  isEntryScript,
   preferenceSnapshotText,
   resolveApiCredential,
   warmPrincipalSession,
@@ -111,10 +111,7 @@ async function main() {
   process.stdout.write(`${JSON.stringify(output)}\n`);
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isEntryScript(import.meta.url)) {
   main().catch(() => {
     // Never fail a tool call because the pickup failed.
   });

@@ -7,12 +7,12 @@
 // then recover when the agent ignored the rule and never called query_skills.
 
 import process from "node:process";
-import { pathToFileURL } from "node:url";
 import {
   capturePrivateSkillNativeUserPrompt,
   createContinuationDirective,
   disabled,
   isContextualContinuationPrompt,
+  isEntryScript,
   isHostNotificationPrompt,
   recordDirectiveSurface,
   recordExplicitPreferenceObservations,
@@ -144,10 +144,7 @@ async function main() {
   }
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isEntryScript(import.meta.url)) {
   main().catch(() => {
     // Never fail a Cursor prompt because eligibility recording failed.
   });

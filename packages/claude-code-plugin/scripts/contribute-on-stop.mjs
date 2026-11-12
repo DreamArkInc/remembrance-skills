@@ -47,7 +47,6 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import {
   agentLedgerIdFor,
   completionContinuationReason,
@@ -55,6 +54,7 @@ import {
   contributionReason,
   decideStop,
   directSelectionFromResponse,
+  isEntryScript,
   markCompletionObligationsPrompted,
   markDirectSelectionSurfacesPrompted,
   readDirectSelectionSurfaces,
@@ -403,10 +403,7 @@ async function main() {
   }
 }
 
-const invokedDirectly =
-  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-
-if (invokedDirectly) {
+if (isEntryScript(import.meta.url)) {
   main().catch(() => {
     // Never block a stop on an unexpected error.
   });

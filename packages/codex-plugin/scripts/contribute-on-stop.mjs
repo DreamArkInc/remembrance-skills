@@ -31,12 +31,12 @@
 // calls decideStop, records the new prompted count on a block, and prints.
 
 import process from "node:process";
-import { pathToFileURL } from "node:url";
 import {
   agentLedgerIdFor,
   completionContinuationReason,
   decideStop,
   foldTurnLedgerIntoSession,
+  isEntryScript,
   recordPluginLifecycleHealth,
   reportTaskOutcomesOnStop,
   resolveApiCredential,
@@ -123,10 +123,7 @@ async function main() {
   }
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isEntryScript(import.meta.url)) {
   main().catch(() => {
     // Never block a stop on an unexpected error.
   });

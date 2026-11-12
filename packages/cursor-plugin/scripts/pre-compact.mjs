@@ -4,7 +4,7 @@
 // prints {} and never returns user_message text.
 
 import process from "node:process";
-import { pathToFileURL } from "node:url";
+import { isEntryScript } from "./hook-core.mjs";
 import {
   cursorSessionId,
   updateCursorPreferenceState,
@@ -38,10 +38,7 @@ async function main() {
   process.stdout.write("{}\n");
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isEntryScript(import.meta.url)) {
   main().catch(() => {
     // Never fail a compaction because the observer failed.
   });

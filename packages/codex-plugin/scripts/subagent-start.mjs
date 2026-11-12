@@ -12,11 +12,11 @@
 
 import { readFileSync } from "node:fs";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
 import {
   debugLog,
   disabled,
   HOOK_CONTEXT_BUDGETS,
+  isEntryScript,
   preferenceSnapshotText,
   projectPreferenceSnapshot,
   resolveApiCredential,
@@ -92,10 +92,7 @@ export async function main() {
   if (output) process.stdout.write(`${JSON.stringify(output)}\n`);
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isEntryScript(import.meta.url)) {
   main().catch((error) => {
     // Preference context is advisory and must never block a subagent.
     debugLog(process.env, "subagent_start_error", {

@@ -11,13 +11,13 @@
 
 import { createHash } from "node:crypto";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
 import {
   bindPrivateSkillNativeCapture,
   clearHighMatchSurfaceIfOpened,
   clearHighMatchSurfaceForExplicitSelection,
   directSelectionFromResponse,
   highMatchFromResponse,
+  isEntryScript,
   observeSuccessfulCompletionTool,
   parsePreferenceSnapshotHeader,
   preferenceContextIdFromToken,
@@ -510,10 +510,7 @@ async function main() {
   }
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isEntryScript(import.meta.url)) {
   main().catch(() => {
     // Never fail an MCP call because the recorder failed.
   });

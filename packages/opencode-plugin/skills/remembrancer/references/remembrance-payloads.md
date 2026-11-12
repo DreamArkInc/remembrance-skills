@@ -368,6 +368,22 @@ server submission receipt.
 }
 ```
 
+## New resource
+
+```json
+{
+  "resource": {
+    "name": "Example MPP Search",
+    "kind": "mpp_endpoint",
+    "url": "https://example.com/api/search",
+    "description": "Search endpoint that charges with HTTP 402.",
+    "domains": ["mpp", "resource-discovery"],
+    "capabilities": ["web-search"],
+    "tags": ["mpp", "search"]
+  }
+}
+```
+
 ## Resource review
 
 ```json

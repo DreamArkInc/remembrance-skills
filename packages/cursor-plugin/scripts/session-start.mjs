@@ -11,11 +11,11 @@
 
 import { readFileSync } from "node:fs";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
 import {
   checkForClientUpdate,
   disabled,
   HOOK_CONTEXT_BUDGETS,
+  isEntryScript,
   preferenceSnapshotText,
   recordPluginLifecycleHealth,
   resolveApiCredential,
@@ -171,10 +171,7 @@ async function main() {
   process.stdout.write(`${JSON.stringify(await handleSessionStart(input))}\n`);
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isEntryScript(import.meta.url)) {
   main().catch(() => {
     // Fail open. Session context is helpful, not required.
   });

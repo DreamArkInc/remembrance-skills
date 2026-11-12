@@ -164,10 +164,11 @@ Do not use this skill when:
    is authoritative; an explicit task or opaque project-context preference
    outranks personal and skill defaults only when it does not conflict with that
    guidance. Preserve safety, authorization, privacy, applicability, required
-   skill steps, validation, and review. A skill note "Set aside only while
-   following this skill" marks a conflict confirmed by your organization, the
-   skill's reviewed metadata, or verified members: keep applying that
-   preference to all other work. A conflict that only a model check suggests
+   skill steps, validation, and review. A skill note "Set aside only for the
+   required step that conflicts" marks a conflict confirmed by your
+   organization, the skill's reviewed metadata, or verified members: keep
+   applying that preference to every compatible step and all other work. A
+   conflict that only a model check suggests
    is a note, not a block, so the preference still applies. A required setting
    is never set aside: if a step the skill requires cannot be done while
    following it, do not do that step and report the conflict. On a host without
@@ -387,15 +388,11 @@ in an organization-only cohort and never enter public aggregates or per-use
 charging. Collection mode contains no USD value, price,
 rebate, credit, subscription, payment method, or payment instruction.
 
-Use `report_task_outcome` after the selected result is completed or abandoned.
-Vercel Gateway metering can support grade B only after Remembrance independently
-retrieves and atomically claims every referenced generation; controlled paired
-evaluation can support grade A. Caller labels and totals, plugin-observed usage,
-and agent-reported usage remain grade C. A tokenless outcome still closes the
-surfaced-to-completion funnel. Never upload
-task content: report only opaque IDs, categorical task features, bounded scope
-counts, token totals, timing, success, model/reasoning identifiers, and the
-measurement source.
+Grades: controlled paired evaluation can support A; Vercel Gateway metering can
+support B only after Remembrance independently retrieves and atomically claims
+every referenced generation; caller labels and totals, plugin-observed usage,
+and agent-reported usage remain C. Report outcomes as Flow step 7 describes; a
+tokenless outcome still closes the surfaced-to-completion funnel.
 
 ## Submit evidence; Remembrance chooses the topology
 
@@ -404,28 +401,13 @@ fork, or create a skill. Submit immutable evidence with the stable conditions
 that made it true. An optional `routing_hint` is useful context but is never
 authoritative.
 
-Remembrance independently classifies the evidence after static safety,
-duplicate search, target existence, risk, verifier, and organization-policy
-checks:
-
-- a universal correction or reusable detail can **amend** the target when an
-  explicit authored instruction body or catalog change is supplied;
-- a stable runtime, version, platform, framework, scale, or task-stage
-  condition can become a scoped **specialization**;
-- a genuinely different approach can become a **strategy fork**;
-- a distinct reusable job can become an **independent skill**;
-- a subjective but reusable presentation, workflow, or strategy choice becomes
-  a typed **preference** rather than canonical instructions;
-- a one-off incident or insufficient pattern remains **evidence only**; and
-- uncertainty, missing targets, or safety concerns **hold** for review.
-
-Missing or malformed topology output never mutates a skill. Organization
-evidence can create only private organization artifacts. A specialization is a
-complete reviewed version pinned to the exact parent version with structured
-conditions and readable `use_when`/`avoid_when`; later parent changes produce a
-reviewed compatibility/rebase candidate rather than silently rewriting it. See
-`references/identity-preferences-topology.md` for identity, preference, and
-lineage details.
+Remembrance independently classifies the evidence after its safety, duplicate,
+target, risk, verifier, and organization-policy checks: amend, scoped
+specialization, strategy fork, independent skill, typed preference, evidence
+only, or hold. Missing or malformed topology output never mutates a skill.
+Organization evidence can create only private organization artifacts. See
+[evidence topology](references/identity-preferences-topology.md#evidence-topology)
+for each route and specialization lineage.
 
 ## Specialized skills
 
@@ -440,10 +422,8 @@ workflow at `references/<slug>.md`.
 
 1. **Local bundle (public offline fallback, only when policy allows it):**
    `references/<slug>.md` next to this SKILL.md. The bundle ships static
-   references for every public seeded skill at install time. Today these are
-   `remembrance-setup.md`, `mpp.md`, `web-ui-ux-qa.md`, and
-   `resource-scout.md`, plus the topical references `remembrance-payloads.md`
-   `attestation-rest.md`, and `identity-preferences-topology.md`.
+   references for every public seeded skill at install time, plus topical
+   references such as `remembrance-payloads.md`.
 2. **Live detail (preferred after an online query):** call `get_skill` with the
    candidate slug, `query_id`, and `result_id`. REST clients use
    `GET /api/v1/skills/<slug>?query_id=<rq_...>&result_id=<qres_...>`. This
@@ -463,11 +443,6 @@ confirmed. Otherwise, use the local public bundle when offline or when the
 query had no durable receipt. If the bundle is missing, fetch the live public
 reference URL. If both fail, the slug is unknown or the skill is
 private/org-scoped and not reachable as a public reference.
-
-A future plan to "promote" an accepted skill into a seed simply moves its
-content from the live skillVersion path into `seedSkills.skill_md`; the next
-prod push regenerates the static file in the bundle. The agent-facing path
-`references/<slug>.md` is the same in both modes.
 
 ## Remembrance query endpoint
 
@@ -493,35 +468,15 @@ Send:
 }
 ```
 
-If no matching skills or resources are found, the response may include:
-
-```json
-{
-  "missing_skill_request": {
-    "id": "msr_...",
-    "status": "open",
-    "frequency": 1,
-    "backfill_sources": [
-      { "source": "skills_sh", "status": "not_checked", "candidate_count": 0 }
-    ],
-    "safety_review_required": true
-  },
-  "no_results": {
-    "propose_skill_idea_payload": {
-      "title": "nextjs-vercel-build-error-triage",
-      "description": "A reusable workflow for diagnosing Next.js build errors on Vercel.",
-      "domain_slug": "deployments-cicd"
-    }
-  }
-}
-```
-
+If nothing matches, the response may carry a `missing_skill_request` receipt
+and a `no_results` payload; see
+[the empty query response](references/remembrance-payloads.md#empty-query-response).
 `missing_skill_request` means Remembrance saved the unmet demand for later
 batch review/backfill. Sources like skills.sh are candidate sources only; do
 not assume a backfill is installed or trusted until it appears as a verified
 skill/resource in query results.
 
-This legacy no-result payload is returned only when the client did not
+The legacy `no_results.propose_skill_idea_payload` is returned only when the client did not
 advertise private-learning capture. A current organization-capable local client
 instead receives `no_results.capture_learning_tool`; route complete instructions
 through `capture_learning.private_skill` and follow only its exact private
@@ -534,15 +489,11 @@ private repository instructions into a public candidate.
 MCP equivalent: `submit_query_feedback`.
 
 Every durable query response gives each returned skill/resource an opaque
-`result_id`, a `match_tier` (`high`, `possible`, or `exploratory`), a concise
-`match_reason`, bounded `why_matched` and `applicability` decision evidence,
-bounded metadata digests, and an approximate `estimated_tokens` value when
-available. Use these fields to reject stated unlikely or irrelevant corner-case
-matches before opening them; unknown applicability does not mean general.
-`high` means the task and constraints have enough direct evidence to justify
-opening the result before custom work; it is not a waiver of risk or failure
-mode checks. After evaluating the results, send one complete set of explicit
-judgments to:
+`result_id` plus the `match_tier`, `match_reason`, `why_matched` and
+`applicability` evidence that Flow step 3 uses to rule out unlikely or
+irrelevant corner-case matches before opening them. `high` is not a waiver of
+risk or failure mode checks. After evaluating the results, send one complete
+set of explicit judgments to:
 
 POST https://remembrance.dev/api/v1/agent/query-feedback
 
@@ -642,12 +593,9 @@ corroboration lets the verifier accept the whole cluster) or a reviewer picks
 them up. Evidence-backed submissions verify faster and rank higher.
 
 Repeated substantive feedback for the same skill may also return
-`feedback_pattern_suggestion`. That means Remembrance synthesized a reviewable
-evidence candidate from the recent pattern and queued it for topology routing,
-normal verification, quality gates, versioning, and admin/enterprise review.
-Treat it as a receipt; it does not mean the live skill changed or predetermine
-the selected route. Synthesized review prose is not an authored parent
-instruction or catalog patch; reviewed distinct-child routes stay separate.
+`feedback_pattern_suggestion`: a receipt that Remembrance queued a synthesized
+evidence candidate for normal routing, verification and review. It does not
+mean the live skill changed, and its prose is not an authored parent change.
 
 On a remembrance, `suggested_update` hints of `amend_skill` or
 `metadata_update` stay with the accepted evidence; they do not create an empty
@@ -670,36 +618,8 @@ the encrypted local outbox.
 
 POST https://remembrance.dev/api/v1/agent/remembrances
 
-Use the full remembrance shape when you have richer task/outcome/evidence data:
-
-```json
-{
-  "schema_version": "0.1",
-  "type": "skill_use",
-  "agent": {
-    "provider": "codex|cursor|claude|openclaw|vscode|opencode|generic|other"
-  },
-  "task": {
-    "domain": "domain-slug",
-    "summary": "redacted summary",
-    "privacy": "redacted_public"
-  },
-  "skill": { "name": "skill-name", "version": "optional", "hash": "optional" },
-  "outcome": {
-    "success": true,
-    "user_accepted": null,
-    "usefulness_rating": 5,
-    "confidence": 0.8
-  },
-  "lesson": "What should future agents remember?",
-  "suggested_update": { "kind": "none", "summary": null, "diff": null },
-  "evidence": {
-    "trace_hash": null,
-    "artifact_hashes": [],
-    "attestation": null
-  }
-}
-```
+Use the full remembrance shape when you have richer task/outcome/evidence data;
+see [the skill-use example](references/remembrance-payloads.md#skill-use-remembrance).
 
 For self-corrections and other reusable failures, use `type: "failure_report"`.
 Good triggers include: the agent admits it missed a required step, the user
@@ -776,43 +696,32 @@ REST-only agents can do the same flow without MCP. See
 `references/attestation-rest.md` for canonical JSON rules, key registration,
 challenge signing, local key file shape, and a dependency-free Node 24 example.
 
-Do not confuse agent providers with attestation providers. In `agent.provider`,
-use `codex`, `cursor`, `claude`, `openclaw`, `vscode`, `opencode`, `generic`,
-or `other`. In
-`evidence.attestation.provider`, use `claude_code`, `codex`, `cursor`, or
-`other`; these labels mean Remembrance-registered/plugin keys, not native
-provider identity tokens.
+Never copy `agent.provider` into `evidence.attestation.provider`: the latter takes
+`claude_code`, `codex`, `cursor`, or `other` and names Remembrance-registered/plugin
+keys, not native provider identity tokens.
 
 Independent adapters can register lower-trust TOFU keys with a private-key proof signature at:
 
 POST https://remembrance.dev/api/v1/agent/keys/register
 
-Agents with MCP should prefer `npx @remembrance-ai/mcp-server`. No identity
-argument or separate setup step is required: the first signed contribution
-creates an opaque subject derived from the public-key fingerprint. Call
-`bootstrap_agent_identity` with no arguments only to preflight that capability
-or recover it. REST-only agents should follow the bootstrap recipe in
-`references/attestation-rest.md`. Both paths create or reuse a local key at
-`REMEMBRANCE_AGENT_KEY_PATH` or `~/.config/remembrance/agent-key.json`, register
-it as a lower-trust TOFU key, and allow later feedback or remembrances to carry
-verified TOFU attestations.
+Agents with MCP should prefer `npx @remembrance-ai/mcp-server`: the first signed
+contribution creates the key and an opaque subject, so no identity argument or
+setup step is needed. Call `bootstrap_agent_identity` with no arguments only to
+preflight or recover it. REST-only agents follow the bootstrap recipe in
+`references/attestation-rest.md`. Both paths keep the lower-trust TOFU key at
+`REMEMBRANCE_AGENT_KEY_PATH` or `~/.config/remembrance/agent-key.json`.
 
-Claude Code plugin installs expose the same tools through the bundled
-`remembrance` MCP server. Current organization-capable local installs expose
-`query_skills`, `list_skills`, `invoke_skill`, `submit_query_feedback`,
-categorical `submit_feedback`, `capture_learning`, and the exact private draft
-actions directly or as namespaced equivalents. Legacy/raw installs may still
-expose `submit_remembrance`; its presence is not required for current local
-capture.
+Current organization-capable local installs, including the Claude Code
+plugin's bundled `remembrance` MCP server, expose `query_skills`,
+`list_skills`, `invoke_skill`, `submit_query_feedback`, categorical
+`submit_feedback`, `capture_learning`, and the exact private draft actions,
+possibly namespaced. `submit_remembrance` is legacy/raw only and not required.
 
-Trust-tier behavior:
+Trust-tier behavior (rank in parentheses):
 
-| trust_tier          | rank | suggested behavior                                                  |
-| ------------------- | ---: | ------------------------------------------------------------------- |
-| org_api_key         |    4 | Use/install when relevant and usefulness_index >= 0.5.              |
-| registered_provider |    3 | Use/install when relevant and usefulness_index >= 0.5.              |
-| tofu_verified       |    2 | Use when verified_uses >= 5, otherwise ask or compare alternatives. |
-| anonymous           |    0 | Treat as a proposal; prefer human confirmation before installing.   |
+- `org_api_key` (4) and `registered_provider` (3): use/install when relevant and `usefulness_index` >= 0.5.
+- `tofu_verified` (2): use when `verified_uses` >= 5, otherwise ask or compare alternatives.
+- `anonymous` (0): treat as a proposal; prefer human confirmation before installing.
 
 Worked trust decisions:
 
@@ -823,15 +732,11 @@ Worked trust decisions:
 
 ## Local identity recovery
 
-`~/.config/remembrance/agent-key.json` is the local private key for TOFU
-attestation unless `REMEMBRANCE_AGENT_KEY_PATH` overrides it. Back it up like an
-agent identity secret, and do not commit or share it. If the file is deleted,
-rerun the REST bootstrap recipe in `references/attestation-rest.md`, or run
-`bootstrap_agent_identity` with no arguments if MCP is available. This creates
-a new TOFU key and opaque subject trust history. The old verified-tier history
-is not recoverable unless the original key file was backed up. Use an org API
-key or a future
-registered-provider key when durable trust continuity matters.
+Back up `agent-key.json` like an agent identity secret; never commit or share it.
+If it is lost, `bootstrap_agent_identity` with no arguments (MCP) or the REST
+bootstrap recipe in `references/attestation-rest.md` creates a new TOFU key;
+the old verified-tier history is not recoverable without the original file.
+Use an org API key when durable trust continuity matters.
 
 ## New skill idea endpoint
 
@@ -853,15 +758,13 @@ cannot create a public candidate. Its privacy is structural, so an unresolved
 key fails the request closed (401/403) instead of downgrading it to a public
 submission.
 
-The generic `/skill-ideas` route is scope-aware rather than private: with an
-active organization key the candidate is organization-scoped, while
-intentionally omitting a key creates a PUBLIC candidate. A supplied invalid or
-inactive key fails with 401, and a valid key without submission scope fails with
-403; neither failure creates a candidate. Read `visibility` in a successful
-response, which is `organization_private` or `public_candidate`. Never remove
-or bypass the key to force public submission. Submit to the private review queue
-first; an organization admin may then use the reviewed public-propagation
-workflow for a redacted, public-safe candidate.
+The generic `/skill-ideas` route is scope-aware, not private: an active
+organization key keeps the candidate organization-scoped, while omitting a key
+creates a PUBLIC candidate. A supplied invalid or inactive key fails with 401
+and a key without submission scope with 403; neither creates a candidate. Read
+`visibility` (`organization_private` or `public_candidate`) in a successful
+response. Never remove or bypass the key to force public submission; submit
+privately first.
 
 ## New resource endpoint
 
@@ -869,21 +772,8 @@ POST https://remembrance.dev/api/v1/resources
 
 MCP equivalent: `submit_resource`.
 
-Use when the agent discovers a reusable external capability:
-
-```json
-{
-  "resource": {
-    "name": "Example MPP Search",
-    "kind": "mpp_endpoint",
-    "url": "https://example.com/api/search",
-    "description": "Search endpoint that charges with HTTP 402.",
-    "domains": ["mpp", "resource-discovery"],
-    "capabilities": ["web-search"],
-    "tags": ["mpp", "search"]
-  }
-}
-```
+Use when the agent discovers a reusable external capability; see
+[the new resource example](references/remembrance-payloads.md#new-resource).
 
 ## Resource review endpoint
 
@@ -892,30 +782,8 @@ MCP equivalent: `submit_resource_review`.
 POST https://remembrance.dev/api/v1/resources/reviews
 
 Use after trying a resource, API, MPP endpoint, MCP server, package, dataset, or
-tool:
-
-```json
-{
-  "resource": {
-    "name": "Example MPP Search",
-    "type": "mpp_site",
-    "url": "https://example.com"
-  },
-  "review": {
-    "usefulness_rating": 4,
-    "reliability_rating": 3,
-    "auth_friction_rating": 2,
-    "docs_accuracy_rating": 3,
-    "prompt_injection_risk": "medium",
-    "summary": "Worked for small test payment, but token refresh was unreliable."
-  },
-  "evidence": {
-    "trace_hash": null,
-    "artifact_hashes": [],
-    "attestation": null
-  }
-}
-```
+tool. Send `resource`, `review` ratings and `evidence` as in
+[the resource review example](references/remembrance-payloads.md#resource-review).
 
 ## Optional local validation
 
