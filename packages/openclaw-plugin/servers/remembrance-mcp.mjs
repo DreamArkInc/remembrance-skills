@@ -25390,7 +25390,7 @@ var seedSkills = [
     summary: "Operational setup and troubleshooting workflow for Remembrance across Claude Code, Codex, OpenClaw, Cursor, Gemini, MCP, REST, skill-only installs, enterprise keys, and local agent identity.",
     status: "active",
     visibility: "public",
-    version: "0.1.49",
+    version: "0.1.50",
     domains: ["agent-skills", "mcp", "resource-discovery"],
     tags: [
       "remembrance",
@@ -25438,7 +25438,7 @@ var seedSkills = [
         "gemini",
         "rest"
       ],
-      version: "0.1.49",
+      version: "0.1.50",
       status: "active",
       visibility: "public",
       providers: ["codex", "claude", "cursor", "openclaw", "generic"],
@@ -26126,7 +26126,7 @@ paths, or raw logs. Set \`REMEMBRANCE_HEALTH_REPORTING=0\` to disable that
 best-effort report.
 
 If no Remembrance MCP tool is visible, run
-\`npx @remembrance-ai/mcp-server@0.2.22 doctor\`. This safely verifies registry,
+\`npx @remembrance-ai/mcp-server@0.2.23 doctor\`. This safely verifies registry,
 credential, and catalog-read access outside the host, but it deliberately
 reports host registration as unobservable. Update or reinstall the native
 plugin, fully restart the host, then rerun \`run_connection_doctor\` inside it.
@@ -26168,11 +26168,21 @@ only when the organization admin enabled the **Contribution propagation**
 setting; the submitting agent neither chooses nor sees that process, and the
 derivative must pass the complete public pipeline.
 
-If the host denies the action, no candidate content was sent. The encrypted
-draft remains on the device in \`awaiting_authorization\`; do not retry it
-through REST, hosted MCP, or another transport. Timeouts, 429s, and 5xx
-responses retry with bounded backoff during later plugin lifecycles. A 401,
-403, policy change, or validation failure remains held for explicit repair.
+If the host denies the action, no candidate content was sent; do not retry it
+through REST, hosted MCP, or another transport. When a plugin hook observes
+the denial, the encrypted draft stays on the device as a user decision. A
+never-sent capture that no hook recorded (made by a client without the hooks,
+such as Claude Desktop with the local server, or before its own session's hook
+recorded it) counts as handled for 24 hours after its last change. Such a
+client records no denial or keep: a capture whose submit the user denied there
+is sent by default once those 24 hours end, unless the draft is deleted with
+\`delete_private_lesson_candidate\` and \`confirm=true\`. Timeouts, 429s, and
+5xx responses retry with bounded backoff during later plugin lifecycles. A 401
+or 403 retries during a later plugin lifecycle after a credential change, or
+after a six-hour backoff with unchanged credentials. A policy hold that a
+refreshed policy can clear (an expired or changed policy, for example) retries
+at the next lifecycle under the current policy. Any other policy hold, and a
+validation failure, remain held for explicit repair.
 Unresolved and terminal drafts never expire or auto-delete. Inspect, retry, or
 explicitly delete one with the local private-lesson tools; deletion requires
 confirmation. After a signed submission receipt is verified, the encrypted
@@ -26806,7 +26816,7 @@ cloud-agent hooks can differ. See the official
 ### Approve other MCP clients
 
 Register exactly \`https://remembrance.dev/api/mcp\` or the exact local
-\`npx @remembrance-ai/mcp-server@0.2.22\` command. Use the recommended organization
+\`npx @remembrance-ai/mcp-server@0.2.23\` command. Use the recommended organization
 tool list above when the client supports tool filtering. Supply the
 organization key through the client's secret/header mechanism, then run
 \`run_connection_doctor\` and require organization scope before private writes.
@@ -26843,13 +26853,13 @@ https://remembrance.dev/api/mcp
 Local stdio MCP server:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.22
+npx @remembrance-ai/mcp-server@0.2.23
 ~~~
 
 Independent setup check when the host does not expose Remembrance tools:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.22 doctor
+npx @remembrance-ai/mcp-server@0.2.23 doctor
 ~~~
 
 This verifies registry, credential, and catalog-read access without submitting
@@ -71947,7 +71957,7 @@ function inspectPrivateLearningOutbox2(input, dependencies = {}) {
 }
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.2.22" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.2.23" : "0.0.0-dev";
 var tools2 = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var nativeContextCliRequested = process.argv[2] === "--native-context";

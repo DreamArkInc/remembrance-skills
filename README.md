@@ -54,11 +54,24 @@ draft only to the authenticated organization's private verifier queue. They
 cannot create or automatically propagate public content.
 
 Unresolved and terminal drafts never expire or auto-delete. Retryable failures
-resume during later lifecycle events; authentication, validation, policy, and
-host-denial states stay held. After a signed submission receipt is verified,
-the encrypted lesson content is removed immediately; its content-free
-completion marker is automatically deleted after 14 days. Admins enable or
-pause the lane under **Dashboard > Settings > Private lesson automation**.
+resume during later lifecycle events. A 401 or 403 retries during a later
+plugin lifecycle after a credential change, or after a six-hour backoff with
+unchanged credentials. A policy hold that a refreshed policy can clear (an
+expired or changed policy, for example) retries at the next lifecycle under the
+current policy. Any other policy hold, and a validation failure, remain held
+for explicit repair. A host denial that a plugin hook observes is retained
+locally: the plugin hooks park only the denied draft, which stays on the device
+as a user decision, and the client reports that precise retained state. A
+never-sent capture that no hook recorded (made by a client without the hooks,
+such as Claude Desktop with the local server, or before its own session's hook
+recorded it) counts as handled for 24 hours after its last change. Such a
+client records no denial or keep: a capture whose submit the user denied there
+is sent by default once those 24 hours end, unless the draft is deleted with
+`delete_private_lesson_candidate` and `confirm=true`. After a signed
+submission receipt is verified, the encrypted lesson content is removed
+immediately; its content-free completion marker is automatically deleted after
+14 days. Admins enable or pause the lane under
+**Dashboard > Settings > Private lesson automation**.
 Persist host approval only for the four exact submit and retry actions, as in
 the Highly Recommended step below, not every Remembrance write tool.
 `run_connection_doctor` reports policy, signing, encryption, outbox, and action
