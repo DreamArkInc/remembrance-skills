@@ -20,6 +20,7 @@ This repository is the public, open distribution surface:
 - `packages/openclaw-plugin/` — the native OpenClaw plugin package (conversation hooks + MCP server)
 - `packages/vscode-plugin/` — the native VS Code agent plugin (skill + lifecycle hooks + bundled local MCP)
 - `packages/opencode-plugin/` — the npm-distributed OpenCode plugin and version-matched MCP setup
+- `packages/pi-plugin/` — the native Pi extension and bundled local MCP server
 - `.claude-plugin/marketplace.json` — the plugin marketplace manifest
 - `.claude-plugin/plugin.json` — the root VS Code install-from-source manifest
 - `.cursor-plugin/marketplace.json` — the Cursor marketplace manifest
@@ -131,6 +132,9 @@ auto-approve.
   `"remembrance_*"` rule because the last matching rule wins.
 - **OpenClaw:** choose allow-always once for the lesson lane and once for the
   skill lane.
+- **Pi:** choose **Always allow this lane** once per lane in Remembrance's native
+  confirmation. Headless runs reuse a matching saved approval or retain the
+  protected draft for recovery; prompts and commands cannot grant consent.
 - **Gemini CLI:** one allow `[[rule]]` per tool, including `capture_learning`,
   then one ask rule per tool under its full Gemini CLI name, both delete tools
   included, in `~/.gemini/policies/remembrance.toml`.
@@ -468,6 +472,23 @@ example `/Users/you/.nvm/versions/node/v22.12.0/bin:/usr/bin:/bin`.
 The plugin queries eligible turns, injects bounded matching guidance before
 model dispatch, observes completed Remembrance tools, and prompts once for
 redacted feedback when the session becomes idle.
+
+### Pi — plugin (context + tools + protected learning)
+
+Requires Pi 1.5.2 and Node.js 22.19.0 or newer:
+
+```bash
+pi install npm:@remembrance-ai/pi-plugin
+```
+
+Restart Pi and call `run_connection_doctor`. The extension registers its bundled
+local MCP server and reads the shared Remembrance configuration; never copy the
+organization key into Pi settings or prompts. It reuses discovery, preferences,
+feedback, protected local learning, and bounded recovery. Private submissions
+use the scoped native confirmation described above. If source authority cannot
+be verified, retain the protected draft and follow its exact recovery action;
+a hold is not a submitted contribution or completed recovery. Full setup:
+[remembrance-setup](skills/remembrancer/references/remembrance-setup.md).
 
 ### Codex — remote MCP fallback
 

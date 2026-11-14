@@ -1,0 +1,49 @@
+{
+  "name": "@remembrance-ai/pi-plugin",
+  "version": "0.2.25",
+  "license": "Apache-2.0",
+  "description": "Native Pi extension for Remembrance discovery, preferences, feedback, and protected learning.",
+  "type": "module",
+  "main": "src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "remembrance"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.mjs"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "files": [
+    "src",
+    "scripts",
+    "servers",
+    "skills",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": false
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "node --check src/index.mjs && node --check scripts/hook-core.mjs",
+    "prepack": "npm run build",
+    "test": "vitest run",
+    "test:private-lesson": "vitest run test/security.test.mjs test/lifecycle.test.mjs test/tools.test.mjs",
+    "typecheck": "node --check src/index.mjs && node --check scripts/hook-core.mjs"
+  },
+  "devDependencies": {
+    "vitest": "^3.1.2"
+  }
+}

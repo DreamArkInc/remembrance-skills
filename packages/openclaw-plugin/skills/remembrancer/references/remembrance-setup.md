@@ -8,7 +8,7 @@ REST/HTTPS, skill-only installs, enterprise org keys, local identity, and common
 ## When to use
 
 - The user asks how to install Remembrance for Claude Code, Codex, OpenClaw,
-  Cursor, Gemini, or another agent.
+  Cursor, Pi, Gemini, or another agent.
 - The user has an enterprise/org API key and needs to make an agent use
   org-scoped skills or private overlays.
 - MCP tools such as run_connection_doctor, get_connection_status, query_skills,
@@ -234,6 +234,22 @@ install does not automatically provision the cloud surface. Distribute the
 plugin through the team marketplace, register Remembrance as a Team MCP server
 under **Dashboard > Plugins & MCPs**, and verify query, invocation, feedback,
 and contribution receipts in both local and cloud runs.
+
+Pi (Pi 1.5.2 and Node.js 22.19.0 or newer):
+
+~~~bash
+pi install npm:@remembrance-ai/pi-plugin
+~~~
+
+Restart Pi, then run `run_connection_doctor`. The extension registers its
+bundled local MCP server using the shared Remembrance configuration. Keep the
+organization key in the mode-0600 shared config or an approved process secret;
+never copy it into Pi settings or prompts.
+
+Private capture still requires verified source authority. If the actual
+producer cannot be verified, retain the protected draft and follow its bounded
+recovery instructions through the existing exact private action. A user-role
+label, session ID, or tool claim is not proof; a retained hold is not a submitted contribution or completed recovery.
 
 After installing any native plugin, restart the agent app/session and approve
 the runtime's trust request when one appears. For Codex, complete the hook
@@ -538,6 +554,22 @@ from** the server: both approve the whole server. Alternatively, choose
 **Always Allow** in the prompt's Allow menu the first time each of those tools
 asks.
 
+### Pi
+
+Pi does not ask before every tool by default. Remembrance adds native
+confirmation before private network submission. Choose **Always allow this lane**
+once per lane to save its scoped receipt, **Allow this time** for one attempt,
+or **Deny** to keep the encrypted draft local. Both submit and retry reuse the
+same receipt for that lane only while the credential and registry destination
+still match. A changed scope needs fresh approval.
+
+A headless run reuses a matching saved receipt and otherwise holds the draft
+for native confirmation. Prompt text and commands never grant approval.
+Denial never permits retry through another transport. No Pi permission-file
+setting is required or provided for this approval. Categorical query-fit and use
+feedback do not need private-content lane approval. Administrator mutations
+require confirmation on every invocation, without an Always allow choice.
+
 ### OpenCode
 
 OpenCode runs MCP tools without asking by default, so private submissions
@@ -797,7 +829,7 @@ paths, or raw logs. Set `REMEMBRANCE_HEALTH_REPORTING=0` to disable that
 best-effort report.
 
 If no Remembrance MCP tool is visible, run
-`npx @remembrance-ai/mcp-server@0.2.24 doctor`. This safely verifies registry,
+`npx @remembrance-ai/mcp-server@0.2.25 doctor`. This safely verifies registry,
 credential, and catalog-read access outside the host, but it deliberately
 reports host registration as unobservable. Update or reinstall the native
 plugin, fully restart the host, then rerun `run_connection_doctor` inside it.
@@ -1998,10 +2030,26 @@ cloud-agent hooks can differ. See the official
 [sandbox network controls](https://cursor.com/changelog/2-5), and
 [cloud-agent hooks](https://cursor.com/changelog/side-chat).
 
+### Approve Pi
+
+Distribute the reviewed native `@remembrance-ai/pi-plugin` package with
+`pi install npm:@remembrance-ai/pi-plugin`. Keep Pi 1.5.2 and Node.js 22.19.0
+or newer. The extension registers the local MCP server; provision the
+organization key through the mode-0600 shared Remembrance config or an approved
+process secret, and never copy it into Pi settings or prompts.
+
+Use the native confirmation described under "### Pi" to approve only the
+private lesson and skill lanes. A saved receipt is bound to the credential and
+registry destination. Headless runs cannot create consent; a matching saved
+receipt is required. Keep denial authoritative and recover retained drafts
+through their exact private actions. Installing the extension does not approve
+public or administrator mutations; administrator mutations ask every time.
+Restart Pi and call `run_connection_doctor` to confirm organization scope.
+
 ### Approve other MCP clients
 
 Register exactly `https://remembrance.dev/api/mcp` or the exact local
-`npx @remembrance-ai/mcp-server@0.2.24` command. Use the recommended organization
+`npx @remembrance-ai/mcp-server@0.2.25` command. Use the recommended organization
 tool list above when the client supports tool filtering. Supply the
 organization key through the client's secret/header mechanism, then run
 `run_connection_doctor` and require organization scope before private writes.
@@ -2014,7 +2062,7 @@ zero-network handoff.
 
 If any host still denies the export, that denial remains authoritative. The
 portable local handoff and dashboard import work identically for Codex, Claude
-Code, Gemini CLI, Cursor, OpenClaw, and raw local MCP clients.
+Code, Gemini CLI, Cursor, OpenClaw, Pi, and raw local MCP clients.
 
 For direct REST clients, send either:
 
@@ -2038,13 +2086,13 @@ https://remembrance.dev/api/mcp
 Local stdio MCP server:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.24
+npx @remembrance-ai/mcp-server@0.2.25
 ~~~
 
 Independent setup check when the host does not expose Remembrance tools:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.24 doctor
+npx @remembrance-ai/mcp-server@0.2.25 doctor
 ~~~
 
 This verifies registry, credential, and catalog-read access without submitting
@@ -2146,7 +2194,7 @@ at startup and through `run_connection_doctor`. The check sends no API key,
 fails open when the registry is unavailable, and never runs a command returned
 by the network. When a newer verified release exists, the agent must ask before
 running the update command bundled with its installed client, then tell the user
-which Codex, Claude Code, Cursor, OpenClaw, VS Code, OpenCode, or MCP host must
+which Codex, Claude Code, Cursor, OpenClaw, VS Code, OpenCode, Pi, or MCP host must
 be reloaded, reopened, or fully restarted. Set
 `REMEMBRANCE_CLIENT_UPDATE_CHECK=0` to disable only this advisory check.
 

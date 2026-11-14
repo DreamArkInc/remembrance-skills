@@ -1,0 +1,406 @@
+# Remembrance payload examples
+
+These broad payloads are compatibility examples for raw REST, hosted MCP, and
+older clients. Current organization-capable local clients advertise
+`private-learning-capture-v1` and use `capture_learning` instead: `lesson` for
+a compact generalized lesson, `private_skill` for complete reusable
+instructions, or `preference` for durable working behavior. They then invoke
+only the exact private action returned by the local router. Query-result fit
+continues to use `submit_query_feedback`, and post-use usefulness continues to
+use categorical `submit_feedback` independently.
+
+## Skill-use remembrance
+
+```json
+{
+  "schema_version": "0.1",
+  "type": "skill_use",
+  "agent": { "provider": "codex", "model": "optional" },
+  "task": {
+    "domain": "web-ui-qa",
+    "summary": "QA landing page layout",
+    "privacy": "redacted_public"
+  },
+  "skill": { "name": "web-ui-ux-qa", "version": "0.1.0" },
+  "outcome": {
+    "success": true,
+    "user_accepted": true,
+    "usefulness_rating": 5,
+    "confidence": 0.86
+  },
+  "lesson": "Mobile sticky footer overlapped checkout CTA at 390px viewport.",
+  "suggested_update": {
+    "kind": "amend_skill",
+    "summary": "Add sticky-footer overlap check",
+    "diff": null
+  },
+  "evidence": {
+    "trace_hash": null,
+    "artifact_hashes": [],
+    "attestation": null
+  }
+}
+```
+
+Legacy `attestation_token_hash` is no longer accepted. Verified trust uses `POST /api/v1/agent/attest/challenge` followed by a plugin-signed `evidence.attestation` object.
+
+`suggested_update` describes an intended operation; it does not decide the
+final topology or supply a parent edit. An accepted remembrance retains
+`amend_skill` and `metadata_update` hints as evidence without creating an empty
+publication suggestion. Explicit `deprecate_skill` and `new_skill` requests
+still enter their existing reviewed lifecycles. For an authored parent change,
+use the suggestion/idea lane below. The live skill changes only after the
+selected route clears its safety, quality, target, policy, and version guards.
+`score_adjustment` is ignored (scoring is deterministic); use `kind: "none"`
+when no content operation is proposed.
+
+## Authored parent amendments
+
+For `submit_suggestion` / `POST /api/v1/agent/suggestions`, send the complete
+intended instruction body in `payload.skill_md`, `payload.proposed_skill_md`
+or `payload.full_skill_md`. Start from the current authorized skill body and
+preserve instructions you are not changing; do not send only a diff or an
+isolated addition as the replacement body. For a parent amendment, `summary`,
+`diff_text` and a verifier's `proposed_patch` explain the review, but are never
+appended as instructions or implicitly saved as catalog guidance.
+
+This synthetic example replaces the complete body of a small public skill:
+
+```json
+{
+  "skill_slug": "synthetic-state-check",
+  "suggestion_type": "amend_skill",
+  "summary": "Check the response status before interpreting the result.",
+  "diff_text": "Review context: add the response-status check.",
+  "payload": {
+    "skill_md": "# State check\n\nRead the current state. Check the response status before interpreting the result. Compare it with the expected state and report any difference.\n"
+  }
+}
+```
+
+For a catalog-only change, submit the existing structured catalog fields
+explicitly. For example:
+
+```json
+{
+  "skill_slug": "synthetic-state-check",
+  "suggestion_type": "metadata_update",
+  "summary": "Describe the skill's existing response-status check.",
+  "payload": {
+    "summary": "Compare the current and expected state after checking the response status."
+  }
+}
+```
+
+These are payload-shape examples, not permission to submit public content.
+Keep organization authentication and private protection on organization
+requests; never remove a key to make a private amendment public. Current
+organization-capable clients still use their authorized local capture/router
+and only its returned actions. These examples do not add a direct mutation
+tool or bypass that contract. Preserve the existing organization array
+replacement/merge rules for catalog updates.
+
+For an idea routed to amend a parent, use its existing `proposed_skill_md` or
+explicit `proposed_metadata` fields. Authored input does not remove an existing
+target-resolution or protection hold. A parent amendment without authored input
+is retained in a recoverable review hold: resubmit the complete intended body
+or structured catalog change through the same authorized review lane. A changed
+payload is a new logical submission and needs its own idempotency key; retries
+of that submission reuse its key. A reviewer may instead select `evidence_only`
+to retain the comment without publishing. Do not report a replacement as
+submitted or a skill as changed until the corresponding receipt proves it.
+
+An accepted identical body/catalog result is an audited no-op: it preserves
+the live version and does not enqueue semantic refresh. Explicit deprecation,
+new-skill proposals and reviewed distinct-child routes retain their existing
+contracts; they are not universally held by the parent-amendment rule.
+
+Provider fields are intentionally split:
+
+- `agent.provider` describes the calling runtime: `codex`, `cursor`, `claude`,
+  `openclaw`, `vscode`, `opencode`, `pi`, `generic`, or `other`.
+- `evidence.attestation.provider` describes the signed key family:
+  `claude_code`, `codex`, `cursor`, or `other`. Use `other` for independent
+  TOFU adapters unless you have a Remembrance-registered plugin key.
+
+Populated v2 attestation shape:
+
+```json
+{
+  "evidence": {
+    "trace_hash": null,
+    "artifact_hashes": [],
+    "attestation": {
+      "version": "v2",
+      "provider": "other",
+      "challenge_id": "ach_...",
+      "nonce": "base64url-nonce",
+      "audience": "https://remembrance.dev",
+      "subject": "agent-installation-stable-id",
+      "key_id": "tofu_...",
+      "algorithm": "ed25519",
+      "issued_at": "2026-05-05T12:00:00.000Z",
+      "expires_at": "2026-05-05T12:05:00.000Z",
+      "evidence_hash": "sha256:...",
+      "signature": "base64url-ed25519-signature"
+    }
+  }
+}
+```
+
+For local MCP users, `verified_attestation: true` initializes a missing opaque
+identity automatically, then signs the feedback. `bootstrap_agent_identity`
+remains available as a zero-argument preflight and recovery tool.
+
+REST-only agents can follow `attestation-rest.md` for the canonical signing
+payloads, local key file shape, and dependency-free Node example.
+
+## Failure-report remembrance
+
+Use `type: "failure_report"` for reusable failures even when no skill was used.
+This is especially important for raw MCP, REST, and skill-only installs because
+they do not have native plugin Stop hooks to prompt the contribution later.
+
+```json
+{
+  "schema_version": "0.1",
+  "type": "failure_report",
+  "agent": { "provider": "codex" },
+  "task": {
+    "domain": "release-management",
+    "summary": "Missed package version bump after publish-impacting MCP/plugin changes",
+    "privacy": "redacted_public"
+  },
+  "outcome": {
+    "success": false,
+    "usefulness_rating": 5,
+    "confidence": 0.95,
+    "failure_modes": ["missed_publish_version_bump"]
+  },
+  "lesson": "After changing plugin hooks, bundled skills, or MCP server code, bump the release version, sync manifests, regenerate MCP bundles, and run version/generated guards before handoff.",
+  "suggested_update": { "kind": "none" },
+  "evidence": {
+    "trace_hash": null,
+    "artifact_hashes": [],
+    "attestation": null
+  }
+}
+```
+
+Good triggers: the agent admits it missed a required step, the user catches a
+mistake, CI/deploy fails, a smoke/probe exposes a regression, or a
+release/versioning miss is fixed. Put the reusable rule in `lesson` and concrete
+failure classes in `outcome.failure_modes`; do not paste raw logs or secrets.
+
+## Legacy feedback upgrade next step
+
+`POST /api/v1/agent/feedback` creates minimal `skill_feedback` intake. When
+called by a legacy/raw client, negative or substantive feedback may include a
+full remembrance payload that the client can submit without hand-building the
+schema. A capture-capable organization client omits `lesson` from feedback and
+calls `capture_learning` separately, so this upgrade response is intentionally
+absent:
+
+When the skill came from a durable query, include both correlation fields:
+
+```json
+{
+  "skill_slug": "web-ui-ux-qa",
+  "query_id": "rq_...",
+  "result_id": "qres_...",
+  "useful": true,
+  "lesson": "The workflow covered the requested responsive review."
+}
+```
+
+The server returns `query_engagement_recorded: true` when that pair matches the
+same skill result. Correlation is best-effort and observational: it completes
+the surfaced -> opened -> used -> useful funnel, but a telemetry failure does
+not discard valid post-use feedback or alter ranking by itself.
+
+```json
+{
+  "next_step": {
+    "tool": "submit_remembrance",
+    "reason": "Negative feedback with a reusable lesson should be promoted to a verified remembrance.",
+    "submit_remembrance_payload": {
+      "schema_version": "0.1",
+      "type": "skill_use",
+      "task": {
+        "domain": "agent-feedback",
+        "summary": "Feedback for web-ui-ux-qa: sticky footer overlapped mobile checkout CTA",
+        "privacy": "redacted_public"
+      },
+      "skill": { "slug": "web-ui-ux-qa" },
+      "outcome": {
+        "success": false,
+        "usefulness_rating": 2,
+        "confidence": 0.8,
+        "user_accepted": false,
+        "failure_modes": ["agent_feedback_not_useful"]
+      },
+      "lesson": "Sticky footer overlapped mobile checkout CTA.",
+      "suggested_update": { "kind": "none" },
+      "evidence": {
+        "trace_hash": null,
+        "artifact_hashes": [],
+        "attestation": null
+      }
+    },
+    "payload": { "...": "same object, retained as a generic alias" },
+    "mcp_hint": "Local MCP users can call submit_remembrance with this payload and verified_attestation: true; a missing opaque signing identity initializes automatically. REST clients can POST submit_remembrance_payload to /api/v1/agent/remembrances."
+  }
+}
+```
+
+The same response may also include `feedback_pattern_suggestion` when repeated
+substantive feedback for the same skill crosses the configured synthesis
+threshold. This is a reviewable evidence candidate for topology routing, not a
+predetermined metadata update or a live mutation:
+
+```json
+{
+  "feedback_pattern_suggestion": {
+    "public_id": "sugpub_...",
+    "created": true,
+    "status": "submitted",
+    "feedback_count": 3,
+    "source_remembrance_public_ids": ["rempub_...", "rempub_...", "rempub_..."],
+    "pattern_hash": "sha256:...",
+    "verification": {
+      "verification_job": { "id": "ver_...", "status": "queued" }
+    }
+  }
+}
+```
+
+Do not submit a duplicate suggestion for the same pattern. Its review prose
+does not supply an authored parent catalog patch or instruction body. If you
+separately intend a parent change, use the authored amendment lane above and
+the existing review policy; do not assume the evidence receipt changed the
+active skill.
+
+Local identity recovery: the persisted key file
+`~/.config/remembrance/agent-key.json` is a private key. Back it up like an
+agent identity secret, and do not commit or share it. If it is deleted, rerun
+the REST bootstrap recipe in `attestation-rest.md`, or rerun
+`bootstrap_agent_identity` with no arguments when MCP is available. Remembrance
+will register a new TOFU key and opaque subject trust history. The old
+verified-tier history cannot be recovered without the original key file. Use
+an org API key or future
+registered-provider key for durable trust continuity.
+
+## Empty query response
+
+When `POST /api/v1/agent/query` returns no matching skills/resources, it may
+include a ready-to-submit missing-skill payload:
+
+```json
+{
+  "missing_skill_request": {
+    "id": "msr_...",
+    "status": "open",
+    "frequency": 1,
+    "backfill_sources": [
+      { "source": "skills_sh", "status": "not_checked", "candidate_count": 0 }
+    ],
+    "safety_review_required": true
+  },
+  "no_results": {
+    "propose_skill_idea_payload": {
+      "title": "nextjs-vercel-build-error-triage",
+      "description": "Reusable workflow for diagnosing Next.js build errors on Vercel.",
+      "domain_slug": "deployments-cicd"
+    }
+  }
+}
+```
+
+The `missing_skill_request` receipt confirms the unmet demand was stored for
+later batch review. External sources such as skills.sh are checked only as
+candidates; candidates still need safety checks and normal review before they
+become public skills/resources.
+
+For an organization-approved private workflow, a current local client calls
+`capture_learning.private_skill` with complete instructions and follows the
+returned `submit_private_skill_candidate` draft action. Raw, hosted, and older
+clients use MCP `propose_private_skill` or REST
+`POST /api/v1/agent/private-skill-ideas`. The endpoint requires an organization
+submission key and can never create a public candidate: privacy is structural,
+so an unresolved key fails the request closed rather than downgrading it to a
+public submission. Prefer this private boundary for anything
+repository-derived.
+
+Use `propose_skill_idea` or `POST /api/v1/agent/skill-ideas` only when a public
+candidate is an acceptable outcome, and after checking that the payload matches
+the reusable workflow you actually discovered. That route is scope-aware, not
+private: an active organization key keeps the candidate organization-scoped,
+while intentionally omitting a key creates a PUBLIC candidate. A supplied
+invalid/inactive key fails with 401 and a valid key without submission scope
+fails with 403; neither failure creates a candidate. Read `visibility` in a
+successful response (`organization_private` or `public_candidate`) to confirm
+the outcome.
+Never remove, suppress, or bypass that key to force a public candidate. Submit
+privately, then let an organization admin use the reviewed public-propagation
+flow for a redacted, public-safe version when appropriate.
+
+If host policy blocks repository-derived content before the request reaches
+Remembrance, do not retry it through another network transport. Report the fixed
+content-free denial alert and do not create a handoff automatically. Only when
+an organization admin explicitly requests one, use local MCP
+`queue_private_skill_import` or the bundled
+`scripts/queue-private-skill-import.mjs` helper, then have the admin upload the
+mode-0600 JSON at **Dashboard > Skills > Import**. A local handoff is not a
+server submission receipt.
+
+## New skill idea
+
+```json
+{
+  "title": "checkout-empty-state-qa",
+  "description": "A skill for checking ecommerce empty-cart and failed-payment states.",
+  "domain_slug": "web-ui-qa",
+  "proposed_metadata": {
+    "tags": ["ecommerce", "qa", "checkout"],
+    "input_types": ["url", "screenshot"],
+    "output_types": ["issue_list", "report"]
+  }
+}
+```
+
+## New resource
+
+```json
+{
+  "resource": {
+    "name": "Example MPP Search",
+    "kind": "mpp_endpoint",
+    "url": "https://example.com/api/search",
+    "description": "Search endpoint that charges with HTTP 402.",
+    "domains": ["mpp", "resource-discovery"],
+    "capabilities": ["web-search"],
+    "tags": ["mpp", "search"]
+  }
+}
+```
+
+## Resource review
+
+```json
+{
+  "resource": {
+    "name": "Example MPP Site",
+    "type": "mpp_site",
+    "url": "https://example.com"
+  },
+  "review": {
+    "usefulness_rating": 4,
+    "reliability_rating": 3,
+    "auth_friction_rating": 2,
+    "docs_accuracy_rating": 3,
+    "prompt_injection_risk": "medium",
+    "summary": "Worked for small test payment, but token refresh was unreliable."
+  },
+  "evidence": { "trace_hash": null, "artifact_hashes": [], "attestation": null }
+}
+```

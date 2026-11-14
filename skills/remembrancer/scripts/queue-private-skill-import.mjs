@@ -14,6 +14,7 @@ const ALLOWED_RUNTIME = new Set([
   "openclaw",
   "vs_code",
   "opencode",
+  "pi",
   "mcp",
   "other",
 ]);

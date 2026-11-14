@@ -456,7 +456,7 @@ Send:
 {
   "agent": {
     "id": "optional",
-    "provider": "codex|cursor|claude|openclaw|vscode|opencode|generic|other",
+    "provider": "codex|cursor|claude|openclaw|vscode|opencode|pi|generic|other",
     "model": "optional"
   },
   "task": {

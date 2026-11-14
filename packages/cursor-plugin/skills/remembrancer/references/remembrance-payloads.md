@@ -118,7 +118,7 @@ contracts; they are not universally held by the parent-amendment rule.
 Provider fields are intentionally split:
 
 - `agent.provider` describes the calling runtime: `codex`, `cursor`, `claude`,
-  `openclaw`, `vscode`, `opencode`, `generic`, or `other`.
+  `openclaw`, `vscode`, `opencode`, `pi`, `generic`, or `other`.
 - `evidence.attestation.provider` describes the signed key family:
   `claude_code`, `codex`, `cursor`, or `other`. Use `other` for independent
   TOFU adapters unless you have a Remembrance-registered plugin key.

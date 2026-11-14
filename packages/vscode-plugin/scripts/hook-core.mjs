@@ -288,6 +288,7 @@ const PLUGIN_HEALTH_SURFACES = new Set([
   "openclaw",
   "vs_code",
   "opencode",
+  "pi",
 ]);
 const CLIENT_RELEASE_MANIFEST_SURFACES = new Set([
   ...PLUGIN_HEALTH_SURFACES,
@@ -360,6 +361,13 @@ printf 'Using Codex CLI: %s\\n' "$CODEX_CLI" >&2
       "Ask the user for permission to update Remembrance. If approved, run the bundled opencode setup command exactly as shown.",
     restart:
       "After it succeeds, tell the user to fully quit and reopen opencode. The current process remains on the installed version until restart.",
+  },
+  pi: {
+    command: "pi install npm:@remembrance-ai/pi-plugin@latest",
+    update:
+      "Ask the user for permission to update Remembrance. If approved, run the bundled Pi update command exactly as shown.",
+    restart:
+      "After it succeeds, tell the user to run /reload or restart Pi. The current extension remains on the installed version until reload or restart.",
   },
 };
 
@@ -1010,6 +1018,7 @@ const VERSIONED_CLIENT_USER_AGENTS = new Set([
   "@remembrance/openclaw-plugin",
   "@remembrance/vscode-plugin",
   "@remembrance-ai/opencode-plugin",
+  "@remembrance-ai/pi-plugin",
 ]);
 let cachedInstalledClientVersion;
 
@@ -1547,6 +1556,7 @@ function normalizeRuntime(value) {
       "openclaw",
       "vs_code",
       "opencode",
+      "pi",
       "other",
     ].includes(value)
   ) {
@@ -1573,6 +1583,7 @@ export function runtimeHostSurface(runtime, env = process.env, hint = null) {
   switch (normalizeRuntime(runtime)) {
     case "claude_code":
     case "opencode":
+    case "pi":
       return "cli";
     case "cursor":
     case "vs_code":
@@ -11046,6 +11057,7 @@ function runtimeDisplayName(runtime) {
       openclaw: "OpenClaw",
       vs_code: "VS Code",
       opencode: "opencode",
+      pi: "Pi",
     }[runtime] ?? "Agent"
   );
 }
@@ -11588,6 +11600,7 @@ export const HOOK_CONTEXT_BUDGETS = Object.freeze({
   codex: Object.freeze({ maxChars: 7000, maxEstimatedTokens: 2000 }),
   cursor: Object.freeze({ maxChars: 9000 }),
   opencode: Object.freeze({ maxChars: 9000 }),
+  pi: Object.freeze({ maxChars: 9000 }),
   openclaw: Object.freeze({ maxChars: 9000 }),
 });
 
