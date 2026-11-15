@@ -39,8 +39,24 @@ directory". The hooks start through `scripts/node-launcher`, which uses
 `REMEMBRANCE_NODE` when it is set, else `node` on PATH, else Node.js 18.17.0+
 from nvm, volta, fnm, n, asdf, nodenv, mise, Homebrew, `/usr/local` or
 `/usr/bin`. `npx` starts `node` through PATH, so if the MCP server does not
-start, start Cursor from a terminal where `npx` works. On Windows, Cursor runs
-hooks in PowerShell, where they need `sh` (Git for Windows `usr\bin`) on PATH.
+start, start Cursor from a terminal where `npx` works. On native Windows, the
+Cursor hooks resolve `scripts/node-launcher` to its
+`node-launcher.cmd` twin and require PowerShell 7 (`pwsh`) on Cursor's inherited
+PATH; these hook entries do not need `sh`.
+
+Install the stable PowerShell 7 MSI from Microsoft's
+[official instructions](https://learn.microsoft.com/en-us/powershell/scripting/install/install-powershell-on-windows),
+or run:
+
+```powershell
+winget install --id Microsoft.PowerShell --source winget --installer-type wix
+```
+
+Fully quit Cursor and reopen it from a fresh terminal after installation. Verify
+`pwsh -NoProfile -Command '$PSVersionTable.PSVersion.Major'` prints `7` in that
+terminal, with Node.js and npm also on PATH. This requirement applies to Cursor
+hooks; the private filesystem checker still uses Windows PowerShell 5.1. The
+launcher fixture does not establish a complete native Cursor app session.
 
 At session start, Remembrance checks a credential-free public release manifest.
 If a newer verified plugin exists, the agent tells the user to refresh the

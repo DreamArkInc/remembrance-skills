@@ -169,8 +169,8 @@ function sortForHash(value) {
     return value.map((item) => sortForHash(item));
   }
   if (value && typeof value === "object") {
-    return Object.keys(value).sort().reduce((acc, key) => {
-      acc[key] = sortForHash(value[key]);
+    return Object.keys(value).sort().reduce((acc, key2) => {
+      acc[key2] = sortForHash(value[key2]);
       return acc;
     }, {});
   }
@@ -524,6 +524,24 @@ var CODEX_PLUGIN_SETUP_COMMAND = codexCliCommand(
   '"$CODEX_CLI" plugin add remembrance@remembrance',
   '"$CODEX_CLI"'
 );
+var CODEX_PLUGIN_SETUP_POWERSHELL_COMMAND = `& {
+  $ErrorActionPreference = 'Stop'
+  if ($env:CODEX_CLI) {
+    $candidate = Get-Item -LiteralPath $env:CODEX_CLI -ErrorAction Stop
+    if ($candidate.PSIsContainer) { throw 'CODEX_CLI must name an executable file.' }
+    $codexCli = $candidate.FullName
+  } else {
+    $codexCli = (Get-Command codex -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+  }
+  & $codexCli plugin marketplace add dreamarkinc/remembrance-skills
+  if ($LASTEXITCODE -ne 0) { throw 'Codex marketplace add failed.' }
+  & $codexCli plugin marketplace upgrade remembrance
+  if ($LASTEXITCODE -ne 0) { throw 'Codex marketplace upgrade failed.' }
+  & $codexCli plugin add remembrance@remembrance
+  if ($LASTEXITCODE -ne 0) { throw 'Codex plugin add failed.' }
+  & $codexCli
+  if ($LASTEXITCODE -ne 0) { throw 'Codex launch failed.' }
+}`;
 
 // ../../node_modules/zod/v3/external.js
 var external_exports = {};
@@ -671,9 +689,9 @@ var util;
   };
   util2.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object2) => {
     const keys = [];
-    for (const key in object2) {
-      if (Object.prototype.hasOwnProperty.call(object2, key)) {
-        keys.push(key);
+    for (const key2 in object2) {
+      if (Object.prototype.hasOwnProperty.call(object2, key2)) {
+        keys.push(key2);
       }
     }
     return keys;
@@ -1073,10 +1091,10 @@ var ParseStatus = class _ParseStatus {
   static async mergeObjectAsync(status, pairs) {
     const syncPairs = [];
     for (const pair of pairs) {
-      const key = await pair.key;
+      const key2 = await pair.key;
       const value = await pair.value;
       syncPairs.push({
-        key,
+        key: key2,
         value
       });
     }
@@ -1085,17 +1103,17 @@ var ParseStatus = class _ParseStatus {
   static mergeObjectSync(status, pairs) {
     const finalObject = {};
     for (const pair of pairs) {
-      const { key, value } = pair;
-      if (key.status === "aborted")
+      const { key: key2, value } = pair;
+      if (key2.status === "aborted")
         return INVALID;
       if (value.status === "aborted")
         return INVALID;
-      if (key.status === "dirty")
+      if (key2.status === "dirty")
         status.dirty();
       if (value.status === "dirty")
         status.dirty();
-      if (key.value !== "__proto__" && (typeof value.value !== "undefined" || pair.alwaysSet)) {
-        finalObject[key.value] = value.value;
+      if (key2.value !== "__proto__" && (typeof value.value !== "undefined" || pair.alwaysSet)) {
+        finalObject[key2.value] = value.value;
       }
     }
     return { status: status.value, value: finalObject };
@@ -1120,12 +1138,12 @@ var errorUtil;
 
 // ../../node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path, key) {
+  constructor(parent, value, path, key2) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
     this._path = path;
-    this._key = key;
+    this._key = key2;
   }
   get path() {
     if (!this._cachedPath.length) {
@@ -2870,9 +2888,9 @@ ZodArray.create = (schema, params) => {
 function deepPartialify(schema) {
   if (schema instanceof ZodObject) {
     const newShape = {};
-    for (const key in schema.shape) {
-      const fieldSchema = schema.shape[key];
-      newShape[key] = ZodOptional.create(deepPartialify(fieldSchema));
+    for (const key2 in schema.shape) {
+      const fieldSchema = schema.shape[key2];
+      newShape[key2] = ZodOptional.create(deepPartialify(fieldSchema));
     }
     return new ZodObject({
       ...schema._def,
@@ -2923,29 +2941,29 @@ var ZodObject = class _ZodObject extends ZodType {
     const { shape, keys: shapeKeys } = this._getCached();
     const extraKeys = [];
     if (!(this._def.catchall instanceof ZodNever && this._def.unknownKeys === "strip")) {
-      for (const key in ctx.data) {
-        if (!shapeKeys.includes(key)) {
-          extraKeys.push(key);
+      for (const key2 in ctx.data) {
+        if (!shapeKeys.includes(key2)) {
+          extraKeys.push(key2);
         }
       }
     }
     const pairs = [];
-    for (const key of shapeKeys) {
-      const keyValidator = shape[key];
-      const value = ctx.data[key];
+    for (const key2 of shapeKeys) {
+      const keyValidator = shape[key2];
+      const value = ctx.data[key2];
       pairs.push({
-        key: { status: "valid", value: key },
-        value: keyValidator._parse(new ParseInputLazyPath(ctx, value, ctx.path, key)),
-        alwaysSet: key in ctx.data
+        key: { status: "valid", value: key2 },
+        value: keyValidator._parse(new ParseInputLazyPath(ctx, value, ctx.path, key2)),
+        alwaysSet: key2 in ctx.data
       });
     }
     if (this._def.catchall instanceof ZodNever) {
       const unknownKeys = this._def.unknownKeys;
       if (unknownKeys === "passthrough") {
-        for (const key of extraKeys) {
+        for (const key2 of extraKeys) {
           pairs.push({
-            key: { status: "valid", value: key },
-            value: { status: "valid", value: ctx.data[key] }
+            key: { status: "valid", value: key2 },
+            value: { status: "valid", value: ctx.data[key2] }
           });
         }
       } else if (unknownKeys === "strict") {
@@ -2962,15 +2980,15 @@ var ZodObject = class _ZodObject extends ZodType {
       }
     } else {
       const catchall = this._def.catchall;
-      for (const key of extraKeys) {
-        const value = ctx.data[key];
+      for (const key2 of extraKeys) {
+        const value = ctx.data[key2];
         pairs.push({
-          key: { status: "valid", value: key },
+          key: { status: "valid", value: key2 },
           value: catchall._parse(
-            new ParseInputLazyPath(ctx, value, ctx.path, key)
+            new ParseInputLazyPath(ctx, value, ctx.path, key2)
             //, ctx.child(key), value, getParsedType(value)
           ),
-          alwaysSet: key in ctx.data
+          alwaysSet: key2 in ctx.data
         });
       }
     }
@@ -2978,10 +2996,10 @@ var ZodObject = class _ZodObject extends ZodType {
       return Promise.resolve().then(async () => {
         const syncPairs = [];
         for (const pair of pairs) {
-          const key = await pair.key;
+          const key2 = await pair.key;
           const value = await pair.value;
           syncPairs.push({
-            key,
+            key: key2,
             value,
             alwaysSet: pair.alwaysSet
           });
@@ -3106,8 +3124,8 @@ var ZodObject = class _ZodObject extends ZodType {
   //   }) as any;
   //   return merged;
   // }
-  setKey(key, schema) {
-    return this.augment({ [key]: schema });
+  setKey(key2, schema) {
+    return this.augment({ [key2]: schema });
   }
   // merge<Incoming extends AnyZodObject>(
   //   merging: Incoming
@@ -3138,9 +3156,9 @@ var ZodObject = class _ZodObject extends ZodType {
   }
   pick(mask) {
     const shape = {};
-    for (const key of util.objectKeys(mask)) {
-      if (mask[key] && this.shape[key]) {
-        shape[key] = this.shape[key];
+    for (const key2 of util.objectKeys(mask)) {
+      if (mask[key2] && this.shape[key2]) {
+        shape[key2] = this.shape[key2];
       }
     }
     return new _ZodObject({
@@ -3150,9 +3168,9 @@ var ZodObject = class _ZodObject extends ZodType {
   }
   omit(mask) {
     const shape = {};
-    for (const key of util.objectKeys(this.shape)) {
-      if (!mask[key]) {
-        shape[key] = this.shape[key];
+    for (const key2 of util.objectKeys(this.shape)) {
+      if (!mask[key2]) {
+        shape[key2] = this.shape[key2];
       }
     }
     return new _ZodObject({
@@ -3168,12 +3186,12 @@ var ZodObject = class _ZodObject extends ZodType {
   }
   partial(mask) {
     const newShape = {};
-    for (const key of util.objectKeys(this.shape)) {
-      const fieldSchema = this.shape[key];
-      if (mask && !mask[key]) {
-        newShape[key] = fieldSchema;
+    for (const key2 of util.objectKeys(this.shape)) {
+      const fieldSchema = this.shape[key2];
+      if (mask && !mask[key2]) {
+        newShape[key2] = fieldSchema;
       } else {
-        newShape[key] = fieldSchema.optional();
+        newShape[key2] = fieldSchema.optional();
       }
     }
     return new _ZodObject({
@@ -3183,16 +3201,16 @@ var ZodObject = class _ZodObject extends ZodType {
   }
   required(mask) {
     const newShape = {};
-    for (const key of util.objectKeys(this.shape)) {
-      if (mask && !mask[key]) {
-        newShape[key] = this.shape[key];
+    for (const key2 of util.objectKeys(this.shape)) {
+      if (mask && !mask[key2]) {
+        newShape[key2] = this.shape[key2];
       } else {
-        const fieldSchema = this.shape[key];
+        const fieldSchema = this.shape[key2];
         let newField = fieldSchema;
         while (newField instanceof ZodOptional) {
           newField = newField._def.innerType;
         }
-        newShape[key] = newField;
+        newShape[key2] = newField;
       }
     }
     return new _ZodObject({
@@ -3436,14 +3454,14 @@ function mergeValues(a, b) {
     return { valid: true, data: a };
   } else if (aType === ZodParsedType.object && bType === ZodParsedType.object) {
     const bKeys = util.objectKeys(b);
-    const sharedKeys = util.objectKeys(a).filter((key) => bKeys.indexOf(key) !== -1);
+    const sharedKeys = util.objectKeys(a).filter((key2) => bKeys.indexOf(key2) !== -1);
     const newObj = { ...a, ...b };
-    for (const key of sharedKeys) {
-      const sharedValue = mergeValues(a[key], b[key]);
+    for (const key2 of sharedKeys) {
+      const sharedValue = mergeValues(a[key2], b[key2]);
       if (!sharedValue.valid) {
         return { valid: false };
       }
-      newObj[key] = sharedValue.data;
+      newObj[key2] = sharedValue.data;
     }
     return { valid: true, data: newObj };
   } else if (aType === ZodParsedType.array && bType === ZodParsedType.array) {
@@ -3607,11 +3625,11 @@ var ZodRecord = class _ZodRecord extends ZodType {
     const pairs = [];
     const keyType = this._def.keyType;
     const valueType = this._def.valueType;
-    for (const key in ctx.data) {
+    for (const key2 in ctx.data) {
       pairs.push({
-        key: keyType._parse(new ParseInputLazyPath(ctx, key, ctx.path, key)),
-        value: valueType._parse(new ParseInputLazyPath(ctx, ctx.data[key], ctx.path, key)),
-        alwaysSet: key in ctx.data
+        key: keyType._parse(new ParseInputLazyPath(ctx, key2, ctx.path, key2)),
+        value: valueType._parse(new ParseInputLazyPath(ctx, ctx.data[key2], ctx.path, key2)),
+        alwaysSet: key2 in ctx.data
       });
     }
     if (ctx.common.async) {
@@ -3659,9 +3677,9 @@ var ZodMap = class extends ZodType {
     }
     const keyType = this._def.keyType;
     const valueType = this._def.valueType;
-    const pairs = [...ctx.data.entries()].map(([key, value], index) => {
+    const pairs = [...ctx.data.entries()].map(([key2, value], index) => {
       return {
-        key: keyType._parse(new ParseInputLazyPath(ctx, key, ctx.path, [index, "key"])),
+        key: keyType._parse(new ParseInputLazyPath(ctx, key2, ctx.path, [index, "key"])),
         value: valueType._parse(new ParseInputLazyPath(ctx, value, ctx.path, [index, "value"]))
       };
     });
@@ -3669,30 +3687,30 @@ var ZodMap = class extends ZodType {
       const finalMap = /* @__PURE__ */ new Map();
       return Promise.resolve().then(async () => {
         for (const pair of pairs) {
-          const key = await pair.key;
+          const key2 = await pair.key;
           const value = await pair.value;
-          if (key.status === "aborted" || value.status === "aborted") {
+          if (key2.status === "aborted" || value.status === "aborted") {
             return INVALID;
           }
-          if (key.status === "dirty" || value.status === "dirty") {
+          if (key2.status === "dirty" || value.status === "dirty") {
             status.dirty();
           }
-          finalMap.set(key.value, value.value);
+          finalMap.set(key2.value, value.value);
         }
         return { status: status.value, value: finalMap };
       });
     } else {
       const finalMap = /* @__PURE__ */ new Map();
       for (const pair of pairs) {
-        const key = pair.key;
+        const key2 = pair.key;
         const value = pair.value;
-        if (key.status === "aborted" || value.status === "aborted") {
+        if (key2.status === "aborted" || value.status === "aborted") {
           return INVALID;
         }
-        if (key.status === "dirty" || value.status === "dirty") {
+        if (key2.status === "dirty" || value.status === "dirty") {
           status.dirty();
         }
-        finalMap.set(key.value, value.value);
+        finalMap.set(key2.value, value.value);
       }
       return { status: status.value, value: finalMap };
     }
@@ -4836,7 +4854,7 @@ function parseSurfaceReleases(value) {
   const entries = Object.entries(value);
   if (entries.some(
     ([surface, release]) => !validSurfaces.has(surface) || !isRecord(release) || Object.keys(release).some(
-      (key) => key !== "version" && key !== "published_at"
+      (key2) => key2 !== "version" && key2 !== "published_at"
     ) || !parseStableClientVersion(release.version) || typeof release.published_at !== "string" || !isCanonicalIsoTimestamp(release.published_at)
   )) {
     return null;
@@ -5625,8 +5643,8 @@ var PREFERENCE_KEYS = Object.keys(
   BUILT_IN_PREFERENCE_DEFINITIONS
 );
 var PREFERENCE_VALUE_OPTIONS = Object.fromEntries(
-  Object.entries(BUILT_IN_PREFERENCE_DEFINITIONS).map(([key, definition]) => [
-    key,
+  Object.entries(BUILT_IN_PREFERENCE_DEFINITIONS).map(([key2, definition]) => [
+    key2,
     Object.keys(definition.values)
   ])
 );
@@ -5920,8 +5938,8 @@ var preferenceCompatibilityAdminActionSchema = external_exports.discriminatedUni
 var REMEMBRANCE_CROSS_FAMILY_PREFERENCE_RULE = "Follow the part of a preference written for this host. Unlike an outage, one naming a model, tool, or agent this host lacks, with no part for this host, was written for another agent family: apply the closest equivalent this host supports and say which. When none is safe to assume, ask the user; if you cannot ask, keep your default and say so.";
 var REMEMBRANCE_CROSS_FAMILY_PREFERENCE_RECORDING = "To keep an adaptation of another agent family's preference, record it for this runtime only: scope member_runtime, the same key, and a value, label, and behavior naming your equivalent; use source_category explicit_user only when the user confirmed it. Never overwrite the original in a shared installation or member scope. If member_runtime is refused because this installation is not linked to a member, keep the adaptation to this task and say once that linking the installation lets it persist.";
 var INFERRED_MAX_AGE_MS = 180 * 864e5;
-function builtInPreferenceDefinition(key) {
-  return BUILT_IN_PREFERENCE_DEFINITIONS[key] ?? null;
+function builtInPreferenceDefinition(key2) {
+  return BUILT_IN_PREFERENCE_DEFINITIONS[key2] ?? null;
 }
 
 // ../core/src/skill-catalog.ts
@@ -6362,7 +6380,7 @@ var SKILL_ROUTING_METADATA_FIELD_PATHS = [
 function fieldProvenanceMap(keys) {
   return external_exports.object(
     Object.fromEntries(
-      keys.map((key) => [key, skillRoutingFieldProvenanceSchema.optional()])
+      keys.map((key2) => [key2, skillRoutingFieldProvenanceSchema.optional()])
     )
   ).strict();
 }
@@ -6455,7 +6473,7 @@ var submissionFieldReviewSchema = external_exports.object({
 function fieldReviewMap(keys) {
   return external_exports.object(
     Object.fromEntries(
-      keys.map((key) => [key, submissionFieldReviewSchema.optional()])
+      keys.map((key2) => [key2, submissionFieldReviewSchema.optional()])
     )
   ).strict();
 }
@@ -8299,8 +8317,8 @@ function preparePrivateLessonCandidate(input, options = {}) {
   const counts = {};
   for (const part of [...redactedParts, ...tagParts]) {
     for (const [category, count] of Object.entries(part.counts)) {
-      const key = category;
-      counts[key] = Math.min(999, (counts[key] ?? 0) + Number(count));
+      const key2 = category;
+      counts[key2] = Math.min(999, (counts[key2] ?? 0) + Number(count));
     }
   }
   const held = new Set(redactedParts.flatMap((part) => part.held_reasons));
@@ -8559,7 +8577,7 @@ function assertPlatformEnvelopeSignature(envelope2, purpose, keySet, subject) {
     throw new Error(`${subject} signed payload is not canonical.`);
   }
   const keys = privateLessonVerificationKeySetSchema.parse(keySet);
-  const jwk = keys.keys.find((key) => key.kid === envelope2.key_id);
+  const jwk = keys.keys.find((key2) => key2.kid === envelope2.key_id);
   if (!jwk) {
     throw new Error(
       `${subject} verification key is unavailable: ${envelope2.key_id}`
@@ -8913,17 +8931,17 @@ var PRIVATE_CAPTURE_REPLACEMENTS = [
   [LEGACY_HOST_DENIAL_GUIDANCE, PRIVATE_CAPTURE_HOST_DENIAL_GUIDANCE]
 ];
 var REMEMBRANCE_MCP_PRIVATE_CAPTURE_INSTRUCTIONS = PRIVATE_CAPTURE_REPLACEMENTS.reduce(
-  (instructions, [expected, replacement]) => requiredGuidanceReplacement(instructions, expected, replacement),
+  (instructions2, [expected, replacement]) => requiredGuidanceReplacement(instructions2, expected, replacement),
   REMEMBRANCE_MCP_SERVER_INSTRUCTIONS
 );
-function withRemembranceMcpNotice(instructions, notice) {
-  const details = instructions.indexOf(MCP_DETAILS_HEADING);
-  if (details < 0) return `${instructions}
+function withRemembranceMcpNotice(instructions2, notice) {
+  const details = instructions2.indexOf(MCP_DETAILS_HEADING);
+  if (details < 0) return `${instructions2}
 
 ${notice}`;
-  return `${instructions.slice(0, details)}
+  return `${instructions2.slice(0, details)}
 
-${notice}${instructions.slice(
+${notice}${instructions2.slice(
     details
   )}`;
 }
@@ -9542,7 +9560,7 @@ function serializedPublicJwkIsValid(value, metrics) {
     return false;
   }
   const jwk = parsed;
-  if (["d", "p", "q", "dp", "dq", "qi", "oth"].some((key) => key in jwk)) {
+  if (["d", "p", "q", "dp", "dq", "qi", "oth"].some((key2) => key2 in jwk)) {
     return false;
   }
   if (jwk.kty === "RSA") {
@@ -10010,7 +10028,7 @@ function parseJsonOccurrenceLayout(source, metrics, maximumLiteralSourceCharacte
       continue;
     }
     metrics.nodesVisited += 1;
-    let key = String(container.edges.length);
+    let key2 = String(container.edges.length);
     let property;
     if (container.kind === "object") {
       const decoded = readLiteral();
@@ -10019,7 +10037,7 @@ function parseJsonOccurrenceLayout(source, metrics, maximumLiteralSourceCharacte
         continue;
       }
       property = decoded;
-      key = property.text;
+      key2 = property.text;
       skipWhitespace();
       if (source[cursor] !== ":") {
         stack.length = 0;
@@ -10058,13 +10076,13 @@ function parseJsonOccurrenceLayout(source, metrics, maximumLiteralSourceCharacte
     allocation?.allocate(40, 1);
     const edge = {
       owner: container,
-      key,
+      key: key2,
       index: container.edges.length,
       value,
       ...child ? { child } : {}
     };
     container.edges.push(edge);
-    Object.defineProperty(container.value, key, {
+    Object.defineProperty(container.value, key2, {
       value,
       configurable: true,
       enumerable: true,
@@ -10395,8 +10413,8 @@ function longestEmailDomainEnd(value, domainStart, domainLimit) {
   }
   return null;
 }
-function isSensitiveKey(key) {
-  const lowerKey = key.toLowerCase();
+function isSensitiveKey(key2) {
+  const lowerKey = key2.toLowerCase();
   if (SENSITIVE_KEY_SAFE_EXACT.has(lowerKey)) return false;
   if (SENSITIVE_KEY_EXACT.has(lowerKey)) return true;
   if (SENSITIVE_KEY_FRAGMENTS.some((fragment) => lowerKey.includes(fragment))) {
@@ -10449,18 +10467,18 @@ function buildPayloadGraph(payload, metrics, inspectString, inspectObjectKey, po
       (_, index) => [String(index), container.value[index]]
     ) : Object.entries(container.value);
     for (let index = 0; index < entries.length; index += 1) {
-      const [key, value] = entries[index];
-      const edge = { owner: container, key, index, value };
+      const [key2, value] = entries[index];
+      const edge = { owner: container, key: key2, index, value };
       container.edges.push(edge);
       if (container.kind === "object") {
-        inspectObjectKey(container, key, value !== null && value !== void 0);
+        inspectObjectKey(container, key2, value !== null && value !== void 0);
         edge.keyToken = addPayloadToken(
           tokens,
           container,
           edge,
           "key",
-          key,
-          { objectKey: { parent: container.value, key } },
+          key2,
+          { objectKey: { parent: container.value, key: key2 } },
           metrics,
           policy
         );
@@ -10474,7 +10492,7 @@ function buildPayloadGraph(payload, metrics, inspectString, inspectObjectKey, po
           edge,
           "value",
           value,
-          { slot: { parent: container.value, key, value } },
+          { slot: { parent: container.value, key: key2, value } },
           metrics,
           policy
         );
@@ -10482,7 +10500,7 @@ function buildPayloadGraph(payload, metrics, inspectString, inspectObjectKey, po
         const child = byObject.get(value) ?? createContainer(value);
         edge.child = child;
         child.parents.push(edge);
-        if (policy.isBodyHint(key)) bodyHintRoots.add(child);
+        if (policy.isBodyHint(key2)) bodyHintRoots.add(child);
       }
     }
   }
@@ -10706,15 +10724,15 @@ function decodedTransportViews(value, metrics) {
 }
 function collectDelimitedSerializedPrivateKeyRanges(value, ranges, metrics, publicMemberRanges) {
   collectJsonPrivateKeyRanges(value, ranges, metrics, publicMemberRanges);
-  const open4 = "<RSAKeyValue>";
+  const open6 = "<RSAKeyValue>";
   const close = "</RSAKeyValue>";
   let cursor = 0;
   while (cursor < value.length) {
-    const start = value.indexOf(open4, cursor);
+    const start = value.indexOf(open6, cursor);
     if (start < 0) break;
-    const endStart = value.indexOf(close, start + open4.length);
+    const endStart = value.indexOf(close, start + open6.length);
     if (endStart < 0) {
-      cursor = start + open4.length;
+      cursor = start + open6.length;
       continue;
     }
     const end = endStart + close.length;
@@ -11215,8 +11233,8 @@ function redactAnalyzedPayload(payload, analysis) {
       const valuePlan = valuePlans.get(edge);
       const valueRanges = edge.valueToken && claims.get(edge.valueToken);
       if (valuePlan && valueRanges) {
-        const key = container.kind === "array" ? edge.index : outputKeys.get(edge);
-        target[key] = applyLateOverlapRanges(
+        const key2 = container.kind === "array" ? edge.index : outputKeys.get(edge);
+        target[key2] = applyLateOverlapRanges(
           valuePlan,
           valueRanges,
           analysis.metrics
@@ -11243,13 +11261,13 @@ function redactAnalyzedPayload(payload, analysis) {
     const entries = container.edges.map((edge) => {
       const oldKey = outputKeys.get(edge);
       const candidate = renamed.get(edge);
-      const key = candidate === void 0 ? oldKey : uniqueRedactedObjectKey(reserved, used, suffixes, candidate);
-      used.add(key);
-      return { oldKey, key, value: target[oldKey] };
+      const key2 = candidate === void 0 ? oldKey : uniqueRedactedObjectKey(reserved, used, suffixes, candidate);
+      used.add(key2);
+      return { oldKey, key: key2, value: target[oldKey] };
     });
     for (const { oldKey } of entries) delete target[oldKey];
-    for (const { key, value } of entries)
-      Object.defineProperty(target, key, {
+    for (const { key: key2, value } of entries)
+      Object.defineProperty(target, key2, {
         value,
         enumerable: true,
         configurable: true,
@@ -11299,14 +11317,14 @@ function analyzeSensitivePayload(payload, metrics = createRedactionWorkMetrics()
     (value) => {
       sensitiveMaterial ||= redactStringValue(value, metrics).changed;
     },
-    (container, key, populated) => {
-      const changed = redactStringValue(key, metrics).changed;
-      const sensitiveKey = populated && isSensitiveKey(key);
+    (container, key2, populated) => {
+      const changed = redactStringValue(key2, metrics).changed;
+      const sensitiveKey = populated && isSensitiveKey(key2);
       sensitiveMaterial ||= changed;
       sensitiveObjectKeyMaterial ||= changed || sensitiveKey;
       if (changed) {
         const keys = sensitiveObjectKeys.get(container.value) ?? /* @__PURE__ */ new Set();
-        keys.add(key);
+        keys.add(key2);
         sensitiveObjectKeys.set(container.value, keys);
       }
     }
@@ -11344,9 +11362,9 @@ function analyzeSensitivePayload(payload, metrics = createRedactionWorkMetrics()
     })).filter((range) => range.start < range.end) : [{ start: boundedStart, end: boundedEnd }];
     if (requestedRanges.length === 0) return;
     if (token.kind === "key") {
-      const { parent, key } = token.objectKey;
+      const { parent, key: key2 } = token.objectKey;
       const keys = sensitiveObjectKeys.get(parent) ?? /* @__PURE__ */ new Set();
-      keys.add(key);
+      keys.add(key2);
       sensitiveObjectKeys.set(parent, keys);
       sensitiveObjectKeyMaterial = true;
     } else {
@@ -11462,8 +11480,8 @@ function analyzeSensitivePayload(payload, metrics = createRedactionWorkMetrics()
         continue;
       }
       if (!isSensitiveKey(token.value) && !independentlySensitive) {
-        const { parent, key } = token.objectKey;
-        sensitiveObjectKeys.get(parent)?.delete(key);
+        const { parent, key: key2 } = token.objectKey;
+        sensitiveObjectKeys.get(parent)?.delete(key2);
       }
     }
   }
@@ -11524,7 +11542,7 @@ function containsPrivateByteFrame(bytes, metrics) {
   return false;
 }
 var payloadGraphPolicy = {
-  isBodyHint: (key) => PRIVATE_KEY_BODY_HINT.test(key),
+  isBodyHint: (key2) => PRIVATE_KEY_BODY_HINT.test(key2),
   neutralMetadata: isNeutralObjectMetadata
 };
 function buildPayloadGraph2(payload, metrics, inspectString, inspectObjectKey) {
@@ -11958,8 +11976,8 @@ function assembleOneMarkerSequence(context, claimed) {
   return null;
 }
 function markerAssemblyTransitions(context, text, signature) {
-  const key = `${text.length}:${signature}`;
-  const cached = context.transitions.get(key);
+  const key2 = `${text.length}:${signature}`;
+  const cached = context.transitions.get(key2);
   if (cached) return cached;
   const buckets = /* @__PURE__ */ new Map();
   for (const group of context.groups) {
@@ -11975,7 +11993,7 @@ function markerAssemblyTransitions(context, text, signature) {
     buckets.set(target, bucket);
   }
   const created = [...buckets.values()];
-  context.transitions.set(key, created);
+  context.transitions.set(key2, created);
   return created;
 }
 function availableMarkerAssemblyPiece(bucket, path, claimed, metrics) {
@@ -12419,8 +12437,8 @@ function validatedCandidateOrder(tokens, metrics) {
   }
   return null;
 }
-function indexedField(key) {
-  const match = /^(.*?)(?:[_-]?)(\d+)$/u.exec(key);
+function indexedField(key2) {
+  const match = /^(.*?)(?:[_-]?)(\d+)$/u.exec(key2);
   if (!match || match[1].length === 0) return null;
   return { stem: match[1], index: Number(match[2]) };
 }
@@ -13185,14 +13203,14 @@ function completeRsaPrivateKeyCopies(scope, frames, bytes, start, end, encoding,
     (frame) => frame.end > start && frame.start < end
   );
   if (inside.length < 2) return null;
-  const key = rsaPrivateExponentPrefix(
+  const key2 = rsaPrivateExponentPrefix(
     byteArrayPrivateKeyView(bytes.subarray(0, end), start),
     metrics
   );
-  if (!key) return null;
-  const keyEnd = start + key.sequence.end;
+  if (!key2) return null;
+  const keyEnd = start + key2.sequence.end;
   const boundaries = inside.map((frame) => frame.start).filter(
-    (boundary) => boundary > start + key.privateExponentStart && boundary < keyEnd
+    (boundary) => boundary > start + key2.privateExponentStart && boundary < keyEnd
   );
   if (boundaries.length === 0) return null;
   const origin = boundaries[0];
@@ -13258,9 +13276,9 @@ function independentContinuationWalk(expected, starts, scope, tokenIndexes, enco
       const reached = state.cursor + piece.byteLength;
       matched = Math.max(matched, reached);
       const after = piece.index !== void 0 && piece.end >= piece.token.value.trimEnd().length ? piece.index + 1 : -1;
-      const key = `${reached}:${after}`;
-      if (reached < expected.length && !queued.has(key)) {
-        queued.add(key);
+      const key2 = `${reached}:${after}`;
+      if (reached < expected.length && !queued.has(key2)) {
+        queued.add(key2);
         pending.push({ cursor: reached, next: after });
       }
     }
@@ -13399,7 +13417,7 @@ function independentlyEncodedRsaPrefixCompletion(scope, tokenIndexes, frames, by
     metrics
   );
   if (shortfall === null) return null;
-  const { missing, primeLength } = shortfall;
+  const { missing: missing3, primeLength } = shortfall;
   const prefix = bytes.subarray(start, frame.end);
   const checks = /* @__PURE__ */ new Map();
   const ranges = [];
@@ -13411,14 +13429,14 @@ function independentlyEncodedRsaPrefixCompletion(scope, tokenIndexes, frames, by
     if (!spendDetachedRsaContinuationReads(runs.length, metrics)) break;
     for (const run of runs) {
       metrics.ownershipSteps += 1;
-      if (run.token === frame.token || run.bytes[missing] !== 2 || !isRsaPrimeHeader(run.bytes, missing, primeLength, metrics))
+      if (run.token === frame.token || run.bytes[missing3] !== 2 || !isRsaPrimeHeader(run.bytes, missing3, primeLength, metrics))
         continue;
-      const supplied = run.bytes.subarray(0, missing);
-      const key = supplied.join(",");
-      let check = checks.get(key);
+      const supplied = run.bytes.subarray(0, missing3);
+      const key2 = supplied.join(",");
+      let check = checks.get(key2);
       if (!check) {
         check = checkedRsaPrefixCompletion(prefix, supplied, metrics);
-        checks.set(key, check);
+        checks.set(key2, check);
         if (typeof check !== "string") {
           let best = null;
           for (const continued of check) {
@@ -16467,10 +16485,10 @@ function exactMixedEncodedPieceRanges(pieces, assessment, metrics) {
   for (const frame of assessment.sourceClaims) {
     metrics.ownershipSteps += 1;
     if (!frame.exactComplete) continue;
-    const key = `${frame.start}:${frame.end}`;
-    const matching = exactFrames.get(key) ?? [];
+    const key2 = `${frame.start}:${frame.end}`;
+    const matching = exactFrames.get(key2) ?? [];
     matching.push(frame);
-    exactFrames.set(key, matching);
+    exactFrames.set(key2, matching);
   }
   const boundaryKinds = /* @__PURE__ */ new Map();
   let joined;
@@ -17352,13 +17370,13 @@ function structuredProjectionHasRepresentationBoundedPrefix(sourceTokens, projec
   );
 }
 function representationBoundedFallbackMetadata(sourceTokens, metrics) {
-  const metadata = sourceTokens.filter(
+  const metadata2 = sourceTokens.filter(
     (token) => isDefiniteCryptographicProjectionOutlier(token, metrics)
   );
-  if (metadata.length === 0 || metadata.length === sourceTokens.length) {
+  if (metadata2.length === 0 || metadata2.length === sourceTokens.length) {
     return [];
   }
-  const metadataIds = new Set(metadata.map((token) => token.id));
+  const metadataIds = new Set(metadata2.map((token) => token.id));
   const projection = sourceTokens.filter((token) => !metadataIds.has(token.id));
   if (projection.length < 2) return [];
   const syntaxCounts = /* @__PURE__ */ new Map();
@@ -17369,7 +17387,7 @@ function representationBoundedFallbackMetadata(sourceTokens, metrics) {
   const dominant = [...syntaxCounts.entries()].sort(
     ([leftSyntax, leftCount], [rightSyntax, rightCount]) => rightCount - leftCount || leftSyntax.localeCompare(rightSyntax)
   )[0];
-  if (!dominant || dominant[0] === "other" || dominant[1] < 2 || dominant[1] * 4 < projection.length * 3 || metadata.some(
+  if (!dominant || dominant[0] === "other" || dominant[1] < 2 || dominant[1] * 4 < projection.length * 3 || metadata2.some(
     (token) => structuredEncodedPieceSyntax(token.value) === dominant[0]
   )) {
     return [];
@@ -17387,7 +17405,7 @@ function representationBoundedFallbackMetadata(sourceTokens, metrics) {
     projection,
     (token) => token.value,
     metrics
-  ) ? metadata : [];
+  ) ? metadata2 : [];
 }
 function independentFrameProjectionHasWholeSequenceEvidence(tokens, metrics) {
   return independentEncodedFramesHaveWholeSequenceEvidence(
@@ -18733,8 +18751,8 @@ function isDerCertificate(bytes, metrics) {
   const start = fields2[0]?.tag === 160 ? 1 : 0;
   if (fields2.length < start + 6 || fields2[start].tag !== 2 || !isDerAlgorithmIdentifier(bytes, fields2[start + 1], metrics) || fields2.slice(start + 2, start + 5).some((field) => field.tag !== 48))
     return false;
-  const key = fields2[start + 5];
-  return key.tag === 48 && isDerPublicKeySequence(bytes, key, metrics);
+  const key2 = fields2[start + 5];
+  return key2.tag === 48 && isDerPublicKeySequence(bytes, key2, metrics);
 }
 function derPublicKeyPrefixByteLength(bytes, metrics) {
   const complete = derPublicKeyByteLength(bytes, metrics);
@@ -21059,10 +21077,10 @@ function qualifiesForUnmatched(run, metrics) {
   return run.evidence === "weak" && run.joined.length >= 24;
 }
 var IDENTIFIER_FIELD = /^(?:(?:event|trace|request|correlation)[_-]?)?id\d*$/iu;
-function isNeutralObjectMetadata(key, value, owner, metrics) {
-  const typedDigest = /^value$/iu.test(key) && typedDigestDiscriminator(owner) !== null;
+function isNeutralObjectMetadata(key2, value, owner, metrics) {
+  const typedDigest = /^value$/iu.test(key2) && typedDigestDiscriminator(owner) !== null;
   if (typedDigest || /(?:^|[_-])(?:commit|revision|digest|hash|fingerprint|checksum)(?:$|[_-])/iu.test(
-    key
+    key2
   )) {
     value = value.trim();
     if (/^[\da-f]{24,}$/iu.test(value)) return true;
@@ -21074,7 +21092,7 @@ function isNeutralObjectMetadata(key, value, owner, metrics) {
     }
     return false;
   }
-  return /^branch$/iu.test(key) && /^[a-z][a-z0-9]*$/u.test(value.trim());
+  return /^branch$/iu.test(key2) && /^[a-z][a-z0-9]*$/u.test(value.trim());
 }
 function typedDigestDiscriminator(owner) {
   const record4 = owner;
@@ -22916,8 +22934,8 @@ function structuredJsonOverlapRanges(source, metrics, mode = "overlap") {
         container.keyTokens.map((token) => [token.edge.key, token])
       );
       assess(
-        Object.keys(container.value).flatMap((key) => {
-          const token = unique.get(key);
+        Object.keys(container.value).flatMap((key2) => {
+          const token = unique.get(key2);
           return token ? [token] : [];
         })
       );
@@ -23713,12 +23731,12 @@ function statusClassCode(status) {
   if (status >= 300 && status < 400) return "remembrance_api_redirect_refused";
   return "remembrance_api_request_failed";
 }
-function bodyField(envelope2, key) {
+function bodyField(envelope2, key2) {
   const body = envelope2.body;
   if (!isRecord2(body)) return void 0;
-  if (body[key] !== void 0) return body[key];
+  if (body[key2] !== void 0) return body[key2];
   const details = body.details;
-  return isRecord2(details) ? details[key] : void 0;
+  return isRecord2(details) ? details[key2] : void 0;
 }
 function sanitizedFailureCode(envelope2) {
   const candidate = bodyField(envelope2, "code");
@@ -23982,9 +24000,9 @@ function flatCompatibilityOffer(feedback, own, topLevel) {
 }
 function skillPreferenceFields(skill, topLevel) {
   const own = preferenceLookup(skill.entries);
-  const labelFor = (key) => {
-    const entry = typeof key === "string" ? own.byKey.get(key) ?? topLevel.byKey.get(key) : void 0;
-    return typeof entry?.label === "string" && entry.label.trim() !== "" ? entry.label : String(key);
+  const labelFor = (key2) => {
+    const entry = typeof key2 === "string" ? own.byKey.get(key2) ?? topLevel.byKey.get(key2) : void 0;
+    return typeof entry?.label === "string" && entry.label.trim() !== "" ? entry.label : String(key2);
   };
   const text = (value) => typeof value === "string" ? value : "";
   const application = isRecord2(skill.application) ? skill.application : {};
@@ -24037,14 +24055,14 @@ function shapeSkillCandidate(skill, topLevel) {
     topLevel
   );
   const entries = [];
-  for (const [key, value] of Object.entries(skill)) {
-    if (AGENT_VIEW_REMOVED_FIELDS.has(key)) {
+  for (const [key2, value] of Object.entries(skill)) {
+    if (AGENT_VIEW_REMOVED_FIELDS.has(key2)) {
       entries.push(...derived);
       derived = [];
-    } else if (key === "description") {
+    } else if (key2 === "description") {
       entries.push(...descriptionEntries(skill, value));
     } else {
-      entries.push([key, value]);
+      entries.push([key2, value]);
     }
   }
   return Object.fromEntries(entries);
@@ -24052,7 +24070,7 @@ function shapeSkillCandidate(skill, topLevel) {
 function shapeResourceCandidate(resource) {
   return Object.fromEntries(
     Object.entries(resource).flatMap(
-      ([key, value]) => key === "description" ? descriptionEntries(resource, value) : [[key, value]]
+      ([key2, value]) => key2 === "description" ? descriptionEntries(resource, value) : [[key2, value]]
     )
   );
 }
@@ -24081,11 +24099,11 @@ function shapeRemembranceQueryBodyForAgents(body, localReasons = []) {
     );
   }
   const entries = QUERY_BODY_LEADING_KEYS.filter(
-    (key) => shaped.has(key) || Object.hasOwn(body, key)
-  ).map((key) => [key, shaped.has(key) ? shaped.get(key) : body[key]]);
-  for (const [key, value] of Object.entries(body)) {
-    if (!QUERY_BODY_LEADING_KEYS.includes(key) && !AGENT_VIEW_REMOVED_FIELDS.has(key)) {
-      entries.push([key, value]);
+    (key2) => shaped.has(key2) || Object.hasOwn(body, key2)
+  ).map((key2) => [key2, shaped.has(key2) ? shaped.get(key2) : body[key2]]);
+  for (const [key2, value] of Object.entries(body)) {
+    if (!QUERY_BODY_LEADING_KEYS.includes(key2) && !AGENT_VIEW_REMOVED_FIELDS.has(key2)) {
+      entries.push([key2, value]);
     }
   }
   return Object.fromEntries(entries);
@@ -24114,15 +24132,15 @@ function shapeSkillInvocationBodyForAgents(body, localReasons = []) {
     )
   ];
   const entries = [];
-  for (const [key, value] of Object.entries(body)) {
-    if (AGENT_VIEW_REMOVED_FIELDS.has(key)) continue;
-    if (key === "skill") {
-      entries.push(...derived, [key, skill]);
+  for (const [key2, value] of Object.entries(body)) {
+    if (AGENT_VIEW_REMOVED_FIELDS.has(key2)) continue;
+    if (key2 === "skill") {
+      entries.push(...derived, [key2, skill]);
       derived = [];
       continue;
     }
-    entries.push([key, value]);
-    if (key === "scope") {
+    entries.push([key2, value]);
+    if (key2 === "scope") {
       entries.push(...derived);
       derived = [];
     }
@@ -24831,12 +24849,12 @@ var revisedCapture = privateSkillCaptureSchema.superRefine((capture2, context) =
   while (pending.length) {
     const { value, path } = pending.pop();
     if (!value || typeof value !== "object") continue;
-    for (const [key, entry] of Object.entries(value)) {
-      if (key.startsWith("_remembrance_")) {
-        context.addIssue({ code: "custom", path: [...path, key], message: "Server provenance fields are reserved." });
+    for (const [key2, entry] of Object.entries(value)) {
+      if (key2.startsWith("_remembrance_")) {
+        context.addIssue({ code: "custom", path: [...path, key2], message: "Server provenance fields are reserved." });
         return;
       }
-      pending.push({ value: entry, path: [...path, key] });
+      pending.push({ value: entry, path: [...path, key2] });
     }
   }
 });
@@ -24917,11 +24935,11 @@ var proposedMetadataTermArraySchema = (max) => external_exports.preprocess(
       if (!trimmed) {
         continue;
       }
-      const key = trimmed.toLowerCase();
-      if (seen.has(key)) {
+      const key2 = trimmed.toLowerCase();
+      if (seen.has(key2)) {
         continue;
       }
-      seen.add(key);
+      seen.add(key2);
       terms.push(trimmed);
     }
     return terms.slice(0, max);
@@ -25268,8 +25286,8 @@ function checkJsonGraph(value, context, reservedKeys) {
       return false;
     }
     seen.add(current);
-    for (const [key, child] of Object.entries(current)) {
-      if (reservedKeys && key.startsWith("_remembrance_")) {
+    for (const [key2, child] of Object.entries(current)) {
+      if (reservedKeys && key2.startsWith("_remembrance_")) {
         context.addIssue({ code: "custom", message: "Server provenance fields are reserved." });
         return false;
       }
@@ -25425,7 +25443,7 @@ var seedSkills = [
     summary: "Operational setup and troubleshooting workflow for Remembrance across Claude Code, Codex, OpenClaw, Cursor, Pi, Gemini, MCP, REST, skill-only installs, enterprise keys, and local agent identity.",
     status: "active",
     visibility: "public",
-    version: "0.1.52",
+    version: "0.1.57",
     domains: ["agent-skills", "mcp", "resource-discovery"],
     tags: [
       "remembrance",
@@ -25475,7 +25493,7 @@ var seedSkills = [
         "pi",
         "rest"
       ],
-      version: "0.1.52",
+      version: "0.1.57",
       status: "active",
       visibility: "public",
       providers: ["codex", "claude", "cursor", "openclaw", "pi", "generic"],
@@ -25537,7 +25555,7 @@ var seedSkills = [
       "Desktop agents may not inherit shell environment variables, so API keys set only in a terminal can be invisible.",
       "Codex Desktop can bundle the CLI without putting codex on PATH.",
       "OpenClaw ClawHub search can return unrelated remembrance-named packages; verify the official package points to dreamarkinc/remembrance-skills before installing.",
-      "Until allowConversationAccess is enabled, OpenClaw holds only the plugin's completion hook; the prompt, tool and subagent-end hooks already run, and the prompt hook can query the registry.",
+      "Current OpenClaw hosts require allowConversationAccess for prompt and completion hooks; older host qualification does not establish current pre-grant behavior.",
       "Cursor local and cloud distribution are separate: configure the team plugin and Team MCP, then verify hook and receipt behavior on each enabled surface.",
       "MCP tools can be missing when the client uses the wrong config shape for its runtime.",
       "Without persisted host approval for the four private submit and retry tools, an organization install on a host that asks before them stops every private lesson or skill submission for a manual approval, and unattended or headless runs deny it.",
@@ -25557,7 +25575,7 @@ REST/HTTPS, skill-only installs, enterprise org keys, local identity, and common
 ## When to use
 
 - The user asks how to install Remembrance for Claude Code, Codex, OpenClaw,
-  Cursor, Pi, Gemini, or another agent.
+  Cursor, VS Code, OpenCode, Pi, Gemini, or another agent.
 - The user has an enterprise/org API key and needs to make an agent use
   org-scoped skills or private overlays.
 - MCP tools such as run_connection_doctor, get_connection_status, query_skills,
@@ -25713,9 +25731,11 @@ unrelated roots, genealogy, ancestry, or memorial packages.
 
 The setup command preserves existing OpenClaw settings, enables conversation
 access, and registers the bundled local MCP by its installed absolute path.
-Before that grant, OpenClaw already runs the plugin's prompt, tool and
-subagent-end hooks and holds only its completion hook (before_agent_finalize):
-the prompt hook reads each prompt and, unless \`REMEMBRANCE_AUTO_QUERY=0\`,
+Current OpenClaw hosts require the grant for both \`before_prompt_build\` and
+\`before_agent_finalize\`; prompt modification also requires that
+\`allowPromptModification\` is not false. The older 2026.7.1-2 qualification
+held only completion before the grant; it does not establish current-host
+behavior. When enabled, the prompt hook reads each prompt and, unless \`REMEMBRANCE_AUTO_QUERY=0\`,
 sends a reusable-looking prompt, redacted, as a registry query.
 In centrally managed environments, apply this equivalent configuration in
 "~/.openclaw/openclaw.json":
@@ -25777,6 +25797,155 @@ Private capture still requires verified source authority. If the actual
 producer cannot be verified, retain the protected draft and follow its bounded
 recovery instructions through the existing exact private action. A user-role
 label, session ID, or tool claim is not proof; a retained hold is not a submitted contribution or completed recovery.
+
+### Windows and WSL
+
+Windows support and secure credential setup require Remembrance 0.2.26 or newer. Install the current client, then verify the connection in the actual host.
+
+Choose the environment where the agent actually runs. Native Windows examples
+below use **PowerShell**. A host running inside **WSL2** uses the Linux/Bash
+instructions, Linux Node.js, and its Linux home directory instead. Installing
+Node.js or configuring Remembrance on Windows does not configure a WSL agent,
+and a Windows desktop app does not inherit a WSL shell's environment.
+
+Install the host first, following its official Windows requirements. The
+Remembrance local MCP/hooks minimum of Node.js 18.17.0 does not replace a host's
+higher requirement. Pi 1.5.2 requires Node.js 22.19.0 or newer. OpenClaw's current
+host requirements are higher; follow the requirements for the OpenClaw version
+you actually install. The existing release qualification pins OpenCode 1.18.10,
+Pi 1.5.2, and OpenClaw 2026.7.1-2; a newer host or a different operating system
+needs its own compatibility verification. In particular, current OpenCode v2
+installation documentation is not proof that the v1 adapter is v2-qualified.
+
+| Host | Native Windows installation |
+| --- | --- |
+| Codex | Install the native Codex CLI and use the PowerShell setup below. Native Windows supports PowerShell and a Windows sandbox; WSL is optional. [Official Windows guide](https://developers.openai.com/codex/windows/) |
+| Claude Code | Run \`claude plugin marketplace add dreamarkinc/remembrance-skills\`, then \`claude plugin install remembrance@remembrance\`. The host supports Windows 10 1809+/Server 2019+; Git for Windows supplies Bash for shell-based plugin hooks even when the host itself can use PowerShell. [Official setup](https://code.claude.com/docs/en/setup) |
+| Cursor | Install PowerShell 7 as described below, then use **Customize > Plugins** or the approved team marketplace in the native Windows editor. The desktop hooks require \`pwsh\` on Cursor's inherited PATH and use the bundled Windows launcher. [Windows downloads](https://cursor.com/download), [hook execution](https://cursor.com/docs/hooks) |
+| VS Code | Use the native Windows editor, select the intended agent harness, then **Chat: Install Plugin From Source** with \`https://github.com/dreamarkinc/remembrance-skills\`. Available plugin components depend on the harness and organization policy. The Remembrance MCP launcher also requires Git for Windows' \`sh\` on the PATH inherited by VS Code; this is a plugin dependency, separate from the editor's requirements. [Windows setup](https://code.visualstudio.com/docs/setup/windows), [agent plugins](https://code.visualstudio.com/docs/agent-customization/agent-plugins) |
+| OpenCode | With a compatible native Windows host installed, run \`npx.cmd -y @remembrance-ai/opencode-plugin setup\`. For current OpenCode v2, official Windows installation uses standalone binaries; keep the adapter-version boundary above. [Official installation](https://opencode.ai/docs/) |
+| Pi | With Pi 1.5.2 and Node.js 22.19.0+ installed, run \`pi install npm:@remembrance-ai/pi-plugin\`. Native Pi uses Git Bash by default; its optional PowerShell tool does not remove Bash from every command path. [Official Windows guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/windows.md) |
+| OpenClaw | In the environment that runs the Gateway, run \`openclaw plugins install clawhub:@remembrance/openclaw-plugin\`, then \`openclaw remembrance setup\`. Native PowerShell CLI/Gateway and WSL2 are separate supported host routes; Windows Hub's local Gateway may run in its app-owned WSL environment. [Official Windows guide](https://docs.openclaw.ai/platforms/windows), [host Node requirements](https://docs.openclaw.ai/install/node) |
+| Any MCP client | Use hosted \`https://remembrance.dev/api/mcp\`, or test local stdio from PowerShell with \`npx.cmd -y @remembrance-ai/mcp-server\`. Configure process launching in the client's documented Windows form; a terminal command is not a universal MCP JSON configuration. [Official Windows MCP example](https://modelcontextprotocol.io/docs/develop/connect-local-servers) |
+
+#### Cursor Windows prerequisite
+
+Native Windows requires PowerShell 7 for Cursor's desktop hooks. Install
+the stable MSI package using Microsoft's [official installation instructions](https://learn.microsoft.com/en-us/powershell/scripting/install/install-powershell-on-windows):
+
+\`\`\`powershell
+winget install --id Microsoft.PowerShell --source winget --installer-type wix
+\`\`\`
+
+If WinGet is unavailable, use the MSI download in those instructions. Fully quit
+Cursor after installation and reopen it from a fresh terminal so it inherits
+the updated PATH. In that terminal, \`pwsh -NoProfile -Command '$PSVersionTable.PSVersion.Major'\`
+must print \`7\`. Keep Node.js and npm on that same inherited PATH. This extra
+dependency applies to Cursor hooks; the private filesystem checker continues
+to use Windows PowerShell 5.1, and other hosts keep their documented prerequisites.
+This launcher qualification does not establish a complete native Cursor app session.
+
+#### Codex PowerShell setup
+
+Use PowerShell 5.1 or PowerShell 7 with the native Codex CLI on PATH. To choose
+a different installed executable, set \`CODEX_CLI\` to its full path in this
+process first. The block stops at the first failed step and opens Codex for the
+same hook review described above. This setup block does not establish a
+completed native Windows host installation; follow the connection checks below.
+
+~~~powershell
+${CODEX_PLUGIN_SETUP_POWERSHELL_COMMAND}
+~~~
+
+Use \`npx.cmd\` from PowerShell if its \`npx.ps1\` shim is blocked; no execution-policy
+change is needed. If an npm-installed host has the same issue, use its \`.cmd\`
+shim, such as \`pi.cmd\` or \`openclaw.cmd\`. For existing shell-based plugin
+launchers, Git for Windows' \`usr\\bin\` directory supplies \`sh\`; make it visible
+on the PATH inherited by the desktop host and fully restart that host. A
+successful terminal launch alone does not verify the desktop host's PATH.
+
+The default native Windows shared configuration is
+\`$HOME\\.config\\remembrance\\config.json\`, normally
+\`C:\\Users\\<you>\\.config\\remembrance\\config.json\`; it is not an arbitrary
+Electron application's AppData folder. The corresponding default local identity
+is \`$HOME\\.config\\remembrance\\agent-key.json\`. Existing explicit path
+overrides still apply. Inside WSL these are Linux paths under the WSL user's
+home. Do not copy credentials between those environments merely to make a
+missing-tool error disappear.
+
+#### Windows credential setup
+
+Remembrance 0.2.26 or newer provides \`configure --stdin\` through the npm
+package. The command below downloads the current client with npm before
+passing the credential through standard input.
+
+Run this block in Windows PowerShell 5.1 or PowerShell 7, and enter the key only
+at the masked prompt. For an organization registry, replace the public API URL
+with its approved HTTPS base URL.
+
+~~~powershell
+& {
+    $ErrorActionPreference = 'Stop'
+    $OutputEncoding = [Text.UTF8Encoding]::new($false)
+    $remembranceSecureKey = $null
+    $remembranceKeyBstr = [IntPtr]::Zero
+    $remembranceConfigJson = $null
+    try {
+        $remembranceSecureKey = Read-Host 'Remembrance API key' -AsSecureString
+        $remembranceKeyBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($remembranceSecureKey)
+        $remembranceConfigJson = @{
+            apiKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($remembranceKeyBstr)
+            apiUrl = 'https://remembrance.dev'
+        } | Microsoft.PowerShell.Utility\\ConvertTo-Json -Compress
+        $remembranceConfigJson | npx.cmd --yes @remembrance-ai/mcp-server configure --stdin
+        $remembranceNativeExit = $LASTEXITCODE
+        if ($remembranceNativeExit -ne 0) {
+            throw 'Remembrance configuration did not complete.'
+        }
+    }
+    finally {
+        $remembranceConfigJson = $null
+        if ($remembranceKeyBstr -ne [IntPtr]::Zero) {
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($remembranceKeyBstr)
+            $remembranceKeyBstr = [IntPtr]::Zero
+        }
+        if ($null -ne $remembranceSecureKey) {
+            $remembranceSecureKey.Dispose()
+            $remembranceSecureKey = $null
+        }
+    }
+}
+~~~
+
+The command passes the key through memory/stdin, saves the shared configuration
+with private protection before credential bytes, and preserves unrelated
+settings. Malformed or insecure existing files are refused unchanged. Setup
+does not contact the registry or bootstrap an agent identity. Do not replace
+the secure writer with \`Set-Content\`, \`Out-File\`, a key-bearing argument or
+environment variable, or a post-write permission repair.
+
+The block frees the BSTR allocation and drops managed references. JSON
+conversion still creates a temporary plaintext string in process memory;
+cleanup does not guarantee immediate erasure of managed strings. Encoding and
+error handling remain local to the block; no profile or execution-policy change
+is needed.
+
+Native qualification exercised the same masked-input transport and secure
+configuration command with synthetic keys against an exact local bundle on
+Windows Server 2022 and Node.js 24.15.0 in Windows PowerShell 5.1 and PowerShell 7.
+That fixture did not download the package with npm.
+It did not exercise a human interactive prompt or complete native host app
+session, and it does not establish a system-cold-start bound.
+
+If a local tool returns \`restore_windows_private_permissions\`, run its exact returned normal-shell recipe for the selected current-owned file or empty directory. It preserves file contents and changes only that object's permissions. A nonempty directory, foreign owner, or grants allowing another user to modify the object or parent can return \`owner_review_required\`: inspect only the selected object and immediate-parent ownership/ACL metadata, obtain scoped owner review before broader repair, then resume the returned \`get_connection_status\` or \`bootstrap_agent_identity\` step and run \`run_connection_doctor\`. Preserve existing state: do not delete retained data or rotate keys to repair permissions. Restored permissions make no claim about past access or previously opened handles.
+
+After installing the client, fully restart the actual host and run
+its Remembrance \`run_connection_doctor\`. With no host tool available, run
+\`npx.cmd --yes @remembrance-ai/mcp-server doctor --json\`; that checks the
+CLI's connection, not native hook registration. Complete the same host trust
+review and exact private-submit approvals as on other platforms. A Windows installation does not grant consent,
+establish source authority, or turn a retained private draft into a completed
+submission.
 
 After installing any native plugin, restart the agent app/session and approve
 the runtime's trust request when one appears. For Codex, complete the hook
@@ -26195,7 +26364,7 @@ paths, or raw logs. Set \`REMEMBRANCE_HEALTH_REPORTING=0\` to disable that
 best-effort report.
 
 If no Remembrance MCP tool is visible, run
-\`npx @remembrance-ai/mcp-server@0.2.25 doctor\`. This safely verifies registry,
+\`npx @remembrance-ai/mcp-server@0.2.26 doctor\`. This safely verifies registry,
 credential, and catalog-read access outside the host, but it deliberately
 reports host registration as unobservable. Update or reinstall the native
 plugin, fully restart the host, then rerun \`run_connection_doctor\` inside it.
@@ -26780,8 +26949,8 @@ and require organization scope before contribution work. See the official
 
 ### Approve OpenClaw
 
-Pin the exact plugin id, grant its conversation access (without it, OpenClaw
-holds only the completion hook), and filter the saved Remembrance MCP server.
+Pin the exact plugin id, grant its conversation access for the host's gated
+prompt and completion hooks, and filter the saved Remembrance MCP server.
 \`plugins.deny\` wins over the allowlist. The \`minimal\` tool profile hides
 MCP tools, and \`tools.deny: ["bundle-mcp"]\` disables them:
 
@@ -26901,7 +27070,7 @@ Restart Pi and call \`run_connection_doctor\` to confirm organization scope.
 ### Approve other MCP clients
 
 Register exactly \`https://remembrance.dev/api/mcp\` or the exact local
-\`npx @remembrance-ai/mcp-server@0.2.25\` command. Use the recommended organization
+\`npx @remembrance-ai/mcp-server@0.2.26\` command. Use the recommended organization
 tool list above when the client supports tool filtering. Supply the
 organization key through the client's secret/header mechanism, then run
 \`run_connection_doctor\` and require organization scope before private writes.
@@ -26938,13 +27107,13 @@ https://remembrance.dev/api/mcp
 Local stdio MCP server:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.25
+npx @remembrance-ai/mcp-server@0.2.26
 ~~~
 
 Independent setup check when the host does not expose Remembrance tools:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.25 doctor
+npx @remembrance-ai/mcp-server@0.2.26 doctor
 ~~~
 
 This verifies registry, credential, and catalog-read access without submitting
@@ -27176,9 +27345,8 @@ session skills.
 - "OpenClaw search found another Remembrance package": do not install it unless
   it points to dreamarkinc/remembrance-skills and exposes the Remembrance MCP
   tools.
-- "OpenClaw hooks do nothing": without allowConversationAccess, OpenClaw holds
-  only the completion hook (before_agent_finalize) and still runs the prompt,
-  tool and subagent-end hooks. Run "openclaw remembrance setup", verify
+- "OpenClaw hooks do nothing": current hosts require allowConversationAccess
+  for prompt and completion hooks. Run "openclaw remembrance setup", verify
   allowConversationAccess is true, run "openclaw mcp doctor remembrance
   --probe", and restart OpenClaw after plugin install/config changes.
 - "Claude desktop ignores env vars": put env in the user-scoped Claude settings
@@ -27865,8 +28033,8 @@ function schemaObject(value) {
 function toolArgumentSchemaAlternatives(schema) {
   const result = [schema];
   for (let cursor = 0; cursor < result.length && result.length < 32; cursor++) {
-    for (const key of ["anyOf", "oneOf", "allOf"]) {
-      const children = result[cursor][key];
+    for (const key2 of ["anyOf", "oneOf", "allOf"]) {
+      const children = result[cursor][key2];
       if (!Array.isArray(children)) continue;
       for (const child of children.slice(0, 32 - result.length)) {
         const next = schemaObject(child);
@@ -27889,7 +28057,7 @@ function toolArgumentSchemaLocation(schema, path) {
       if (typeof segment === "string" && properties && Object.hasOwn(properties, segment)) {
         const child = schemaObject(properties[segment]);
         if (child) {
-          name = Object.keys(properties).find((key) => key === segment);
+          name = Object.keys(properties).find((key2) => key2 === segment);
           if (!next.includes(child)) next.push(child);
         }
       } else if (typeof segment === "number") {
@@ -28099,9 +28267,1657 @@ function privateSkillPermanentRefusalGuidance(draft) {
 }
 
 // src/server.ts
-import { existsSync as existsSync6 } from "node:fs";
-import { mkdir as mkdir5, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname11 } from "node:path";
+import { existsSync as existsSync6, realpathSync } from "node:fs";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
+
+// src/local-config-path.ts
+import { homedir } from "node:os";
+import { join } from "node:path";
+function remembranceConfigPath(env = process.env, homeDirectory = homedir()) {
+  const configRoot = env.REMEMBRANCE_PLUGIN_HOST?.trim().toLowerCase() === "openclaw" ? join(homeDirectory, ".config") : join(homeDirectory, ".config");
+  return join(configRoot, "remembrance", "config.json");
+}
+
+// src/local-api-url.ts
+import { isIP } from "node:net";
+function normalizeApiUrl(value, env) {
+  if (typeof value !== "string" || !value.trim()) {
+    return { baseUrl: null, issue: "invalid_url" };
+  }
+  const candidate = value.trim();
+  try {
+    const parsed = new URL(candidate);
+    if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
+      return { baseUrl: null, issue: "invalid_url" };
+    }
+    const loopback = isLoopbackHostname(parsed.hostname);
+    const privateDestination = isPrivateDestinationHostname(parsed.hostname);
+    if (parsed.protocol === "http:" && !loopback) {
+      return { baseUrl: null, issue: "insecure_remote_http" };
+    }
+    if (!loopback && privateDestination && env.REMEMBRANCE_ALLOW_PRIVATE_REGISTRY !== "true") {
+      return {
+        baseUrl: null,
+        issue: "private_destination_requires_opt_in"
+      };
+    }
+    return { baseUrl: candidate.replace(/\/+$/, ""), issue: null };
+  } catch {
+    return { baseUrl: null, issue: "invalid_url" };
+  }
+}
+function isLoopbackHostname(hostname) {
+  const normalized2 = normalizeHostname(hostname);
+  if (normalized2 === "localhost" || normalized2.endsWith(".localhost")) {
+    return true;
+  }
+  if (normalized2 === "::1") return true;
+  if (isIP(normalized2) === 4) {
+    return Number(normalized2.split(".")[0]) === 127;
+  }
+  return false;
+}
+function isPrivateDestinationHostname(hostname) {
+  const normalized2 = normalizeHostname(hostname);
+  if (normalized2.endsWith(".local") || normalized2.endsWith(".internal") || normalized2 === "localhost") {
+    return true;
+  }
+  const version = isIP(normalized2);
+  if (version === 4) return isNonPublicIpv4(normalized2);
+  if (version === 6) {
+    const compact = normalized2.toLowerCase();
+    return compact === "::" || compact === "::1" || compact.startsWith("fc") || compact.startsWith("fd") || /^fe[89ab]/.test(compact);
+  }
+  return false;
+}
+function isNonPublicIpv4(address) {
+  const [a = -1, b = -1] = address.split(".").map(Number);
+  return a === 0 || a === 10 || a === 127 || a === 100 && b >= 64 && b <= 127 || a === 169 && b === 254 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168 || a === 198 && (b === 18 || b === 19) || a >= 224;
+}
+function normalizeHostname(hostname) {
+  return hostname.replace(/^\[|\]$/g, "").toLowerCase();
+}
+
+// src/secure-local-file.ts
+import {
+  closeSync as closeSync2,
+  constants as constants2,
+  fchmodSync,
+  fstatSync as fstatSync2,
+  lstatSync as lstatSync2,
+  openSync as openSync2,
+  opendirSync,
+  readSync
+} from "node:fs";
+import { dirname as dirname2 } from "node:path";
+
+// ../codex-plugin/scripts/windows-private-read.mjs
+import { AsyncLocalStorage } from "node:async_hooks";
+import { closeSync, constants, fstatSync, lstatSync, openSync } from "node:fs";
+import { dirname, join as join2, normalize } from "node:path";
+
+// ../codex-plugin/scripts/windows-file-security.mjs
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { win32 } from "node:path";
+var WINDOWS_ACL_LIMITS = Object.freeze({ maxPaths: 32, inputBytes: 16384, metadataChars: 21848, environmentChars: 32767, outputBytes: 131072, timeoutMs: 8e3 });
+var WINDOWS_DIRECTORY_PAGE_LIMITS = Object.freeze({ count: 1024, outputBytes: 8 * 1024 * 1024, timeoutMs: 3e3 });
+var SCHEMA = "windows-private-paths-v1";
+var METADATA_FIELD = "REMEMBRANCE_WINDOWS_PRIVATE_PATHS";
+var SID = /^S-1-(?:\d+-){1,14}\d+$/u;
+var INTEGER = /^(?:0|[1-9]\d{0,19})$/u;
+var ADMIN_SIDS = /* @__PURE__ */ new Set(["S-1-5-18", "S-1-5-32-544"]);
+var INTEGRITY_RIGHTS = 0x500d0156n;
+var ISSUED = /* @__PURE__ */ new WeakMap();
+var refuse = () => {
+  throw new Error("Windows private storage protection could not be verified.");
+};
+var POWERSHELL = String.raw`
+$ErrorActionPreference = 'Stop'
+[Console]::Error.WriteLine('WINDOWS_ACL_PHASE:started')
+$phase='environment_read'
+try {
+  [Console]::Error.WriteLine('WINDOWS_ACL_PHASE:environment_read')
+  $line = [Environment]::GetEnvironmentVariable('REMEMBRANCE_WINDOWS_PRIVATE_PATHS','Process')
+  if ($null -eq $line -or $line.Length -gt 21848 -or $line -notmatch '\A[A-Za-z0-9+/]*={0,2}\z') { throw 'Invalid metadata' }
+  $bytes = [Convert]::FromBase64String($line)
+  if ($bytes.Length -eq 0 -or $bytes.Length -gt 16384) { throw 'Invalid metadata body' }
+  $request = [System.Text.UTF8Encoding]::new($false,$true).GetString($bytes) | Microsoft.PowerShell.Utility\ConvertFrom-Json
+  if ($request.schema -ne 'windows-private-paths-v1' -or @($request.paths).Count -gt 32) { throw 'Invalid request' }
+  $phase='compile'
+  [Console]::Error.WriteLine('WINDOWS_ACL_PHASE:compile')
+  Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Security.Cryptography;
+using System.ComponentModel;
+using Microsoft.Win32.SafeHandles;
+public sealed class RemembranceAclAce {
+  public string sid; public string type; public string mask; public bool inherit_only; public bool callback;
+}
+public sealed class RemembranceAclEntry {
+  public string path; public string kind; public bool reparse; public string owner_sid;
+  public bool null_dacl; public bool persistent_acls; public string volume_serial; public string file_id;
+  public RemembranceAclAce[] aces; public string acl_fingerprint;
+}
+public static class RemembranceAclSnapshot {
+  [StructLayout(LayoutKind.Sequential)] struct FileInfo {
+    public uint Attributes; public System.Runtime.InteropServices.ComTypes.FILETIME Creation;
+    public System.Runtime.InteropServices.ComTypes.FILETIME Access; public System.Runtime.InteropServices.ComTypes.FILETIME Write;
+    public uint Volume; public uint SizeHigh; public uint SizeLow; public uint Links; public uint IndexHigh; public uint IndexLow;
+  }
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern SafeFileHandle CreateFileW(string path, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetFileInformationByHandle(SafeFileHandle handle, out FileInfo info);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool GetVolumeInformationByHandleW(SafeFileHandle handle, IntPtr volumeName, uint volumeNameSize, out uint serial, out uint maximumName, out uint flags, IntPtr filesystemName, uint filesystemNameSize);
+  [DllImport("advapi32.dll", SetLastError=true)] static extern uint GetSecurityInfo(SafeFileHandle handle, uint type, uint flags, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+  [DllImport("advapi32.dll")] static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
+  [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr value);
+  [StructLayout(LayoutKind.Sequential)] struct SecurityAttributes { public int Length; public IntPtr Descriptor; public int Inherit; }
+  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string sddl, uint revision, out IntPtr descriptor, out uint size);
+  [DllImport("kernel32.dll", EntryPoint="CreateFileW", CharSet=CharSet.Unicode, SetLastError=true)] static extern SafeFileHandle CreatePrivateFile(string path, uint access, uint share, ref SecurityAttributes security, uint disposition, uint flags, IntPtr template);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool CreateDirectoryW(string path, ref SecurityAttributes security);
+  const uint CREATE_NEW = 1;
+  static void MatchParent(RemembranceAclEntry row, string sid, bool requirePrivate, string volume, string id, string fingerprint) {
+    if (row.kind != "directory" || row.reparse || row.null_dacl || !row.persistent_acls || (requirePrivate && row.owner_sid != sid) || row.volume_serial != volume || row.file_id != id || row.acl_fingerprint != fingerprint) throw new InvalidOperationException();
+  }
+  public static RemembranceAclEntry[] Create(string path, string kind, string parent, string volume, string id, string fingerprint) {
+    string sid = WindowsIdentity.GetCurrent().User.Value;
+    // Keep the immediate parent handle open without share-delete/write throughout creation.
+    using (var handle = CreateFileW(parent, 0x20080, 1, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero)) {
+      if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+      FileInfo held;
+      if (!GetFileInformationByHandle(handle, out held) || held.Volume.ToString(CultureInfo.InvariantCulture) != volume || (((ulong)held.IndexHigh << 32) | held.IndexLow).ToString(CultureInfo.InvariantCulture) != id || (held.Attributes & 1024) != 0 || (held.Attributes & 16) == 0) throw new InvalidOperationException();
+      MatchParent(Read(new string[] { parent })[0], sid, kind == "file", volume, id, fingerprint);
+      string inherit = kind == "directory" ? "OICI" : "";
+      string sddl = "O:" + sid + "D:P(A;" + inherit + ";FA;;;" + sid + ")(A;" + inherit + ";FA;;;SY)(A;" + inherit + ";FA;;;BA)";
+      IntPtr descriptor; uint size;
+      if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, out descriptor, out size)) throw new Win32Exception(Marshal.GetLastWin32Error());
+      try {
+        var attrs = new SecurityAttributes { Length=Marshal.SizeOf(typeof(SecurityAttributes)), Descriptor=descriptor, Inherit=0 };
+        if (kind == "directory") {
+          if (!CreateDirectoryW(path, ref attrs)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        } else if (kind == "file") {
+          using (var child = CreatePrivateFile(path, 0x20080, 1, ref attrs, CREATE_NEW, 0x00200000, IntPtr.Zero)) {
+            if (child.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+          }
+        } else throw new InvalidOperationException();
+      } finally { LocalFree(descriptor); }
+      var result = Read(new string[] { path, parent });
+      MatchParent(result[1], sid, kind == "file", volume, id, fingerprint);
+      return result;
+    }
+  }
+  public static RemembranceAclEntry[] Read(string[] paths) {
+    var handles = new List<SafeFileHandle>(); var rows = new List<RemembranceAclEntry>();
+    try {
+      foreach (var path in paths) {
+        // READ_CONTROL|READ_ATTRIBUTES; share read only, open existing, inspect reparse point itself.
+        var handle = CreateFileW(path, 0x20080, 1, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+        if (handle.IsInvalid) { handle.Dispose(); throw new InvalidOperationException(); }
+        handles.Add(handle); FileInfo info;
+        if (!GetFileInformationByHandle(handle, out info)) throw new InvalidOperationException();
+        uint serial, maximumName, filesystemFlags;
+        if (!GetVolumeInformationByHandleW(handle, IntPtr.Zero, 0, out serial, out maximumName, out filesystemFlags, IntPtr.Zero, 0) || serial != info.Volume) throw new InvalidOperationException();
+        IntPtr owner, group, dacl, sacl, descriptor;
+        if (GetSecurityInfo(handle, 1, 5, out owner, out group, out dacl, out sacl, out descriptor) != 0) throw new InvalidOperationException();
+        try {
+          uint length = GetSecurityDescriptorLength(descriptor);
+          if (length == 0 || length > 65536) throw new InvalidOperationException();
+          var bytes = new byte[length]; Marshal.Copy(descriptor, bytes, 0, bytes.Length);
+          var sd = new RawSecurityDescriptor(bytes, 0); var aces = new List<RemembranceAclAce>();
+          var canonical = new byte[sd.BinaryLength]; sd.GetBinaryForm(canonical, 0);
+          string fingerprint;
+          using (var hash = SHA256.Create()) fingerprint = BitConverter.ToString(hash.ComputeHash(canonical)).Replace("-", "").ToLowerInvariant();
+          if (sd.DiscretionaryAcl != null) {
+            if (sd.DiscretionaryAcl.Count > 128) throw new InvalidOperationException();
+            foreach (GenericAce item in sd.DiscretionaryAcl) {
+              var ace = item as CommonAce;
+              if (ace == null) throw new InvalidOperationException();
+              string type = ace.AceQualifier == AceQualifier.AccessAllowed ? "allow" : ace.AceQualifier == AceQualifier.AccessDenied ? "deny" : "unknown";
+              aces.Add(new RemembranceAclAce { sid=ace.SecurityIdentifier.Value, type=type,
+                mask=unchecked((uint)ace.AccessMask).ToString(CultureInfo.InvariantCulture),
+                inherit_only=(ace.AceFlags & AceFlags.InheritOnly) != 0, callback=ace.IsCallback });
+            }
+          }
+          rows.Add(new RemembranceAclEntry { path=path, kind=(info.Attributes & 16) != 0 ? "directory" : "file",
+            reparse=(info.Attributes & 1024) != 0, owner_sid=sd.Owner == null ? null : sd.Owner.Value,
+            null_dacl=sd.DiscretionaryAcl == null, persistent_acls=(filesystemFlags & 8) != 0, volume_serial=info.Volume.ToString(CultureInfo.InvariantCulture),
+            file_id=(((ulong)info.IndexHigh << 32) | info.IndexLow).ToString(CultureInfo.InvariantCulture), acl_fingerprint=fingerprint, aces=aces.ToArray() });
+        } finally { LocalFree(descriptor); }
+      }
+      return rows.ToArray();
+    } finally { foreach (var handle in handles) handle.Dispose(); }
+  }
+  public static object Page(string dir,string after,int count) {
+    if(count<1||count>1024||after.Length>255)throw new InvalidOperationException();
+    var directory=Read(new string[]{dir,System.IO.Path.GetDirectoryName(dir)});
+    foreach(var p in directory)if(p.reparse||p.kind!="directory")throw new InvalidOperationException();
+    var paths=new List<string>(System.IO.Directory.EnumerateFileSystemEntries(dir));
+    paths.Sort(StringComparer.Ordinal);var rows=new List<object>();string next=after;bool more=false;long cost=0;
+    foreach(var path in paths){string name=System.IO.Path.GetFileName(path);if(StringComparer.Ordinal.Compare(name,after)<=0)continue;
+      if(rows.Count==count){more=true;break;}RemembranceAclEntry entry=null;
+      try{entry=Read(new string[]{path})[0];}catch{}
+      long size=2048+6L*(name.Length+path.Length);
+      if(entry!=null){size+=6L*(entry.owner_sid??"").Length;foreach(var ace in entry.aces)size+=256+6L*ace.sid.Length;}
+      if(rows.Count>0&&cost+size>6291456){more=true;break;}
+      rows.Add(new{name=name,entry=entry,unavailable=entry==null});cost+=size;next=name;
+    }
+    return new{rows=rows.ToArray(),after=after,next_after=next,has_more=more,directory=directory};
+  }
+}
+'@
+  $phase='inspect'
+  [Console]::Error.WriteLine('WINDOWS_ACL_PHASE:inspect')
+  $paths = @($request.paths | ForEach-Object { [string]$_.path })
+  if ($request.verb -eq 'create-private-file' -or $request.verb -eq 'create-private-directory') {
+    $phase='create'
+    [Console]::Error.WriteLine('WINDOWS_ACL_PHASE:create')
+    if (@($request.paths).Count -ne 2) { throw 'Invalid create request' }
+    $kind = if ($request.verb -eq 'create-private-file') { 'file' } else { 'directory' }
+    $entries=@([RemembranceAclSnapshot]::Create($paths[0],$kind,$paths[1],[string]$request.expected_parent.volume_serial,[string]$request.expected_parent.file_id,[string]$request.expected_parent.acl_fingerprint))
+    $result=@{ schema='windows-private-paths-v1'; current_sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; entries=$entries; created=$true; verb=$request.verb }
+  } elseif ($request.verb -eq 'inspect-directory-page') {
+    $result=@{schema='windows-private-paths-v1';current_sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;page=[RemembranceAclSnapshot]::Page($paths[0],[string]$request.after_name,[int]$request.page_count)}
+  } elseif ($null -eq $request.verb) {
+    $result = @{ schema='windows-private-paths-v1'; current_sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; entries=@([RemembranceAclSnapshot]::Read([string[]]$paths)) }
+  } else { throw 'Invalid verb' }
+  $outputBytes = [System.Text.Encoding]::UTF8.GetBytes(($result | ConvertTo-Json -Depth 8 -Compress))
+  if($outputBytes.Length -gt 8388608){throw 'Output bound exceeded'}
+  $stdout = [Console]::OpenStandardOutput()
+  $stdout.Write($outputBytes,0,$outputBytes.Length)
+  $stdout.Flush()
+  exit 0
+} catch {
+  $failure=$_.Exception
+  for($i=0;$i -lt 8 -and $null -ne $failure.InnerException;$i++) { $failure=$failure.InnerException }
+  $win32 = if ($failure -is [System.ComponentModel.Win32Exception]) { $failure.NativeErrorCode } else { -1 }
+  [Console]::Error.WriteLine('WINDOWS_ACL_ERROR:{"phase":"'+$phase+'","type":"'+$failure.GetType().FullName+'","hresult":'+$failure.HResult+',"win32":'+$win32+'}')
+  exit 1
+}
+`;
+var ENCODED_SCRIPT = Buffer.from(POWERSHELL.split("\n").filter((line) => !/^\s*\/\//u.test(line)).map((line) => line.trim()).filter(Boolean).join("\n"), "utf16le").toString("base64");
+function privatePath(value) {
+  if (typeof value !== "string" || value.length > 2048 || !/^[A-Za-z]:[\\/]/u.test(value) || /[\x00-\x1f]/u.test(value) || value.slice(2).includes(":") || value.split(/[\\/]/u).includes("..")) refuse();
+  return win32.normalize(value);
+}
+function pathBatch(requests2) {
+  if (!Array.isArray(requests2) || !requests2.length || requests2.length > WINDOWS_ACL_LIMITS.maxPaths) refuse();
+  const entries = /* @__PURE__ */ new Map();
+  const add = (path, kind, privacy) => {
+    const key2 = path.toLowerCase(), prior = entries.get(key2);
+    if (prior && prior.kind !== kind) refuse();
+    if (!prior || privacy === "private") entries.set(key2, { path, kind, privacy });
+    if (entries.size > WINDOWS_ACL_LIMITS.maxPaths) refuse();
+  };
+  for (const request2 of requests2) {
+    if (!request2 || !["file", "directory"].includes(request2.kind)) refuse();
+    const path = privatePath(request2.path);
+    add(path, request2.kind, "private");
+    const parent = win32.dirname(path);
+    if (parent === path) refuse();
+    add(parent, "directory", "integrity");
+  }
+  return [...entries.values()];
+}
+function validateSnapshot(raw, paths) {
+  if (!raw || raw.schema !== SCHEMA || !SID.test(raw.current_sid ?? "") || !Array.isArray(raw.entries) || raw.entries.length !== paths.length) refuse();
+  const trusted = /* @__PURE__ */ new Set([...ADMIN_SIDS, raw.current_sid]);
+  return paths.map((expected, index) => {
+    const row = raw.entries[index];
+    if (!row || row.path !== expected.path || row.kind !== expected.kind || row.reparse !== false || row.null_dacl !== false || row.persistent_acls !== true || !SID.test(row.owner_sid ?? "") || !(expected.privacy === "private" ? row.owner_sid === raw.current_sid : trusted.has(row.owner_sid)) || !INTEGER.test(row.volume_serial ?? "") || !INTEGER.test(row.file_id ?? "") || BigInt(row.file_id) === 0n || !/^[a-f0-9]{64}$/u.test(row.acl_fingerprint ?? "") || !Array.isArray(row.aces) || row.aces.length > 128) refuse();
+    for (const ace of row.aces) {
+      if (!ace || !SID.test(ace.sid ?? "") || !["allow", "deny"].includes(ace.type) || ace.callback !== void 0 && ace.callback !== false || typeof ace.inherit_only !== "boolean" || !INTEGER.test(ace.mask ?? "") || BigInt(ace.mask) > 0xffffffffn) refuse();
+      if (ace.type === "allow" && !ace.inherit_only && !trusted.has(ace.sid) && (expected.privacy === "private" ? BigInt(ace.mask) !== 0n : (BigInt(ace.mask) & INTEGRITY_RIGHTS) !== 0n)) refuse();
+    }
+    const entry = Object.freeze({
+      path: expected.path,
+      kind: expected.kind,
+      privacy: expected.privacy,
+      volume_serial: row.volume_serial,
+      file_id: row.file_id,
+      acl_fingerprint: row.acl_fingerprint
+    });
+    ISSUED.set(entry, raw.current_sid);
+    return entry;
+  });
+}
+function validateEnvironment(env) {
+  const entries = Object.entries(env);
+  if (entries.some(([key2, value]) => typeof value !== "string" || value.includes("\0") || key2.length + value.length + 2 > WINDOWS_ACL_LIMITS.environmentChars) || entries.reduce((sum, [key2, value]) => sum + key2.length + value.length + 2, 1) > WINDOWS_ACL_LIMITS.environmentChars) refuse();
+  return env;
+}
+function bootstrapEnvironment(dependencies) {
+  const source = dependencies.environment ?? process.env;
+  const systemRoot = privatePath(source.SystemRoot ?? "");
+  const home = win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0");
+  const temp = privatePath(dependencies.tempDirectory ?? tmpdir());
+  const env = {
+    SystemRoot: systemRoot,
+    WINDIR: systemRoot,
+    TEMP: temp,
+    TMP: temp,
+    ComSpec: win32.join(systemRoot, "System32", "cmd.exe"),
+    ProgramFiles: privatePath(source.ProgramFiles ?? ""),
+    USERPROFILE: privatePath(source.USERPROFILE ?? ""),
+    APPDATA: privatePath(source.APPDATA ?? ""),
+    LOCALAPPDATA: privatePath(source.LOCALAPPDATA ?? ""),
+    PATH: [win32.join(systemRoot, "System32"), systemRoot, win32.join(systemRoot, "System32", "Wbem"), home].join(";"),
+    PSModulePath: win32.join(home, "Modules")
+  };
+  return validateEnvironment(env);
+}
+function runWithDependencies(paths, dependencies, extras = {}, accept = () => {
+}) {
+  if ((dependencies.platform ?? process.platform) !== "win32") refuse();
+  const env = bootstrapEnvironment(dependencies);
+  const body = Buffer.from(JSON.stringify({ schema: SCHEMA, paths, ...extras }), "utf8");
+  if (body.length > WINDOWS_ACL_LIMITS.inputBytes) refuse();
+  const metadata2 = body.toString("base64");
+  if (metadata2.length > WINDOWS_ACL_LIMITS.metadataChars) refuse();
+  env[METADATA_FIELD] = metadata2;
+  validateEnvironment(env);
+  let phase = "native_process";
+  const outputBytes = extras.verb === "inspect-directory-page" ? WINDOWS_DIRECTORY_PAGE_LIMITS.outputBytes : WINDOWS_ACL_LIMITS.outputBytes;
+  const timeout = extras.verb === "inspect-directory-page" ? WINDOWS_DIRECTORY_PAGE_LIMITS.timeoutMs : WINDOWS_ACL_LIMITS.timeoutMs;
+  const executable = win32.join(env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-InputFormat", "Text", "-EncodedCommand", ENCODED_SCRIPT];
+  if (`"${executable}" ${args.join(" ")}`.length >= 32767) refuse();
+  try {
+    const output = (dependencies.execFile ?? execFileSync)(
+      executable,
+      args,
+      {
+        encoding: "utf8",
+        timeout,
+        maxBuffer: outputBytes,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        env
+      }
+    );
+    phase = "response";
+    if (typeof output !== "string" || Buffer.byteLength(output) > outputBytes) refuse();
+    const raw = JSON.parse(output.replace(/^\uFEFF/u, ""));
+    phase = "acl_policy";
+    const accepted = accept(raw);
+    if (accepted !== void 0) return accepted;
+    return Object.freeze({ protection: "windows_dacl", current_sid: raw.current_sid, entries: Object.freeze(validateSnapshot(raw, paths)) });
+  } catch (error) {
+    const failure2 = new Error("Windows private storage protection could not be verified.");
+    const stderr = String(error?.stderr ?? "");
+    const markers = [...stderr.matchAll(/WINDOWS_ACL_PHASE:(started|environment_read|compile|inspect|create)/gu)];
+    failure2.diagnostic = {
+      phase,
+      last_child_phase: markers.at(-1)?.[1] ?? null,
+      code: /^[A-Z0-9_]{1,32}$/u.test(error?.code ?? "") ? error.code : null,
+      status: Number.isInteger(error?.status) ? error.status : null,
+      signal: /^SIG[A-Z]{1,16}$/u.test(error?.signal ?? "") ? error.signal : null
+    };
+    const detail = /WINDOWS_ACL_ERROR:(\{[^\r\n]{1,1024}\})/u.exec(stderr);
+    if (detail) try {
+      const value = JSON.parse(detail[1]);
+      if (["environment_read", "compile", "inspect", "create"].includes(value.phase) && /^[A-Za-z0-9_.]{1,160}$/u.test(value.type) && Number.isInteger(value.hresult)) {
+        failure2.diagnostic.exception = { phase: value.phase, type: value.type, hresult: value.hresult };
+        if (value.phase === "create" && value.type === "System.ComponentModel.Win32Exception" && [80, 183].includes(value.win32)) failure2.code = "EEXIST";
+      }
+    } catch {
+    }
+    throw failure2;
+  }
+}
+function inspectWithDependencies(requests2, dependencies) {
+  return runWithDependencies(pathBatch(requests2), dependencies);
+}
+function directoryPageWithDependencies(directory, after, count, dependencies) {
+  const path = privatePath(directory), paths = pathBatch([{ path, kind: "directory" }]);
+  const validName = (name) => typeof name === "string" && name.length > 0 && name.length <= 255 && ![".", ".."].includes(name) && !/[\\/:\x00-\x1f]/u.test(name);
+  if (after !== "" && !validName(after) || !Number.isSafeInteger(count) || count < 1 || count > WINDOWS_DIRECTORY_PAGE_LIMITS.count) refuse();
+  return runWithDependencies(paths, dependencies, { verb: "inspect-directory-page", after_name: after, page_count: count }, (raw) => {
+    const page = raw?.page;
+    if (!page || page.after !== after || !Array.isArray(page.rows) || page.rows.length > count || typeof page.has_more !== "boolean" || page.has_more && !page.rows.length || page.next_after !== (page.rows.at(-1)?.name ?? after)) refuse();
+    const entries = validateSnapshot({ ...raw, entries: page.directory }, paths);
+    let prior = after;
+    const rows = page.rows.map((row) => {
+      if (!row || !validName(row.name) || row.name <= prior || typeof row.unavailable !== "boolean" || row.unavailable && row.entry !== null) refuse();
+      prior = row.name;
+      let entry = null;
+      if (!row.unavailable) try {
+        entry = validateSnapshot({ ...raw, entries: [row.entry] }, [{ path: win32.join(path, row.name), kind: row.entry?.kind, privacy: "private" }])[0];
+        if (!["file", "directory"].includes(entry.kind)) refuse();
+      } catch {
+      }
+      return Object.freeze({ name: row.name, entry, unavailable: entry === null });
+    });
+    return Object.freeze({ protection: "windows_dacl", current_sid: raw.current_sid, entries: Object.freeze(entries), rows: Object.freeze(rows), next_after: page.next_after, has_more: page.has_more });
+  });
+}
+function inspectWindowsPrivateDirectoryPage(directory, after = "", count = WINDOWS_DIRECTORY_PAGE_LIMITS.count) {
+  return directoryPageWithDependencies(directory, after, count, { platform: process.platform, environment: process.env, tempDirectory: tmpdir(), execFile: execFileSync });
+}
+function createWithDependencies(request2, parent, dependencies) {
+  if (!request2 || Object.keys(request2).sort().join(",") !== "kind,path" || !["file", "directory"].includes(request2.kind)) refuse();
+  const path = privatePath(request2.path);
+  if (!parent || !ISSUED.has(parent) || request2.kind === "file" && parent.privacy !== "private" || parent.kind !== "directory" || win32.dirname(path) !== parent.path) refuse();
+  const paths = [{ path, kind: request2.kind, privacy: "private" }, { path: parent.path, kind: "directory", privacy: parent.privacy }];
+  const verb = `create-private-${request2.kind}`;
+  const result = runWithDependencies(paths, dependencies, { verb, expected_parent: {
+    volume_serial: parent.volume_serial,
+    file_id: parent.file_id,
+    acl_fingerprint: parent.acl_fingerprint
+  } }, (raw) => {
+    if (raw.created !== true || raw.verb !== verb || raw.current_sid !== ISSUED.get(parent)) refuse();
+    const after = raw.entries?.[1];
+    if (!after || after.volume_serial !== parent.volume_serial || after.file_id !== parent.file_id || after.acl_fingerprint !== parent.acl_fingerprint) refuse();
+  });
+  return Object.freeze({ created: true, protection: "windows_dacl", entry: result.entries[0], parent: result.entries[1] });
+}
+function createWindowsPrivatePath(request2, privateParent) {
+  return createWithDependencies(request2, privateParent, { platform: process.platform, environment: process.env, tempDirectory: tmpdir(), execFile: execFileSync });
+}
+function inspectWindowsPrivatePaths(requests2) {
+  return inspectWithDependencies(requests2, { platform: process.platform, environment: process.env, tempDirectory: tmpdir(), execFile: execFileSync });
+}
+function inspectWindowsCreationParent(path) {
+  return runWithDependencies(
+    [{ path: privatePath(path), kind: "directory", privacy: "integrity" }],
+    { platform: process.platform, environment: process.env, tempDirectory: tmpdir(), execFile: execFileSync }
+  ).entries[0];
+}
+function assertWindowsFileIdentity(entry, before, opened) {
+  if (!entry || !INTEGER.test(entry.volume_serial ?? "") || !INTEGER.test(entry.file_id ?? "") || BigInt(entry.file_id) === 0n) refuse();
+  for (const metadata2 of [before, opened]) {
+    if (!metadata2 || typeof metadata2.dev !== "bigint" || typeof metadata2.ino !== "bigint" || metadata2.dev !== BigInt(entry.volume_serial) || metadata2.ino !== BigInt(entry.file_id)) refuse();
+  }
+}
+
+// ../codex-plugin/scripts/windows-private-read.mjs
+var operations = new AsyncLocalStorage();
+var directoryOperations = new AsyncLocalStorage();
+var metadataFields = ["dev", "ino", "mode", "uid", "gid", "size", "nlink", "mtimeNs", "ctimeNs", "birthtimeNs"];
+var refuse2 = () => {
+  throw new Error("Windows private storage protection could not be verified.");
+};
+var key = (path) => normalize(path).toLowerCase();
+var missing = (error) => error?.code === "ENOENT";
+function regular(metadata2, kind) {
+  return !metadata2.isSymbolicLink() && (kind === "file" ? metadata2.isFile() : metadata2.isDirectory()) && metadataFields.every((field) => typeof metadata2[field] === "bigint");
+}
+function sameMetadata(first, second, kind) {
+  return regular(first, kind) && regular(second, kind) && metadataFields.every((field) => first[field] === second[field]);
+}
+function closeProof(proof) {
+  if (!proof) return;
+  proof.records.clear();
+}
+function validateRequests(requests2) {
+  if (!Array.isArray(requests2) || requests2.length > WINDOWS_ACL_LIMITS.maxPaths) refuse2();
+  return requests2.map((request2) => {
+    if (!request2 || typeof request2.path !== "string" || !["file", "directory"].includes(request2.kind) || Object.keys(request2).sort().join(",") !== "kind,path") refuse2();
+    return { path: request2.path, kind: request2.kind };
+  });
+}
+function createProof(requests2) {
+  const paths = /* @__PURE__ */ new Map(), existing = [];
+  const add = (path, kind, privacy) => {
+    const prior = paths.get(key(path));
+    if (prior && prior.kind !== kind) refuse2();
+    if (!prior || privacy === "private") paths.set(key(path), { path, kind, privacy });
+    if (paths.size > WINDOWS_ACL_LIMITS.maxPaths) refuse2();
+  };
+  for (const request2 of requests2) {
+    try {
+      lstatSync(request2.path, { bigint: true });
+    } catch (error) {
+      if (missing(error)) continue;
+      throw error;
+    }
+    existing.push(request2);
+    add(request2.path, request2.kind, "private");
+    add(dirname(request2.path), "directory", "integrity");
+  }
+  const proof = { records: /* @__PURE__ */ new Map(), principal: null };
+  const descriptors = /* @__PURE__ */ new Map();
+  try {
+    for (const [identity2, path] of paths) {
+      const before = lstatSync(path.path, { bigint: true });
+      if (!regular(before, path.kind)) refuse2();
+      const descriptor = openSync(path.path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      descriptors.set(identity2, descriptor);
+      proof.records.set(identity2, { ...path, metadata: before });
+      if (!sameMetadata(before, fstatSync(descriptor, { bigint: true }), path.kind)) refuse2();
+    }
+    if (!existing.length) return proof;
+    const snapshot = inspectWindowsPrivatePaths(existing);
+    if (snapshot?.protection !== "windows_dacl" || !/^S-1-(?:\d+-){1,14}\d+$/u.test(snapshot.current_sid ?? "") || !Array.isArray(snapshot.entries) || snapshot.entries.length !== paths.size) refuse2();
+    proof.principal = snapshot.current_sid;
+    const seen = /* @__PURE__ */ new Set();
+    for (const entry of snapshot.entries) {
+      if (!entry || typeof entry.path !== "string") refuse2();
+      const identity2 = key(entry.path), record4 = proof.records.get(identity2);
+      if (!record4 || seen.has(identity2) || entry.kind !== record4.kind || entry.privacy !== record4.privacy) refuse2();
+      seen.add(identity2);
+      assertWindowsFileIdentity(entry, record4.metadata, fstatSync(descriptors.get(identity2), { bigint: true }));
+      record4.entry = entry;
+    }
+    if (!unchanged(proof)) refuse2();
+    return proof;
+  } catch (error) {
+    closeProof(proof);
+    throw error;
+  } finally {
+    let closeFailed = false;
+    for (const descriptor of descriptors.values()) {
+      try {
+        closeSync(descriptor);
+      } catch {
+        closeFailed = true;
+      }
+    }
+    if (closeFailed) {
+      closeProof(proof);
+      refuse2();
+    }
+  }
+}
+function unchanged(proof) {
+  for (const record4 of proof.records.values()) {
+    try {
+      if (!sameMetadata(record4.metadata, lstatSync(record4.path, { bigint: true }), record4.kind)) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+function currentRecord(record4) {
+  if (!record4?.entry) return false;
+  try {
+    return sameMetadata(record4.metadata, lstatSync(record4.path, { bigint: true }), record4.kind);
+  } catch {
+    return false;
+  }
+}
+function directoryRecord(scope, path) {
+  for (let current = scope; current?.active; current = current.parent) {
+    const record4 = current.records.get(key(path));
+    if (record4) return { scope: current, record: record4 };
+  }
+  return null;
+}
+function bindRecord(path, kind, metadata2, entry, privacy = "private") {
+  let descriptor;
+  try {
+    if (!metadata2 || !regular(metadata2, kind) || !entry) return null;
+    descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const opened = fstatSync(descriptor, { bigint: true });
+    assertWindowsFileIdentity(entry, metadata2, opened);
+    if (!sameMetadata(metadata2, opened, kind) || !sameMetadata(metadata2, lstatSync(path, { bigint: true }), kind)) return null;
+    return { path, kind, privacy, metadata: metadata2, entry };
+  } catch {
+    return null;
+  } finally {
+    if (descriptor !== void 0) closeSync(descriptor);
+  }
+}
+function inheritedPrivateRecord(scope, path, kind) {
+  const found = directoryRecord(scope, path), parent = directoryRecord(scope, dirname(path));
+  return found?.record.kind === kind && found.record.privacy === "private" && currentRecord(found.record) && parent?.record.kind === "directory" && currentRecord(parent.record) ? found.record : null;
+}
+function withWindowsPrivateDirectoryReadOperation(directory, originalNames, callback) {
+  if (process.platform !== "win32") return callback();
+  if (typeof directory !== "string" || !Array.isArray(originalNames) || !originalNames.every((name) => typeof name === "string")) refuse2();
+  const parent = directoryOperations.getStore();
+  for (let current = parent; current?.active; current = current.parent) if (key(current.directory) === key(directory)) return callback();
+  const scope = { directory, parent, active: true, records: /* @__PURE__ */ new Map(), principal: parent?.principal ?? null };
+  const inherited = inheritedPrivateRecord(parent, directory, "directory");
+  if (!originalNames.length && !inherited) return callback();
+  try {
+    const before = /* @__PURE__ */ new Map();
+    for (const name of originalNames) {
+      if (!name || name.length > 255 || [".", ".."].includes(name) || /[\\/:\x00-\x1f]/u.test(name)) continue;
+      const path = join2(directory, name), identity2 = key(path);
+      if (before.has(identity2)) refuse2();
+      let metadata2 = null;
+      try {
+        metadata2 = lstatSync(path, { bigint: true });
+      } catch {
+      }
+      before.set(identity2, { path, metadata: metadata2 });
+    }
+    const small = before.size > 0 && before.size <= Math.floor((WINDOWS_ACL_LIMITS.maxPaths - 2) / 2);
+    let batch = null;
+    if (small) {
+      const requests2 = [...before.values()].filter((item) => item.metadata && (item.metadata.isFile() || item.metadata.isDirectory())).map((item) => ({ path: item.path, kind: item.metadata.isDirectory() ? "directory" : "file" }));
+      try {
+        batch = createProof([{ path: directory, kind: "directory" }, ...requests2]);
+      } catch {
+      }
+    }
+    if (inherited) scope.records.set(key(directory), inherited);
+    else {
+      const proof = batch ?? createProof([{ path: directory, kind: "directory" }]);
+      if (scope.principal && proof.principal !== scope.principal) refuse2();
+      scope.principal = proof.principal;
+      for (const [identity2, record4] of proof.records) scope.records.set(identity2, record4);
+    }
+    if (small) {
+      for (const expected of before.values()) {
+        const kind = expected.metadata?.isDirectory() ? "directory" : "file";
+        let entry = batch?.records.get(key(expected.path))?.entry;
+        if (!batch && expected.metadata) try {
+          const proof = createProof([{ path: expected.path, kind }]);
+          if (proof.principal !== scope.principal) refuse2();
+          entry = proof.records.get(key(expected.path))?.entry;
+        } catch {
+        }
+        const record4 = bindRecord(expected.path, kind, expected.metadata, entry);
+        scope.records.set(key(expected.path), record4 ?? { path: expected.path, kind, privacy: "private", metadata: expected.metadata, entry: null });
+      }
+      if (batch && batch.principal !== scope.principal) refuse2();
+    } else if (before.size) {
+      let after = "";
+      do {
+        const directoryBefore = lstatSync(directory, { bigint: true }), parentPath = dirname(directory), parentBefore = lstatSync(parentPath, { bigint: true });
+        const page = inspectWindowsPrivateDirectoryPage(directory, after, WINDOWS_DIRECTORY_PAGE_LIMITS.count);
+        if (page.current_sid !== scope.principal) refuse2();
+        for (const [index, metadata2] of [directoryBefore, parentBefore].entries()) {
+          const path = index ? parentPath : directory, record4 = bindRecord(path, "directory", metadata2, page.entries[index], index ? "integrity" : "private");
+          if (!record4) {
+            const proof = createProof([{ path: directory, kind: "directory" }]);
+            if (proof.principal !== scope.principal) refuse2();
+            for (const [identity2, fresh] of proof.records) scope.records.set(identity2, fresh);
+            break;
+          }
+          scope.records.set(key(path), record4);
+        }
+        for (const row of page.rows) {
+          const expected = before.get(key(join2(directory, row.name)));
+          if (!expected) continue;
+          const kind = expected.metadata?.isDirectory() ? "directory" : "file";
+          const record4 = bindRecord(expected.path, kind, expected.metadata, row.entry);
+          scope.records.set(key(expected.path), record4 ?? { path: expected.path, kind, privacy: "private", metadata: expected.metadata, entry: null });
+        }
+        if (!page.has_more) break;
+        after = page.next_after;
+      } while (true);
+    }
+  } catch {
+    scope.records.clear();
+    return callback();
+  }
+  const finish = () => {
+    scope.active = false;
+    scope.records.clear();
+  };
+  try {
+    const result = directoryOperations.run(scope, callback);
+    if (result && typeof result.then === "function") return Promise.resolve(result).finally(finish);
+    finish();
+    return result;
+  } catch (error) {
+    finish();
+    throw error;
+  }
+}
+function assertDirectoryRead(scope, path, kind, before, opened) {
+  let found = directoryRecord(scope, path), parent = directoryRecord(scope, dirname(path));
+  if (found?.record.privacy !== "private" || found.record.kind !== kind) return false;
+  const record4 = found.record;
+  if (!record4.entry && record4.metadata && sameMetadata(record4.metadata, before, kind) && parent && currentRecord(parent.record)) refuse2();
+  if (!currentRecord(record4) || !parent || !currentRecord(parent.record)) {
+    const proof = createProof([{ path, kind }]);
+    if (scope.principal && proof.principal !== scope.principal) refuse2();
+    for (const [identity2, fresh] of proof.records) scope.records.set(identity2, fresh);
+    found = directoryRecord(scope, path);
+    parent = directoryRecord(scope, dirname(path));
+  }
+  if (!found || !parent || !currentRecord(parent.record)) refuse2();
+  assertWindowsFileIdentity(found.record.entry, before, opened);
+  if (!sameMetadata(before, opened, kind) || !sameMetadata(found.record.metadata, opened, kind)) refuse2();
+  return true;
+}
+function withWindowsPrivateReadOperation(requests2, callback) {
+  if (process.platform !== "win32") return callback();
+  const bounded2 = validateRequests(requests2);
+  const scope = { requests: bounded2, proof: createProof(bounded2), active: true, failed: false };
+  const finish = () => {
+    scope.active = false;
+    closeProof(scope.proof);
+  };
+  try {
+    const result = operations.run(scope, callback);
+    if (result && typeof result.then === "function") return Promise.resolve(result).finally(finish);
+    finish();
+    return result;
+  } catch (error) {
+    finish();
+    throw error;
+  }
+}
+function assertWindowsPrivateRead(path, kind, before, opened) {
+  if (process.platform !== "win32") refuse2();
+  const directoryScope = directoryOperations.getStore();
+  if (directoryScope?.active && assertDirectoryRead(directoryScope, path, kind, before, opened)) return;
+  let scope = operations.getStore();
+  if (!scope?.active) scope = null;
+  if (scope?.failed) refuse2();
+  let proof;
+  try {
+    if (scope && scope.requests.some((request2) => key(request2.path) === key(path) && request2.kind === kind)) {
+      const record5 = scope.proof.records.get(key(path));
+      if (!record5 || record5.privacy !== "private" || record5.kind !== kind || !unchanged(scope.proof)) {
+        const priorPrincipal = scope.proof.principal;
+        closeProof(scope.proof);
+        scope.proof = createProof(scope.requests);
+        if (priorPrincipal && scope.proof.principal !== priorPrincipal) refuse2();
+      }
+      proof = scope.proof;
+    }
+    let record4 = proof?.records.get(key(path));
+    if (!record4 || record4.privacy !== "private" || record4.kind !== kind) {
+      proof = createProof([{ path, kind }]);
+      record4 = proof.records.get(key(path));
+    }
+    if (!record4 || !regular(before, kind) || !regular(opened, kind)) refuse2();
+    assertWindowsFileIdentity(record4.entry, before, opened);
+    if (!sameMetadata(before, opened, kind) || !sameMetadata(record4.metadata, opened, kind)) refuse2();
+  } catch (error) {
+    if (scope) {
+      scope.failed = true;
+      closeProof(scope.proof);
+    }
+    throw error;
+  } finally {
+    if (proof && proof !== scope?.proof) closeProof(proof);
+  }
+}
+
+// src/secure-local-file.ts
+var MAX_LOCAL_CONFIG_BYTES = 64 * 1024;
+var MAX_LOCAL_IDENTITY_BYTES = 64 * 1024;
+var MAX_LOCAL_LIFECYCLE_MARKER_BYTES = 16 * 1024;
+var MAX_LOCAL_LIFECYCLE_MARKERS = 64;
+var MAX_LOCAL_DIRECTORY_ENTRIES = 256;
+function readSecureLocalText(path, options) {
+  if (process.platform === "win32") {
+    const before2 = lstatSync2(path, { bigint: true });
+    assertRegularFile(before2, path, options.maxBytes);
+    const descriptor2 = openSync2(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0));
+    try {
+      const opened = fstatSync2(descriptor2, { bigint: true });
+      assertRegularFile(opened, path, options.maxBytes);
+      assertWindowsPrivateRead(path, "file", before2, opened);
+      return readBoundedDescriptor(descriptor2, options.maxBytes, options.fatalUtf8);
+    } finally {
+      closeSync2(descriptor2);
+    }
+  }
+  assertSecureParentDirectory(dirname2(path));
+  const before = lstatSync2(path);
+  assertRegularFile(before, path, options.maxBytes);
+  const descriptor = openSync2(
+    path,
+    constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0)
+  );
+  try {
+    let opened = fstatSync2(descriptor);
+    assertRegularFile(opened, path, options.maxBytes);
+    if (before.dev !== opened.dev || before.ino !== opened.ino) {
+      throw new Error("Local state file changed while it was being opened.");
+    }
+    assertCurrentUserOwner(opened.uid, path);
+    if (isPosix() && (opened.mode & 63) !== 0) {
+      if (options.allowInsecurePermissions) {
+      } else if (!options.repairPermissions) {
+        throw new Error("Local state file permissions are not private.");
+      } else {
+        fchmodSync(descriptor, 384);
+        opened = fstatSync2(descriptor);
+        if ((opened.mode & 63) !== 0) {
+          throw new Error("Local state file permissions could not be repaired.");
+        }
+      }
+    }
+    return readBoundedDescriptor(descriptor, options.maxBytes, options.fatalUtf8);
+  } finally {
+    closeSync2(descriptor);
+  }
+}
+function secureLocalFileMode(path) {
+  return lstatSync2(path).mode;
+}
+function assertSecurePrivateLocalDirectory(path) {
+  if (process.platform === "win32") {
+    const metadata2 = lstatSync2(path, { bigint: true });
+    assertWindowsPrivateRead(path, "directory", metadata2, metadata2);
+    return;
+  }
+  assertSecureParentDirectory(path);
+  if (isPosix() && (lstatSync2(path).mode & 63) !== 0) {
+    throw new Error("Local credential directory permissions are not private.");
+  }
+}
+function listSecureLocalDirectory(path) {
+  assertSecureDirectory(path);
+  const directory = opendirSync(path);
+  const entries = [];
+  try {
+    while (entries.length < MAX_LOCAL_DIRECTORY_ENTRIES) {
+      const entry = directory.readSync();
+      if (!entry) break;
+      entries.push(entry.name);
+    }
+  } finally {
+    directory.closeSync();
+  }
+  return entries;
+}
+function assertSecureParentDirectory(path) {
+  const metadata2 = lstatSync2(path);
+  if (metadata2.isSymbolicLink() || !metadata2.isDirectory()) {
+    throw new Error("Local state parent is not a regular directory.");
+  }
+  assertCurrentUserOwner(metadata2.uid, path);
+  if (isPosix() && (metadata2.mode & 18) !== 0) {
+    throw new Error("Local state parent is writable by another user.");
+  }
+}
+function assertSecureDirectory(path) {
+  if (process.platform === "win32") {
+    const metadata2 = lstatSync2(path, { bigint: true });
+    assertWindowsPrivateRead(path, "directory", metadata2, metadata2);
+    return;
+  }
+  assertSecureParentDirectory(path);
+}
+function assertRegularFile(metadata2, path, maxBytes) {
+  if (metadata2.isSymbolicLink() || !metadata2.isFile()) {
+    throw new Error(`Local state path is not a regular file: ${path}`);
+  }
+  if (metadata2.size > maxBytes) {
+    throw new Error("Local state file exceeds its size limit.");
+  }
+}
+function assertCurrentUserOwner(uid, path) {
+  if (isPosix() && uid !== process.getuid()) {
+    throw new Error(`Local state path is not owned by the current user: ${path}`);
+  }
+}
+function readBoundedDescriptor(descriptor, maxBytes, fatalUtf8 = false) {
+  const chunks = [];
+  let total = 0;
+  while (total <= maxBytes) {
+    const chunk = Buffer.allocUnsafe(Math.min(8 * 1024, maxBytes + 1 - total));
+    const bytesRead = readSync(descriptor, chunk, 0, chunk.length, null);
+    if (bytesRead === 0) break;
+    chunks.push(chunk.subarray(0, bytesRead));
+    total += bytesRead;
+  }
+  if (total > maxBytes) {
+    throw new Error("Local state file exceeds its size limit.");
+  }
+  const bytes = Buffer.concat(chunks, total);
+  return fatalUtf8 ? new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes) : bytes.toString("utf8");
+}
+function isPosix() {
+  return typeof process.getuid === "function";
+}
+
+// src/configure-cli.ts
+var USAGE = "Usage: remembrance-mcp configure --stdin\n";
+var FAILURE = "Remembrance configuration could not be saved safely.\n";
+function isRecord3(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+async function runConfigureCli(args, options) {
+  const input = options.input ?? process.stdin;
+  const output = options.output ?? process.stdout;
+  const errorOutput = options.errorOutput ?? process.stderr;
+  if (args.length !== 1 || args[0] !== "--stdin" || input.isTTY === true) {
+    errorOutput.write(USAGE);
+    return 2;
+  }
+  try {
+    const chunks = [];
+    let total = 0;
+    for await (const chunk of input) {
+      if (!(chunk instanceof Uint8Array)) throw new Error("invalid_input");
+      total += chunk.byteLength;
+      if (total > MAX_LOCAL_CONFIG_BYTES) throw new Error("input_too_large");
+      chunks.push(chunk);
+    }
+    const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(Buffer.concat(chunks));
+    const value = JSON.parse(text);
+    if (!isRecord3(value) || Object.keys(value).sort().join(",") !== "apiKey,apiUrl" || typeof value.apiKey !== "string" || !value.apiKey.trim()) throw new Error("invalid_input");
+    const apiKey = value.apiKey.trim();
+    new Headers({ "x-remembrance-api-key": apiKey });
+    const env = options.env ?? process.env;
+    const url = normalizeApiUrl(value.apiUrl, {
+      REMEMBRANCE_ALLOW_PRIVATE_REGISTRY: env.REMEMBRANCE_ALLOW_PRIVATE_REGISTRY
+    });
+    if (url.issue !== null) throw new Error("invalid_input");
+    await options.writeSecureLocalConfig(remembranceConfigPath(env), (existing) => {
+      let prior = {};
+      if (existing !== null) {
+        if (Buffer.byteLength(existing, "utf8") > MAX_LOCAL_CONFIG_BYTES) throw new Error("existing_too_large");
+        const parsed = JSON.parse(existing);
+        if (!isRecord3(parsed)) throw new Error("existing_invalid");
+        for (const key2 of ["apiKey", "apiUrl", "memberLinkToken"]) {
+          if (Object.hasOwn(parsed, key2) && typeof parsed[key2] !== "string") throw new Error("existing_invalid");
+        }
+        prior = parsed;
+      }
+      const next = `${JSON.stringify({ ...prior, apiKey, apiUrl: url.baseUrl })}
+`;
+      if (Buffer.byteLength(next, "utf8") > MAX_LOCAL_CONFIG_BYTES) throw new Error("merged_too_large");
+      return next;
+    }, { maxBytes: MAX_LOCAL_CONFIG_BYTES });
+    output.write("Remembrance configuration saved locally.\n");
+    return 0;
+  } catch {
+    errorOutput.write(FAILURE);
+    return 1;
+  }
+}
+
+// ../codex-plugin/scripts/windows-private-create.mjs
+import { closeSync as closeSync3, constants as constants3, fstatSync as fstatSync3, lstatSync as lstatSync3, openSync as openSync3, rmdirSync, unlinkSync } from "node:fs";
+import { open } from "node:fs/promises";
+import { dirname as dirname3, isAbsolute, normalize as normalize2 } from "node:path";
+var MAX_CREATED_DIRECTORIES = 16;
+var refuse3 = () => {
+  throw new Error("Windows private storage protection could not be verified.");
+};
+var absent = (error) => error?.code === "ENOENT";
+function checkedPath(path) {
+  if (process.platform !== "win32" || typeof path !== "string" || path.length > 2048 || !isAbsolute(path) || /^[\\/]{2}/u.test(path) || /[\x00-\x1f]/u.test(path) || path.slice(2).includes(":") || path.split(/[\\/]/u).includes("..")) refuse3();
+  return normalize2(path);
+}
+function same(entry, stat) {
+  return entry && typeof stat?.dev === "bigint" && typeof stat?.ino === "bigint" && String(stat.dev) === entry.volume_serial && String(stat.ino) === entry.file_id;
+}
+function correctType(stat, kind) {
+  return !stat.isSymbolicLink() && (kind === "directory" ? stat.isDirectory() : stat.isFile());
+}
+function bindDirectory(entry) {
+  const before = lstatSync3(entry.path, { bigint: true });
+  if (!correctType(before, "directory")) refuse3();
+  const fd = openSync3(entry.path, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0));
+  try {
+    assertWindowsFileIdentity(entry, before, fstatSync3(fd, { bigint: true }));
+    assertWindowsFileIdentity(entry, before, lstatSync3(entry.path, { bigint: true }));
+  } finally {
+    closeSync3(fd);
+  }
+}
+function inspectPrivateDirectory(path) {
+  const entry = inspectWindowsPrivatePaths([{ path, kind: "directory" }]).entries[0];
+  if (!entry || entry.path !== path || entry.kind !== "directory" || entry.privacy !== "private") refuse3();
+  bindDirectory(entry);
+  return entry;
+}
+function createEmptyFile(path) {
+  const parent = inspectPrivateDirectory(dirname3(path));
+  const created = createWindowsPrivatePath({ path, kind: "file" }, parent);
+  if (!created || created.created !== true || created.entry.path !== path || created.entry.kind !== "file" || created.entry.privacy !== "private") refuse3();
+  return created;
+}
+function validateFile(created, before, opened, after) {
+  for (const stat of [before, opened, after]) if (!correctType(stat, "file") || stat.size !== 0n || stat.nlink !== 1n) refuse3();
+  assertWindowsFileIdentity(created.entry, before, opened);
+  assertWindowsFileIdentity(created.entry, opened, after);
+  bindDirectory(created.parent);
+}
+function removeOwnedEmptyFile(path, entry) {
+  try {
+    const metadata2 = lstatSync3(path, { bigint: true });
+    if (same(entry, metadata2) && correctType(metadata2, "file") && metadata2.size === 0n && metadata2.nlink === 1n) unlinkSync(path);
+  } catch {
+  }
+}
+function openWindowsPrivateFileSync(value) {
+  const path = checkedPath(value), created = createEmptyFile(path);
+  let descriptor;
+  try {
+    const before = lstatSync3(path, { bigint: true });
+    descriptor = openSync3(path, constants3.O_RDWR | (constants3.O_NOFOLLOW ?? 0));
+    validateFile(created, before, fstatSync3(descriptor, { bigint: true }), lstatSync3(path, { bigint: true }));
+    return descriptor;
+  } catch (error) {
+    if (descriptor !== void 0) try {
+      closeSync3(descriptor);
+    } catch {
+    }
+    removeOwnedEmptyFile(path, created.entry);
+    throw error;
+  }
+}
+async function openWindowsPrivateFile(value) {
+  const path = checkedPath(value), created = createEmptyFile(path);
+  let handle;
+  try {
+    const before = lstatSync3(path, { bigint: true });
+    handle = await open(path, constants3.O_RDWR | (constants3.O_NOFOLLOW ?? 0));
+    validateFile(created, before, await handle.stat({ bigint: true }), lstatSync3(path, { bigint: true }));
+    return handle;
+  } catch (error) {
+    await handle?.close().catch(() => {
+    });
+    removeOwnedEmptyFile(path, created.entry);
+    throw error;
+  }
+}
+function ensureWindowsPrivateDirectorySync(value) {
+  const target = checkedPath(value), missing3 = [], created = [];
+  let cursor = target;
+  while (true) {
+    try {
+      const stat = lstatSync3(cursor, { bigint: true });
+      if (!correctType(stat, "directory")) refuse3();
+      break;
+    } catch (error) {
+      if (!absent(error)) throw error;
+      missing3.push(cursor);
+      if (missing3.length > MAX_CREATED_DIRECTORIES) refuse3();
+      const parent2 = dirname3(cursor);
+      if (parent2 === cursor) refuse3();
+      cursor = parent2;
+    }
+  }
+  if (!missing3.length) {
+    inspectPrivateDirectory(target);
+    return;
+  }
+  let parent = inspectWindowsCreationParent(cursor);
+  bindDirectory(parent);
+  try {
+    for (const path of missing3.reverse()) {
+      let result;
+      try {
+        result = createWindowsPrivatePath({ path, kind: "directory" }, parent);
+      } catch (error) {
+        if (error?.code !== "EEXIST") throw error;
+        parent = inspectPrivateDirectory(path);
+        continue;
+      }
+      created.push(result.entry);
+      if (result.entry.path !== path || result.entry.kind !== "directory" || result.entry.privacy !== "private") refuse3();
+      bindDirectory(result.parent);
+      bindDirectory(result.entry);
+      parent = result.entry;
+    }
+  } catch (error) {
+    for (const entry of created.reverse()) {
+      try {
+        const stat = lstatSync3(entry.path, { bigint: true });
+        if (same(entry, stat) && correctType(stat, "directory")) rmdirSync(entry.path);
+      } catch {
+      }
+    }
+    throw error;
+  }
+}
+async function ensureWindowsPrivateDirectory(path) {
+  ensureWindowsPrivateDirectorySync(path);
+}
+
+// src/secure-local-write.ts
+import { randomBytes as randomBytes2 } from "node:crypto";
+import { lstat as lstat2, mkdir as mkdir2, open as open3, rename as rename2, unlink as unlink2 } from "node:fs/promises";
+import { dirname as dirname5, isAbsolute as isAbsolute2, join as join4 } from "node:path";
+
+// src/private-outbox-lock.ts
+import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
+import { randomBytes } from "node:crypto";
+import { constants as constants4 } from "node:fs";
+import { chmod, lstat, mkdir, open as open2, rename, unlink } from "node:fs/promises";
+import { dirname as dirname4, join as join3 } from "node:path";
+import { performance } from "node:perf_hooks";
+
+// src/private-outbox-diagnostics.ts
+var retainedDraftRecovery = "Retained drafts and encryption keys must not be deleted or regenerated to repair startup.";
+var capacityRecovery = "Inspect content-free outbox state, then delete only a selected obsolete draft with delete_private_lesson_candidate or delete_private_skill_candidate, using its draft_id and confirm=true after explicit confirmation. Available bytes alone do not establish whether another encrypted draft fits; admission checks its actual size.";
+var entryLimitRecovery = "Inspect content-free outbox state. Confirmed deletion may retain a tombstone and does not necessarily free an entry slot. Retry after any expiring submitted markers are cleaned up; do not delete retained files manually.";
+var diagnostics = {
+  outbox_path_unsafe: "Private lesson outbox path is unsafe. Restore a regular, user-owned directory or file; symlinks are not supported.",
+  outbox_owner_mismatch: "Private lesson outbox is not owned by the current user. Restore ownership for this OS profile.",
+  outbox_permissions_not_private: "Private lesson outbox permissions are not private. Restrict directories to 0700 and files to 0600.",
+  outbox_permission_denied: "Private lesson storage access was denied. Allow this MCP process access to its private local storage and retry.",
+  outbox_storage_full: "Private lesson storage is full. Free unrelated disk space and retry.",
+  outbox_key_invalid: "Private lesson outbox encryption key is invalid. Restore the original key (the login Keychain item or the 0600 key file private-lesson-outbox.key in the Remembrance config directory) before retrying; a new key cannot read retained items.",
+  outbox_key_unavailable: "Private lesson outbox encryption key availability could not be determined. Unlock the macOS login keychain, allow this MCP process to access it, and retry.",
+  outbox_key_missing: "Private learning outbox encryption key is missing while encrypted drafts remain. Restore the original key (the login Keychain item or the 0600 key file private-lesson-outbox.key in the Remembrance config directory) before retrying; a new key cannot read retained items.",
+  outbox_ceiling_reached: "Private learning capture is paused because the configured local outbox safety ceiling has insufficient headroom.",
+  outbox_entry_limit_reached: "Private learning capture is paused because the configured local outbox entry limit was reached.",
+  outbox_lock_busy: "Private learning outbox is busy; retry shortly.",
+  outbox_io_failed: "Private lesson storage could not be accessed. Check local storage availability and retry."
+};
+var PrivateOutboxStorageError = class extends Error {
+  constructor(reasonCode, stage, message = diagnostics[reasonCode]) {
+    super(message);
+    this.reasonCode = reasonCode;
+    this.stage = stage;
+    this.name = "PrivateOutboxStorageError";
+  }
+  reasonCode;
+  stage;
+  diagnostic() {
+    const ceilingLimited = this.reasonCode === "outbox_ceiling_reached";
+    const entryLimited = this.reasonCode === "outbox_entry_limit_reached";
+    const capacityLimited = ceilingLimited || entryLimited;
+    const preserveRetainedDrafts = !capacityLimited && this.reasonCode !== "outbox_lock_busy";
+    return {
+      reason_code: this.reasonCode,
+      stage: this.stage,
+      remediation: `${this.message}${ceilingLimited ? ` ${capacityRecovery}` : entryLimited ? ` ${entryLimitRecovery}` : preserveRetainedDrafts ? ` ${retainedDraftRecovery}` : ""}`,
+      ...capacityLimited ? {
+        next_action: {
+          tool: "inspect_private_learning_outbox",
+          arguments: { limit: 50 }
+        }
+      } : {}
+    };
+  }
+};
+function privateOutboxStorageError(error, stage) {
+  if (error instanceof PrivateOutboxStorageError) {
+    return new PrivateOutboxStorageError(error.reasonCode, stage);
+  }
+  const code = error instanceof Error && "code" in error ? error.code : null;
+  const reason = code === "EACCES" || code === "EPERM" || code === "EROFS" ? "outbox_permission_denied" : code === "ENOSPC" || code === "EDQUOT" ? "outbox_storage_full" : code === "ELOOP" || code === "ENOTDIR" || code === "EEXIST" ? "outbox_path_unsafe" : "outbox_io_failed";
+  return new PrivateOutboxStorageError(reason, stage);
+}
+function isPrivateOutboxKeyAccessError(error) {
+  return error instanceof PrivateOutboxStorageError && (error.stage === "keychain_read" || error.stage === "fallback_key_read");
+}
+var PrivateOutboxCapacityError = class extends PrivateOutboxStorageError {
+  constructor(lane, ceilingBytes, outcome) {
+    const mib = 1024 * 1024;
+    const ceiling = ceilingBytes % mib === 0 ? `${ceilingBytes / mib} MiB` : `${ceilingBytes} bytes`;
+    super(
+      "outbox_ceiling_reached",
+      "outbox_capture",
+      `Private ${lane} capture is paused because the configured local ${ceiling} outbox safety ceiling ${outcome}.`
+    );
+    this.name = "PrivateOutboxCapacityError";
+  }
+};
+var PrivateOutboxDecryptionError = class extends Error {
+  constructor(lane, draftId) {
+    super(
+      "Private learning outbox authentication failed. Restore access to the original encryption key; do not delete or regenerate retained drafts."
+    );
+    this.lane = lane;
+    this.draftId = draftId;
+    this.name = "PrivateOutboxDecryptionError";
+  }
+  lane;
+  draftId;
+  diagnostic() {
+    return {
+      code: "private_learning_outbox_undecryptable",
+      lane: this.lane,
+      draft_id: this.draftId,
+      retained_locally: true,
+      candidate_sent: false,
+      remediation: "Restore access to the original encryption key, then inspect the retained draft again. Do not delete or regenerate it."
+    };
+  }
+};
+function privateOutboxPausedAtCeiling(totalBytes, ceilingBytes, lastRejectedCaptureBytes) {
+  const headroomBytes = Math.max(0, ceilingBytes - totalBytes);
+  return headroomBytes === 0 || lastRejectedCaptureBytes !== null && headroomBytes < lastRejectedCaptureBytes;
+}
+function privateOutboxCapacityState(totalBytes, ceilingBytes, captureHeadroomTargetBytes, lastRejectedCaptureBytes) {
+  const captureHeadroomBytes = Math.max(0, ceilingBytes - totalBytes);
+  const pausedAtCeiling = privateOutboxPausedAtCeiling(
+    totalBytes,
+    ceilingBytes,
+    lastRejectedCaptureBytes
+  );
+  const capacityStatus = captureHeadroomBytes === 0 ? "full" : lastRejectedCaptureBytes !== null && captureHeadroomBytes < lastRejectedCaptureBytes ? "constrained" : captureHeadroomBytes < captureHeadroomTargetBytes ? "limited" : "ready";
+  const capacityGuidance = capacityStatus === "constrained" ? `A recent capture was rejected at the current headroom. ${capacityRecovery}` : capacityStatus === "full" ? `The outbox has no capture headroom. ${capacityRecovery}` : capacityStatus === "limited" ? "Headroom is below the lane's advisory capture target. Available bytes alone do not establish whether another encrypted draft fits; admission checks its actual size." : null;
+  return {
+    paused_at_ceiling: pausedAtCeiling,
+    capacity_status: capacityStatus,
+    capture_headroom_bytes: captureHeadroomBytes,
+    capture_headroom_target_bytes: captureHeadroomTargetBytes,
+    last_rejected_capture_bytes: lastRejectedCaptureBytes,
+    capture_requires_size_check: captureHeadroomBytes > 0,
+    capacity_guidance: capacityGuidance
+  };
+}
+
+// src/private-outbox-lock.ts
+var LOCK_VERSION = "private-outbox-lock-v2";
+var DEFAULT_STALE_MS = 3e4;
+var DEFAULT_WAIT_MS = 5e3;
+var DEFAULT_MALFORMED_LOCK_GRACE_MS = 250;
+var MAX_LOCK_BYTES = 4096;
+var activeLocks = new AsyncLocalStorage2();
+var lockMetadata = (path) => process.platform === "win32" ? lstat(path, { bigint: true }) : lstat(path);
+var heldMetadata = (handle) => process.platform === "win32" ? handle.stat({ bigint: true }) : handle.stat();
+var modificationNs = (metadata2) => "mtimeNs" in metadata2 ? metadata2.mtimeNs : void 0;
+async function withPrivateOutboxLock(directory, namespace, operation, options = {}) {
+  const lockKey = `${directory}\0${namespace}`;
+  const active = activeLocks.getStore();
+  if (active?.has(lockKey)) return operation();
+  const lockPath = join3(directory, `.${namespace}.lock`);
+  const staleMs = Math.max(50, options.staleMs ?? DEFAULT_STALE_MS);
+  const heartbeatMs = Math.max(
+    25,
+    Math.min(options.heartbeatMs ?? Math.floor(staleMs / 3), staleMs / 2)
+  );
+  const deadline = performance.now() + (options.waitMs ?? DEFAULT_WAIT_MS);
+  const ownerNonce = randomBytes(18).toString("hex");
+  let observation = null;
+  let handle = null;
+  const windowsInspection = {};
+  while (!handle) {
+    let candidate = null;
+    try {
+      if (process.platform === "win32") {
+        const exists = await lockMetadata(lockPath).catch((error) => {
+          if (isMissingError(error)) return null;
+          throw error;
+        });
+        if (exists) throw Object.assign(new Error("Private outbox lock exists."), { code: "EEXIST" });
+      }
+      candidate = process.platform === "win32" ? await openWindowsPrivateFile(lockPath) : await open2(lockPath, "wx", 384);
+      await writeLockRecord(candidate, lockRecord(ownerNonce));
+      if (process.platform !== "win32") await candidate.chmod(384);
+      await syncDirectory(directory);
+      const candidateMetadata = await heldMetadata(candidate);
+      const published = await inspectLockPath(lockPath, windowsInspection);
+      if (!published || published.metadata.dev !== candidateMetadata.dev || published.metadata.ino !== candidateMetadata.ino || published.record?.owner_nonce !== ownerNonce) {
+        await candidate.close().catch(() => {
+        });
+        candidate = null;
+        continue;
+      }
+      handle = candidate;
+    } catch (error) {
+      if (!isAlreadyExistsError(error)) {
+        if (candidate) {
+          await closeAndRemoveOwnedCandidate(directory, lockPath, candidate);
+        }
+        throw error;
+      }
+      const metadata2 = await lockMetadata(lockPath).catch((statError) => {
+        if (isMissingError(statError)) return null;
+        throw statError;
+      });
+      if (!metadata2) continue;
+      if (metadata2.isSymbolicLink() || !metadata2.isFile() || !privateLockMetadata(metadata2)) {
+        await quarantineMalformedLock(
+          directory,
+          lockPath,
+          namespace,
+          options.recoveryIdPrefix
+        );
+        observation = null;
+        continue;
+      }
+      const inspected = await inspectLock(lockPath, metadata2, windowsInspection);
+      if (!inspected) {
+        observation = null;
+        continue;
+      }
+      const knownHolder = process.platform === "win32" ? windowsInspection.holder?.record : void 0;
+      const ownerState = inspected.record ?? knownHolder ? processState((inspected.record ?? knownHolder).pid) : "unknown";
+      const now = performance.now();
+      const unchanged2 = Boolean(
+        observation && observation.dev === inspected.metadata.dev && observation.ino === inspected.metadata.ino && observation.size === inspected.metadata.size && observation.mtimeMs === inspected.metadata.mtimeMs && observation.mtimeNs === modificationNs(inspected.metadata)
+      );
+      const currentObservation = unchanged2 && observation ? observation : {
+        dev: inspected.metadata.dev,
+        ino: inspected.metadata.ino,
+        size: inspected.metadata.size,
+        mtimeMs: inspected.metadata.mtimeMs,
+        mtimeNs: modificationNs(inspected.metadata),
+        // A clearly old filesystem timestamp can establish that a
+        // malformed/unknown holder already outlived the lease. Future
+        // timestamps and small clock disagreements get no credit and are
+        // still measured only with the monotonic clock from first sight.
+        firstSeenMonotonicMs: now - Math.min(
+          staleMs,
+          Math.max(0, Date.now() - Number(inspected.metadata.mtimeMs))
+        )
+      };
+      observation = currentObservation;
+      const deadOwner = ownerState === "dead";
+      const leaseMs = inspected.record ?? knownHolder ? staleMs : Math.min(staleMs, DEFAULT_MALFORMED_LOCK_GRACE_MS);
+      const leaseExpired = unchanged2 && now - currentObservation.firstSeenMonotonicMs >= leaseMs;
+      const partialKnownLiveHolder = !inspected.record && knownHolder && ownerState === "live";
+      if (!partialKnownLiveHolder && (deadOwner || leaseExpired)) {
+        if (!inspected.record && !knownHolder) {
+          await quarantineMalformedLock(
+            directory,
+            lockPath,
+            namespace,
+            options.recoveryIdPrefix
+          );
+          observation = null;
+          continue;
+        }
+        const reclaimed = await reclaimObservedLock(
+          directory,
+          lockPath,
+          namespace,
+          currentObservation,
+          options.recoveryIdPrefix
+        );
+        if (reclaimed) {
+          observation = null;
+          continue;
+        }
+      }
+      if (performance.now() >= deadline) {
+        throw new PrivateOutboxStorageError(
+          "outbox_lock_busy",
+          "outbox_lock_acquire"
+        );
+      }
+      await sleep(10);
+    }
+  }
+  const nextActive = new Set(active ?? []);
+  nextActive.add(lockKey);
+  let heartbeatPending = false;
+  const heartbeat = setInterval(() => {
+    if (heartbeatPending || !handle) return;
+    heartbeatPending = true;
+    void writeLockRecord(handle, lockRecord(ownerNonce)).finally(() => {
+      heartbeatPending = false;
+    });
+  }, heartbeatMs);
+  heartbeat.unref?.();
+  try {
+    return await activeLocks.run(nextActive, operation);
+  } finally {
+    clearInterval(heartbeat);
+    while (heartbeatPending) await sleep(1);
+    const held = await heldMetadata(handle).catch(() => null);
+    let current;
+    try {
+      current = await inspectLockPath(lockPath, windowsInspection);
+    } finally {
+      await handle.close().catch(() => {
+      });
+    }
+    if (held && current?.record?.owner_nonce === ownerNonce && held.dev === current.metadata.dev && held.ino === current.metadata.ino) {
+      await unlink(lockPath).catch(() => {
+      });
+      await syncDirectory(directory);
+    }
+  }
+}
+async function closeAndRemoveOwnedCandidate(directory, lockPath, candidate) {
+  const candidateMetadata = await heldMetadata(candidate).catch(() => null);
+  const current = await lockMetadata(lockPath).catch((error) => {
+    if (isMissingError(error)) return null;
+    throw error;
+  });
+  await candidate.close().catch(() => {
+  });
+  if (candidateMetadata && current && current.dev === candidateMetadata.dev && current.ino === candidateMetadata.ino) {
+    await unlink(lockPath).catch(() => {
+    });
+    await syncDirectory(directory).catch(() => {
+    });
+  }
+}
+function lockRecord(ownerNonce) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  return {
+    version: LOCK_VERSION,
+    pid: process.pid,
+    owner_nonce: ownerNonce,
+    created_at: now,
+    heartbeat_at: now
+  };
+}
+async function writeLockRecord(handle, record4) {
+  const value = `${JSON.stringify(record4)}
+`;
+  await handle.write(value, 0, "utf8");
+  await handle.truncate(Buffer.byteLength(value));
+  await handle.sync();
+}
+async function inspectLockPath(path, windowsInspection) {
+  const metadata2 = await lockMetadata(path).catch((error) => {
+    if (isMissingError(error)) return null;
+    throw error;
+  });
+  if (!metadata2 || metadata2.isSymbolicLink() || !metadata2.isFile()) return null;
+  return inspectLock(path, metadata2, windowsInspection);
+}
+async function inspectLock(path, expected, windowsInspection) {
+  let handle = null;
+  try {
+    handle = await open2(path, constants4.O_RDONLY | (constants4.O_NOFOLLOW ?? 0));
+    const metadata2 = await heldMetadata(handle);
+    if (metadata2.dev !== expected.dev || metadata2.ino !== expected.ino)
+      return null;
+    if (process.platform === "win32") {
+      await assertWindowsLockIdentity(path, expected, metadata2, windowsInspection ?? {});
+    }
+    const buffer = Buffer.alloc(Math.min(MAX_LOCK_BYTES, Number(metadata2.size) + 1));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const record4 = parseLockRecord(
+      buffer.subarray(0, bytesRead).toString("utf8")
+    );
+    if (process.platform === "win32" && windowsInspection && record4) {
+      const prior = windowsInspection.holder;
+      if (prior && prior.dev === metadata2.dev && prior.ino === metadata2.ino && (prior.record.pid !== record4.pid || prior.record.owner_nonce !== record4.owner_nonce)) {
+        throw new PrivateOutboxStorageError("outbox_lock_busy", "outbox_lock_acquire");
+      }
+      windowsInspection.holder = { dev: metadata2.dev, ino: metadata2.ino, record: record4 };
+    }
+    return { metadata: metadata2, record: record4 };
+  } catch (error) {
+    if (isMissingError(error) || isLoopError(error)) return null;
+    throw error;
+  } finally {
+    await handle?.close().catch(() => {
+    });
+  }
+}
+function parseLockRecord(value) {
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed?.version !== LOCK_VERSION || !Number.isSafeInteger(parsed.pid) || parsed.pid <= 0 || !/^[a-f0-9]{36}$/u.test(parsed.owner_nonce) || typeof parsed.created_at !== "string" || typeof parsed.heartbeat_at !== "string" || !Number.isFinite(Date.parse(parsed.created_at)) || !Number.isFinite(Date.parse(parsed.heartbeat_at))) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+async function assertWindowsLockIdentity(path, before, opened, state) {
+  if (!state.entry || state.entry.volume_serial !== String(opened.dev) || state.entry.file_id !== String(opened.ino)) {
+    const snapshot = inspectWindowsPrivatePaths([{ path, kind: "file" }]);
+    const entry = snapshot.entries.find((item) => item.path === path && item.kind === "file" && item.privacy === "private");
+    const parent2 = snapshot.entries.find((item) => item.path === dirname4(path) && item.kind === "directory");
+    if (snapshot.protection !== "windows_dacl" || !entry || !parent2) throw new Error("Windows private lock protection could not be verified.");
+    state.entry = entry;
+    state.parent = parent2;
+    state.holder = void 0;
+  }
+  assertWindowsFileIdentity(state.entry, before, opened);
+  const parent = await lstat(dirname4(path), { bigint: true });
+  if (!parent.isDirectory() || parent.isSymbolicLink() || !state.parent) throw new Error("Windows private lock parent is unsafe.");
+  assertWindowsFileIdentity(state.parent, parent, parent);
+}
+function privateLockMetadata(metadata2) {
+  if (process.platform === "win32") return true;
+  const owned = typeof process.getuid !== "function" || metadata2.uid === process.getuid();
+  return owned && (Number(metadata2.mode) & 63) === 0;
+}
+function processState(pid) {
+  try {
+    process.kill(pid, 0);
+    return "live";
+  } catch (error) {
+    if (error.code === "ESRCH") return "dead";
+    return "unknown";
+  }
+}
+async function reclaimObservedLock(directory, lockPath, namespace, observed, recoveryIdPrefix) {
+  const current = await lockMetadata(lockPath).catch((error) => {
+    if (isMissingError(error)) return null;
+    throw error;
+  });
+  if (!current || current.isSymbolicLink() || !current.isFile() || current.dev !== observed.dev || current.ino !== observed.ino || current.size !== observed.size || current.mtimeMs !== observed.mtimeMs || modificationNs(current) !== observed.mtimeNs) {
+    return false;
+  }
+  const displaced = await quarantinePath(
+    directory,
+    namespace,
+    "reclaimed",
+    recoveryIdPrefix
+  );
+  try {
+    await rename(lockPath, displaced);
+    await unlink(displaced);
+    await syncDirectory(directory);
+    return true;
+  } catch (error) {
+    if (isMissingError(error)) return false;
+    throw error;
+  }
+}
+async function quarantineMalformedLock(directory, lockPath, namespace, recoveryIdPrefix) {
+  if (!recoveryIdPrefix) {
+    throw new Error("Private learning lock quarantine requires a lane id.");
+  }
+  const target = await quarantinePath(
+    directory,
+    namespace,
+    "malformed",
+    recoveryIdPrefix
+  );
+  try {
+    await rename(lockPath, target);
+    await syncDirectory(dirname4(target));
+    await syncDirectory(directory);
+  } catch (error) {
+    if (!isMissingError(error)) throw error;
+  }
+}
+async function quarantinePath(directory, namespace, reason, recoveryIdPrefix) {
+  const quarantine = join3(directory, "quarantine");
+  const root = join3(quarantine, "locks");
+  await ensurePrivateQuarantineDirectory(directory, "quarantine");
+  await ensurePrivateQuarantineDirectory(quarantine, "locks");
+  const recoveryId = recoveryIdPrefix ? `${recoveryIdPrefix}_recovery_${randomBytes(12).toString("hex")}` : `reclaimed_${randomBytes(12).toString("hex")}`;
+  return join3(root, `${recoveryId}.${namespace}.${reason}.retained`);
+}
+async function ensurePrivateQuarantineDirectory(parent, name) {
+  const path = join3(parent, name);
+  if (process.platform === "win32") {
+    await ensureWindowsPrivateDirectory(path);
+    return;
+  }
+  try {
+    await mkdir(path, { mode: 448 });
+  } catch (error) {
+    if (!isAlreadyExistsError(error)) throw error;
+  }
+  const metadata2 = await lstat(path);
+  const owned = typeof process.getuid !== "function" || metadata2.uid === process.getuid();
+  if (metadata2.isSymbolicLink() || !metadata2.isDirectory() || !owned) {
+    throw new Error("Private learning lock quarantine is unsafe.");
+  }
+  await chmod(path, 448);
+}
+async function syncDirectory(directory) {
+  if (process.platform === "win32") return;
+  const handle = await open2(directory, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+function isMissingError(error) {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+function isAlreadyExistsError(error) {
+  return error instanceof Error && "code" in error && error.code === "EEXIST";
+}
+function isLoopError(error) {
+  return error instanceof Error && "code" in error && error.code === "ELOOP";
+}
+
+// src/secure-local-write.ts
+var sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino;
+var missing2 = (error) => error?.code === "ENOENT";
+async function metadata(path) {
+  try {
+    return await lstat2(path, { bigint: true });
+  } catch (error) {
+    if (missing2(error)) return null;
+    throw error;
+  }
+}
+var writeSecureLocalConfig = async (path, update, { maxBytes }) => {
+  const windows = process.platform === "win32";
+  if (!windows && typeof process.getuid !== "function") throw new Error("Private config protection is unavailable.");
+  if (!isAbsolute2(path) || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_LOCAL_CONFIG_BYTES) throw new Error("Invalid private config storage request.");
+  const directory = dirname5(path);
+  if (windows) await ensureWindowsPrivateDirectory(directory);
+  else await mkdir2(directory, { recursive: true, mode: 448 });
+  assertSecurePrivateLocalDirectory(directory);
+  const parent = await lstat2(directory, { bigint: true });
+  const checkParent = async () => {
+    assertSecurePrivateLocalDirectory(directory);
+    if (!sameFile(parent, await lstat2(directory, { bigint: true }))) throw new Error("Private config parent changed.");
+  };
+  await withPrivateOutboxLock(directory, "config", async () => {
+    await checkParent();
+    const before = await metadata(path);
+    const previous = before ? readSecureLocalText(path, { maxBytes, fatalUtf8: true }) : null;
+    const next = update(previous);
+    if (typeof next !== "string" || Buffer.byteLength(next, "utf8") > maxBytes) throw new Error("Private config exceeds its size limit.");
+    const temporary = join4(directory, `.config.${process.pid}.${randomBytes2(12).toString("hex")}.tmp`);
+    let handle = null, owned = null;
+    try {
+      await checkParent();
+      handle = windows ? await openWindowsPrivateFile(temporary) : await open3(temporary, "wx", 384);
+      owned = await handle.stat({ bigint: true });
+      if (!owned.isFile() || !windows && (owned.uid !== BigInt(process.getuid()) || (owned.mode & 0o077n) !== 0n)) throw new Error("Private config temporary is unsafe.");
+      await handle.writeFile(next, "utf8");
+      await handle.sync();
+      await handle.close();
+      handle = null;
+      await checkParent();
+      const candidate = await lstat2(temporary, { bigint: true });
+      if (!sameFile(owned, candidate) || candidate.isSymbolicLink() || !candidate.isFile() || !windows && (candidate.mode & 0o077n) !== 0n) throw new Error("Private config temporary changed.");
+      if (windows) readSecureLocalText(temporary, { maxBytes, fatalUtf8: true });
+      const current = await metadata(path);
+      if (before ? !current || !sameFile(before, current) || readSecureLocalText(path, { maxBytes, fatalUtf8: true }) !== previous : current !== null) throw new Error("Private config changed during update.");
+      await rename2(temporary, path);
+    } finally {
+      await handle?.close().catch(() => {
+      });
+      const leftover = await metadata(temporary).catch(() => null);
+      if (owned && leftover && sameFile(owned, leftover)) await unlink2(temporary).catch(() => {
+      });
+    }
+  });
+};
+
+// src/server.ts
+import { mkdir as mkdir6, writeFile as writeFile2 } from "node:fs/promises";
+import { dirname as dirname14 } from "node:path";
 import {
   createHash as createHash10,
   createHmac,
@@ -28166,19 +29982,19 @@ var getRefs = (options) => {
 };
 
 // ../../node_modules/zod-to-json-schema/dist/esm/errorMessages.js
-function addErrorMessage(res, key, errorMessage, refs) {
+function addErrorMessage(res, key2, errorMessage, refs) {
   if (!refs?.errorMessages)
     return;
   if (errorMessage) {
     res.errorMessage = {
       ...res.errorMessage,
-      [key]: errorMessage
+      [key2]: errorMessage
     };
   }
 }
-function setResponseValueAndErrors(res, key, value, errorMessage, refs) {
-  res[key] = value;
-  addErrorMessage(res, key, errorMessage, refs);
+function setResponseValueAndErrors(res, key2, value, errorMessage, refs) {
+  res[key2] = value;
+  addErrorMessage(res, key2, errorMessage, refs);
 }
 
 // ../../node_modules/zod-to-json-schema/dist/esm/getRelativePath.js
@@ -28770,11 +30586,11 @@ function parseRecordDef(def, refs) {
     return {
       type: "object",
       required: def.keyType._def.values,
-      properties: def.keyType._def.values.reduce((acc, key) => ({
+      properties: def.keyType._def.values.reduce((acc, key2) => ({
         ...acc,
-        [key]: parseDef(def.valueType._def, {
+        [key2]: parseDef(def.valueType._def, {
           ...refs,
-          currentPath: [...refs.currentPath, "properties", key]
+          currentPath: [...refs.currentPath, "properties", key2]
         }) ?? parseAnyDef(refs)
       }), {}),
       additionalProperties: refs.rejectedAdditionalProperties
@@ -28841,10 +30657,10 @@ function parseMapDef(def, refs) {
 // ../../node_modules/zod-to-json-schema/dist/esm/parsers/nativeEnum.js
 function parseNativeEnumDef(def) {
   const object2 = def.values;
-  const actualKeys = Object.keys(def.values).filter((key) => {
-    return typeof object2[object2[key]] !== "number";
+  const actualKeys = Object.keys(def.values).filter((key2) => {
+    return typeof object2[object2[key2]] !== "number";
   });
-  const actualValues = actualKeys.map((key) => object2[key]);
+  const actualValues = actualKeys.map((key2) => object2[key2]);
   const parsedTypes = Array.from(new Set(actualValues.map((values) => typeof values)));
   return {
     type: parsedTypes.length === 1 ? parsedTypes[0] === "string" ? "string" : "number" : ["string", "number"],
@@ -29537,16 +31353,16 @@ function maximumJsonBytes(schema, path, errors, root = false) {
       }
       const entries = Object.entries(properties ?? {});
       let total = 2;
-      for (const [index, [key, value]] of entries.entries()) {
+      for (const [index, [key2, value]] of entries.entries()) {
         if (!isSchema(value)) {
-          errors.push(`${path}.properties.${key} is not a schema.`);
+          errors.push(`${path}.properties.${key2} is not a schema.`);
           continue;
         }
-        total = checkedAdd(total, Buffer.byteLength(JSON.stringify(key)), path);
+        total = checkedAdd(total, Buffer.byteLength(JSON.stringify(key2)), path);
         total = checkedAdd(total, 1, path);
         total = checkedAdd(
           total,
-          maximumJsonBytes(value, `${path}.properties.${key}`, errors),
+          maximumJsonBytes(value, `${path}.properties.${key2}`, errors),
           path
         );
         if (index > 0) total = checkedAdd(total, 1, path);
@@ -29604,7 +31420,7 @@ function checkedMultiply(left, right, path) {
 }
 
 // src/tool-argument-diagnostics.ts
-var diagnostics = /* @__PURE__ */ new WeakMap();
+var diagnostics2 = /* @__PURE__ */ new WeakMap();
 var messages2 = /* @__PURE__ */ new WeakMap();
 var issueCodes2 = /* @__PURE__ */ new Set([
   "invalid_type",
@@ -29629,7 +31445,7 @@ function constraintsFor(schemas) {
   const project = (schema, depth) => {
     const result = {};
     if (depth === 4 || remaining-- <= 0) throw incomplete;
-    for (const key of [
+    for (const key2 of [
       "type",
       "minLength",
       "maxLength",
@@ -29639,24 +31455,24 @@ function constraintsFor(schemas) {
       "maxItems",
       "x-remembrance-max-serialized-bytes"
     ]) {
-      const value = schema[key];
+      const value = schema[key2];
       if (typeof value === "number" || typeof value === "boolean" || typeof value === "string" && value.length <= 64)
-        result[key] = value;
+        result[key2] = value;
     }
-    for (const key of ["pattern", "const"]) {
-      const value = schema[key];
-      if (typeof value === "string" && value.length <= 256) result[key] = value;
+    for (const key2 of ["pattern", "const"]) {
+      const value = schema[key2];
+      if (typeof value === "string" && value.length <= 256) result[key2] = value;
     }
-    for (const key of ["enum", "required"]) {
-      const value = schema[key];
+    for (const key2 of ["enum", "required"]) {
+      const value = schema[key2];
       if (Array.isArray(value) && value.length <= 32 && value.every((item) => typeof item === "string" && item.length <= 64))
-        result[key] = Object.freeze([...value]);
+        result[key2] = Object.freeze([...value]);
     }
-    for (const key of ["anyOf", "oneOf", "allOf"]) {
-      const children = schema[key];
+    for (const key2 of ["anyOf", "oneOf", "allOf"]) {
+      const children = schema[key2];
       if (Array.isArray(children)) {
         if (children.length > 8) throw incomplete;
-        result[key] = Object.freeze(
+        result[key2] = Object.freeze(
           children.flatMap((child) => {
             const next = object(child);
             return next ? [project(next, depth + 1)] : [];
@@ -29664,9 +31480,9 @@ function constraintsFor(schemas) {
         );
       }
     }
-    for (const key of ["if", "then", "not"]) {
-      const child = object(schema[key]);
-      if (child) result[key] = project(child, depth + 1);
+    for (const key2 of ["if", "then", "not"]) {
+      const child = object(schema[key2]);
+      if (child) result[key2] = project(child, depth + 1);
     }
     return Object.freeze(result);
   };
@@ -29711,7 +31527,7 @@ function parseWithArgumentDiagnostics(schema, parse) {
         }
         issues.push(safe);
       }
-      diagnostics.set(
+      diagnostics2.set(
         error,
         Object.freeze({
           code: "invalid_tool_arguments",
@@ -29725,7 +31541,7 @@ function parseWithArgumentDiagnostics(schema, parse) {
   }
 }
 function toolArgumentDiagnostic(error) {
-  return error instanceof ZodError ? diagnostics.get(error) : void 0;
+  return error instanceof ZodError ? diagnostics2.get(error) : void 0;
 }
 function toolArgumentMessage(error) {
   return error instanceof ZodError ? messages2.get(error) : void 0;
@@ -30265,11 +32081,11 @@ function analyzePlainMetadataGraph(root, options = {}) {
         "MCP metadata exceeds the maximum graph descriptor/edge count."
       );
     }
-    for (const key of keys) {
-      if (typeof key !== "string" && !options.allowSymbolKeys) {
+    for (const key2 of keys) {
+      if (typeof key2 !== "string" && !options.allowSymbolKeys) {
         throw new Error("MCP metadata contains a symbol property.");
       }
-      const descriptor = Object.getOwnPropertyDescriptor(node.value, key);
+      const descriptor = Object.getOwnPropertyDescriptor(node.value, key2);
       if (!descriptor || descriptor.get || descriptor.set || !("value" in descriptor)) {
         throw new Error("MCP metadata contains an executable property.");
       }
@@ -30453,13 +32269,13 @@ function inertMetadataMatches(actual, expected) {
     }
     const leftKeys = Object.keys(left).sort();
     const rightKeys = Object.keys(right).sort();
-    if (leftKeys.length !== rightKeys.length || leftKeys.some((key, index) => key !== rightKeys[index])) {
+    if (leftKeys.length !== rightKeys.length || leftKeys.some((key2, index) => key2 !== rightKeys[index])) {
       return false;
     }
-    for (const key of leftKeys) {
+    for (const key2 of leftKeys) {
       pending.push([
-        left[key],
-        right[key]
+        left[key2],
+        right[key2]
       ]);
     }
   }
@@ -30479,10 +32295,10 @@ function canonicalRuntimeForDefinition(definition) {
   const expected = acceptedProfile?.definition ?? canonical.definition;
   const mismatches = [];
   const unexpectedKeys = Reflect.ownKeys(definition).filter(
-    (key) => !TOOL_DEFINITION_KEYS.has(key)
+    (key2) => !TOOL_DEFINITION_KEYS.has(key2)
   );
   if (unexpectedKeys.length > 0) mismatches.push("descriptor_shape");
-  for (const key of [
+  for (const key2 of [
     "description",
     "endpoint",
     "method",
@@ -30494,25 +32310,25 @@ function canonicalRuntimeForDefinition(definition) {
     "schemaProfile",
     "networkSchemaProfile"
   ]) {
-    if (definition[key] !== expected[key]) mismatches.push(key);
+    if (definition[key2] !== expected[key2]) mismatches.push(key2);
   }
-  for (const key of [
+  for (const key2 of [
     "network_behavior",
     "payload_class",
     "consent_class"
   ]) {
-    if (definition.security?.[key] !== expected.security[key]) {
-      mismatches.push(`security.${key}`);
+    if (definition.security?.[key2] !== expected.security[key2]) {
+      mismatches.push(`security.${key2}`);
     }
   }
-  for (const key of [
+  for (const key2 of [
     "readOnlyHint",
     "openWorldHint",
     "destructiveHint",
     "idempotentHint"
   ]) {
-    if (definition.annotations?.[key] !== expected.annotations[key]) {
-      mismatches.push(`annotations.${key}`);
+    if (definition.annotations?.[key2] !== expected.annotations[key2]) {
+      mismatches.push(`annotations.${key2}`);
     }
   }
   if (!inertMetadataMatches(definition.inputSchema, expected.inputSchema)) {
@@ -30878,8 +32694,8 @@ function normalizeBoundedWriteJsonSchema(schema, name) {
     schemaProperty(lessonLink, "draft_id").description = "Held private-lesson draft that this lesson replaces, from its agent_recovery. Write the lesson from the current task, without what the findings name; the held content is never available. The held draft is retired only once the organization accepts this lesson, and accepts at most three versions; a held version is refused with its findings.";
   }
   if (name === "register_agent_key") {
-    const metadata = schemaProperty(schema, "metadata");
-    metadata[BOUNDED_JSON_BYTES_EXTENSION] = MAX_JSON_FIELD_BYTES;
+    const metadata2 = schemaProperty(schema, "metadata");
+    metadata2[BOUNDED_JSON_BYTES_EXTENSION] = MAX_JSON_FIELD_BYTES;
   }
   if (name === "submit_feedback") {
     const evidence = schemaProperty(schema, "evidence");
@@ -30916,40 +32732,40 @@ validateServedToolDefinitionSet(
 );
 
 // src/private-lesson-outbox.ts
-import { createCipheriv as createCipheriv2, createDecipheriv as createDecipheriv2, randomBytes as randomBytes5 } from "node:crypto";
+import { createCipheriv as createCipheriv2, createDecipheriv as createDecipheriv2, randomBytes as randomBytes6 } from "node:crypto";
 import {
   chmod as chmod2,
   link,
-  lstat as lstat2,
-  mkdir as mkdir2,
-  open as open2,
+  lstat as lstat3,
+  mkdir as mkdir3,
+  open as open4,
   readdir,
-  rename as rename2,
+  rename as rename3,
   rm,
-  unlink as unlink2
+  unlink as unlink3
 } from "node:fs/promises";
-import { constants as constants4, existsSync as existsSync2 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { basename, dirname as dirname3, join as join3 } from "node:path";
+import { constants as constants6, existsSync as existsSync2 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { basename, dirname as dirname6, join as join6 } from "node:path";
 
 // ../codex-plugin/scripts/pending-action-payload.mjs
 import {
   createCipheriv,
   createDecipheriv,
   createHash as createHash2,
-  randomBytes
+  randomBytes as randomBytes3
 } from "node:crypto";
 import {
-  closeSync,
-  constants,
-  fstatSync,
-  lstatSync,
-  openSync,
-  readSync,
+  closeSync as closeSync4,
+  constants as constants5,
+  fstatSync as fstatSync4,
+  lstatSync as lstatSync4,
+  openSync as openSync4,
+  readSync as readSync2,
   readdirSync
 } from "node:fs";
-import { homedir, tmpdir, userInfo } from "node:os";
-import { join } from "node:path";
+import { homedir as homedir2, tmpdir as tmpdir2, userInfo, platform } from "node:os";
+import { join as join5 } from "node:path";
 var RESUPPLY_ENVELOPE_VERSION = "completion-resupply-envelope-v1";
 var OBLIGATION_VERSION = "completion-obligation-v1";
 var OBLIGATION_MAX_BYTES = 12 * 1024;
@@ -30980,8 +32796,8 @@ function resupplyPayloadDigest(payload) {
 function sortKeys(value) {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (value && typeof value === "object") {
-    return Object.keys(value).sort().reduce((result, key) => {
-      result[key] = sortKeys(value[key]);
+    return Object.keys(value).sort().reduce((result, key2) => {
+      result[key2] = sortKeys(value[key2]);
       return result;
     }, {});
   }
@@ -31013,7 +32829,7 @@ function normalizeResupplyEnvelope(value) {
 function base64urlOfLength(value, bytes) {
   return typeof value === "string" && BASE64URL.test(value) && Buffer.from(value, "base64url").length === bytes;
 }
-function openResupplyEnvelope(obligation, key) {
+function openResupplyEnvelope(obligation, key2) {
   const envelope2 = normalizeResupplyEnvelope(
     obligation?.local_resupply_envelope
   );
@@ -31022,7 +32838,7 @@ function openResupplyEnvelope(obligation, key) {
   try {
     const decipher = createDecipheriv(
       "aes-256-gcm",
-      key,
+      key2,
       Buffer.from(envelope2.nonce, "base64url")
     );
     decipher.setAAD(envelopeAad(obligation));
@@ -31046,27 +32862,27 @@ function openResupplyEnvelope(obligation, key) {
   return payload;
 }
 function usageDirectory(env) {
-  return env?.REMEMBRANCE_USAGE_DIR ? String(env.REMEMBRANCE_USAGE_DIR) : join(tmpdir(), `remembrance-usage-${localUsageOwnerId()}`);
+  return env?.REMEMBRANCE_USAGE_DIR ? String(env.REMEMBRANCE_USAGE_DIR) : join5(tmpdir2(), `remembrance-usage-${localUsageOwnerId()}`);
 }
-function stateRoot(env, homeDirectory = homedir()) {
+function stateRoot(env, homeDirectory = homedir2()) {
   const configured = String(env?.XDG_STATE_HOME ?? "").trim();
-  return configured || join(homeDirectory, ".local", "state");
+  return configured || join5(homeDirectory, ".local", "state");
 }
-function retainedLedgerRoot(env, homeDirectory = homedir()) {
-  return join(
+function retainedLedgerRoot(env, homeDirectory = homedir2()) {
+  return join5(
     stateRoot(env, homeDirectory),
     "remembrance",
     "private-learning-lifecycle",
     "retained"
   );
 }
-function retainedRootsUsable(env, homeDirectory = homedir(), { retained = true } = {}) {
-  const lifecycle = join(
+function retainedRootsUsable(env, homeDirectory = homedir2(), { retained = true } = {}) {
+  const lifecycle = join5(
     stateRoot(env, homeDirectory),
     "remembrance",
     "private-learning-lifecycle"
   );
-  for (const path of retained ? [lifecycle, join(lifecycle, "retained")] : [lifecycle]) {
+  for (const path of retained ? [lifecycle, join5(lifecycle, "retained")] : [lifecycle]) {
     try {
       assertPrivateDirectory(path);
     } catch (error) {
@@ -31086,35 +32902,54 @@ function currentUserId() {
 function localUsageOwnerId() {
   const uid = currentUserId();
   if (uid !== null) return `uid-${uid}`;
-  return `home-${createHash2("sha256").update(homedir()).digest("hex").slice(0, 16)}`;
+  return `home-${createHash2("sha256").update(homedir2()).digest("hex").slice(0, 16)}`;
 }
-function assertOwned(metadata) {
+function assertOwned(metadata2) {
   const uid = currentUserId();
-  if (uid !== null && metadata.uid !== uid) {
+  if (uid !== null && metadata2.uid !== uid) {
     throw new Error("Local state is not owned by the current user.");
   }
 }
 function assertPrivateDirectory(path) {
-  const metadata = lstatSync(path);
-  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+  if (platform() === "win32") {
+    let descriptor;
+    try {
+      const before = lstatSync4(path, { bigint: true });
+      if (before.isSymbolicLink() || !before.isDirectory()) throw windowsProtectionRefusal();
+      descriptor = openSync4(path, constants5.O_RDONLY | (constants5.O_NOFOLLOW ?? 0));
+      assertWindowsPrivateRead(path, "directory", before, fstatSync4(descriptor, { bigint: true }));
+    } catch (error) {
+      if (error?.code === "ENOENT") throw error;
+      throw windowsProtectionRefusal();
+    } finally {
+      if (descriptor !== void 0) closeSync4(descriptor);
+    }
+    return;
+  }
+  const metadata2 = lstatSync4(path);
+  if (metadata2.isSymbolicLink() || !metadata2.isDirectory()) {
     throw new Error("Local state is not a regular directory.");
   }
-  assertOwned(metadata);
-  if (currentUserId() !== null && (metadata.mode & 18) !== 0) {
+  assertOwned(metadata2);
+  if (currentUserId() !== null && (metadata2.mode & 18) !== 0) {
     throw new Error("Local state directory is writable by another user.");
   }
 }
 var UNSAFE_RECORD = "REMEMBRANCE_UNSAFE_RECORD";
 var unsafeRecord = (message, access = false) => Object.assign(new Error(message), { code: UNSAFE_RECORD, access });
-function assertPrivateRecord(metadata, maxBytes = OBLIGATION_MAX_BYTES) {
-  if (metadata.isSymbolicLink() || !metadata.isFile() || metadata.size > maxBytes) {
+var windowsProtectionRefusal = () => Object.assign(
+  unsafeRecord("Windows local state protection could not be verified.", true),
+  { localProtectionUnverified: true }
+);
+function assertPrivateRecord(metadata2, maxBytes = OBLIGATION_MAX_BYTES) {
+  if (metadata2.isSymbolicLink() || !metadata2.isFile() || metadata2.size > maxBytes) {
     throw unsafeRecord("Local state record is unsafe.");
   }
   const uid = currentUserId();
-  if (uid !== null && metadata.uid !== uid) {
+  if (uid !== null && metadata2.uid !== uid) {
     throw unsafeRecord("Local state is not owned by the current user.", true);
   }
-  if (uid !== null && (metadata.mode & 63) !== 0) {
+  if (uid !== null && (metadata2.mode & 63) !== 0) {
     throw unsafeRecord("Local state record permissions are not private.", true);
   }
 }
@@ -31122,15 +32957,37 @@ function readRecord(path) {
   return JSON.parse(readRecordText(path, OBLIGATION_MAX_BYTES));
 }
 function readRecordText(path, maxBytes) {
-  const before = lstatSync(path);
+  try {
+    return readRecordTextChecked(path, maxBytes);
+  } catch (error) {
+    if (platform() === "win32" && error?.code !== "ENOENT") {
+      if (error?.code === UNSAFE_RECORD) {
+        error.localProtectionUnverified = true;
+        throw error;
+      }
+      throw windowsProtectionRefusal();
+    }
+    throw error;
+  }
+}
+function readRecordTextChecked(path, maxBytes) {
+  const windows = platform() === "win32";
+  const before = windows ? lstatSync4(path, { bigint: true }) : lstatSync4(path);
   assertPrivateRecord(before, maxBytes);
-  const descriptor = openSync(
+  const descriptor = openSync4(
     path,
-    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)
+    constants5.O_RDONLY | (constants5.O_NOFOLLOW ?? 0)
   );
   try {
-    const opened = fstatSync(descriptor);
+    const opened = windows ? fstatSync4(descriptor, { bigint: true }) : fstatSync4(descriptor);
     assertPrivateRecord(opened, maxBytes);
+    if (windows) {
+      try {
+        assertWindowsPrivateRead(path, "file", before, opened);
+      } catch {
+        throw windowsProtectionRefusal();
+      }
+    }
     if (before.dev !== opened.dev || before.ino !== opened.ino) {
       throw new Error("Local state record changed while opening.");
     }
@@ -31138,7 +32995,7 @@ function readRecordText(path, maxBytes) {
     let total = 0;
     while (total <= maxBytes) {
       const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes + 1 - total));
-      const read2 = readSync(descriptor, chunk, 0, chunk.length, null);
+      const read2 = readSync2(descriptor, chunk, 0, chunk.length, null);
       if (read2 === 0) break;
       chunks.push(chunk.subarray(0, read2));
       total += read2;
@@ -31148,7 +33005,7 @@ function readRecordText(path, maxBytes) {
     }
     return Buffer.concat(chunks, total).toString("utf8");
   } finally {
-    closeSync(descriptor);
+    closeSync4(descriptor);
   }
 }
 var GUIDANCE = {
@@ -31206,31 +33063,44 @@ async function readPendingActionPayload(input, env, { readKey }) {
     return notFound;
   }
   let record4 = null;
+  const retainedUsable = retainedRootsUsable(env);
+  let protectionUnverified = platform() === "win32" && !retainedUsable;
   for (const directory of [
-    ...retainedRootsUsable(env) ? [join(retainedLedgerRoot(env), `${request2.ledger}.obligations`)] : [],
-    join(usageDirectory(env), `${request2.ledger}.obligations`)
+    ...retainedUsable ? [join5(retainedLedgerRoot(env), `${request2.ledger}.obligations`)] : [],
+    join5(usageDirectory(env), `${request2.ledger}.obligations`)
   ]) {
     try {
       assertPrivateDirectory(directory);
-      for (const name of readdirSync(directory).sort().slice(0, LEDGER_ENTRY_LIMIT)) {
-        if (!name.startsWith(request2.action_id) || !/^[a-f0-9]{32}\.json$/u.test(name)) {
-          continue;
-        }
-        try {
-          const candidate = readRecord(join(directory, name));
-          const idHash = createHash2("sha256").update(String(candidate?.id), "utf8").digest("hex");
-          if (candidate?.version === OBLIGATION_VERSION && RETAINED_KINDS.has(candidate.kind) && (candidate.kind !== "capture_next_action" || candidate.action_tool === "record_preference") && `${idHash.slice(0, 32)}.json` === name && Number.isFinite(Date.parse(String(candidate?.created_at ?? "")))) {
-            record4 = candidate;
-            break;
+      const windowsReadNames = readdirSync(directory).sort().slice(0, LEDGER_ENTRY_LIMIT);
+      withWindowsPrivateDirectoryReadOperation(directory, windowsReadNames, () => {
+        for (const name of windowsReadNames) {
+          if (!name.startsWith(request2.action_id) || !/^[a-f0-9]{32}\.json$/u.test(name)) {
+            continue;
           }
-        } catch {
+          try {
+            const candidate = readRecord(join5(directory, name));
+            const idHash = createHash2("sha256").update(String(candidate?.id), "utf8").digest("hex");
+            if (candidate?.version === OBLIGATION_VERSION && RETAINED_KINDS.has(candidate.kind) && (candidate.kind !== "capture_next_action" || candidate.action_tool === "record_preference") && `${idHash.slice(0, 32)}.json` === name && Number.isFinite(Date.parse(String(candidate?.created_at ?? "")))) {
+              record4 = candidate;
+              break;
+            }
+          } catch (error) {
+            if (error?.localProtectionUnverified) protectionUnverified = true;
+          }
         }
-      }
-    } catch {
+      });
+    } catch (error) {
+      if (error?.localProtectionUnverified) protectionUnverified = true;
     }
     if (record4) break;
   }
-  if (!record4) return notFound;
+  if (!record4) {
+    if (protectionUnverified) return withoutPayload("unavailable", request2, {
+      reason: "local_protection_unverified",
+      guidance: "Windows protection for retained local state could not be verified. The retained bytes are preserved. Inspect only the selected ledger/file and immediate parent numeric ownership and ACL metadata. Restore original protection only under safe scoped authority; restoring folder permissions may affect existing children and requires owner review before broader OS repair. Do not rotate keys, delete retained data, or treat repeated inspection as recovery. Retry get_pending_action_payload after authorized restoration."
+    });
+    return notFound;
+  }
   const preference = record4.kind === "capture_next_action";
   const guidance = GUIDANCE[record4.kind];
   const transferred = record4.transferred_from && typeof record4.transferred_from === "object" ? {
@@ -31257,9 +33127,9 @@ async function readPendingActionPayload(input, env, { readKey }) {
         guidance: guidance.envelope_invalid
       });
     }
-    let key;
+    let key2;
     try {
-      key = await readKey(envelope2.key_source);
+      key2 = await readKey(envelope2.key_source);
     } catch (error) {
       return withoutPayload("unavailable", request2, {
         ...described,
@@ -31272,7 +33142,7 @@ async function readPendingActionPayload(input, env, { readKey }) {
     try {
       payload = openResupplyEnvelope(
         { ...record4, local_resupply_envelope: envelope2 },
-        key
+        key2
       );
     } catch (error) {
       return withoutPayload("refused", request2, {
@@ -31346,7 +33216,7 @@ var LIVE_LANE_LOCK_FILES = /* @__PURE__ */ new Set([
   ".outbox.lock",
   ".private-skill-outbox.lock"
 ]);
-function inventoryRetainedKeyConsumers(env, { limits = INVENTORY_LIMITS, lanes, homeDirectory = homedir() } = {}) {
+function inventoryRetainedKeyConsumers(env, { limits = INVENTORY_LIMITS, lanes, homeDirectory = homedir2() } = {}) {
   const kinds = {
     private_lesson: 0,
     private_skill: 0,
@@ -31365,12 +33235,12 @@ function inventoryRetainedKeyConsumers(env, { limits = INVENTORY_LIMITS, lanes, 
   let unlisted = 0;
   let directories = 0;
   let files = 0;
-  const lifecycle = join(
+  const lifecycle = join5(
     stateRoot(env, homeDirectory),
     "remembrance",
     "private-learning-lifecycle"
   );
-  const missing = (error) => error?.code === "ENOENT";
+  const missing3 = (error) => error?.code === "ENOENT";
   const left = (area, cause) => {
     const entry = causes[cause];
     entry.count += 1;
@@ -31384,14 +33254,14 @@ function inventoryRetainedKeyConsumers(env, { limits = INVENTORY_LIMITS, lanes, 
     left(area, cause);
     unlisted += 1;
   };
-  const fileCause = (error, name) => error?.code === UNSAFE_RECORD && !(error.access && RECORD_FILE.test(name)) || error instanceof SyntaxError ? "unclassified" : "unreadable";
+  const fileCause = (error, name) => error?.localProtectionUnverified && error.access ? "unreadable" : error?.code === UNSAFE_RECORD && !(error.access && RECORD_FILE.test(name)) || error instanceof SyntaxError ? "unclassified" : "unreadable";
   const consumer = (kind, source) => {
     if (!(kind in kinds) || !(source in sources)) return false;
     kinds[kind] += 1;
     sources[source] += 1;
     return true;
   };
-  const readFile3 = (area, path, maxBytes) => {
+  const readFile2 = (area, path, maxBytes) => {
     if (files >= limits.files) {
       leftFile(area, "bounded");
       return null;
@@ -31406,11 +33276,11 @@ function inventoryRetainedKeyConsumers(env, { limits = INVENTORY_LIMITS, lanes, 
   const ledgerRecord = (area, directory, name) => {
     let record4;
     try {
-      const text = readFile3(area, join(directory, name), OBLIGATION_MAX_BYTES);
+      const text = readFile2(area, join5(directory, name), OBLIGATION_MAX_BYTES);
       if (text === null) return;
       record4 = JSON.parse(text);
     } catch (error) {
-      if (!missing(error)) leftFile(area, fileCause(error, name));
+      if (!missing3(error)) leftFile(area, fileCause(error, name));
       return;
     }
     if (!record4 || typeof record4 !== "object" || Array.isArray(record4) || record4.version !== OBLIGATION_VERSION) {
@@ -31432,49 +33302,53 @@ function inventoryRetainedKeyConsumers(env, { limits = INVENTORY_LIMITS, lanes, 
     try {
       entries = listDirectory(path);
     } catch (error) {
-      if (!(root && missing(error))) leftDirectory(area, "unlisted");
+      if (!(root && missing3(error))) leftDirectory(area, "unlisted");
       return;
     }
-    for (const entry of entries) {
-      if (RECORD_FILE.test(entry.name)) {
-        ledgerRecord(area, path, entry.name);
+    withWindowsPrivateDirectoryReadOperation(path, platform() === "win32" ? entries.map((entry) => entry.name) : [], () => {
+      for (const entry of entries) {
+        if (RECORD_FILE.test(entry.name)) {
+          ledgerRecord(area, path, entry.name);
+        }
       }
-    }
+    });
   };
   const ledgerRoot = (area, root) => {
     let entries;
     try {
       entries = listDirectory(root);
     } catch (error) {
-      if (!missing(error)) leftDirectory(area, "unlisted");
+      if (!missing3(error)) leftDirectory(area, "unlisted");
       return;
     }
     const ledgers = entries.filter((entry) => LEDGER_DIRECTORY.test(entry.name)).map((entry) => entry.name).sort();
-    for (const name of ledgers) {
-      if (directories >= limits.ledgers) {
-        leftDirectory(area, "bounded");
-        continue;
-      }
-      directories += 1;
-      recordDirectory(area, join(root, name), false);
-    }
-    let counts = 0;
-    for (const entry of entries) {
-      if (!OVERFLOW_FILE.test(entry.name) || counts >= limits.ledgers) continue;
-      counts += 1;
-      try {
-        const value = JSON.parse(
-          readRecordText(join(root, entry.name), 4096)
-        );
-        if (Number.isSafeInteger(value?.count) && value.count > 0) {
-          unretained.count += value.count;
-          for (const kind of Array.isArray(value.kinds) ? value.kinds : []) {
-            unretained.kinds.add(String(kind));
-          }
+    withWindowsPrivateDirectoryReadOperation(root, platform() === "win32" ? entries.map((entry) => entry.name) : [], () => {
+      for (const name of ledgers) {
+        if (directories >= limits.ledgers) {
+          leftDirectory(area, "bounded");
+          continue;
         }
-      } catch {
+        directories += 1;
+        recordDirectory(area, join5(root, name), false);
       }
-    }
+      let counts = 0;
+      for (const entry of entries) {
+        if (!OVERFLOW_FILE.test(entry.name) || counts >= limits.ledgers) continue;
+        counts += 1;
+        try {
+          const value = JSON.parse(
+            readRecordText(join5(root, entry.name), 4096)
+          );
+          if (Number.isSafeInteger(value?.count) && value.count > 0) {
+            unretained.count += value.count;
+            for (const kind of Array.isArray(value.kinds) ? value.kinds : []) {
+              unretained.kinds.add(String(kind));
+            }
+          }
+        } catch {
+        }
+      }
+    });
   };
   const lane = (area, path, root) => {
     let entries;
@@ -31488,41 +33362,43 @@ function inventoryRetainedKeyConsumers(env, { limits = INVENTORY_LIMITS, lanes, 
       }
       entries = listDirectory(path);
     } catch (error) {
-      if (!(root && missing(error))) leftDirectory(area, "unlisted");
+      if (!(root && missing3(error))) leftDirectory(area, "unlisted");
       return;
     }
-    for (const entry of entries) {
-      const file = join(path, entry.name);
-      if (entry.isDirectory()) {
-        lane(area, file, false);
-        continue;
-      }
-      const liveLock = root && LIVE_LANE_LOCK_FILES.has(entry.name);
-      let value;
-      try {
-        const text = readFile3(area, file, LANE_FILE_MAX_BYTES);
-        if (text === null) continue;
-        if (liveLock && text === "") continue;
-        value = JSON.parse(text);
-      } catch (error) {
-        if (!(liveLock && missing(error))) {
-          leftFile(area, fileCause(error, entry.name));
+    withWindowsPrivateDirectoryReadOperation(path, platform() === "win32" ? entries.map((entry) => entry.name) : [], () => {
+      for (const entry of entries) {
+        const file = join5(path, entry.name);
+        if (entry.isDirectory()) {
+          lane(area, file, false);
+          continue;
         }
-        continue;
-      }
-      const kind = value && typeof value === "object" && !Array.isArray(value) ? LANE_ENVELOPE_KINDS.get(String(value.version)) : void 0;
-      if (kind && value.encryption && typeof value.encryption === "object" && value.encryption.algorithm === "aes-256-gcm") {
-        if (!consumer(kind, value.encryption.key_source)) {
+        const liveLock = root && LIVE_LANE_LOCK_FILES.has(entry.name);
+        let value;
+        try {
+          const text = readFile2(area, file, LANE_FILE_MAX_BYTES);
+          if (text === null) continue;
+          if (liveLock && text === "") continue;
+          value = JSON.parse(text);
+        } catch (error) {
+          if (!(liveLock && missing3(error))) {
+            leftFile(area, fileCause(error, entry.name));
+          }
+          continue;
+        }
+        const kind = value && typeof value === "object" && !Array.isArray(value) ? LANE_ENVELOPE_KINDS.get(String(value.version)) : void 0;
+        if (kind && value.encryption && typeof value.encryption === "object" && value.encryption.algorithm === "aes-256-gcm") {
+          if (!consumer(kind, value.encryption.key_source)) {
+            leftFile(area, "unclassified");
+          }
+        } else if (!value || typeof value !== "object" || Array.isArray(value) || !LANE_KEY_FREE_VERSIONS.has(String(value.version)) || Object.hasOwn(value, "encryption")) {
           leftFile(area, "unclassified");
         }
-      } else if (!value || typeof value !== "object" || Array.isArray(value) || !LANE_KEY_FREE_VERSIONS.has(String(value.version)) || Object.hasOwn(value, "encryption")) {
-        leftFile(area, "unclassified");
       }
-    }
+    });
   };
   const outboxLanes = lanes ?? [
-    join(stateRoot(env, homeDirectory), "remembrance", "private-lessons"),
-    join(stateRoot(env, homeDirectory), "remembrance", "private-skills")
+    join5(stateRoot(env, homeDirectory), "remembrance", "private-lessons"),
+    join5(stateRoot(env, homeDirectory), "remembrance", "private-skills")
   ];
   for (const path of outboxLanes) {
     lane(
@@ -31536,14 +33412,14 @@ function inventoryRetainedKeyConsumers(env, { limits = INVENTORY_LIMITS, lanes, 
   try {
     assertPrivateDirectory(lifecycle);
   } catch (error) {
-    lifecycleUsable = missing(error);
+    lifecycleUsable = missing3(error);
     if (!lifecycleUsable) {
       leftDirectory("private_learning_lifecycle", "unlisted");
     }
   }
   if (lifecycleUsable) {
-    recordDirectory("private_obligations", join(lifecycle, "obligations"), true);
-    ledgerRoot("retained_ledgers", join(lifecycle, "retained"));
+    recordDirectory("private_obligations", join5(lifecycle, "obligations"), true);
+    ledgerRoot("retained_ledgers", join5(lifecycle, "retained"));
   }
   const total = Object.values(kinds).reduce((sum, count) => sum + count, 0);
   const sorted = (values) => [...values].sort();
@@ -31618,19 +33494,19 @@ function retainedKeyHoldRemediation(codes) {
   const unreadable2 = where("unreadable");
   if (unreadable2) {
     sentences.push(
-      `Files in ${unreadable2} could not be read: make them user-owned 0600 files again, or move aside those Remembrance did not write, then retry.`
+      platform() === "win32" ? `Files in ${unreadable2} could not be read safely. Preserve retained data and keys. Inspect only numeric ownership/ACL metadata for the affected file and immediate parent; restore original protection under scoped authority. Broader folder repair may affect existing children and requires owner review. Retry after authorized restoration.` : `Files in ${unreadable2} could not be read: make them user-owned 0600 files again, or move aside those Remembrance did not write, then retry.`
     );
   }
   const unclassified = where("unclassified");
   if (unclassified) {
     sentences.push(
-      `Move aside files in ${unclassified} that Remembrance did not write (for example .DS_Store), and make a file Remembrance wrote whose owner or mode changed a user-owned 0600 file again instead of moving it aside, then retry.`
+      platform() === "win32" ? `Items in ${unclassified} could not be classified as safe Remembrance records. Preserve retained data and keys; inspect only item type, size, and numeric ownership/ACL metadata for the item and immediate parent. Establish provenance under scoped owner review before restoring or relocating anything; do not rotate keys or treat unknown records as disposable.` : `Move aside files in ${unclassified} that Remembrance did not write (for example .DS_Store), and make a file Remembrance wrote whose owner or mode changed a user-owned 0600 file again instead of moving it aside, then retry.`
     );
   }
   const unlisted = where("unlisted");
   if (unlisted) {
     sentences.push(
-      `A directory at or in ${unlisted} could not be listed safely (a symlink, another user's, or writable by others): move aside what Remembrance did not create and keep the rest user-owned with mode 0700, then retry.`
+      platform() === "win32" ? `A directory at or in ${unlisted} could not be listed safely. Preserve its records; inspect only numeric ownership/ACL metadata for the directory and immediate parent. Restoring folder permissions may affect existing children: obtain scoped owner review before broader OS repair, then retry after authorized restoration.` : `A directory at or in ${unlisted} could not be listed safely (a symlink, another user's, or writable by others): move aside what Remembrance did not create and keep the rest user-owned with mode 0700, then retry.`
     );
   }
   if ([...named].some((area) => area !== "hook_ledgers")) {
@@ -31647,250 +33523,16 @@ function retainedKeyHoldRemediation(codes) {
   ].join(" ");
 }
 
-// src/secure-local-file.ts
-import {
-  closeSync as closeSync2,
-  constants as constants2,
-  fchmodSync,
-  fstatSync as fstatSync2,
-  lstatSync as lstatSync2,
-  openSync as openSync2,
-  opendirSync,
-  readSync as readSync2
-} from "node:fs";
-import { dirname } from "node:path";
-var MAX_LOCAL_CONFIG_BYTES = 64 * 1024;
-var MAX_LOCAL_IDENTITY_BYTES = 64 * 1024;
-var MAX_LOCAL_LIFECYCLE_MARKER_BYTES = 16 * 1024;
-var MAX_LOCAL_LIFECYCLE_MARKERS = 64;
-var MAX_LOCAL_DIRECTORY_ENTRIES = 256;
-function readSecureLocalText(path, options) {
-  assertSecureParentDirectory(dirname(path));
-  const before = lstatSync2(path);
-  assertRegularFile(before, path, options.maxBytes);
-  const descriptor = openSync2(
-    path,
-    constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0)
-  );
-  try {
-    let opened = fstatSync2(descriptor);
-    assertRegularFile(opened, path, options.maxBytes);
-    if (before.dev !== opened.dev || before.ino !== opened.ino) {
-      throw new Error("Local state file changed while it was being opened.");
-    }
-    assertCurrentUserOwner(opened.uid, path);
-    if (isPosix() && (opened.mode & 63) !== 0) {
-      if (options.allowInsecurePermissions) {
-      } else if (!options.repairPermissions) {
-        throw new Error("Local state file permissions are not private.");
-      } else {
-        fchmodSync(descriptor, 384);
-        opened = fstatSync2(descriptor);
-        if ((opened.mode & 63) !== 0) {
-          throw new Error("Local state file permissions could not be repaired.");
-        }
-      }
-    }
-    return readBoundedDescriptor(descriptor, options.maxBytes);
-  } finally {
-    closeSync2(descriptor);
-  }
-}
-function secureLocalFileMode(path) {
-  return lstatSync2(path).mode;
-}
-function assertSecurePrivateLocalDirectory(path) {
-  assertSecureParentDirectory(path);
-  if (isPosix() && (lstatSync2(path).mode & 63) !== 0) {
-    throw new Error("Local credential directory permissions are not private.");
-  }
-}
-function listSecureLocalDirectory(path) {
-  assertSecureDirectory(path);
-  const directory = opendirSync(path);
-  const entries = [];
-  try {
-    while (entries.length < MAX_LOCAL_DIRECTORY_ENTRIES) {
-      const entry = directory.readSync();
-      if (!entry) break;
-      entries.push(entry.name);
-    }
-  } finally {
-    directory.closeSync();
-  }
-  return entries;
-}
-function assertSecureParentDirectory(path) {
-  const metadata = lstatSync2(path);
-  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
-    throw new Error("Local state parent is not a regular directory.");
-  }
-  assertCurrentUserOwner(metadata.uid, path);
-  if (isPosix() && (metadata.mode & 18) !== 0) {
-    throw new Error("Local state parent is writable by another user.");
-  }
-}
-function assertSecureDirectory(path) {
-  assertSecureParentDirectory(path);
-}
-function assertRegularFile(metadata, path, maxBytes) {
-  if (metadata.isSymbolicLink() || !metadata.isFile()) {
-    throw new Error(`Local state path is not a regular file: ${path}`);
-  }
-  if (metadata.size > maxBytes) {
-    throw new Error("Local state file exceeds its size limit.");
-  }
-}
-function assertCurrentUserOwner(uid, path) {
-  if (isPosix() && uid !== process.getuid()) {
-    throw new Error(`Local state path is not owned by the current user: ${path}`);
-  }
-}
-function readBoundedDescriptor(descriptor, maxBytes) {
-  const chunks = [];
-  let total = 0;
-  while (total <= maxBytes) {
-    const chunk = Buffer.allocUnsafe(Math.min(8 * 1024, maxBytes + 1 - total));
-    const bytesRead = readSync2(descriptor, chunk, 0, chunk.length, null);
-    if (bytesRead === 0) break;
-    chunks.push(chunk.subarray(0, bytesRead));
-    total += bytesRead;
-  }
-  if (total > maxBytes) {
-    throw new Error("Local state file exceeds its size limit.");
-  }
-  return Buffer.concat(chunks, total).toString("utf8");
-}
-function isPosix() {
-  return typeof process.getuid === "function";
-}
-
 // src/private-lesson-keychain.ts
-import { randomBytes as randomBytes2 } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { randomBytes as randomBytes4 } from "node:crypto";
+import { execFileSync as execFileSync2 } from "node:child_process";
 import { existsSync } from "node:fs";
-
-// src/private-outbox-diagnostics.ts
-var retainedDraftRecovery = "Retained drafts and encryption keys must not be deleted or regenerated to repair startup.";
-var capacityRecovery = "Inspect content-free outbox state, then delete only a selected obsolete draft with delete_private_lesson_candidate or delete_private_skill_candidate, using its draft_id and confirm=true after explicit confirmation. Available bytes alone do not establish whether another encrypted draft fits; admission checks its actual size.";
-var entryLimitRecovery = "Inspect content-free outbox state. Confirmed deletion may retain a tombstone and does not necessarily free an entry slot. Retry after any expiring submitted markers are cleaned up; do not delete retained files manually.";
-var diagnostics2 = {
-  outbox_path_unsafe: "Private lesson outbox path is unsafe. Restore a regular, user-owned directory or file; symlinks are not supported.",
-  outbox_owner_mismatch: "Private lesson outbox is not owned by the current user. Restore ownership for this OS profile.",
-  outbox_permissions_not_private: "Private lesson outbox permissions are not private. Restrict directories to 0700 and files to 0600.",
-  outbox_permission_denied: "Private lesson storage access was denied. Allow this MCP process access to its private local storage and retry.",
-  outbox_storage_full: "Private lesson storage is full. Free unrelated disk space and retry.",
-  outbox_key_invalid: "Private lesson outbox encryption key is invalid. Restore the original key (the login Keychain item or the 0600 key file private-lesson-outbox.key in the Remembrance config directory) before retrying; a new key cannot read retained items.",
-  outbox_key_unavailable: "Private lesson outbox encryption key availability could not be determined. Unlock the macOS login keychain, allow this MCP process to access it, and retry.",
-  outbox_key_missing: "Private learning outbox encryption key is missing while encrypted drafts remain. Restore the original key (the login Keychain item or the 0600 key file private-lesson-outbox.key in the Remembrance config directory) before retrying; a new key cannot read retained items.",
-  outbox_ceiling_reached: "Private learning capture is paused because the configured local outbox safety ceiling has insufficient headroom.",
-  outbox_entry_limit_reached: "Private learning capture is paused because the configured local outbox entry limit was reached.",
-  outbox_lock_busy: "Private learning outbox is busy; retry shortly.",
-  outbox_io_failed: "Private lesson storage could not be accessed. Check local storage availability and retry."
-};
-var PrivateOutboxStorageError = class extends Error {
-  constructor(reasonCode, stage, message = diagnostics2[reasonCode]) {
-    super(message);
-    this.reasonCode = reasonCode;
-    this.stage = stage;
-    this.name = "PrivateOutboxStorageError";
-  }
-  reasonCode;
-  stage;
-  diagnostic() {
-    const ceilingLimited = this.reasonCode === "outbox_ceiling_reached";
-    const entryLimited = this.reasonCode === "outbox_entry_limit_reached";
-    const capacityLimited = ceilingLimited || entryLimited;
-    const preserveRetainedDrafts = !capacityLimited && this.reasonCode !== "outbox_lock_busy";
-    return {
-      reason_code: this.reasonCode,
-      stage: this.stage,
-      remediation: `${this.message}${ceilingLimited ? ` ${capacityRecovery}` : entryLimited ? ` ${entryLimitRecovery}` : preserveRetainedDrafts ? ` ${retainedDraftRecovery}` : ""}`,
-      ...capacityLimited ? {
-        next_action: {
-          tool: "inspect_private_learning_outbox",
-          arguments: { limit: 50 }
-        }
-      } : {}
-    };
-  }
-};
-function privateOutboxStorageError(error, stage) {
-  if (error instanceof PrivateOutboxStorageError) {
-    return new PrivateOutboxStorageError(error.reasonCode, stage);
-  }
-  const code = error instanceof Error && "code" in error ? error.code : null;
-  const reason = code === "EACCES" || code === "EPERM" || code === "EROFS" ? "outbox_permission_denied" : code === "ENOSPC" || code === "EDQUOT" ? "outbox_storage_full" : code === "ELOOP" || code === "ENOTDIR" || code === "EEXIST" ? "outbox_path_unsafe" : "outbox_io_failed";
-  return new PrivateOutboxStorageError(reason, stage);
-}
-function isPrivateOutboxKeyAccessError(error) {
-  return error instanceof PrivateOutboxStorageError && (error.stage === "keychain_read" || error.stage === "fallback_key_read");
-}
-var PrivateOutboxCapacityError = class extends PrivateOutboxStorageError {
-  constructor(lane, ceilingBytes, outcome) {
-    const mib = 1024 * 1024;
-    const ceiling = ceilingBytes % mib === 0 ? `${ceilingBytes / mib} MiB` : `${ceilingBytes} bytes`;
-    super(
-      "outbox_ceiling_reached",
-      "outbox_capture",
-      `Private ${lane} capture is paused because the configured local ${ceiling} outbox safety ceiling ${outcome}.`
-    );
-    this.name = "PrivateOutboxCapacityError";
-  }
-};
-var PrivateOutboxDecryptionError = class extends Error {
-  constructor(lane, draftId) {
-    super(
-      "Private learning outbox authentication failed. Restore access to the original encryption key; do not delete or regenerate retained drafts."
-    );
-    this.lane = lane;
-    this.draftId = draftId;
-    this.name = "PrivateOutboxDecryptionError";
-  }
-  lane;
-  draftId;
-  diagnostic() {
-    return {
-      code: "private_learning_outbox_undecryptable",
-      lane: this.lane,
-      draft_id: this.draftId,
-      retained_locally: true,
-      candidate_sent: false,
-      remediation: "Restore access to the original encryption key, then inspect the retained draft again. Do not delete or regenerate it."
-    };
-  }
-};
-function privateOutboxPausedAtCeiling(totalBytes, ceilingBytes, lastRejectedCaptureBytes) {
-  const headroomBytes = Math.max(0, ceilingBytes - totalBytes);
-  return headroomBytes === 0 || lastRejectedCaptureBytes !== null && headroomBytes < lastRejectedCaptureBytes;
-}
-function privateOutboxCapacityState(totalBytes, ceilingBytes, captureHeadroomTargetBytes, lastRejectedCaptureBytes) {
-  const captureHeadroomBytes = Math.max(0, ceilingBytes - totalBytes);
-  const pausedAtCeiling = privateOutboxPausedAtCeiling(
-    totalBytes,
-    ceilingBytes,
-    lastRejectedCaptureBytes
-  );
-  const capacityStatus = captureHeadroomBytes === 0 ? "full" : lastRejectedCaptureBytes !== null && captureHeadroomBytes < lastRejectedCaptureBytes ? "constrained" : captureHeadroomBytes < captureHeadroomTargetBytes ? "limited" : "ready";
-  const capacityGuidance = capacityStatus === "constrained" ? `A recent capture was rejected at the current headroom. ${capacityRecovery}` : capacityStatus === "full" ? `The outbox has no capture headroom. ${capacityRecovery}` : capacityStatus === "limited" ? "Headroom is below the lane's advisory capture target. Available bytes alone do not establish whether another encrypted draft fits; admission checks its actual size." : null;
-  return {
-    paused_at_ceiling: pausedAtCeiling,
-    capacity_status: capacityStatus,
-    capture_headroom_bytes: captureHeadroomBytes,
-    capture_headroom_target_bytes: captureHeadroomTargetBytes,
-    last_rejected_capture_bytes: lastRejectedCaptureBytes,
-    capture_requires_size_check: captureHeadroomBytes > 0,
-    capacity_guidance: capacityGuidance
-  };
-}
-
-// src/private-lesson-keychain.ts
 var KEYCHAIN_SERVICE = "dev.remembrance.private-lessons";
 var ENCODED_KEY = /^[A-Za-z0-9_-]{43}$/u;
 var defaultDependencies = {
   platform: process.platform,
   securityExists: existsSync("/usr/bin/security"),
-  execFile: execFileSync,
+  execFile: execFileSync2,
   randomKey: null,
   uid: typeof process.getuid === "function" ? process.getuid() : null
 };
@@ -31899,7 +33541,7 @@ function probePrivateLessonKeychainKey(env, dependencies = defaultDependencies) 
     return { status: "disabled", key: null };
   }
   try {
-    const key = decodeKey(
+    const key2 = decodeKey(
       String(
         dependencies.execFile(
           "/usr/bin/security",
@@ -31919,7 +33561,7 @@ function probePrivateLessonKeychainKey(env, dependencies = defaultDependencies) 
         )
       ).trim()
     );
-    return key ? { status: "ready", key } : { status: "invalid", key: null };
+    return key2 ? { status: "ready", key: key2 } : { status: "invalid", key: null };
   } catch (error) {
     return keychainItemConfirmedMissing(error) ? { status: "confirmed_missing", key: null } : { status: "unavailable", key: null };
   }
@@ -31948,7 +33590,7 @@ function resolvePrivateLessonKeychainKey(env, dependencies = defaultDependencies
   if (!keychainEnabled(env, dependencies)) return null;
   const existing = readPrivateLessonKeychainKey(env, dependencies);
   if (existing) return existing;
-  const encoded = dependencies.randomKey ?? randomBytes2(32).toString("base64url");
+  const encoded = dependencies.randomKey ?? randomBytes4(32).toString("base64url");
   if (!ENCODED_KEY.test(encoded)) return null;
   try {
     dependencies.execFile("/usr/bin/security", ["-i"], {
@@ -31968,8 +33610,8 @@ function keychainAccount(dependencies) {
   return `uid-${dependencies.uid ?? "user"}`;
 }
 function decodeKey(encoded) {
-  const key = Buffer.from(encoded, "base64url");
-  return key.length === 32 ? key : null;
+  const key2 = Buffer.from(encoded, "base64url");
+  return key2.length === 32 ? key2 : null;
 }
 function keychainItemConfirmedMissing(error) {
   if (!error || typeof error !== "object" || !("status" in error)) {
@@ -31978,333 +33620,10 @@ function keychainItemConfirmedMissing(error) {
   return error.status === 44;
 }
 
-// src/private-outbox-lock.ts
-import { AsyncLocalStorage } from "node:async_hooks";
-import { randomBytes as randomBytes3 } from "node:crypto";
-import { constants as constants3 } from "node:fs";
-import { chmod, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
-import { dirname as dirname2, join as join2 } from "node:path";
-import { performance } from "node:perf_hooks";
-var LOCK_VERSION = "private-outbox-lock-v2";
-var DEFAULT_STALE_MS = 3e4;
-var DEFAULT_WAIT_MS = 5e3;
-var DEFAULT_MALFORMED_LOCK_GRACE_MS = 250;
-var MAX_LOCK_BYTES = 4096;
-var activeLocks = new AsyncLocalStorage();
-async function withPrivateOutboxLock(directory, namespace, operation, options = {}) {
-  const lockKey = `${directory}\0${namespace}`;
-  const active = activeLocks.getStore();
-  if (active?.has(lockKey)) return operation();
-  const lockPath = join2(directory, `.${namespace}.lock`);
-  const staleMs = Math.max(50, options.staleMs ?? DEFAULT_STALE_MS);
-  const heartbeatMs = Math.max(
-    25,
-    Math.min(options.heartbeatMs ?? Math.floor(staleMs / 3), staleMs / 2)
-  );
-  const deadline = performance.now() + (options.waitMs ?? DEFAULT_WAIT_MS);
-  const ownerNonce = randomBytes3(18).toString("hex");
-  let observation = null;
-  let handle = null;
-  while (!handle) {
-    let candidate = null;
-    try {
-      candidate = await open(lockPath, "wx", 384);
-      await writeLockRecord(candidate, lockRecord(ownerNonce));
-      await candidate.chmod(384);
-      await syncDirectory(directory);
-      const candidateMetadata = await candidate.stat();
-      const published = await inspectLockPath(lockPath);
-      if (!published || published.metadata.dev !== candidateMetadata.dev || published.metadata.ino !== candidateMetadata.ino || published.record?.owner_nonce !== ownerNonce) {
-        await candidate.close().catch(() => {
-        });
-        candidate = null;
-        continue;
-      }
-      handle = candidate;
-    } catch (error) {
-      if (!isAlreadyExistsError(error)) {
-        if (candidate) {
-          await closeAndRemoveOwnedCandidate(directory, lockPath, candidate);
-        }
-        throw error;
-      }
-      const metadata = await lstat(lockPath).catch((statError) => {
-        if (isMissingError(statError)) return null;
-        throw statError;
-      });
-      if (!metadata) continue;
-      if (metadata.isSymbolicLink() || !metadata.isFile() || !privateLockMetadata(metadata)) {
-        await quarantineMalformedLock(
-          directory,
-          lockPath,
-          namespace,
-          options.recoveryIdPrefix
-        );
-        observation = null;
-        continue;
-      }
-      const inspected = await inspectLock(lockPath, metadata);
-      if (!inspected) {
-        observation = null;
-        continue;
-      }
-      const ownerState = inspected.record ? processState(inspected.record.pid) : "unknown";
-      const now = performance.now();
-      const unchanged = Boolean(
-        observation && observation.dev === Number(inspected.metadata.dev) && observation.ino === Number(inspected.metadata.ino) && observation.size === Number(inspected.metadata.size) && observation.mtimeMs === Number(inspected.metadata.mtimeMs)
-      );
-      const currentObservation = unchanged && observation ? observation : {
-        dev: Number(inspected.metadata.dev),
-        ino: Number(inspected.metadata.ino),
-        size: Number(inspected.metadata.size),
-        mtimeMs: Number(inspected.metadata.mtimeMs),
-        // A clearly old filesystem timestamp can establish that a
-        // malformed/unknown holder already outlived the lease. Future
-        // timestamps and small clock disagreements get no credit and are
-        // still measured only with the monotonic clock from first sight.
-        firstSeenMonotonicMs: now - Math.min(
-          staleMs,
-          Math.max(0, Date.now() - Number(inspected.metadata.mtimeMs))
-        )
-      };
-      observation = currentObservation;
-      const deadOwner = ownerState === "dead";
-      const leaseMs = inspected.record ? staleMs : Math.min(staleMs, DEFAULT_MALFORMED_LOCK_GRACE_MS);
-      const leaseExpired = unchanged && now - currentObservation.firstSeenMonotonicMs >= leaseMs;
-      if (deadOwner || leaseExpired) {
-        if (!inspected.record) {
-          await quarantineMalformedLock(
-            directory,
-            lockPath,
-            namespace,
-            options.recoveryIdPrefix
-          );
-          observation = null;
-          continue;
-        }
-        const reclaimed = await reclaimObservedLock(
-          directory,
-          lockPath,
-          namespace,
-          currentObservation,
-          options.recoveryIdPrefix
-        );
-        if (reclaimed) {
-          observation = null;
-          continue;
-        }
-      }
-      if (performance.now() >= deadline) {
-        throw new PrivateOutboxStorageError(
-          "outbox_lock_busy",
-          "outbox_lock_acquire"
-        );
-      }
-      await sleep(10);
-    }
-  }
-  const nextActive = new Set(active ?? []);
-  nextActive.add(lockKey);
-  let heartbeatPending = false;
-  const heartbeat = setInterval(() => {
-    if (heartbeatPending || !handle) return;
-    heartbeatPending = true;
-    void writeLockRecord(handle, lockRecord(ownerNonce)).finally(() => {
-      heartbeatPending = false;
-    });
-  }, heartbeatMs);
-  heartbeat.unref?.();
-  try {
-    return await activeLocks.run(nextActive, operation);
-  } finally {
-    clearInterval(heartbeat);
-    while (heartbeatPending) await sleep(1);
-    const heldMetadata = await handle.stat().catch(() => null);
-    const current = await inspectLockPath(lockPath);
-    await handle.close().catch(() => {
-    });
-    if (heldMetadata && current?.record?.owner_nonce === ownerNonce && heldMetadata.dev === current.metadata.dev && heldMetadata.ino === current.metadata.ino) {
-      await unlink(lockPath).catch(() => {
-      });
-      await syncDirectory(directory);
-    }
-  }
-}
-async function closeAndRemoveOwnedCandidate(directory, lockPath, candidate) {
-  const candidateMetadata = await candidate.stat().catch(() => null);
-  const current = await lstat(lockPath).catch((error) => {
-    if (isMissingError(error)) return null;
-    throw error;
-  });
-  await candidate.close().catch(() => {
-  });
-  if (candidateMetadata && current && current.dev === candidateMetadata.dev && current.ino === candidateMetadata.ino) {
-    await unlink(lockPath).catch(() => {
-    });
-    await syncDirectory(directory).catch(() => {
-    });
-  }
-}
-function lockRecord(ownerNonce) {
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  return {
-    version: LOCK_VERSION,
-    pid: process.pid,
-    owner_nonce: ownerNonce,
-    created_at: now,
-    heartbeat_at: now
-  };
-}
-async function writeLockRecord(handle, record4) {
-  const value = `${JSON.stringify(record4)}
-`;
-  await handle.write(value, 0, "utf8");
-  await handle.truncate(Buffer.byteLength(value));
-  await handle.sync();
-}
-async function inspectLockPath(path) {
-  const metadata = await lstat(path).catch((error) => {
-    if (isMissingError(error)) return null;
-    throw error;
-  });
-  if (!metadata || metadata.isSymbolicLink() || !metadata.isFile()) return null;
-  return inspectLock(path, metadata);
-}
-async function inspectLock(path, expected) {
-  let handle = null;
-  try {
-    handle = await open(path, constants3.O_RDONLY | constants3.O_NOFOLLOW);
-    const metadata = await handle.stat();
-    if (metadata.dev !== expected.dev || metadata.ino !== expected.ino)
-      return null;
-    const buffer = Buffer.alloc(Math.min(MAX_LOCK_BYTES, metadata.size + 1));
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    const record4 = parseLockRecord(
-      buffer.subarray(0, bytesRead).toString("utf8")
-    );
-    return { metadata, record: record4 };
-  } catch (error) {
-    if (isMissingError(error) || isLoopError(error)) return null;
-    throw error;
-  } finally {
-    await handle?.close().catch(() => {
-    });
-  }
-}
-function parseLockRecord(value) {
-  try {
-    const parsed = JSON.parse(value);
-    if (parsed?.version !== LOCK_VERSION || !Number.isSafeInteger(parsed.pid) || parsed.pid <= 0 || !/^[a-f0-9]{36}$/u.test(parsed.owner_nonce) || typeof parsed.created_at !== "string" || typeof parsed.heartbeat_at !== "string" || !Number.isFinite(Date.parse(parsed.created_at)) || !Number.isFinite(Date.parse(parsed.heartbeat_at))) {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-function privateLockMetadata(metadata) {
-  const owned = typeof process.getuid !== "function" || metadata.uid === process.getuid();
-  return owned && (metadata.mode & 63) === 0;
-}
-function processState(pid) {
-  try {
-    process.kill(pid, 0);
-    return "live";
-  } catch (error) {
-    if (error.code === "ESRCH") return "dead";
-    return "unknown";
-  }
-}
-async function reclaimObservedLock(directory, lockPath, namespace, observed, recoveryIdPrefix) {
-  const current = await lstat(lockPath).catch((error) => {
-    if (isMissingError(error)) return null;
-    throw error;
-  });
-  if (!current || current.isSymbolicLink() || !current.isFile() || current.dev !== observed.dev || current.ino !== observed.ino || current.size !== observed.size || current.mtimeMs !== observed.mtimeMs) {
-    return false;
-  }
-  const displaced = await quarantinePath(
-    directory,
-    namespace,
-    "reclaimed",
-    recoveryIdPrefix
-  );
-  try {
-    await rename(lockPath, displaced);
-    await unlink(displaced);
-    await syncDirectory(directory);
-    return true;
-  } catch (error) {
-    if (isMissingError(error)) return false;
-    throw error;
-  }
-}
-async function quarantineMalformedLock(directory, lockPath, namespace, recoveryIdPrefix) {
-  if (!recoveryIdPrefix) {
-    throw new Error("Private learning lock quarantine requires a lane id.");
-  }
-  const target = await quarantinePath(
-    directory,
-    namespace,
-    "malformed",
-    recoveryIdPrefix
-  );
-  try {
-    await rename(lockPath, target);
-    await syncDirectory(dirname2(target));
-    await syncDirectory(directory);
-  } catch (error) {
-    if (!isMissingError(error)) throw error;
-  }
-}
-async function quarantinePath(directory, namespace, reason, recoveryIdPrefix) {
-  const quarantine = join2(directory, "quarantine");
-  const root = join2(quarantine, "locks");
-  await ensurePrivateQuarantineDirectory(directory, "quarantine");
-  await ensurePrivateQuarantineDirectory(quarantine, "locks");
-  const recoveryId = recoveryIdPrefix ? `${recoveryIdPrefix}_recovery_${randomBytes3(12).toString("hex")}` : `reclaimed_${randomBytes3(12).toString("hex")}`;
-  return join2(root, `${recoveryId}.${namespace}.${reason}.retained`);
-}
-async function ensurePrivateQuarantineDirectory(parent, name) {
-  const path = join2(parent, name);
-  try {
-    await mkdir(path, { mode: 448 });
-  } catch (error) {
-    if (!isAlreadyExistsError(error)) throw error;
-  }
-  const metadata = await lstat(path);
-  const owned = typeof process.getuid !== "function" || metadata.uid === process.getuid();
-  if (metadata.isSymbolicLink() || !metadata.isDirectory() || !owned) {
-    throw new Error("Private learning lock quarantine is unsafe.");
-  }
-  await chmod(path, 448);
-}
-async function syncDirectory(directory) {
-  if (process.platform === "win32") return;
-  const handle = await open(directory, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-function sleep(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-function isMissingError(error) {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
-}
-function isAlreadyExistsError(error) {
-  return error instanceof Error && "code" in error && error.code === "EEXIST";
-}
-function isLoopError(error) {
-  return error instanceof Error && "code" in error && error.code === "ELOOP";
-}
-
 // src/capture-learning-diagnostics.ts
-import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
-import { randomBytes as randomBytes4 } from "node:crypto";
-var contexts = new AsyncLocalStorage2();
+import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
+import { randomBytes as randomBytes5 } from "node:crypto";
+var contexts = new AsyncLocalStorage3();
 var failures = /* @__PURE__ */ new WeakMap();
 var CaptureLearningReplayError = class extends Error {
   constructor(code) {
@@ -32319,8 +33638,8 @@ var CaptureLearningReplayError = class extends Error {
 async function withCaptureLearningDiagnostics(operation) {
   if (contexts.getStore()) return operation();
   const context = {
-    capture_id: `cap_${randomBytes4(16).toString("hex")}`,
-    correlation_id: `capcorr_${randomBytes4(16).toString("hex")}`,
+    capture_id: `cap_${randomBytes5(16).toString("hex")}`,
+    correlation_id: `capcorr_${randomBytes5(16).toString("hex")}`,
     failure_stage: "validation",
     persistence_outcome: "not_persisted"
   };
@@ -32702,7 +34021,7 @@ async function queuePrivateLessonReplacement(replacementOf, prepared, options = 
   return withPrivateLessonOutboxLock(directory, async () => {
     const now = options.now ?? /* @__PURE__ */ new Date();
     const read2 = { ...options, outboxDirectory: directory };
-    const refuse = (reason, used2 = 0, replacementDraftId) => new PrivateLessonReplacementRefusedError(
+    const refuse4 = (reason, used2 = 0, replacementDraftId) => new PrivateLessonReplacementRefusedError(
       replacementOf,
       reason,
       Math.max(0, PRIVATE_LESSON_REPLACEMENT_MAX_ATTEMPTS - used2),
@@ -32710,7 +34029,7 @@ async function queuePrivateLessonReplacement(replacementOf, prepared, options = 
     );
     await reconcileSubmittedRecordsUnlocked(directory, now);
     if (existsSync2(tombstonePath(directory, replacementOf))) {
-      throw refuse("deleted");
+      throw refuse4("deleted");
     }
     let original;
     try {
@@ -32721,24 +34040,24 @@ async function queuePrivateLessonReplacement(replacementOf, prepared, options = 
     } catch (error) {
       if (error instanceof PrivateLessonDraftUnavailableError) {
         if (error.reason === "replaced") {
-          throw refuse(
+          throw refuse4(
             "replaced",
             PRIVATE_LESSON_REPLACEMENT_MAX_ATTEMPTS,
             error.replacementDraftId
           );
         }
-        if (error.reason === "unknown") throw refuse("unknown");
+        if (error.reason === "unknown") throw refuse4("unknown");
       }
       if (existsSync2(submittedRecordPath(directory, replacementOf))) {
-        throw refuse("submitted");
+        throw refuse4("submitted");
       }
       throw error;
     }
-    if (original.state === "submitted") throw refuse("submitted");
+    if (original.state === "submitted") throw refuse4("submitted");
     if (original.held_reasons.length === 0 || original.state === "superseded_redactor" || original.replacement_of !== void 0) {
-      throw refuse("not_held");
+      throw refuse4("not_held");
     }
-    if (privateLessonSafetyRecheck(original)) throw refuse("releasable");
+    if (privateLessonSafetyRecheck(original)) throw refuse4("releasable");
     const attempts = original.replacement_attempts ?? [];
     const digest3 = prepared.payload_digest;
     const draftId = privateLessonReplacementDraftId(replacementOf, digest3);
@@ -32753,15 +34072,15 @@ async function queuePrivateLessonReplacement(replacementOf, prepared, options = 
     const replay = attempts.includes(digest3);
     const used = replay ? attempts.length : attempts.length + 1;
     if (!replay && privateLessonCapturedForOtherDestination(original, options.destination)) {
-      throw refuse("destination_changed", attempts.length);
+      throw refuse4("destination_changed", attempts.length);
     }
     const pending = attempts.map((attempt) => privateLessonReplacementDraftId(replacementOf, attempt)).find(
       (candidate) => candidate !== draftId && existsSync2(draftPath(directory, candidate))
     );
-    if (pending) throw refuse("replacement_pending", attempts.length, pending);
+    if (pending) throw refuse4("replacement_pending", attempts.length, pending);
     if (!replay) {
       if (attempts.length >= PRIVATE_LESSON_REPLACEMENT_MAX_ATTEMPTS) {
-        throw refuse("attempts_exhausted", attempts.length);
+        throw refuse4("attempts_exhausted", attempts.length);
       }
       await writeDraftUnlocked(
         validateDraft({
@@ -32774,10 +34093,10 @@ async function queuePrivateLessonReplacement(replacementOf, prepared, options = 
       );
     }
     if (prepared.status === "held_safety") {
-      throw refuse("replacement_held", used);
+      throw refuse4("replacement_held", used);
     }
     if (existsSync2(tombstonePath(directory, draftId))) {
-      throw refuse("replacement_deleted", used, draftId);
+      throw refuse4("replacement_deleted", used, draftId);
     }
     if (existsSync2(draftPath(directory, draftId))) {
       const existing = await readPrivateLessonDraft(draftId, {
@@ -32843,7 +34162,7 @@ async function retireReplacedPrivateLessonUnlocked(directory, draftId, replaceme
 `,
     ".replaced.tmp"
   );
-  await unlink2(path).catch(() => {
+  await unlink3(path).catch(() => {
   });
   await syncDirectory2(directory).catch(() => {
   });
@@ -32918,7 +34237,7 @@ async function readPrivateLessonSubmittedRecord(draftId, options = {}) {
   assertDraftId(draftId);
   const directory = options.outboxDirectory ?? privateLessonOutboxDirectory(options.env, options.homeDirectory);
   if (!existsSync2(directory)) return null;
-  assertPrivateLessonPathMetadata(await lstat2(directory), "directory");
+  assertPrivateLessonPathMetadata(await lstat3(directory), "directory");
   return withPrivateLessonOutboxLock(directory, async () => {
     await reconcileSubmittedRecordsUnlocked(
       directory,
@@ -32997,49 +34316,51 @@ async function reconcilePrivateLessonOutboxProfiles(options = {}, replaced) {
       options.now ?? /* @__PURE__ */ new Date()
     );
     const entries = await secureOutboxEntries(outbox.directory);
-    let inspected = 0;
-    let terminalized = 0;
-    for (const name of entries.filter(
-      (entry) => entry.endsWith(".lesson.json")
-    )) {
-      const draftId = name.slice(0, -".lesson.json".length);
-      let before;
-      let draft;
-      try {
-        before = parseEnvelope(
-          await readBoundedFile(
-            draftPath(outbox.directory, draftId),
-            PRIVATE_LESSON_DRAFT_MAX_BYTES
-          ),
-          draftId
-        ).state;
-        draft = await readPrivateLessonDraft(draftId, {
-          ...options,
-          outboxDirectory: outbox.directory,
-          encryption: outbox.encryption
-        });
-      } catch (error) {
-        if (error instanceof PrivateLessonDraftUnavailableError && error.reason === "replaced") {
-          replaced?.add(draftId);
+    return withWindowsPrivateDirectoryReadOperation(outbox.directory, entries, async () => {
+      let inspected = 0;
+      let terminalized = 0;
+      for (const name of entries.filter(
+        (entry) => entry.endsWith(".lesson.json")
+      )) {
+        const draftId = name.slice(0, -".lesson.json".length);
+        let before;
+        let draft;
+        try {
+          before = parseEnvelope(
+            await readBoundedFile(
+              draftPath(outbox.directory, draftId),
+              PRIVATE_LESSON_DRAFT_MAX_BYTES
+            ),
+            draftId
+          ).state;
+          draft = await readPrivateLessonDraft(draftId, {
+            ...options,
+            outboxDirectory: outbox.directory,
+            encryption: outbox.encryption
+          });
+        } catch (error) {
+          if (error instanceof PrivateLessonDraftUnavailableError && error.reason === "replaced") {
+            replaced?.add(draftId);
+          }
+          continue;
         }
-        continue;
-      }
-      inspected += 1;
-      if (draft.state === "submitted") {
-        if (validatedCompletion(draft)) {
-          await compactLegacySubmittedDraftUnlocked(draft, outbox);
+        inspected += 1;
+        if (draft.state === "submitted") {
+          if (validatedCompletion(draft)) {
+            await compactLegacySubmittedDraftUnlocked(draft, outbox);
+          }
+          continue;
         }
-        continue;
+        if (before !== "superseded_redactor" && draft.state === "superseded_redactor") {
+          terminalized += 1;
+        }
       }
-      if (before !== "superseded_redactor" && draft.state === "superseded_redactor") {
-        terminalized += 1;
-      }
-    }
-    await reconcileSubmittedRecordsUnlocked(
-      outbox.directory,
-      options.now ?? /* @__PURE__ */ new Date()
-    );
-    return { inspected, terminalized };
+      await reconcileSubmittedRecordsUnlocked(
+        outbox.directory,
+        options.now ?? /* @__PURE__ */ new Date()
+      );
+      return { inspected, terminalized };
+    });
   });
 }
 async function updatePrivateLessonDraft(draftId, update, options = {}) {
@@ -33194,7 +34515,7 @@ async function completePrivateLessonSubmission(draftId, input, options = {}) {
       `${JSON.stringify(completion)}
 `
     );
-    await unlink2(path).catch(() => {
+    await unlink3(path).catch(() => {
     });
     await syncDirectory2(outbox.directory).catch(() => {
     });
@@ -33267,120 +34588,122 @@ async function privateLessonOutboxSummary(options = {}) {
     replaced
   );
   const entries = await secureOutboxEntries(outbox.directory);
-  const counts = {
-    ready: 0,
-    awaiting_authorization: 0,
-    awaiting_compatible_profile: 0,
-    retry_scheduled: 0,
-    held_policy: 0,
-    held_safety: 0,
-    held_validation: 0,
-    submitted: 0,
-    superseded_redactor: 0
-  };
-  let totalBytes = 0;
-  let deletionTombstones = 0;
-  let replacedRecords = 0;
-  let terminalBytes = 0;
-  const terminalReasons = {};
-  let corruptFiles = 0;
-  for (const name of entries) {
-    const path = join3(outbox.directory, name);
-    const metadata = await lstat2(path);
-    if (name.endsWith(".deleted.json")) {
-      deletionTombstones += 1;
-      continue;
-    }
-    if (name.endsWith(".replaced.json")) {
-      replacedRecords += 1;
-      continue;
-    }
-    if (name.endsWith(".submitted.json")) {
-      const draftId = name.slice(0, -".submitted.json".length);
+  return withWindowsPrivateDirectoryReadOperation(outbox.directory, entries, async () => {
+    const counts = {
+      ready: 0,
+      awaiting_authorization: 0,
+      awaiting_compatible_profile: 0,
+      retry_scheduled: 0,
+      held_policy: 0,
+      held_safety: 0,
+      held_validation: 0,
+      submitted: 0,
+      superseded_redactor: 0
+    };
+    let totalBytes = 0;
+    let deletionTombstones = 0;
+    let replacedRecords = 0;
+    let terminalBytes = 0;
+    const terminalReasons = {};
+    let corruptFiles = 0;
+    for (const name of entries) {
+      const path = join6(outbox.directory, name);
+      const metadata2 = await lstat3(path);
+      if (name.endsWith(".deleted.json")) {
+        deletionTombstones += 1;
+        continue;
+      }
+      if (name.endsWith(".replaced.json")) {
+        replacedRecords += 1;
+        continue;
+      }
+      if (name.endsWith(".submitted.json")) {
+        const draftId = name.slice(0, -".submitted.json".length);
+        try {
+          parseSubmittedRecord(
+            await readBoundedFile(
+              path,
+              PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
+            ),
+            draftId
+          );
+          counts.submitted += 1;
+        } catch {
+          corruptFiles += 1;
+        }
+        continue;
+      }
+      if (!name.endsWith(".lesson.json")) continue;
+      if (replaced.has(name.slice(0, -".lesson.json".length))) {
+        replacedRecords += 1;
+        continue;
+      }
+      let envelope2;
       try {
-        parseSubmittedRecord(
-          await readBoundedFile(
-            path,
-            PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
-          ),
-          draftId
+        envelope2 = parseEnvelope(
+          await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES),
+          name.slice(0, -".lesson.json".length)
         );
-        counts.submitted += 1;
       } catch {
         corruptFiles += 1;
+        continue;
       }
-      continue;
-    }
-    if (!name.endsWith(".lesson.json")) continue;
-    if (replaced.has(name.slice(0, -".lesson.json".length))) {
-      replacedRecords += 1;
-      continue;
-    }
-    let envelope2;
-    try {
-      envelope2 = parseEnvelope(
-        await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES),
-        name.slice(0, -".lesson.json".length)
-      );
-    } catch {
-      corruptFiles += 1;
-      continue;
-    }
-    counts[envelope2.state] += 1;
-    if (envelope2.state === "superseded_redactor") {
-      terminalBytes += metadata.size;
-      try {
-        const draft = await readPrivateLessonDraft(
-          name.slice(0, -".lesson.json".length),
-          {
-            ...options,
-            outboxDirectory: outbox.directory,
-            encryption: outbox.encryption
-          }
-        );
-        const reason = draft.terminal_reason;
-        terminalReasons[reason] = (terminalReasons[reason] ?? 0) + 1;
-      } catch (error) {
-        if (!(error instanceof PrivateOutboxStorageError)) corruptFiles += 1;
+      counts[envelope2.state] += 1;
+      if (envelope2.state === "superseded_redactor") {
+        terminalBytes += metadata2.size;
+        try {
+          const draft = await readPrivateLessonDraft(
+            name.slice(0, -".lesson.json".length),
+            {
+              ...options,
+              outboxDirectory: outbox.directory,
+              encryption: outbox.encryption
+            }
+          );
+          const reason = draft.terminal_reason;
+          terminalReasons[reason] = (terminalReasons[reason] ?? 0) + 1;
+        } catch (error) {
+          if (!(error instanceof PrivateOutboxStorageError)) corruptFiles += 1;
+        }
       }
     }
-  }
-  const retainedArtifacts = await retainedPrivateLessonArtifactStats(
-    outbox.directory
-  );
-  totalBytes = retainedArtifacts.totalBytes;
-  const capacity = privateOutboxCapacityState(
-    totalBytes,
-    outbox.ceilingBytes,
-    PRIVATE_LESSON_DRAFT_MAX_BYTES,
-    await readPrivateLessonCapacityRejection(outbox.directory)
-  );
-  const recoveryItems = await privateLessonRecoveryItems({
-    ...options,
-    outboxDirectory: outbox.directory,
-    encryption: outbox.encryption
+    const retainedArtifacts = await retainedPrivateLessonArtifactStats(
+      outbox.directory
+    );
+    totalBytes = retainedArtifacts.totalBytes;
+    const capacity = privateOutboxCapacityState(
+      totalBytes,
+      outbox.ceilingBytes,
+      PRIVATE_LESSON_DRAFT_MAX_BYTES,
+      await readPrivateLessonCapacityRejection(outbox.directory)
+    );
+    const recoveryItems = await privateLessonRecoveryItems({
+      ...options,
+      outboxDirectory: outbox.directory,
+      encryption: outbox.encryption
+    });
+    return {
+      directory: outbox.directory,
+      ...outboxEncryptionState(outbox),
+      total_bytes: totalBytes,
+      ceiling_bytes: outbox.ceilingBytes,
+      ...capacity,
+      counts,
+      terminal_count: counts.superseded_redactor,
+      terminal_bytes: terminalBytes,
+      terminal_reasons: terminalReasons,
+      deletion_guidance: counts.superseded_redactor > 0 ? "Update the client, then re-capture the lesson with capture_learning before considering deletion. Delete the superseded draft with delete_private_lesson_candidate only after confirming the replacement was retained or accepted." : null,
+      deletion_tombstones: deletionTombstones,
+      replaced_records: replacedRecords,
+      temporary_files: retainedArtifacts.temporaryFiles,
+      corrupt_files: Math.max(
+        corruptFiles,
+        recoveryItems.filter((item) => !item.diagnostic).length
+      ),
+      quarantined_bytes: retainedArtifacts.quarantinedBytes,
+      recovery_required_count: recoveryItems.length
+    };
   });
-  return {
-    directory: outbox.directory,
-    ...outboxEncryptionState(outbox),
-    total_bytes: totalBytes,
-    ceiling_bytes: outbox.ceilingBytes,
-    ...capacity,
-    counts,
-    terminal_count: counts.superseded_redactor,
-    terminal_bytes: terminalBytes,
-    terminal_reasons: terminalReasons,
-    deletion_guidance: counts.superseded_redactor > 0 ? "Update the client, then re-capture the lesson with capture_learning before considering deletion. Delete the superseded draft with delete_private_lesson_candidate only after confirming the replacement was retained or accepted." : null,
-    deletion_tombstones: deletionTombstones,
-    replaced_records: replacedRecords,
-    temporary_files: retainedArtifacts.temporaryFiles,
-    corrupt_files: Math.max(
-      corruptFiles,
-      recoveryItems.filter((item) => !item.diagnostic).length
-    ),
-    quarantined_bytes: retainedArtifacts.quarantinedBytes,
-    recovery_required_count: recoveryItems.length
-  };
 }
 async function inspectPrivateLessonOutboxSnapshot(options = {}) {
   const outbox = await readyOutbox(options, false);
@@ -33405,48 +34728,102 @@ async function inspectPrivateLessonOutboxSnapshotUnlocked(outbox, options) {
   let replacedRecords = 0;
   let terminalBytes = 0;
   let corruptFiles = 0;
-  for (const entry of await readdir(outbox.directory, {
+  const inventoryEntries = await readdir(outbox.directory, {
     withFileTypes: true
-  })) {
-    const match = entry.name.match(
-      /^(pld_[A-Za-z0-9_-]{8,96})\.(lesson|submitted|deleted|replaced)\.json$/u
-    );
-    if (!match) continue;
-    const draftId = match[1];
-    if (entry.isSymbolicLink() || !entry.isFile()) {
-      recoveryItems.push(
-        privateLessonRecoveryItem(draftId, "unsafe_canonical_entry")
+  });
+  return withWindowsPrivateDirectoryReadOperation(outbox.directory, process.platform === "win32" ? inventoryEntries.map((entry) => entry.name) : [], async () => {
+    for (const entry of inventoryEntries) {
+      const match = entry.name.match(
+        /^(pld_[A-Za-z0-9_-]{8,96})\.(lesson|submitted|deleted|replaced)\.json$/u
       );
-      corruptFiles += 1;
-      continue;
-    }
-    const path = join3(outbox.directory, entry.name);
-    if (entry.name.endsWith(".replaced.json")) {
-      replacedRecords += 1;
-      try {
-        parseReplacedRecord(
-          await readPrivateLessonCanonicalText(
+      if (!match) continue;
+      const draftId = match[1];
+      if (entry.isSymbolicLink() || !entry.isFile()) {
+        recoveryItems.push(
+          privateLessonRecoveryItem(draftId, "unsafe_canonical_entry")
+        );
+        corruptFiles += 1;
+        continue;
+      }
+      const path = join6(outbox.directory, entry.name);
+      if (entry.name.endsWith(".replaced.json")) {
+        replacedRecords += 1;
+        try {
+          parseReplacedRecord(
+            await readPrivateLessonCanonicalText(
+              path,
+              PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
+            ),
+            draftId
+          );
+        } catch (error) {
+          if (error instanceof PrivateOutboxStorageError) throw error;
+          recoveryItems.push(
+            privateLessonRecoveryItem(draftId, "invalid_canonical_entry")
+          );
+          corruptFiles += 1;
+        }
+        continue;
+      }
+      if (entry.name.endsWith(".deleted.json")) {
+        let serialized2;
+        deletionTombstones += 1;
+        try {
+          serialized2 = await readPrivateLessonCanonicalText(
             path,
             PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
-          ),
-          draftId
-        );
-      } catch (error) {
-        if (error instanceof PrivateOutboxStorageError) throw error;
-        recoveryItems.push(
-          privateLessonRecoveryItem(draftId, "invalid_canonical_entry")
-        );
-        corruptFiles += 1;
+          );
+        } catch (error) {
+          if (error instanceof PrivateOutboxStorageError) throw error;
+          recoveryItems.push(
+            privateLessonRecoveryItem(draftId, "invalid_canonical_entry")
+          );
+          corruptFiles += 1;
+          continue;
+        }
+        try {
+          parseDeletionTombstone(serialized2, draftId);
+        } catch {
+          recoveryItems.push(
+            privateLessonRecoveryItem(draftId, "invalid_canonical_entry")
+          );
+          corruptFiles += 1;
+        }
+        continue;
       }
-      continue;
-    }
-    if (entry.name.endsWith(".deleted.json")) {
-      let serialized2;
-      deletionTombstones += 1;
+      if (entry.name.endsWith(".submitted.json")) {
+        let serialized2;
+        try {
+          serialized2 = await readPrivateLessonCanonicalText(
+            path,
+            PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
+          );
+        } catch (error) {
+          if (error instanceof PrivateOutboxStorageError) throw error;
+          recoveryItems.push(
+            privateLessonRecoveryItem(draftId, "invalid_canonical_entry")
+          );
+          corruptFiles += 1;
+          continue;
+        }
+        try {
+          const completion = parseSubmittedRecord(serialized2, draftId);
+          counts.submitted += 1;
+          drafts.push(submittedRecordListItem(completion));
+        } catch {
+          recoveryItems.push(
+            privateLessonRecoveryItem(draftId, "invalid_canonical_entry")
+          );
+          corruptFiles += 1;
+        }
+        continue;
+      }
+      let envelope2;
+      let serialized;
       try {
-        serialized2 = await readPrivateLessonCanonicalText(
+        serialized = await readPrivateLessonCanonicalText(
           path,
-          PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
+          PRIVATE_LESSON_DRAFT_MAX_BYTES
         );
       } catch (error) {
         if (error instanceof PrivateOutboxStorageError) throw error;
@@ -33457,193 +34834,142 @@ async function inspectPrivateLessonOutboxSnapshotUnlocked(outbox, options) {
         continue;
       }
       try {
-        parseDeletionTombstone(serialized2, draftId);
+        envelope2 = parseEnvelope(serialized, draftId);
       } catch {
         recoveryItems.push(
           privateLessonRecoveryItem(draftId, "invalid_canonical_entry")
         );
         corruptFiles += 1;
+        continue;
       }
-      continue;
-    }
-    if (entry.name.endsWith(".submitted.json")) {
-      let serialized2;
+      counts[envelope2.state] += 1;
+      let decrypted;
       try {
-        serialized2 = await readPrivateLessonCanonicalText(
-          path,
-          PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
-        );
+        decrypted = await decryptDraft(envelope2, outbox.encryption, true);
       } catch (error) {
+        if (isPrivateOutboxKeyAccessError(error)) {
+          recoveryItems.push(
+            privateLessonRecoveryItem(draftId, "undecryptable_entry", error)
+          );
+          continue;
+        }
         if (error instanceof PrivateOutboxStorageError) throw error;
         recoveryItems.push(
-          privateLessonRecoveryItem(draftId, "invalid_canonical_entry")
+          privateLessonRecoveryItem(
+            draftId,
+            error instanceof PrivateOutboxDecryptionError ? "undecryptable_entry" : "invalid_canonical_entry"
+          )
         );
         corruptFiles += 1;
         continue;
       }
-      try {
-        const completion = parseSubmittedRecord(serialized2, draftId);
-        counts.submitted += 1;
-        drafts.push(submittedRecordListItem(completion));
-      } catch {
-        recoveryItems.push(
-          privateLessonRecoveryItem(draftId, "invalid_canonical_entry")
-        );
-        corruptFiles += 1;
-      }
-      continue;
-    }
-    let envelope2;
-    let serialized;
-    try {
-      serialized = await readPrivateLessonCanonicalText(
-        path,
-        PRIVATE_LESSON_DRAFT_MAX_BYTES
-      );
-    } catch (error) {
-      if (error instanceof PrivateOutboxStorageError) throw error;
-      recoveryItems.push(
-        privateLessonRecoveryItem(draftId, "invalid_canonical_entry")
-      );
-      corruptFiles += 1;
-      continue;
-    }
-    try {
-      envelope2 = parseEnvelope(serialized, draftId);
-    } catch {
-      recoveryItems.push(
-        privateLessonRecoveryItem(draftId, "invalid_canonical_entry")
-      );
-      corruptFiles += 1;
-      continue;
-    }
-    counts[envelope2.state] += 1;
-    let decrypted;
-    try {
-      decrypted = await decryptDraft(envelope2, outbox.encryption, true);
-    } catch (error) {
-      if (isPrivateOutboxKeyAccessError(error)) {
-        recoveryItems.push(
-          privateLessonRecoveryItem(draftId, "undecryptable_entry", error)
-        );
-        continue;
-      }
-      if (error instanceof PrivateOutboxStorageError) throw error;
-      recoveryItems.push(
-        privateLessonRecoveryItem(
-          draftId,
-          error instanceof PrivateOutboxDecryptionError ? "undecryptable_entry" : "invalid_canonical_entry"
-        )
-      );
-      corruptFiles += 1;
-      continue;
-    }
-    const replacement = acceptedPrivateLessonReplacement(
-      outbox.directory,
-      decrypted
-    );
-    if (replacement) {
-      counts[envelope2.state] -= 1;
-      replacedRecords += 1;
-      await retireReplacedPrivateLessonUnlocked(
+      const replacement = acceptedPrivateLessonReplacement(
         outbox.directory,
-        draftId,
-        replacement,
-        now
-      ).catch(() => {
-      });
-      continue;
-    }
-    const draft = reconcileStoredDraft(decrypted, now);
-    if (draft !== decrypted || staleSafetyRecheckHint(envelope2, draft)) {
-      counts[envelope2.state] -= 1;
-      counts[draft.state] += 1;
-      await writeDraftUnlocked(draft, outbox, true, void 0, true);
-    }
-    if (draft.state === "submitted") {
-      const completion = validatedCompletion(draft);
-      if (!completion) {
-        recoveryItems.push(
-          privateLessonRecoveryItem(draftId, "submitted_completion_invalid")
-        );
-        drafts.push(privateLessonDraftListItem(draft));
+        decrypted
+      );
+      if (replacement) {
+        counts[envelope2.state] -= 1;
+        replacedRecords += 1;
+        await retireReplacedPrivateLessonUnlocked(
+          outbox.directory,
+          draftId,
+          replacement,
+          now
+        ).catch(() => {
+        });
         continue;
       }
-      if (!existsSync2(submittedRecordPath(outbox.directory, draftId))) {
-        await compactLegacySubmittedDraftUnlocked(draft, outbox);
+      const draft = reconcileStoredDraft(decrypted, now);
+      if (draft !== decrypted || staleSafetyRecheckHint(envelope2, draft)) {
+        counts[envelope2.state] -= 1;
+        counts[draft.state] += 1;
+        await writeDraftUnlocked(draft, outbox, true, void 0, true);
       }
-      drafts.push(submittedRecordListItem(completion));
-      continue;
+      if (draft.state === "submitted") {
+        const completion = validatedCompletion(draft);
+        if (!completion) {
+          recoveryItems.push(
+            privateLessonRecoveryItem(draftId, "submitted_completion_invalid")
+          );
+          drafts.push(privateLessonDraftListItem(draft));
+          continue;
+        }
+        if (!existsSync2(submittedRecordPath(outbox.directory, draftId))) {
+          await compactLegacySubmittedDraftUnlocked(draft, outbox);
+        }
+        drafts.push(submittedRecordListItem(completion));
+        continue;
+      }
+      if (draft.state === "superseded_redactor") {
+        terminalBytes += (await lstat3(path)).size;
+        const reason = draft.terminal_reason;
+        terminalReasons[reason] = (terminalReasons[reason] ?? 0) + 1;
+      }
+      if (draft.state === "retry_scheduled" && draft.last_error_code === "policy_verification_failed") {
+        recoveryItems.push(
+          privateLessonRecoveryItem(draftId, "held_safety_recovery_required")
+        );
+      }
+      drafts.push(privateLessonDraftListItem(draft));
     }
-    if (draft.state === "superseded_redactor") {
-      terminalBytes += (await lstat2(path)).size;
-      const reason = draft.terminal_reason;
-      terminalReasons[reason] = (terminalReasons[reason] ?? 0) + 1;
-    }
-    if (draft.state === "retry_scheduled" && draft.last_error_code === "policy_verification_failed") {
-      recoveryItems.push(
-        privateLessonRecoveryItem(draftId, "held_safety_recovery_required")
-      );
-    }
-    drafts.push(privateLessonDraftListItem(draft));
-  }
-  await appendPrivateLessonQuarantineRecoveryItems(
-    outbox.directory,
-    recoveryItems
-  );
-  const deduplicatedRecovery = [
-    ...new Map(
-      recoveryItems.map((item) => [
-        `${item.draft_id}:${item.reason_code}`,
-        item
-      ])
-    ).values()
-  ];
-  const retainedArtifacts = await retainedPrivateLessonArtifactStats(
-    outbox.directory
-  );
-  const capacity = privateOutboxCapacityState(
-    retainedArtifacts.totalBytes,
-    outbox.ceilingBytes,
-    PRIVATE_LESSON_DRAFT_MAX_BYTES,
-    await readPrivateLessonCapacityRejection(outbox.directory)
-  );
-  const sorted = drafts.sort(
-    (left, right) => right.updated_at.localeCompare(left.updated_at) || right.draft_id.localeCompare(left.draft_id)
-  );
-  const limit = Math.max(0, Math.min(options.limit ?? 50, 200));
-  const summaryOnly = limit === 0;
-  const offset = privateLessonPageOffset(options.offset);
-  const page = sorted.slice(offset, offset + limit);
-  const nextOffset = offset + page.length;
-  return {
-    summary: {
-      directory: outbox.directory,
-      ...outboxEncryptionState(outbox),
-      total_bytes: retainedArtifacts.totalBytes,
-      ceiling_bytes: outbox.ceilingBytes,
-      ...capacity,
-      counts,
-      terminal_count: counts.superseded_redactor,
-      terminal_bytes: terminalBytes,
-      terminal_reasons: terminalReasons,
-      deletion_guidance: counts.superseded_redactor > 0 ? "Update the client, then re-capture the lesson with capture_learning before considering deletion. Delete the superseded draft with delete_private_lesson_candidate only after confirming the replacement was retained or accepted." : null,
-      deletion_tombstones: deletionTombstones,
-      replaced_records: replacedRecords,
-      temporary_files: retainedArtifacts.temporaryFiles,
-      corrupt_files: Math.max(
-        corruptFiles,
-        deduplicatedRecovery.filter((item) => !item.diagnostic).length
-      ),
-      quarantined_bytes: retainedArtifacts.quarantinedBytes,
-      recovery_required_count: deduplicatedRecovery.length
-    },
-    drafts: page,
-    drafts_total: sorted.length,
-    drafts_truncated: !summaryOnly && nextOffset < sorted.length,
-    next_offset: !summaryOnly && nextOffset < sorted.length ? nextOffset : null,
-    recovery_items: deduplicatedRecovery
-  };
+    await appendPrivateLessonQuarantineRecoveryItems(
+      outbox.directory,
+      recoveryItems
+    );
+    const deduplicatedRecovery = [
+      ...new Map(
+        recoveryItems.map((item) => [
+          `${item.draft_id}:${item.reason_code}`,
+          item
+        ])
+      ).values()
+    ];
+    const retainedArtifacts = await retainedPrivateLessonArtifactStats(
+      outbox.directory
+    );
+    const capacity = privateOutboxCapacityState(
+      retainedArtifacts.totalBytes,
+      outbox.ceilingBytes,
+      PRIVATE_LESSON_DRAFT_MAX_BYTES,
+      await readPrivateLessonCapacityRejection(outbox.directory)
+    );
+    const sorted = drafts.sort(
+      (left, right) => right.updated_at.localeCompare(left.updated_at) || right.draft_id.localeCompare(left.draft_id)
+    );
+    const limit = Math.max(0, Math.min(options.limit ?? 50, 200));
+    const summaryOnly = limit === 0;
+    const offset = privateLessonPageOffset(options.offset);
+    const page = sorted.slice(offset, offset + limit);
+    const nextOffset = offset + page.length;
+    return {
+      summary: {
+        directory: outbox.directory,
+        ...outboxEncryptionState(outbox),
+        total_bytes: retainedArtifacts.totalBytes,
+        ceiling_bytes: outbox.ceilingBytes,
+        ...capacity,
+        counts,
+        terminal_count: counts.superseded_redactor,
+        terminal_bytes: terminalBytes,
+        terminal_reasons: terminalReasons,
+        deletion_guidance: counts.superseded_redactor > 0 ? "Update the client, then re-capture the lesson with capture_learning before considering deletion. Delete the superseded draft with delete_private_lesson_candidate only after confirming the replacement was retained or accepted." : null,
+        deletion_tombstones: deletionTombstones,
+        replaced_records: replacedRecords,
+        temporary_files: retainedArtifacts.temporaryFiles,
+        corrupt_files: Math.max(
+          corruptFiles,
+          deduplicatedRecovery.filter((item) => !item.diagnostic).length
+        ),
+        quarantined_bytes: retainedArtifacts.quarantinedBytes,
+        recovery_required_count: deduplicatedRecovery.length
+      },
+      drafts: page,
+      drafts_total: sorted.length,
+      drafts_truncated: !summaryOnly && nextOffset < sorted.length,
+      next_offset: !summaryOnly && nextOffset < sorted.length ? nextOffset : null,
+      recovery_items: deduplicatedRecovery
+    };
+  });
 }
 async function inspectPrivateLessonOutboxHealth(options = {}) {
   const env = options.env ?? process.env;
@@ -33678,7 +35004,7 @@ async function inspectPrivateLessonOutboxHealth(options = {}) {
     inventory
   );
   if (!existsSync2(directory)) {
-    const ceilingBytes2 = privateLessonOutboxMaxBytes(env);
+    const ceilingBytes = privateLessonOutboxMaxBytes(env);
     return {
       storage_initialized: false,
       encryption_ready: encryptionReady,
@@ -33686,10 +35012,10 @@ async function inspectPrivateLessonOutboxHealth(options = {}) {
       ...diagnostic2 ? { diagnostic: diagnostic2 } : {},
       ...await keyFileState(),
       total_bytes: 0,
-      ceiling_bytes: ceilingBytes2,
+      ceiling_bytes: ceilingBytes,
       ...privateOutboxCapacityState(
         0,
-        ceilingBytes2,
+        ceilingBytes,
         PRIVATE_LESSON_DRAFT_MAX_BYTES,
         null
       ),
@@ -33706,8 +35032,8 @@ async function inspectPrivateLessonOutboxHealth(options = {}) {
       recovery_required_count: 0
     };
   }
-  const metadata = await lstat2(directory);
-  assertPrivateLessonPathMetadata(metadata, "directory");
+  const metadata2 = await lstat3(directory);
+  assertPrivateLessonPathMetadata(metadata2, "directory");
   const keyFile = await keyFileState();
   if (encryption) {
     const summary = await privateLessonOutboxSummary({
@@ -33735,95 +35061,97 @@ async function inspectPrivateLessonOutboxHealth(options = {}) {
     );
   }
   const entries = await secureOutboxEntries(directory);
-  const counts = emptyOutboxCounts();
-  let totalBytes = 0;
-  let deletionTombstones = 0;
-  let replacedRecords = 0;
-  let terminalBytes = 0;
-  let corruptFiles = 0;
-  const terminalReasons = {};
-  for (const name of entries) {
-    const path = join3(directory, name);
-    const entry = await lstat2(path);
-    totalBytes += entry.size;
-    if (name.endsWith(".deleted.json")) {
-      deletionTombstones += 1;
-      continue;
-    }
-    if (name.endsWith(".replaced.json")) {
-      replacedRecords += 1;
-      continue;
-    }
-    if (name.endsWith(".submitted.json")) {
-      const draftId = name.slice(0, -".submitted.json".length);
+  return withWindowsPrivateDirectoryReadOperation(directory, entries, async () => {
+    const counts = emptyOutboxCounts();
+    let totalBytes = 0;
+    let deletionTombstones = 0;
+    let replacedRecords = 0;
+    let terminalBytes = 0;
+    let corruptFiles = 0;
+    const terminalReasons = {};
+    for (const name of entries) {
+      const path = join6(directory, name);
+      const entry = await lstat3(path);
+      totalBytes += entry.size;
+      if (name.endsWith(".deleted.json")) {
+        deletionTombstones += 1;
+        continue;
+      }
+      if (name.endsWith(".replaced.json")) {
+        replacedRecords += 1;
+        continue;
+      }
+      if (name.endsWith(".submitted.json")) {
+        const draftId = name.slice(0, -".submitted.json".length);
+        try {
+          parseSubmittedRecord(
+            await readBoundedFile(
+              path,
+              PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
+            ),
+            draftId
+          );
+          counts.submitted += 1;
+        } catch {
+          corruptFiles += 1;
+        }
+        continue;
+      }
+      if (!name.endsWith(".lesson.json")) continue;
+      let envelope2;
       try {
-        parseSubmittedRecord(
-          await readBoundedFile(
-            path,
-            PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
-          ),
-          draftId
+        envelope2 = parseEnvelope(
+          await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES),
+          name.slice(0, -".lesson.json".length)
         );
-        counts.submitted += 1;
       } catch {
         corruptFiles += 1;
+        continue;
       }
-      continue;
+      counts[envelope2.state] += 1;
+      if (envelope2.state === "superseded_redactor") {
+        terminalBytes += entry.size;
+      }
     }
-    if (!name.endsWith(".lesson.json")) continue;
-    let envelope2;
-    try {
-      envelope2 = parseEnvelope(
-        await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES),
-        name.slice(0, -".lesson.json".length)
-      );
-    } catch {
-      corruptFiles += 1;
-      continue;
-    }
-    counts[envelope2.state] += 1;
-    if (envelope2.state === "superseded_redactor") {
-      terminalBytes += entry.size;
-    }
-  }
-  const retainedArtifacts = await retainedPrivateLessonArtifactStats(directory);
-  totalBytes = retainedArtifacts.totalBytes;
-  const ceilingBytes = privateLessonOutboxMaxBytes(env);
-  const capacity = privateOutboxCapacityState(
-    totalBytes,
-    ceilingBytes,
-    PRIVATE_LESSON_DRAFT_MAX_BYTES,
-    await readPrivateLessonCapacityRejection(directory)
-  );
-  return {
-    storage_initialized: true,
-    encryption_ready: encryptionReady,
-    encryption_source: diagnostic2 ? null : "uninitialized",
-    ...diagnostic2 ? { diagnostic: diagnostic2 } : {},
-    ...keyFile,
-    total_bytes: totalBytes,
-    ceiling_bytes: ceilingBytes,
-    ...capacity,
-    counts,
-    terminal_count: counts.superseded_redactor,
-    terminal_bytes: terminalBytes,
-    terminal_reasons: terminalReasons,
-    deletion_guidance: counts.superseded_redactor > 0 ? "Update the client, then re-capture the lesson with capture_learning before considering deletion. Delete the superseded draft with delete_private_lesson_candidate only after confirming the replacement was retained or accepted." : null,
-    deletion_tombstones: deletionTombstones,
-    replaced_records: replacedRecords,
-    temporary_files: retainedArtifacts.temporaryFiles,
-    corrupt_files: corruptFiles,
-    quarantined_bytes: retainedArtifacts.quarantinedBytes,
-    recovery_required_count: corruptFiles
-  };
+    const retainedArtifacts = await retainedPrivateLessonArtifactStats(directory);
+    totalBytes = retainedArtifacts.totalBytes;
+    const ceilingBytes = privateLessonOutboxMaxBytes(env);
+    const capacity = privateOutboxCapacityState(
+      totalBytes,
+      ceilingBytes,
+      PRIVATE_LESSON_DRAFT_MAX_BYTES,
+      await readPrivateLessonCapacityRejection(directory)
+    );
+    return {
+      storage_initialized: true,
+      encryption_ready: encryptionReady,
+      encryption_source: diagnostic2 ? null : "uninitialized",
+      ...diagnostic2 ? { diagnostic: diagnostic2 } : {},
+      ...keyFile,
+      total_bytes: totalBytes,
+      ceiling_bytes: ceilingBytes,
+      ...capacity,
+      counts,
+      terminal_count: counts.superseded_redactor,
+      terminal_bytes: terminalBytes,
+      terminal_reasons: terminalReasons,
+      deletion_guidance: counts.superseded_redactor > 0 ? "Update the client, then re-capture the lesson with capture_learning before considering deletion. Delete the superseded draft with delete_private_lesson_candidate only after confirming the replacement was retained or accepted." : null,
+      deletion_tombstones: deletionTombstones,
+      replaced_records: replacedRecords,
+      temporary_files: retainedArtifacts.temporaryFiles,
+      corrupt_files: corruptFiles,
+      quarantined_bytes: retainedArtifacts.quarantinedBytes,
+      recovery_required_count: corruptFiles
+    };
+  });
 }
-function privateLessonOutboxDirectory(env = process.env, homeDirectory = homedir2()) {
-  const stateRoot2 = env.XDG_STATE_HOME?.trim() || join3(homeDirectory, ".local", "state");
-  return join3(stateRoot2, "remembrance", "private-lessons");
+function privateLessonOutboxDirectory(env = process.env, homeDirectory = homedir3()) {
+  const stateRoot2 = env.XDG_STATE_HOME?.trim() || join6(homeDirectory, ".local", "state");
+  return join6(stateRoot2, "remembrance", "private-lessons");
 }
-function privateLessonOutboxKeyPath(env = process.env, homeDirectory = homedir2()) {
-  const configRoot = join3(homeDirectory, ".config");
-  return join3(configRoot, "remembrance", "private-lesson-outbox.key");
+function privateLessonOutboxKeyPath(env = process.env, homeDirectory = homedir3()) {
+  const configRoot = join6(homeDirectory, ".config");
+  return join6(configRoot, "remembrance", "private-lesson-outbox.key");
 }
 function privateLessonOutboxMaxBytes(env = process.env) {
   const configured = env.REMEMBRANCE_PRIVATE_LESSON_OUTBOX_MAX_BYTES?.trim();
@@ -33952,13 +35280,13 @@ function privateLearningKeyBootstrapHold(inventory, keychain, stage = "fallback_
 }
 async function resolveFallbackOutboxEncryption(options) {
   const path = privateLessonOutboxKeyPath(options.env, options.homeDirectory);
-  await ensurePrivateLessonDirectory(dirname3(path));
+  await ensurePrivateLessonDirectory(dirname6(path));
   let encoded;
   try {
     encoded = await readConcurrentPrivateLessonFallbackKey(path);
   } catch (error) {
     if (!isMissingError2(error)) throw error;
-    encoded = randomBytes5(32).toString("base64url");
+    encoded = randomBytes6(32).toString("base64url");
     try {
       await atomicWritePrivate(path, `${encoded}
 `);
@@ -34032,11 +35360,11 @@ async function rememberPrivateLessonPolicyFloor(binding, options = {}, legacyPol
       "policy_sequence_conflict"
     );
   }
-  const identityPath2 = join3(
+  const identityPath2 = join6(
     directory,
     `.policy-identity.${audience}.${binding.policy_sequence}.${digest3}.json`
   );
-  const legacyPath = join3(
+  const legacyPath = join6(
     directory,
     `.policy.${audience}.${binding.policy_sequence}.${legacyDigest}.json`
   );
@@ -34094,17 +35422,20 @@ function outboxEncryptionState(outbox) {
 }
 async function ensurePrivateLessonDirectory(path) {
   try {
-    await mkdir2(path, { recursive: true, mode: 448 });
-    const before = await lstat2(path);
+    if (process.platform === "win32") {
+      await ensureWindowsPrivateDirectory(path);
+      return;
+    }
+    await mkdir3(path, { recursive: true, mode: 448 });
+    const before = await lstat3(path);
     assertPrivateLessonPathIdentity(before, "directory");
-    if (process.platform === "win32") return;
     if ((before.mode & 18) !== 0) {
       throw new PrivateOutboxStorageError(
         "outbox_permissions_not_private",
         "directory_setup"
       );
     }
-    const handle = await open2(path, constants4.O_RDONLY | constants4.O_NOFOLLOW);
+    const handle = await open4(path, constants6.O_RDONLY | constants6.O_NOFOLLOW);
     try {
       const opened = await handle.stat();
       assertPrivateLessonPathIdentity(opened, "directory");
@@ -34115,7 +35446,7 @@ async function ensurePrivateLessonDirectory(path) {
         );
       }
       await handle.chmod(448);
-      const after = await lstat2(path);
+      const after = await lstat3(path);
       if (after.dev !== opened.dev || after.ino !== opened.ino) {
         throw new PrivateOutboxStorageError(
           "outbox_path_unsafe",
@@ -34143,44 +35474,46 @@ async function retainedPrivateLessonOutboxBytes(directory) {
 }
 async function reconcileExplicitDeletionTombstones(directory) {
   const entries = await secureOutboxEntries(directory);
-  let changed = false;
-  for (const name of entries.filter(
-    (entry) => entry.endsWith(".deleted.json")
-  )) {
-    let tombstone;
-    try {
-      tombstone = parseDeletionTombstone(
-        await readBoundedFile(join3(directory, name), 4 * 1024),
-        name.slice(0, -".deleted.json".length)
-      );
-    } catch {
-      continue;
-    }
-    const retainedPaths = [
-      {
-        path: draftPath(directory, tombstone.draft_id),
-        maxBytes: PRIVATE_LESSON_DRAFT_MAX_BYTES
-      },
-      {
-        path: submittedRecordPath(directory, tombstone.draft_id),
-        maxBytes: PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
-      }
-    ];
-    for (const retained of retainedPaths) {
-      if (!existsSync2(retained.path)) continue;
+  return withWindowsPrivateDirectoryReadOperation(directory, entries, async () => {
+    let changed = false;
+    for (const name of entries.filter(
+      (entry) => entry.endsWith(".deleted.json")
+    )) {
+      let tombstone;
       try {
-        await assertRegularPrivateFile(retained.path, retained.maxBytes);
-        await unlink2(retained.path);
-        changed = true;
+        tombstone = parseDeletionTombstone(
+          await readBoundedFile(join6(directory, name), 4 * 1024),
+          name.slice(0, -".deleted.json".length)
+        );
       } catch {
+        continue;
+      }
+      const retainedPaths = [
+        {
+          path: draftPath(directory, tombstone.draft_id),
+          maxBytes: PRIVATE_LESSON_DRAFT_MAX_BYTES
+        },
+        {
+          path: submittedRecordPath(directory, tombstone.draft_id),
+          maxBytes: PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
+        }
+      ];
+      for (const retained of retainedPaths) {
+        if (!existsSync2(retained.path)) continue;
+        try {
+          await assertRegularPrivateFile(retained.path, retained.maxBytes);
+          await unlink3(retained.path);
+          changed = true;
+        } catch {
+        }
       }
     }
-  }
-  if (changed) await syncDirectory2(directory);
+    if (changed) await syncDirectory2(directory);
+  });
 }
 async function syncDirectory2(directory) {
   if (process.platform === "win32") return;
-  const handle = await open2(directory, "r");
+  const handle = await open4(directory, "r");
   try {
     await handle.sync();
   } finally {
@@ -34205,7 +35538,7 @@ async function writeDraftUnlocked(draft, outbox, replace, _currentOutboxBytes, a
   if (plaintext.length > PRIVATE_LESSON_DRAFT_MAX_BYTES) {
     throw new Error("Private lesson draft exceeds its local size limit.");
   }
-  const nonce = randomBytes5(12);
+  const nonce = randomBytes6(12);
   const aad = Buffer.from(
     canonicalJson({
       version: "private-lesson-outbox-envelope-v1",
@@ -34300,13 +35633,13 @@ async function decryptDraft(envelope2, encryption, allowUnsupportedProfile = fal
     ...Object.hasOwn(envelope2, "destination_binding") ? { destination_binding: envelope2.destination_binding ?? null } : {}
   };
   const aad = Buffer.from(canonicalJson(aadFields), "utf8");
-  const key = await readPrivateLessonOutboxKey(
+  const key2 = await readPrivateLessonOutboxKey(
     encryption,
     envelope2.encryption.key_source
   );
   const decipher = createDecipheriv2(
     "aes-256-gcm",
-    key,
+    key2,
     Buffer.from(envelope2.encryption.nonce, "base64url")
   );
   decipher.setAAD(aad);
@@ -34329,7 +35662,7 @@ async function decryptDraft(envelope2, encryption, allowUnsupportedProfile = fal
   return draft;
 }
 function validateDraft(value, allowUnsupportedProfile = false) {
-  if (!isRecord3(value)) throw new Error("Private lesson draft is invalid.");
+  if (!isRecord4(value)) throw new Error("Private lesson draft is invalid.");
   assertDraftId(String(value.draft_id ?? ""));
   if (value.version !== PRIVATE_LESSON_OUTBOX_VERSION) {
     throw new Error("Private lesson draft version is unsupported.");
@@ -34343,7 +35676,7 @@ function validateDraft(value, allowUnsupportedProfile = false) {
   if (hashValue(value.canonical_payload) !== value.payload_digest) {
     throw new Error("Private lesson draft payload digest is invalid.");
   }
-  if (!isRecord3(value.candidate)) {
+  if (!isRecord4(value.candidate)) {
     throw new Error("Private lesson draft candidate is missing.");
   }
   if (canonicalJson(value.candidate) !== value.canonical_payload) {
@@ -34389,7 +35722,7 @@ function validateDraft(value, allowUnsupportedProfile = false) {
     throw new Error("Terminal private lesson drafts cannot be retried.");
   }
   if (value.policy !== null) {
-    if (!isRecord3(value.policy) || typeof value.policy.policy_digest !== "string" || value.policy.policy_identity_digest !== void 0 && typeof value.policy.policy_identity_digest !== "string" || !Number.isSafeInteger(value.policy.policy_sequence) || typeof value.policy.organization_audience_hash !== "string" || typeof value.policy.expires_at !== "string" || !Array.isArray(value.policy.enabled_tiers) || typeof value.policy.redaction_version !== "string" || typeof value.policy.redactor_digest !== "string") {
+    if (!isRecord4(value.policy) || typeof value.policy.policy_digest !== "string" || value.policy.policy_identity_digest !== void 0 && typeof value.policy.policy_identity_digest !== "string" || !Number.isSafeInteger(value.policy.policy_sequence) || typeof value.policy.organization_audience_hash !== "string" || typeof value.policy.expires_at !== "string" || !Array.isArray(value.policy.enabled_tiers) || typeof value.policy.redaction_version !== "string" || typeof value.policy.redactor_digest !== "string") {
       throw new Error("Private lesson draft policy binding is invalid.");
     }
     if (!unsupportedProfile) {
@@ -34534,52 +35867,54 @@ async function compactLegacySubmittedDraftUnlocked(draft, outbox) {
         throw new Error("Private lesson submitted record conflicts.");
       }
     } else {
-      await unlink2(path).catch(() => {
+      await unlink3(path).catch(() => {
       });
       throw error;
     }
   }
-  await unlink2(draftPath(outbox.directory, draft.draft_id));
+  await unlink3(draftPath(outbox.directory, draft.draft_id));
   await syncDirectory2(outbox.directory);
 }
 async function reconcileSubmittedRecordsUnlocked(directory, now) {
   const entries = await secureOutboxEntries(directory);
-  let changed = false;
-  for (const name of entries.filter(
-    (entry) => entry.endsWith(".submitted.json")
-  )) {
-    const draftId = name.slice(0, -".submitted.json".length);
-    const path = submittedRecordPath(directory, draftId);
-    let completion;
-    try {
-      completion = parseSubmittedRecord(
-        await readBoundedFile(path, PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES),
-        draftId
-      );
-    } catch {
-      continue;
-    }
-    const retainedDraft = draftPath(directory, draftId);
-    if (existsSync2(retainedDraft)) {
+  return withWindowsPrivateDirectoryReadOperation(directory, entries, async () => {
+    let changed = false;
+    for (const name of entries.filter(
+      (entry) => entry.endsWith(".submitted.json")
+    )) {
+      const draftId = name.slice(0, -".submitted.json".length);
+      const path = submittedRecordPath(directory, draftId);
+      let completion;
       try {
-        await assertRegularPrivateFile(
-          retainedDraft,
-          PRIVATE_LESSON_DRAFT_MAX_BYTES
+        completion = parseSubmittedRecord(
+          await readBoundedFile(path, PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES),
+          draftId
         );
-        await unlink2(retainedDraft);
-        changed = true;
       } catch {
+        continue;
+      }
+      const retainedDraft = draftPath(directory, draftId);
+      if (existsSync2(retainedDraft)) {
+        try {
+          await assertRegularPrivateFile(
+            retainedDraft,
+            PRIVATE_LESSON_DRAFT_MAX_BYTES
+          );
+          await unlink3(retainedDraft);
+          changed = true;
+        } catch {
+        }
+      }
+      if (Date.parse(completion.expires_at) <= now.getTime()) {
+        await unlink3(path);
+        changed = true;
       }
     }
-    if (Date.parse(completion.expires_at) <= now.getTime()) {
-      await unlink2(path);
+    if (await reconcileReplacedRecordsUnlocked(directory, entries, now)) {
       changed = true;
     }
-  }
-  if (await reconcileReplacedRecordsUnlocked(directory, entries, now)) {
-    changed = true;
-  }
-  if (changed) await syncDirectory2(directory);
+    if (changed) await syncDirectory2(directory);
+  });
 }
 function submittedRecordListItem(completion) {
   return {
@@ -34697,7 +36032,7 @@ function parseSubmittedRecord(serialized, expectedDraftId) {
     "remote_status",
     "processing_state"
   ]);
-  if (!isRecord3(value) || Object.keys(value).some((key) => !allowedKeys.has(key)) || value.version !== "private-lesson-outbox-submitted-v1" || value.draft_id !== expectedDraftId || value.state !== "submitted" || !isSha256Digest(value.payload_digest) || typeof value.redaction_version !== "string" || !isSha256Digest(value.redactor_digest) || !Number.isInteger(value.attempts) || Number(value.attempts) < 1 || Number(value.attempts) > 1e3 || !isIsoTimestamp(value.created_at) || !isIsoTimestamp(value.updated_at) || !isIsoTimestamp(value.submitted_at) || !isIsoTimestamp(value.expires_at) || !isSha256Digest(value.receipt_digest) || value.remote_status !== null && value.remote_status !== "accepted_private_candidate" && value.remote_status !== "duplicate" || value.processing_state !== null && value.processing_state !== "queued_for_verification" && value.processing_state !== "already_queued") {
+  if (!isRecord4(value) || Object.keys(value).some((key2) => !allowedKeys.has(key2)) || value.version !== "private-lesson-outbox-submitted-v1" || value.draft_id !== expectedDraftId || value.state !== "submitted" || !isSha256Digest(value.payload_digest) || typeof value.redaction_version !== "string" || !isSha256Digest(value.redactor_digest) || !Number.isInteger(value.attempts) || Number(value.attempts) < 1 || Number(value.attempts) > 1e3 || !isIsoTimestamp(value.created_at) || !isIsoTimestamp(value.updated_at) || !isIsoTimestamp(value.submitted_at) || !isIsoTimestamp(value.expires_at) || !isSha256Digest(value.receipt_digest) || value.remote_status !== null && value.remote_status !== "accepted_private_candidate" && value.remote_status !== "duplicate" || value.processing_state !== null && value.processing_state !== "queued_for_verification" && value.processing_state !== "already_queued") {
     throw new Error("Private lesson submitted record is invalid.");
   }
   const submittedAt = Date.parse(value.submitted_at);
@@ -34719,14 +36054,14 @@ function isHoldTelemetryStatus(value) {
 }
 function parseEnvelope(serialized, expectedDraftId) {
   const value = JSON.parse(serialized);
-  if (!isRecord3(value) || value.version !== "private-lesson-outbox-envelope-v1" || value.draft_id !== expectedDraftId || !isOutboxState(value.state) || typeof value.payload_digest !== "string" || !isHoldTelemetryStatus(value.hold_telemetry_status) || value.next_retry_at !== null && typeof value.next_retry_at !== "string" || value.last_error_code !== void 0 && value.last_error_code !== null && typeof value.last_error_code !== "string" || value.destination_binding !== void 0 && value.destination_binding !== null && !isPrivateLessonDestination(value.destination_binding) || value.terminal_reason !== null && typeof value.terminal_reason !== "string" || !isRecord3(value.encryption) || value.encryption.algorithm !== "aes-256-gcm" || value.encryption.key_source !== "os_keychain" && value.encryption.key_source !== "mode_0600_file" || typeof value.encryption.nonce !== "string" || typeof value.encryption.ciphertext !== "string" || typeof value.encryption.auth_tag !== "string") {
+  if (!isRecord4(value) || value.version !== "private-lesson-outbox-envelope-v1" || value.draft_id !== expectedDraftId || !isOutboxState(value.state) || typeof value.payload_digest !== "string" || !isHoldTelemetryStatus(value.hold_telemetry_status) || value.next_retry_at !== null && typeof value.next_retry_at !== "string" || value.last_error_code !== void 0 && value.last_error_code !== null && typeof value.last_error_code !== "string" || value.destination_binding !== void 0 && value.destination_binding !== null && !isPrivateLessonDestination(value.destination_binding) || value.terminal_reason !== null && typeof value.terminal_reason !== "string" || !isRecord4(value.encryption) || value.encryption.algorithm !== "aes-256-gcm" || value.encryption.key_source !== "os_keychain" && value.encryption.key_source !== "mode_0600_file" || typeof value.encryption.nonce !== "string" || typeof value.encryption.ciphertext !== "string" || typeof value.encryption.auth_tag !== "string") {
     throw new Error("Private lesson outbox envelope is invalid.");
   }
   return value;
 }
 function parseDeletionTombstone(serialized, expectedDraftId) {
   const value = JSON.parse(serialized);
-  if (!isRecord3(value) || value.version !== "private-lesson-outbox-deletion-v1" || value.draft_id !== expectedDraftId || typeof value.deleted_at !== "string" || value.reason !== "explicit_confirmed_deletion") {
+  if (!isRecord4(value) || value.version !== "private-lesson-outbox-deletion-v1" || value.draft_id !== expectedDraftId || typeof value.deleted_at !== "string" || value.reason !== "explicit_confirmed_deletion") {
     throw new Error("Private lesson deletion tombstone is invalid.");
   }
   return value;
@@ -34741,7 +36076,7 @@ function parseReplacedRecord(serialized, expectedDraftId) {
     "replacement_draft_id",
     "expires_at"
   ]);
-  if (!isRecord3(value) || Object.keys(value).some((key) => !allowedKeys.has(key)) || value.version !== "private-lesson-outbox-deletion-v1" || value.draft_id !== expectedDraftId || value.reason !== "replaced_by_verified_replacement" || typeof value.replacement_draft_id !== "string" || !/^pld_[A-Za-z0-9_-]{8,96}$/u.test(value.replacement_draft_id) || value.replacement_draft_id === expectedDraftId || !isIsoTimestamp(value.deleted_at) || !isIsoTimestamp(value.expires_at) || Date.parse(value.expires_at) <= Date.parse(value.deleted_at)) {
+  if (!isRecord4(value) || Object.keys(value).some((key2) => !allowedKeys.has(key2)) || value.version !== "private-lesson-outbox-deletion-v1" || value.draft_id !== expectedDraftId || value.reason !== "replaced_by_verified_replacement" || typeof value.replacement_draft_id !== "string" || !/^pld_[A-Za-z0-9_-]{8,96}$/u.test(value.replacement_draft_id) || value.replacement_draft_id === expectedDraftId || !isIsoTimestamp(value.deleted_at) || !isIsoTimestamp(value.expires_at) || Date.parse(value.expires_at) <= Date.parse(value.deleted_at)) {
     throw new Error("Private lesson replaced record is invalid.");
   }
   return value;
@@ -34771,38 +36106,40 @@ async function assertNotReplacedUnlocked(directory, draftId) {
   }
 }
 async function reconcileReplacedRecordsUnlocked(directory, entries, now) {
-  let changed = false;
-  for (const name of entries.filter(
-    (entry) => entry.endsWith(".replaced.json")
-  )) {
-    const draftId = name.slice(0, -".replaced.json".length);
-    let record4;
-    try {
-      record4 = parseReplacedRecord(
-        await readBoundedFile(
-          join3(directory, name),
-          PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
-        ),
-        draftId
-      );
-    } catch {
-      continue;
-    }
-    const retained = draftPath(directory, draftId);
-    if (existsSync2(retained)) {
+  return withWindowsPrivateDirectoryReadOperation(directory, entries, async () => {
+    let changed = false;
+    for (const name of entries.filter(
+      (entry) => entry.endsWith(".replaced.json")
+    )) {
+      const draftId = name.slice(0, -".replaced.json".length);
+      let record4;
       try {
-        await assertRegularPrivateFile(retained, PRIVATE_LESSON_DRAFT_MAX_BYTES);
-        await unlink2(retained);
-        changed = true;
+        record4 = parseReplacedRecord(
+          await readBoundedFile(
+            join6(directory, name),
+            PRIVATE_LESSON_SUBMITTED_RECORD_MAX_BYTES
+          ),
+          draftId
+        );
       } catch {
+        continue;
+      }
+      const retained = draftPath(directory, draftId);
+      if (existsSync2(retained)) {
+        try {
+          await assertRegularPrivateFile(retained, PRIVATE_LESSON_DRAFT_MAX_BYTES);
+          await unlink3(retained);
+          changed = true;
+        } catch {
+        }
+      }
+      if (Date.parse(record4.expires_at) <= now.getTime()) {
+        await unlink3(join6(directory, name));
+        changed = true;
       }
     }
-    if (Date.parse(record4.expires_at) <= now.getTime()) {
-      await unlink2(join3(directory, name));
-      changed = true;
-    }
-  }
-  return changed;
+    return changed;
+  });
 }
 async function privateLessonRecoveryItems(options = {}) {
   const outbox = await readyOutbox(options, false);
@@ -34812,64 +36149,67 @@ async function privateLessonRecoveryItems(options = {}) {
       outbox.encryption
     );
     const items = [];
-    for (const entry of await readdir(outbox.directory, {
+    const inventoryEntries = await readdir(outbox.directory, {
       withFileTypes: true
-    })) {
-      const match = entry.name.match(
-        /^(pld_[A-Za-z0-9_-]{8,96})\.(lesson|submitted|deleted|replaced)\.json$/u
-      );
-      if (!match) continue;
-      const draftId = match[1];
-      if (entry.isSymbolicLink() || !entry.isFile()) {
-        items.push(
-          privateLessonRecoveryItem(draftId, "unsafe_canonical_entry")
+    });
+    return withWindowsPrivateDirectoryReadOperation(outbox.directory, process.platform === "win32" ? inventoryEntries.map((entry) => entry.name) : [], async () => {
+      for (const entry of inventoryEntries) {
+        const match = entry.name.match(
+          /^(pld_[A-Za-z0-9_-]{8,96})\.(lesson|submitted|deleted|replaced)\.json$/u
         );
-        continue;
-      }
-      try {
-        const validatedDraft = await validatePrivateLessonCanonicalPath(
-          join3(outbox.directory, entry.name),
-          entry.name,
-          outbox.encryption
-        );
-        const now = options.now ?? /* @__PURE__ */ new Date();
-        const draft = validatedDraft ? reconcileStoredDraft(validatedDraft, now) : null;
-        if (draft?.state === "retry_scheduled" && draft.last_error_code === "policy_verification_failed") {
+        if (!match) continue;
+        const draftId = match[1];
+        if (entry.isSymbolicLink() || !entry.isFile()) {
           items.push(
-            privateLessonRecoveryItem(draftId, "held_safety_recovery_required")
-          );
-        }
-        if (draft && hasUnverifiablePrivateLessonCompletion(draft)) {
-          items.push(
-            privateLessonRecoveryItem(draftId, "submitted_completion_invalid")
-          );
-        }
-      } catch (error) {
-        if (isPrivateOutboxKeyAccessError(error)) {
-          items.push(
-            privateLessonRecoveryItem(draftId, "undecryptable_entry", error)
+            privateLessonRecoveryItem(draftId, "unsafe_canonical_entry")
           );
           continue;
         }
-        if (error instanceof PrivateOutboxStorageError) throw error;
-        items.push(
-          privateLessonRecoveryItem(
-            draftId,
-            error instanceof PrivateOutboxDecryptionError ? "undecryptable_entry" : "invalid_canonical_entry"
-          )
-        );
+        try {
+          const validatedDraft = await validatePrivateLessonCanonicalPath(
+            join6(outbox.directory, entry.name),
+            entry.name,
+            outbox.encryption
+          );
+          const now = options.now ?? /* @__PURE__ */ new Date();
+          const draft = validatedDraft ? reconcileStoredDraft(validatedDraft, now) : null;
+          if (draft?.state === "retry_scheduled" && draft.last_error_code === "policy_verification_failed") {
+            items.push(
+              privateLessonRecoveryItem(draftId, "held_safety_recovery_required")
+            );
+          }
+          if (draft && hasUnverifiablePrivateLessonCompletion(draft)) {
+            items.push(
+              privateLessonRecoveryItem(draftId, "submitted_completion_invalid")
+            );
+          }
+        } catch (error) {
+          if (isPrivateOutboxKeyAccessError(error)) {
+            items.push(
+              privateLessonRecoveryItem(draftId, "undecryptable_entry", error)
+            );
+            continue;
+          }
+          if (error instanceof PrivateOutboxStorageError) throw error;
+          items.push(
+            privateLessonRecoveryItem(
+              draftId,
+              error instanceof PrivateOutboxDecryptionError ? "undecryptable_entry" : "invalid_canonical_entry"
+            )
+          );
+        }
       }
-    }
-    await appendPrivateLessonQuarantineRecoveryItems(outbox.directory, items);
-    return [
-      ...new Map(
-        items.map((item) => [`${item.draft_id}:${item.reason_code}`, item])
-      ).values()
-    ];
+      await appendPrivateLessonQuarantineRecoveryItems(outbox.directory, items);
+      return [
+        ...new Map(
+          items.map((item) => [`${item.draft_id}:${item.reason_code}`, item])
+        ).values()
+      ];
+    });
   });
 }
 async function appendPrivateLessonQuarantineRecoveryItems(directory, items) {
-  const quarantine = join3(directory, "quarantine");
+  const quarantine = join6(directory, "quarantine");
   const quarantined = await readdir(quarantine, {
     withFileTypes: true
   }).catch((error) => {
@@ -34886,7 +36226,7 @@ async function appendPrivateLessonQuarantineRecoveryItems(directory, items) {
       )
     );
   }
-  const lockQuarantine = join3(quarantine, "locks");
+  const lockQuarantine = join6(quarantine, "locks");
   for (const entry of await readdir(lockQuarantine, {
     withFileTypes: true
   }).catch((error) => {
@@ -34940,69 +36280,96 @@ function privateLessonRecoveryItem(draftId, reasonCode, storageError) {
 async function reconcilePrivateLessonTemporaryWrites(directory, encryption) {
   const unresolved = /* @__PURE__ */ new Map();
   const groups = /* @__PURE__ */ new Map();
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (/^\.[a-f0-9]{24}\.(?:capacity|replaced)\.tmp$/u.test(entry.name) && entry.isFile()) {
-      await unlink2(join3(directory, entry.name));
-      continue;
-    }
-    if (!/^\.[a-f0-9]{24}\.tmp$/u.test(entry.name) || !entry.isFile()) {
-      continue;
-    }
-    const path = join3(directory, entry.name);
-    let value;
-    let draftId;
-    try {
-      value = await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
-      const raw = JSON.parse(value);
-      draftId = String(raw.draft_id ?? "");
-      assertDraftId(draftId);
-      const envelope2 = parseEnvelope(value, draftId);
-      await decryptDraft(envelope2, encryption, true);
-    } catch (error) {
-      if (isPrivateOutboxKeyAccessError(error)) {
-        if (draftId) unresolved.set(draftId, error);
+  const inventoryEntries = await readdir(directory, { withFileTypes: true });
+  const inventoryNames = process.platform === "win32" ? inventoryEntries.filter((entry) => entry.isFile() && /^\.[a-f0-9]{24}\.tmp$/u.test(entry.name)).map((entry) => entry.name) : [];
+  return withWindowsPrivateDirectoryReadOperation(directory, inventoryNames, async () => {
+    for (const entry of inventoryEntries) {
+      if (/^\.[a-f0-9]{24}\.(?:capacity|replaced)\.tmp$/u.test(entry.name) && entry.isFile()) {
+        await unlink3(join6(directory, entry.name));
         continue;
       }
-      if (error instanceof PrivateOutboxStorageError) throw error;
-      if (error instanceof PrivateOutboxDecryptionError) {
-        if (draftId) unresolved.set(draftId, error);
+      if (!/^\.[a-f0-9]{24}\.tmp$/u.test(entry.name) || !entry.isFile()) {
         continue;
       }
-      const recoveryId = derivedPrivateLessonRecoveryId(entry.name);
-      await quarantinePrivateLessonTemporary(
-        directory,
-        recoveryId,
-        entry.name,
-        "invalid"
-      );
-      continue;
-    }
-    const target = `${draftId}.lesson.json`;
-    groups.set(target, [
-      ...groups.get(target) ?? [],
-      { name: entry.name, value }
-    ]);
-  }
-  for (const [target, temporaryValues] of groups) {
-    const targetPath = join3(directory, target);
-    const targetMetadata = await lstat2(targetPath).catch((error) => {
-      if (isMissingError2(error)) return null;
-      throw error;
-    });
-    if (targetMetadata) {
-      let current = null;
+      const path = join6(directory, entry.name);
+      let value;
+      let draftId;
       try {
-        current = await readBoundedFile(
-          targetPath,
-          PRIVATE_LESSON_DRAFT_MAX_BYTES
+        value = await readBoundedFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
+        const raw = JSON.parse(value);
+        draftId = String(raw.draft_id ?? "");
+        assertDraftId(draftId);
+        const envelope2 = parseEnvelope(value, draftId);
+        await decryptDraft(envelope2, encryption, true);
+      } catch (error) {
+        if (isPrivateOutboxKeyAccessError(error)) {
+          if (draftId) unresolved.set(draftId, error);
+          continue;
+        }
+        if (error instanceof PrivateOutboxStorageError) throw error;
+        if (error instanceof PrivateOutboxDecryptionError) {
+          if (draftId) unresolved.set(draftId, error);
+          continue;
+        }
+        const recoveryId = derivedPrivateLessonRecoveryId(entry.name);
+        await quarantinePrivateLessonTemporary(
+          directory,
+          recoveryId,
+          entry.name,
+          "invalid"
         );
-      } catch {
-        current = null;
+        continue;
       }
-      for (const temporary of temporaryValues) {
-        if (current !== null && temporary.value === current) {
-          await unlink2(join3(directory, temporary.name));
-        } else {
+      const target = `${draftId}.lesson.json`;
+      groups.set(target, [
+        ...groups.get(target) ?? [],
+        { name: entry.name, value }
+      ]);
+    }
+    for (const [target, temporaryValues] of groups) {
+      const targetPath = join6(directory, target);
+      const targetMetadata = await lstat3(targetPath).catch((error) => {
+        if (isMissingError2(error)) return null;
+        throw error;
+      });
+      if (targetMetadata) {
+        let current = null;
+        try {
+          current = await readBoundedFile(
+            targetPath,
+            PRIVATE_LESSON_DRAFT_MAX_BYTES
+          );
+        } catch {
+          current = null;
+        }
+        for (const temporary of temporaryValues) {
+          if (current !== null && temporary.value === current) {
+            await unlink3(join6(directory, temporary.name));
+          } else {
+            await quarantinePrivateLessonTemporary(
+              directory,
+              target.slice(0, -".lesson.json".length),
+              temporary.name,
+              "conflict"
+            );
+          }
+        }
+        continue;
+      }
+      const first = temporaryValues[0];
+      if (temporaryValues.every((item) => item.value === first.value)) {
+        await rename3(join6(directory, first.name), targetPath);
+        if (process.platform !== "win32") await chmod2(targetPath, 384);
+        for (const duplicate of temporaryValues.slice(1)) {
+          await unlink3(join6(directory, duplicate.name));
+        }
+      } else {
+        const draftId = target.slice(0, -".lesson.json".length);
+        unresolved.set(
+          draftId,
+          new PrivateLessonDraftUnavailableError(draftId, "corrupt")
+        );
+        for (const temporary of temporaryValues) {
           await quarantinePrivateLessonTemporary(
             directory,
             target.slice(0, -".lesson.json".length),
@@ -35011,32 +36378,9 @@ async function reconcilePrivateLessonTemporaryWrites(directory, encryption) {
           );
         }
       }
-      continue;
     }
-    const first = temporaryValues[0];
-    if (temporaryValues.every((item) => item.value === first.value)) {
-      await rename2(join3(directory, first.name), targetPath);
-      await chmod2(targetPath, 384);
-      for (const duplicate of temporaryValues.slice(1)) {
-        await unlink2(join3(directory, duplicate.name));
-      }
-    } else {
-      const draftId = target.slice(0, -".lesson.json".length);
-      unresolved.set(
-        draftId,
-        new PrivateLessonDraftUnavailableError(draftId, "corrupt")
-      );
-      for (const temporary of temporaryValues) {
-        await quarantinePrivateLessonTemporary(
-          directory,
-          target.slice(0, -".lesson.json".length),
-          temporary.name,
-          "conflict"
-        );
-      }
-    }
-  }
-  return unresolved;
+    return unresolved;
+  });
 }
 async function validatePrivateLessonCanonicalPath(path, name, encryption) {
   const draftId = name.match(/^(pld_[A-Za-z0-9_-]{8,96})/u)?.[1];
@@ -35092,13 +36436,13 @@ function derivedPrivateLessonRecoveryId(value) {
   return `pld_recovery_${hashValue(value).replace(/^sha256:/u, "").slice(0, 20)}`;
 }
 async function quarantinePrivateLessonTemporary(directory, draftId, temporaryName, reason) {
-  const quarantine = join3(directory, "quarantine");
+  const quarantine = join6(directory, "quarantine");
   await ensurePrivateLessonDirectory(quarantine);
-  await rename2(
-    join3(directory, temporaryName),
-    join3(
+  await rename3(
+    join6(directory, temporaryName),
+    join6(
       quarantine,
-      `${draftId}.${reason}.${randomBytes5(8).toString("hex")}.retained`
+      `${draftId}.${reason}.${randomBytes6(8).toString("hex")}.retained`
     )
   );
 }
@@ -35110,18 +36454,18 @@ async function retainedPrivateLessonArtifactStats(directory) {
     for (const entry of await readdir(path, { withFileTypes: true })) {
       if (entry.name === `.${PRIVATE_LESSON_OUTBOX_LOCK_NAMESPACE}.lock`)
         continue;
-      const child = join3(path, entry.name);
-      const metadata = await lstat2(child).catch((error) => {
+      const child = join6(path, entry.name);
+      const metadata2 = await lstat3(child).catch((error) => {
         if (isMissingError2(error)) return null;
         throw error;
       });
-      if (!metadata) continue;
+      if (!metadata2) continue;
       if (entry.isDirectory() && !entry.isSymbolicLink()) {
         await visit(child, quarantined || entry.name === "quarantine");
         continue;
       }
-      totalBytes += metadata.size;
-      if (quarantined) quarantinedBytes += metadata.size;
+      totalBytes += metadata2.size;
+      if (quarantined) quarantinedBytes += metadata2.size;
       if (entry.name.endsWith(".tmp")) temporaryFiles += 1;
     }
   };
@@ -35131,7 +36475,7 @@ async function retainedPrivateLessonArtifactStats(directory) {
 async function readPrivateLessonCapacityRejection(directory) {
   try {
     const parsed = JSON.parse(
-      readSecureLocalText(join3(directory, PRIVATE_LESSON_CAPACITY_STATE_FILE), {
+      readSecureLocalText(join6(directory, PRIVATE_LESSON_CAPACITY_STATE_FILE), {
         maxBytes: PRIVATE_LESSON_CAPACITY_STATE_MAX_BYTES
       })
     );
@@ -35141,10 +36485,10 @@ async function readPrivateLessonCapacityRejection(directory) {
   }
 }
 async function recordPrivateLessonCapacityRejection(directory, rejectedCaptureBytes) {
-  const path = join3(directory, PRIVATE_LESSON_CAPACITY_STATE_FILE);
-  const temporary = join3(
+  const path = join6(directory, PRIVATE_LESSON_CAPACITY_STATE_FILE);
+  const temporary = join6(
     directory,
-    `.${randomBytes5(12).toString("hex")}.capacity.tmp`
+    `.${randomBytes6(12).toString("hex")}.capacity.tmp`
   );
   const encoded = `${canonicalJson({
     version: "private-outbox-capacity-v1",
@@ -35153,16 +36497,16 @@ async function recordPrivateLessonCapacityRejection(directory, rejectedCaptureBy
 `;
   try {
     await atomicWritePrivate(temporary, encoded);
-    await rename2(temporary, path);
-    await chmod2(path, 384);
+    await rename3(temporary, path);
+    if (process.platform !== "win32") await chmod2(path, 384);
     await syncDirectory2(directory);
   } finally {
-    await unlink2(temporary).catch(() => {
+    await unlink3(temporary).catch(() => {
     });
   }
 }
 async function privateLessonQuarantineEntriesForDraft(directory, draftId) {
-  const quarantine = join3(directory, "quarantine");
+  const quarantine = join6(directory, "quarantine");
   const entries = await readdir(quarantine, { withFileTypes: true }).catch(
     (error) => {
       if (isMissingError2(error)) return [];
@@ -35171,8 +36515,8 @@ async function privateLessonQuarantineEntriesForDraft(directory, draftId) {
   );
   const matches = entries.filter(
     (entry) => entry.name.startsWith(`${draftId}.`) && (entry.isFile() || entry.isDirectory() || entry.isSymbolicLink())
-  ).map((entry) => join3(quarantine, entry.name));
-  const locks = join3(quarantine, "locks");
+  ).map((entry) => join6(quarantine, entry.name));
+  const locks = join6(quarantine, "locks");
   const lockEntries = await readdir(locks, { withFileTypes: true }).catch(
     (error) => {
       if (isMissingError2(error)) return [];
@@ -35183,20 +36527,20 @@ async function privateLessonQuarantineEntriesForDraft(directory, draftId) {
     ...matches,
     ...lockEntries.filter(
       (entry) => entry.name.startsWith(`${draftId}.`) && (entry.isFile() || entry.isDirectory() || entry.isSymbolicLink())
-    ).map((entry) => join3(locks, entry.name))
+    ).map((entry) => join6(locks, entry.name))
   ];
 }
 async function removeCanonicalPrivateLessonEntry(path) {
-  const metadata = await lstat2(path).catch((error) => {
+  const metadata2 = await lstat3(path).catch((error) => {
     if (isMissingError2(error)) return null;
     throw error;
   });
-  if (!metadata) return;
-  if (metadata.isDirectory() && !metadata.isSymbolicLink()) {
+  if (!metadata2) return;
+  if (metadata2.isDirectory() && !metadata2.isSymbolicLink()) {
     await rm(path, { recursive: true, force: true });
     return;
   }
-  await unlink2(path);
+  await unlink3(path);
 }
 async function secureOutboxEntries(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -35207,9 +36551,23 @@ async function secureOutboxEntries(directory) {
   ).map((entry) => entry.name).sort();
 }
 async function assertRegularPrivateFile(path, maxBytes) {
-  const metadata = await lstat2(path);
-  assertPrivateLessonPathMetadata(metadata, "file");
-  if (metadata.size > maxBytes) {
+  if (process.platform === "win32") {
+    const before = await lstat3(path, { bigint: true });
+    const handle = await open4(path, constants6.O_RDONLY | (constants6.O_NOFOLLOW ?? 0));
+    try {
+      const opened = await handle.stat({ bigint: true });
+      assertWindowsPrivateRead(path, "file", before, opened);
+      if (!opened.isFile() || opened.isSymbolicLink() || opened.size > maxBytes) {
+        throw new Error("Private lesson outbox entry is not a bounded regular file.");
+      }
+    } finally {
+      await handle.close();
+    }
+    return;
+  }
+  const metadata2 = await lstat3(path);
+  assertPrivateLessonPathMetadata(metadata2, "file");
+  if (metadata2.size > maxBytes) {
     throw new Error("Private lesson outbox entry exceeds its size limit.");
   }
 }
@@ -35217,44 +36575,44 @@ async function readBoundedFile(path, maxBytes) {
   return readSecureLocalText(path, { maxBytes });
 }
 async function atomicWritePrivate(path, data) {
-  const handle = await open2(path, "wx", 384);
+  const handle = process.platform === "win32" ? await openWindowsPrivateFile(path) : await open4(path, "wx", 384);
   try {
     await handle.writeFile(data, "utf8");
     await handle.sync();
-    await handle.chmod(384);
+    if (process.platform !== "win32") await handle.chmod(384);
   } finally {
     await handle.close();
   }
-  await syncDirectory2(dirname3(path));
+  await syncDirectory2(dirname6(path));
 }
 async function atomicCreatePrivateLessonEntry(path, data, temporarySuffix = ".tmp") {
-  const temporary = join3(
-    dirname3(path),
-    `.${randomBytes5(12).toString("hex")}${temporarySuffix}`
+  const temporary = join6(
+    dirname6(path),
+    `.${randomBytes6(12).toString("hex")}${temporarySuffix}`
   );
   try {
     await atomicWritePrivate(temporary, data);
     await link(temporary, path);
-    await chmod2(path, 384);
-    await syncDirectory2(dirname3(path));
+    if (process.platform !== "win32") await chmod2(path, 384);
+    await syncDirectory2(dirname6(path));
   } finally {
-    await unlink2(temporary).catch(() => {
+    await unlink3(temporary).catch(() => {
     });
   }
 }
 async function atomicReplacePrivate(path, data) {
   await assertRegularPrivateFile(path, PRIVATE_LESSON_DRAFT_MAX_BYTES);
-  const temporary = join3(
-    dirname3(path),
-    `.${randomBytes5(12).toString("hex")}.tmp`
+  const temporary = join6(
+    dirname6(path),
+    `.${randomBytes6(12).toString("hex")}.tmp`
   );
   try {
     await atomicWritePrivate(temporary, data);
-    await rename2(temporary, path);
-    await chmod2(path, 384);
-    await syncDirectory2(dirname3(path));
+    await rename3(temporary, path);
+    if (process.platform !== "win32") await chmod2(path, 384);
+    await syncDirectory2(dirname6(path));
   } finally {
-    await unlink2(temporary).catch(() => {
+    await unlink3(temporary).catch(() => {
     });
   }
 }
@@ -35289,14 +36647,14 @@ async function readPrivateLessonOutboxKey(encryption, source) {
       source === "os_keychain" ? "keychain_read" : "fallback_key_read"
     );
   }
-  const key = await encryption.readRetainedKey(source);
-  if (key.length !== 32) {
+  const key2 = await encryption.readRetainedKey(source);
+  if (key2.length !== 32) {
     throw new PrivateOutboxStorageError(
       "outbox_key_invalid",
       source === "os_keychain" ? "keychain_read" : "fallback_key_read"
     );
   }
-  return key;
+  return key2;
 }
 function withRetainedKeyReader(primary, env, options) {
   const encryption = { ...primary };
@@ -35341,23 +36699,25 @@ async function readExistingPrivateLessonOutboxKeyForSource(source, env, options)
 async function readExistingFallbackOutboxEncryption(env, options) {
   const path = privateLessonOutboxKeyPath(env, options.homeDirectory);
   try {
-    await assertRegularPrivateFile(path, 256);
-    const encoded = readSecureLocalText(path, { maxBytes: 256 }).trim();
-    const key = Buffer.from(encoded, "base64url");
-    if (key.length !== 32) {
-      throw new PrivateOutboxStorageError(
-        "outbox_key_invalid",
-        "fallback_key_read"
-      );
-    }
-    return { key, source: "mode_0600_file" };
+    return await withWindowsPrivateReadOperation([{ path, kind: "file" }], async () => {
+      await assertRegularPrivateFile(path, 256);
+      const encoded = readSecureLocalText(path, { maxBytes: 256 }).trim();
+      const key2 = Buffer.from(encoded, "base64url");
+      if (key2.length !== 32) {
+        throw new PrivateOutboxStorageError(
+          "outbox_key_invalid",
+          "fallback_key_read"
+        );
+      }
+      return { key: key2, source: "mode_0600_file" };
+    });
   } catch (error) {
     if (isMissingError2(error)) return null;
     throw privateOutboxStorageError(error, "fallback_key_read");
   }
 }
 async function privateLessonFallbackKeyState(options, activeSource, inventory) {
-  const present = await lstat2(
+  const present = await lstat3(
     privateLessonOutboxKeyPath(options.env, options.homeDirectory)
   ).then(
     () => true,
@@ -35387,23 +36747,23 @@ async function privateLessonFallbackKeyState(options, activeSource, inventory) {
 }
 function privateLearningOutboxDirectories(options) {
   const env = options.env ?? process.env;
-  const homeDirectory = options.homeDirectory ?? homedir2();
-  const stateRoot2 = env.XDG_STATE_HOME?.trim() || join3(homeDirectory, ".local", "state");
+  const homeDirectory = options.homeDirectory ?? homedir3();
+  const stateRoot2 = env.XDG_STATE_HOME?.trim() || join6(homeDirectory, ".local", "state");
   const directories = /* @__PURE__ */ new Set();
   if (options.outboxDirectory) {
     directories.add(options.outboxDirectory);
     const lane = basename(options.outboxDirectory);
     if (lane === "private-lessons" || lane === "private-skills") {
       directories.add(
-        join3(
-          dirname3(options.outboxDirectory),
+        join6(
+          dirname6(options.outboxDirectory),
           lane === "private-lessons" ? "private-skills" : "private-lessons"
         )
       );
     }
   } else {
-    directories.add(join3(stateRoot2, "remembrance", "private-lessons"));
-    directories.add(join3(stateRoot2, "remembrance", "private-skills"));
+    directories.add(join6(stateRoot2, "remembrance", "private-lessons"));
+    directories.add(join6(stateRoot2, "remembrance", "private-skills"));
   }
   return directories;
 }
@@ -35420,24 +36780,24 @@ function selectedPrivateLessonError(draftId, error) {
   if (error instanceof Error && "code" in error) return error;
   return new PrivateLessonDraftUnavailableError(draftId, "corrupt");
 }
-function assertPrivateLessonPathMetadata(metadata, kind, currentUid = typeof process.getuid === "function" ? process.getuid() : null, platform = process.platform) {
-  assertPrivateLessonPathIdentity(metadata, kind, currentUid);
-  if (platform !== "win32" && (metadata.mode & 63) !== 0) {
+function assertPrivateLessonPathMetadata(metadata2, kind, currentUid = typeof process.getuid === "function" ? process.getuid() : null, platform6 = process.platform) {
+  assertPrivateLessonPathIdentity(metadata2, kind, currentUid);
+  if (platform6 !== "win32" && (metadata2.mode & 63) !== 0) {
     throw new PrivateOutboxStorageError(
       "outbox_permissions_not_private",
       "outbox_inspection"
     );
   }
 }
-function assertPrivateLessonPathIdentity(metadata, kind, currentUid = typeof process.getuid === "function" ? process.getuid() : null) {
-  const validType = !metadata.isSymbolicLink() && (kind === "directory" ? metadata.isDirectory() : metadata.isFile());
+function assertPrivateLessonPathIdentity(metadata2, kind, currentUid = typeof process.getuid === "function" ? process.getuid() : null) {
+  const validType = !metadata2.isSymbolicLink() && (kind === "directory" ? metadata2.isDirectory() : metadata2.isFile());
   if (!validType) {
     throw new PrivateOutboxStorageError(
       "outbox_path_unsafe",
       "outbox_inspection"
     );
   }
-  if (currentUid !== null && metadata.uid !== currentUid) {
+  if (currentUid !== null && metadata2.uid !== currentUid) {
     throw new PrivateOutboxStorageError(
       "outbox_owner_mismatch",
       "outbox_inspection"
@@ -35459,19 +36819,19 @@ function emptyOutboxCounts() {
 }
 function draftPath(directory, draftId) {
   assertDraftId(draftId);
-  return join3(directory, `${draftId}.lesson.json`);
+  return join6(directory, `${draftId}.lesson.json`);
 }
 function submittedRecordPath(directory, draftId) {
   assertDraftId(draftId);
-  return join3(directory, `${draftId}.submitted.json`);
+  return join6(directory, `${draftId}.submitted.json`);
 }
 function tombstonePath(directory, draftId) {
   assertDraftId(draftId);
-  return join3(directory, `${draftId}.deleted.json`);
+  return join6(directory, `${draftId}.deleted.json`);
 }
 function replacedRecordPath(directory, draftId) {
   assertDraftId(draftId);
-  return join3(directory, `${draftId}.replaced.json`);
+  return join6(directory, `${draftId}.replaced.json`);
 }
 function privateLessonReplacementDraftId(replacementOf, payloadDigest) {
   assertDraftId(replacementOf);
@@ -35491,11 +36851,11 @@ function assertDraftId(value) {
 function isOutboxState(value) {
   return value === "ready" || value === "awaiting_authorization" || value === "awaiting_compatible_profile" || value === "retry_scheduled" || value === "held_policy" || value === "held_safety" || value === "held_validation" || value === "submitted" || value === "superseded_redactor";
 }
-function isRecord3(value) {
+function isRecord4(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 function isPrivateLessonDestination(value) {
-  return isRecord3(value) && isSha256Digest(value.api_base_sha256) && isSha256Digest(value.credential_sha256);
+  return isRecord4(value) && isSha256Digest(value.api_base_sha256) && isSha256Digest(value.credential_sha256);
 }
 function parsePrivateLessonDestination(value) {
   if (!isPrivateLessonDestination(value)) {
@@ -35576,9 +36936,9 @@ var __commonJS = (cb, mod) => function __require2() {
 };
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp2(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+    for (let key2 of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key2) && key2 !== except)
+        __defProp2(to, key2, { get: () => from[key2], enumerable: !(desc = __getOwnPropDesc(from, key2)) || desc.enumerable });
   }
   return to;
 };
@@ -42598,17 +43958,17 @@ var require_commonmark = __commonJS({
           var trie2 = /* @__PURE__ */ new Map();
           for (var _i = 0, _e = Object.keys(map2); _i < _e.length; _i++) {
             var value = _e[_i];
-            var key = map2[value];
+            var key2 = map2[value];
             var lastMap = trie2;
-            for (var i = 0; i < key.length - 1; i++) {
-              var char = key.charCodeAt(i);
+            for (var i = 0; i < key2.length - 1; i++) {
+              var char = key2.charCodeAt(i);
               var next2 = (_a = lastMap.get(char)) !== null && _a !== void 0 ? _a : {};
               lastMap.set(char, next2);
               lastMap = (_b = next2.next) !== null && _b !== void 0 ? _b : next2.next = /* @__PURE__ */ new Map();
             }
-            var val = (_c = lastMap.get(key.charCodeAt(key.length - 1))) !== null && _c !== void 0 ? _c : {};
+            var val = (_c = lastMap.get(key2.charCodeAt(key2.length - 1))) !== null && _c !== void 0 ? _c : {};
             (_d = val.value) !== null && _d !== void 0 ? _d : val.value = "&" + value + ";";
-            lastMap.set(key.charCodeAt(key.length - 1), val);
+            lastMap.set(key2.charCodeAt(key2.length - 1), val);
           }
           return trie2;
         }
@@ -44972,11 +46332,11 @@ var require_visit = __commonJS({
     visit.BREAK = BREAK;
     visit.SKIP = SKIP;
     visit.REMOVE = REMOVE;
-    function visit_(key, node, visitor, path) {
-      const ctrl = callVisitor(key, node, visitor, path);
+    function visit_(key2, node, visitor, path) {
+      const ctrl = callVisitor(key2, node, visitor, path);
       if (identity2.isNode(ctrl) || identity2.isPair(ctrl)) {
-        replaceNode(key, path, ctrl);
-        return visit_(key, ctrl, visitor, path);
+        replaceNode(key2, path, ctrl);
+        return visit_(key2, ctrl, visitor, path);
       }
       if (typeof ctrl !== "symbol") {
         if (identity2.isCollection(node)) {
@@ -45020,11 +46380,11 @@ var require_visit = __commonJS({
     visitAsync.BREAK = BREAK;
     visitAsync.SKIP = SKIP;
     visitAsync.REMOVE = REMOVE;
-    async function visitAsync_(key, node, visitor, path) {
-      const ctrl = await callVisitor(key, node, visitor, path);
+    async function visitAsync_(key2, node, visitor, path) {
+      const ctrl = await callVisitor(key2, node, visitor, path);
       if (identity2.isNode(ctrl) || identity2.isPair(ctrl)) {
-        replaceNode(key, path, ctrl);
-        return visitAsync_(key, ctrl, visitor, path);
+        replaceNode(key2, path, ctrl);
+        return visitAsync_(key2, ctrl, visitor, path);
       }
       if (typeof ctrl !== "symbol") {
         if (identity2.isCollection(node)) {
@@ -45074,27 +46434,27 @@ var require_visit = __commonJS({
       }
       return visitor;
     }
-    function callVisitor(key, node, visitor, path) {
+    function callVisitor(key2, node, visitor, path) {
       if (typeof visitor === "function")
-        return visitor(key, node, path);
+        return visitor(key2, node, path);
       if (identity2.isMap(node))
-        return visitor.Map?.(key, node, path);
+        return visitor.Map?.(key2, node, path);
       if (identity2.isSeq(node))
-        return visitor.Seq?.(key, node, path);
+        return visitor.Seq?.(key2, node, path);
       if (identity2.isPair(node))
-        return visitor.Pair?.(key, node, path);
+        return visitor.Pair?.(key2, node, path);
       if (identity2.isScalar(node))
-        return visitor.Scalar?.(key, node, path);
+        return visitor.Scalar?.(key2, node, path);
       if (identity2.isAlias(node))
-        return visitor.Alias?.(key, node, path);
+        return visitor.Alias?.(key2, node, path);
       return void 0;
     }
-    function replaceNode(key, path, node) {
+    function replaceNode(key2, path, node) {
       const parent = path[path.length - 1];
       if (identity2.isCollection(parent)) {
-        parent.items[key] = node;
+        parent.items[key2] = node;
       } else if (identity2.isPair(parent)) {
-        if (key === "key")
+        if (key2 === "key")
           parent.key = node;
         else
           parent.value = node;
@@ -45349,7 +46709,7 @@ var require_anchors = __commonJS({
 var require_applyReviver = __commonJS({
   "node_modules/yaml/dist/doc/applyReviver.js"(exports) {
     "use strict";
-    function applyReviver(reviver, obj, key, val) {
+    function applyReviver(reviver, obj, key2, val) {
       if (val && typeof val === "object") {
         if (Array.isArray(val)) {
           for (let i = 0, len = val.length; i < len; ++i) {
@@ -45389,7 +46749,7 @@ var require_applyReviver = __commonJS({
           }
         }
       }
-      return reviver.call(obj, key, val);
+      return reviver.call(obj, key2, val);
     }
     exports.applyReviver = applyReviver;
   }
@@ -45738,14 +47098,14 @@ var require_Collection = __commonJS({
         if (isEmptyPath(path))
           this.add(value);
         else {
-          const [key, ...rest] = path;
-          const node = this.get(key, true);
+          const [key2, ...rest] = path;
+          const node = this.get(key2, true);
           if (identity2.isCollection(node))
             node.addIn(rest, value);
           else if (node === void 0 && this.schema)
-            this.set(key, collectionFromPath(this.schema, rest, value));
+            this.set(key2, collectionFromPath(this.schema, rest, value));
           else
-            throw new Error(`Expected YAML collection at ${key}. Remaining path: ${rest}`);
+            throw new Error(`Expected YAML collection at ${key2}. Remaining path: ${rest}`);
         }
       }
       /**
@@ -45753,14 +47113,14 @@ var require_Collection = __commonJS({
        * @returns `true` if the item was found and removed.
        */
       deleteIn(path) {
-        const [key, ...rest] = path;
+        const [key2, ...rest] = path;
         if (rest.length === 0)
-          return this.delete(key);
-        const node = this.get(key, true);
+          return this.delete(key2);
+        const node = this.get(key2, true);
         if (identity2.isCollection(node))
           return node.deleteIn(rest);
         else
-          throw new Error(`Expected YAML collection at ${key}. Remaining path: ${rest}`);
+          throw new Error(`Expected YAML collection at ${key2}. Remaining path: ${rest}`);
       }
       /**
        * Returns item at `key`, or `undefined` if not found. By default unwraps
@@ -45768,8 +47128,8 @@ var require_Collection = __commonJS({
        * `true` (collections are always returned intact).
        */
       getIn(path, keepScalar) {
-        const [key, ...rest] = path;
-        const node = this.get(key, true);
+        const [key2, ...rest] = path;
+        const node = this.get(key2, true);
         if (rest.length === 0)
           return !keepScalar && identity2.isScalar(node) ? node.value : node;
         else
@@ -45787,10 +47147,10 @@ var require_Collection = __commonJS({
        * Checks if the collection includes a value with the key `key`.
        */
       hasIn(path) {
-        const [key, ...rest] = path;
+        const [key2, ...rest] = path;
         if (rest.length === 0)
-          return this.has(key);
-        const node = this.get(key, true);
+          return this.has(key2);
+        const node = this.get(key2, true);
         return identity2.isCollection(node) ? node.hasIn(rest) : false;
       }
       /**
@@ -45798,17 +47158,17 @@ var require_Collection = __commonJS({
        * boolean to add/remove the item from the set.
        */
       setIn(path, value) {
-        const [key, ...rest] = path;
+        const [key2, ...rest] = path;
         if (rest.length === 0) {
-          this.set(key, value);
+          this.set(key2, value);
         } else {
-          const node = this.get(key, true);
+          const node = this.get(key2, true);
           if (identity2.isCollection(node))
             node.setIn(rest, value);
           else if (node === void 0 && this.schema)
-            this.set(key, collectionFromPath(this.schema, rest, value));
+            this.set(key2, collectionFromPath(this.schema, rest, value));
           else
-            throw new Error(`Expected YAML collection at ${key}. Remaining path: ${rest}`);
+            throw new Error(`Expected YAML collection at ${key2}. Remaining path: ${rest}`);
         }
       }
     };
@@ -46376,19 +47736,19 @@ var require_stringifyPair = __commonJS({
     var Scalar = require_Scalar();
     var stringify = require_stringify();
     var stringifyComment = require_stringifyComment();
-    function stringifyPair({ key, value }, ctx, onComment, onChompKeep) {
+    function stringifyPair({ key: key2, value }, ctx, onComment, onChompKeep) {
       const { allNullValues, doc, indent, indentStep, options: { commentString, indentSeq, simpleKeys } } = ctx;
-      let keyComment = identity2.isNode(key) && key.comment || null;
+      let keyComment = identity2.isNode(key2) && key2.comment || null;
       if (simpleKeys) {
         if (keyComment) {
           throw new Error("With simple keys, key nodes cannot have comments");
         }
-        if (identity2.isCollection(key) || !identity2.isNode(key) && typeof key === "object") {
+        if (identity2.isCollection(key2) || !identity2.isNode(key2) && typeof key2 === "object") {
           const msg = "With simple keys, collection cannot be used as a key value";
           throw new Error(msg);
         }
       }
-      let explicitKey = !simpleKeys && (!key || keyComment && value == null && !ctx.inFlow || identity2.isCollection(key) || (identity2.isScalar(key) ? key.type === Scalar.Scalar.BLOCK_FOLDED || key.type === Scalar.Scalar.BLOCK_LITERAL : typeof key === "object"));
+      let explicitKey = !simpleKeys && (!key2 || keyComment && value == null && !ctx.inFlow || identity2.isCollection(key2) || (identity2.isScalar(key2) ? key2.type === Scalar.Scalar.BLOCK_FOLDED || key2.type === Scalar.Scalar.BLOCK_LITERAL : typeof key2 === "object"));
       ctx = Object.assign({}, ctx, {
         allNullValues: false,
         implicitKey: !explicitKey && (simpleKeys || !allNullValues),
@@ -46396,7 +47756,7 @@ var require_stringifyPair = __commonJS({
       });
       let keyCommentDone = false;
       let chompKeep = false;
-      let str = stringify.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
+      let str = stringify.stringify(key2, ctx, () => keyCommentDone = true, () => chompKeep = true);
       if (!explicitKey && !ctx.inFlow && str.length > 1024) {
         if (simpleKeys)
           throw new Error("With simple keys, single line scalar must not span more than 1024 characters");
@@ -46536,7 +47896,7 @@ var require_merge = __commonJS({
       }),
       stringify: () => MERGE_KEY
     };
-    var isMergeKey = (ctx, key) => (merge.identify(key) || identity2.isScalar(key) && (!key.type || key.type === Scalar.Scalar.PLAIN) && merge.identify(key.value)) && ctx?.doc.schema.tags.some((tag) => tag.tag === merge.tag && tag.default);
+    var isMergeKey = (ctx, key2) => (merge.identify(key2) || identity2.isScalar(key2) && (!key2.type || key2.type === Scalar.Scalar.PLAIN) && merge.identify(key2.value)) && ctx?.doc.schema.tags.some((tag) => tag.tag === merge.tag && tag.default);
     function addMergeToJSMap(ctx, map, value) {
       const source = resolveAliasValue(ctx, value);
       if (identity2.isSeq(source))
@@ -46553,14 +47913,14 @@ var require_merge = __commonJS({
       if (!identity2.isMap(source))
         throw new Error("Merge sources must be maps or map aliases");
       const srcMap = source.toJSON(null, ctx, Map);
-      for (const [key, value2] of srcMap) {
+      for (const [key2, value2] of srcMap) {
         if (map instanceof Map) {
-          if (!map.has(key))
-            map.set(key, value2);
+          if (!map.has(key2))
+            map.set(key2, value2);
         } else if (map instanceof Set) {
-          map.add(key);
-        } else if (!Object.prototype.hasOwnProperty.call(map, key)) {
-          Object.defineProperty(map, key, {
+          map.add(key2);
+        } else if (!Object.prototype.hasOwnProperty.call(map, key2)) {
+          Object.defineProperty(map, key2, {
             value: value2,
             writable: true,
             enumerable: true,
@@ -46586,19 +47946,19 @@ var require_addPairToJSMap = __commonJS({
     var stringify = require_stringify();
     var identity2 = require_identity();
     var toJS = require_toJS();
-    function addPairToJSMap(ctx, map, { key, value }) {
-      if (identity2.isNode(key) && key.addToJSMap)
-        key.addToJSMap(ctx, map, value);
-      else if (merge.isMergeKey(ctx, key))
+    function addPairToJSMap(ctx, map, { key: key2, value }) {
+      if (identity2.isNode(key2) && key2.addToJSMap)
+        key2.addToJSMap(ctx, map, value);
+      else if (merge.isMergeKey(ctx, key2))
         merge.addMergeToJSMap(ctx, map, value);
       else {
-        const jsKey = toJS.toJS(key, "", ctx);
+        const jsKey = toJS.toJS(key2, "", ctx);
         if (map instanceof Map) {
           map.set(jsKey, toJS.toJS(value, jsKey, ctx));
         } else if (map instanceof Set) {
           map.add(jsKey);
         } else {
-          const stringKey = stringifyKey(key, jsKey, ctx);
+          const stringKey = stringifyKey(key2, jsKey, ctx);
           const jsValue = toJS.toJS(value, stringKey, ctx);
           if (stringKey in map)
             Object.defineProperty(map, stringKey, {
@@ -46613,19 +47973,19 @@ var require_addPairToJSMap = __commonJS({
       }
       return map;
     }
-    function stringifyKey(key, jsKey, ctx) {
+    function stringifyKey(key2, jsKey, ctx) {
       if (jsKey === null)
         return "";
       if (typeof jsKey !== "object")
         return String(jsKey);
-      if (identity2.isNode(key) && ctx?.doc) {
+      if (identity2.isNode(key2) && ctx?.doc) {
         const strCtx = stringify.createStringifyContext(ctx.doc, {});
         strCtx.anchors = /* @__PURE__ */ new Set();
         for (const node of ctx.anchors.keys())
           strCtx.anchors.add(node.anchor);
         strCtx.inFlow = true;
         strCtx.inStringifyKey = true;
-        const strKey = key.toString(strCtx);
+        const strKey = key2.toString(strCtx);
         if (!ctx.mapKeyWarned) {
           let jsonStr = JSON.stringify(strKey);
           if (jsonStr.length > 40)
@@ -46647,24 +48007,24 @@ var require_Pair = __commonJS({
     var stringifyPair = require_stringifyPair();
     var addPairToJSMap = require_addPairToJSMap();
     var identity2 = require_identity();
-    function createPair(key, value, ctx) {
-      const k = createNode.createNode(key, void 0, ctx);
+    function createPair(key2, value, ctx) {
+      const k = createNode.createNode(key2, void 0, ctx);
       const v = createNode.createNode(value, void 0, ctx);
       return new Pair(k, v);
     }
     var Pair = class _Pair {
-      constructor(key, value = null) {
+      constructor(key2, value = null) {
         Object.defineProperty(this, identity2.NODE_TYPE, { value: identity2.PAIR });
-        this.key = key;
+        this.key = key2;
         this.value = value;
       }
       clone(schema) {
-        let { key, value } = this;
-        if (identity2.isNode(key))
-          key = key.clone(schema);
+        let { key: key2, value } = this;
+        if (identity2.isNode(key2))
+          key2 = key2.clone(schema);
         if (identity2.isNode(value))
           value = value.clone(schema);
-        return new _Pair(key, value);
+        return new _Pair(key2, value);
       }
       toJSON(_, ctx) {
         const pair = ctx?.mapAsMap ? /* @__PURE__ */ new Map() : {};
@@ -46836,11 +48196,11 @@ var require_YAMLMap = __commonJS({
     var identity2 = require_identity();
     var Pair = require_Pair();
     var Scalar = require_Scalar();
-    function findPair(items, key) {
-      const k = identity2.isScalar(key) ? key.value : key;
+    function findPair(items, key2) {
+      const k = identity2.isScalar(key2) ? key2.value : key2;
       for (const it of items) {
         if (identity2.isPair(it)) {
-          if (it.key === key || it.key === k)
+          if (it.key === key2 || it.key === k)
             return it;
           if (identity2.isScalar(it.key) && it.key.value === k)
             return it;
@@ -46863,20 +48223,20 @@ var require_YAMLMap = __commonJS({
       static from(schema, obj, ctx) {
         const { keepUndefined, replacer } = ctx;
         const map = new this(schema);
-        const add = (key, value) => {
+        const add = (key2, value) => {
           if (typeof replacer === "function")
-            value = replacer.call(obj, key, value);
-          else if (Array.isArray(replacer) && !replacer.includes(key))
+            value = replacer.call(obj, key2, value);
+          else if (Array.isArray(replacer) && !replacer.includes(key2))
             return;
           if (value !== void 0 || keepUndefined)
-            map.items.push(Pair.createPair(key, value, ctx));
+            map.items.push(Pair.createPair(key2, value, ctx));
         };
         if (obj instanceof Map) {
-          for (const [key, value] of obj)
-            add(key, value);
+          for (const [key2, value] of obj)
+            add(key2, value);
         } else if (obj && typeof obj === "object") {
-          for (const key of Object.keys(obj))
-            add(key, obj[key]);
+          for (const key2 of Object.keys(obj))
+            add(key2, obj[key2]);
         }
         if (typeof schema.sortMapEntries === "function") {
           map.items.sort(schema.sortMapEntries);
@@ -46916,23 +48276,23 @@ var require_YAMLMap = __commonJS({
           this.items.push(_pair);
         }
       }
-      delete(key) {
-        const it = findPair(this.items, key);
+      delete(key2) {
+        const it = findPair(this.items, key2);
         if (!it)
           return false;
         const del = this.items.splice(this.items.indexOf(it), 1);
         return del.length > 0;
       }
-      get(key, keepScalar) {
-        const it = findPair(this.items, key);
+      get(key2, keepScalar) {
+        const it = findPair(this.items, key2);
         const node = it?.value;
         return (!keepScalar && identity2.isScalar(node) ? node.value : node) ?? void 0;
       }
-      has(key) {
-        return !!findPair(this.items, key);
+      has(key2) {
+        return !!findPair(this.items, key2);
       }
-      set(key, value) {
-        this.add(new Pair.Pair(key, value), true);
+      set(key2, value) {
+        this.add(new Pair.Pair(key2, value), true);
       }
       /**
        * @param ctx - Conversion context, originally set in Document#toJS()
@@ -47017,15 +48377,15 @@ var require_YAMLSeq = __commonJS({
        *
        * @returns `true` if the item was found and removed.
        */
-      delete(key) {
-        const idx = asItemIndex(key);
+      delete(key2) {
+        const idx = asItemIndex(key2);
         if (typeof idx !== "number")
           return false;
         const del = this.items.splice(idx, 1);
         return del.length > 0;
       }
-      get(key, keepScalar) {
-        const idx = asItemIndex(key);
+      get(key2, keepScalar) {
+        const idx = asItemIndex(key2);
         if (typeof idx !== "number")
           return void 0;
         const it = this.items[idx];
@@ -47037,8 +48397,8 @@ var require_YAMLSeq = __commonJS({
        * `key` must contain a representation of an integer for this to succeed.
        * It may be wrapped in a `Scalar`.
        */
-      has(key) {
-        const idx = asItemIndex(key);
+      has(key2) {
+        const idx = asItemIndex(key2);
         return typeof idx === "number" && idx < this.items.length;
       }
       /**
@@ -47048,10 +48408,10 @@ var require_YAMLSeq = __commonJS({
        * If `key` does not contain a representation of an integer, this will throw.
        * It may be wrapped in a `Scalar`.
        */
-      set(key, value) {
-        const idx = asItemIndex(key);
+      set(key2, value) {
+        const idx = asItemIndex(key2);
         if (typeof idx !== "number")
-          throw new Error(`Expected a valid index, not ${key}.`);
+          throw new Error(`Expected a valid index, not ${key2}.`);
         const prev = this.items[idx];
         if (identity2.isScalar(prev) && Scalar.isScalarValue(value))
           prev.value = value;
@@ -47085,8 +48445,8 @@ var require_YAMLSeq = __commonJS({
           let i = 0;
           for (let it of obj) {
             if (typeof replacer === "function") {
-              const key = obj instanceof Set ? it : String(i++);
-              it = replacer.call(obj, key, it);
+              const key2 = obj instanceof Set ? it : String(i++);
+              it = replacer.call(obj, key2, it);
             }
             seq.items.push(createNode.createNode(it, void 0, ctx));
           }
@@ -47094,8 +48454,8 @@ var require_YAMLSeq = __commonJS({
         return seq;
       }
     };
-    function asItemIndex(key) {
-      let idx = identity2.isScalar(key) ? key.value : key;
+    function asItemIndex(key2) {
+      let idx = identity2.isScalar(key2) ? key2.value : key2;
       if (idx && typeof idx === "string")
         idx = Number(idx);
       return typeof idx === "number" && Number.isInteger(idx) && idx >= 0 ? idx : null;
@@ -47487,25 +48847,25 @@ ${cn.comment}` : item.comment;
         for (let it of iterable) {
           if (typeof replacer === "function")
             it = replacer.call(iterable, String(i++), it);
-          let key, value;
+          let key2, value;
           if (Array.isArray(it)) {
             if (it.length === 2) {
-              key = it[0];
+              key2 = it[0];
               value = it[1];
             } else
               throw new TypeError(`Expected [key, value] tuple: ${it}`);
           } else if (it && it instanceof Object) {
             const keys = Object.keys(it);
             if (keys.length === 1) {
-              key = keys[0];
-              value = it[key];
+              key2 = keys[0];
+              value = it[key2];
             } else {
               throw new TypeError(`Expected tuple with one key, not ${keys.length} keys`);
             }
           } else {
-            key = it;
+            key2 = it;
           }
-          pairs2.items.push(Pair.createPair(key, value, ctx));
+          pairs2.items.push(Pair.createPair(key2, value, ctx));
         }
       return pairs2;
     }
@@ -47550,16 +48910,16 @@ var require_omap = __commonJS({
         if (ctx?.onCreate)
           ctx.onCreate(map);
         for (const pair of this.items) {
-          let key, value;
+          let key2, value;
           if (identity2.isPair(pair)) {
-            key = toJS.toJS(pair.key, "", ctx);
-            value = toJS.toJS(pair.value, key, ctx);
+            key2 = toJS.toJS(pair.key, "", ctx);
+            value = toJS.toJS(pair.value, key2, ctx);
           } else {
-            key = toJS.toJS(pair, "", ctx);
+            key2 = toJS.toJS(pair, "", ctx);
           }
-          if (map.has(key))
+          if (map.has(key2))
             throw new Error("Ordered maps must not include duplicate keys");
-          map.set(key, value);
+          map.set(key2, value);
         }
         return map;
       }
@@ -47580,12 +48940,12 @@ var require_omap = __commonJS({
       resolve(seq, onError) {
         const pairs$1 = pairs.resolvePairs(seq, onError);
         const seenKeys = [];
-        for (const { key } of pairs$1.items) {
-          if (identity2.isScalar(key)) {
-            if (seenKeys.includes(key.value)) {
-              onError(`Ordered maps must not include duplicate keys: ${key.value}`);
+        for (const { key: key2 } of pairs$1.items) {
+          if (identity2.isScalar(key2)) {
+            if (seenKeys.includes(key2.value)) {
+              onError(`Ordered maps must not include duplicate keys: ${key2.value}`);
             } else {
-              seenKeys.push(key.value);
+              seenKeys.push(key2.value);
             }
           }
         }
@@ -47762,14 +49122,14 @@ var require_set = __commonJS({
         super(schema);
         this.tag = _YAMLSet.tag;
       }
-      add(key) {
+      add(key2) {
         let pair;
-        if (identity2.isPair(key))
-          pair = key;
-        else if (key && typeof key === "object" && "key" in key && "value" in key && key.value === null)
-          pair = new Pair.Pair(key.key, null);
+        if (identity2.isPair(key2))
+          pair = key2;
+        else if (key2 && typeof key2 === "object" && "key" in key2 && "value" in key2 && key2.value === null)
+          pair = new Pair.Pair(key2.key, null);
         else
-          pair = new Pair.Pair(key, null);
+          pair = new Pair.Pair(key2, null);
         const prev = YAMLMap.findPair(this.items, pair.key);
         if (!prev)
           this.items.push(pair);
@@ -47778,18 +49138,18 @@ var require_set = __commonJS({
        * If `keepPair` is `true`, returns the Pair matching `key`.
        * Otherwise, returns the value of that Pair's key.
        */
-      get(key, keepPair) {
-        const pair = YAMLMap.findPair(this.items, key);
+      get(key2, keepPair) {
+        const pair = YAMLMap.findPair(this.items, key2);
         return !keepPair && identity2.isPair(pair) ? identity2.isScalar(pair.key) ? pair.key.value : pair.key : pair;
       }
-      set(key, value) {
+      set(key2, value) {
         if (typeof value !== "boolean")
           throw new Error(`Expected boolean value for set(key, value) in a YAML set, not ${typeof value}`);
-        const prev = YAMLMap.findPair(this.items, key);
+        const prev = YAMLMap.findPair(this.items, key2);
         if (prev && !value) {
           this.items.splice(this.items.indexOf(prev), 1);
         } else if (!prev && value) {
-          this.items.push(new Pair.Pair(key));
+          this.items.push(new Pair.Pair(key2));
         }
       }
       toJSON(_, ctx) {
@@ -48030,7 +49390,7 @@ var require_tags = __commonJS({
         if (Array.isArray(customTags))
           tags = [];
         else {
-          const keys = Array.from(schemas.keys()).filter((key) => key !== "yaml11").map((key) => JSON.stringify(key)).join(", ");
+          const keys = Array.from(schemas.keys()).filter((key2) => key2 !== "yaml11").map((key2) => JSON.stringify(key2)).join(", ");
           throw new Error(`Unknown schema "${schemaName}"; use one of ${keys} or define customTags array`);
         }
       }
@@ -48046,7 +49406,7 @@ var require_tags = __commonJS({
         const tagObj = typeof tag === "string" ? tagsByName[tag] : tag;
         if (!tagObj) {
           const tagName = JSON.stringify(tag);
-          const keys = Object.keys(tagsByName).map((key) => JSON.stringify(key)).join(", ");
+          const keys = Object.keys(tagsByName).map((key2) => JSON.stringify(key2)).join(", ");
           throw new Error(`Unknown custom tag ${tagName}; use one of ${keys}`);
         }
         if (!tags2.includes(tagObj))
@@ -48304,8 +49664,8 @@ var require_Document = __commonJS({
        * Convert a key and a value into a `Pair` using the current schema,
        * recursively wrapping all values as `Scalar` or `Collection` nodes.
        */
-      createPair(key, value, options = {}) {
-        const k = this.createNode(key, null, options);
+      createPair(key2, value, options = {}) {
+        const k = this.createNode(key2, null, options);
         const v = this.createNode(value, null, options);
         return new Pair.Pair(k, v);
       }
@@ -48313,8 +49673,8 @@ var require_Document = __commonJS({
        * Removes a value from the document.
        * @returns `true` if the item was found and removed.
        */
-      delete(key) {
-        return assertCollection(this.contents) ? this.contents.delete(key) : false;
+      delete(key2) {
+        return assertCollection(this.contents) ? this.contents.delete(key2) : false;
       }
       /**
        * Removes a value from the document.
@@ -48334,8 +49694,8 @@ var require_Document = __commonJS({
        * scalar values from their surrounding node; to disable set `keepScalar` to
        * `true` (collections are always returned intact).
        */
-      get(key, keepScalar) {
-        return identity2.isCollection(this.contents) ? this.contents.get(key, keepScalar) : void 0;
+      get(key2, keepScalar) {
+        return identity2.isCollection(this.contents) ? this.contents.get(key2, keepScalar) : void 0;
       }
       /**
        * Returns item at `path`, or `undefined` if not found. By default unwraps
@@ -48350,8 +49710,8 @@ var require_Document = __commonJS({
       /**
        * Checks if the document includes a value with the key `key`.
        */
-      has(key) {
-        return identity2.isCollection(this.contents) ? this.contents.has(key) : false;
+      has(key2) {
+        return identity2.isCollection(this.contents) ? this.contents.has(key2) : false;
       }
       /**
        * Checks if the document includes a value at `path`.
@@ -48365,11 +49725,11 @@ var require_Document = __commonJS({
        * Sets a value in this document. For `!!set`, `value` needs to be a
        * boolean to add/remove the item from the set.
        */
-      set(key, value) {
+      set(key2, value) {
         if (this.contents == null) {
-          this.contents = Collection.collectionFromPath(this.schema, [key], value);
+          this.contents = Collection.collectionFromPath(this.schema, [key2], value);
         } else if (assertCollection(this.contents)) {
-          this.contents.set(key, value);
+          this.contents.set(key2, value);
         }
       }
       /**
@@ -48671,24 +50031,24 @@ var require_resolve_props = __commonJS({
 var require_util_contains_newline = __commonJS({
   "node_modules/yaml/dist/compose/util-contains-newline.js"(exports) {
     "use strict";
-    function containsNewline(key) {
-      if (!key)
+    function containsNewline(key2) {
+      if (!key2)
         return null;
-      switch (key.type) {
+      switch (key2.type) {
         case "alias":
         case "scalar":
         case "double-quoted-scalar":
         case "single-quoted-scalar":
-          if (key.source.includes("\n"))
+          if (key2.source.includes("\n"))
             return true;
-          if (key.end) {
-            for (const st of key.end)
+          if (key2.end) {
+            for (const st of key2.end)
               if (st.type === "newline")
                 return true;
           }
           return false;
         case "flow-collection":
-          for (const it of key.items) {
+          for (const it of key2.items) {
             for (const st of it.start)
               if (st.type === "newline")
                 return true;
@@ -48756,10 +50116,10 @@ var require_resolve_block_map = __commonJS({
       let offset = bm.offset;
       let commentEnd = null;
       for (const collItem of bm.items) {
-        const { start, key, sep, value } = collItem;
+        const { start, key: key2, sep, value } = collItem;
         const keyProps = resolveProps.resolveProps(start, {
           indicator: "explicit-key-ind",
-          next: key ?? sep?.[0],
+          next: key2 ?? sep?.[0],
           offset,
           onError,
           parentIndent: bm.indent,
@@ -48767,10 +50127,10 @@ var require_resolve_block_map = __commonJS({
         });
         const implicitKey = !keyProps.found;
         if (implicitKey) {
-          if (key) {
-            if (key.type === "block-seq")
+          if (key2) {
+            if (key2.type === "block-seq")
               onError(offset, "BLOCK_AS_IMPLICIT_KEY", "A block sequence may not be used as an implicit map key");
-            else if ("indent" in key && key.indent !== bm.indent)
+            else if ("indent" in key2 && key2.indent !== bm.indent)
               onError(offset, "BAD_INDENT", startColMsg);
           }
           if (!keyProps.anchor && !keyProps.tag && !sep) {
@@ -48783,17 +50143,17 @@ var require_resolve_block_map = __commonJS({
             }
             continue;
           }
-          if (keyProps.newlineAfterProp || utilContainsNewline.containsNewline(key)) {
-            onError(key ?? start[start.length - 1], "MULTILINE_IMPLICIT_KEY", "Implicit keys need to be on a single line");
+          if (keyProps.newlineAfterProp || utilContainsNewline.containsNewline(key2)) {
+            onError(key2 ?? start[start.length - 1], "MULTILINE_IMPLICIT_KEY", "Implicit keys need to be on a single line");
           }
         } else if (keyProps.found?.indent !== bm.indent) {
           onError(offset, "BAD_INDENT", startColMsg);
         }
         ctx.atKey = true;
         const keyStart = keyProps.end;
-        const keyNode = key ? composeNode(ctx, key, keyProps, onError) : composeEmptyNode(ctx, keyStart, start, null, keyProps, onError);
+        const keyNode = key2 ? composeNode(ctx, key2, keyProps, onError) : composeEmptyNode(ctx, keyStart, start, null, keyProps, onError);
         if (ctx.schema.compat)
-          utilFlowIndentCheck.flowIndentCheck(bm.indent, key, onError);
+          utilFlowIndentCheck.flowIndentCheck(bm.indent, key2, onError);
         ctx.atKey = false;
         if (utilMapIncludes.mapIncludes(ctx, map.items, keyNode))
           onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
@@ -48803,7 +50163,7 @@ var require_resolve_block_map = __commonJS({
           offset: keyNode.range[2],
           onError,
           parentIndent: bm.indent,
-          startOnNewline: !key || key.type === "block-scalar"
+          startOnNewline: !key2 || key2.type === "block-scalar"
         });
         offset = valueProps.end;
         if (valueProps.found) {
@@ -48961,11 +50321,11 @@ var require_resolve_flow_collection = __commonJS({
       let offset = fc.offset + fc.start.source.length;
       for (let i = 0; i < fc.items.length; ++i) {
         const collItem = fc.items[i];
-        const { start, key, sep, value } = collItem;
+        const { start, key: key2, sep, value } = collItem;
         const props = resolveProps.resolveProps(start, {
           flow: fcName,
           indicator: "explicit-key-ind",
-          next: key ?? sep?.[0],
+          next: key2 ?? sep?.[0],
           offset,
           onError,
           parentIndent: fc.indent,
@@ -48986,9 +50346,9 @@ var require_resolve_flow_collection = __commonJS({
             offset = props.end;
             continue;
           }
-          if (!isMap2 && ctx.options.strict && utilContainsNewline.containsNewline(key))
+          if (!isMap2 && ctx.options.strict && utilContainsNewline.containsNewline(key2))
             onError(
-              key,
+              key2,
               // checked by containsNewline()
               "MULTILINE_IMPLICIT_KEY",
               "Implicit keys of flow sequence pairs need to be on a single line"
@@ -49035,8 +50395,8 @@ var require_resolve_flow_collection = __commonJS({
         } else {
           ctx.atKey = true;
           const keyStart = props.end;
-          const keyNode = key ? composeNode(ctx, key, props, onError) : composeEmptyNode(ctx, keyStart, start, null, props, onError);
-          if (isBlock(key))
+          const keyNode = key2 ? composeNode(ctx, key2, props, onError) : composeEmptyNode(ctx, keyStart, start, null, props, onError);
+          if (isBlock(key2))
             onError(keyNode.range, "BLOCK_IN_FLOW", blockMsg);
           ctx.atKey = false;
           const valueProps = resolveProps.resolveProps(sep ?? [], {
@@ -50165,9 +51525,9 @@ var require_cst_scalar = __commonJS({
         ];
         if (!addEndtoBlockProps(props, "end" in token ? token.end : void 0))
           props.push({ type: "newline", offset: -1, indent, source: "\n" });
-        for (const key of Object.keys(token))
-          if (key !== "type" && key !== "offset")
-            delete token[key];
+        for (const key2 of Object.keys(token))
+          if (key2 !== "type" && key2 !== "offset")
+            delete token[key2];
         Object.assign(token, { type: "block-scalar", indent, props, source: body });
       }
     }
@@ -50215,9 +51575,9 @@ var require_cst_scalar = __commonJS({
         default: {
           const indent = "indent" in token ? token.indent : -1;
           const end = "end" in token && Array.isArray(token.end) ? token.end.filter((st) => st.type === "space" || st.type === "comment" || st.type === "newline") : [];
-          for (const key of Object.keys(token))
-            if (key !== "type" && key !== "offset")
-              delete token[key];
+          for (const key2 of Object.keys(token))
+            if (key2 !== "type" && key2 !== "offset")
+              delete token[key2];
           Object.assign(token, { type, indent, source, end });
         }
       }
@@ -50270,12 +51630,12 @@ var require_cst_stringify = __commonJS({
         }
       }
     }
-    function stringifyItem({ start, key, sep, value }) {
+    function stringifyItem({ start, key: key2, sep, value }) {
       let res = "";
       for (const st of start)
         res += st.source;
-      if (key)
-        res += stringifyToken(key);
+      if (key2)
+        res += stringifyToken(key2);
       if (sep)
         for (const st of sep)
           res += st.source;
@@ -51580,7 +52940,7 @@ var require_parser = __commonJS({
                   });
                 } else if (isFlowToken(it.key) && !includesToken(it.sep, "newline")) {
                   const start2 = getFirstKeyStartProps(it.start);
-                  const key = it.key;
+                  const key2 = it.key;
                   const sep = it.sep;
                   sep.push(this.sourceToken);
                   delete it.key;
@@ -51589,7 +52949,7 @@ var require_parser = __commonJS({
                     type: "block-map",
                     offset: this.offset,
                     indent: this.indent,
-                    items: [{ start: start2, key, sep }]
+                    items: [{ start: start2, key: key2, sep }]
                   });
                 } else if (start.length > 0) {
                   it.sep = it.sep.concat(start, this.sourceToken);
@@ -52706,8 +54066,8 @@ function sshPublic(c) {
     return rsaPublic(n, e) ? type : void 0;
   }
   if (type === "ssh-ed25519") {
-    const key = c.string();
-    return key && key.end - key.start === 32 ? type : void 0;
+    const key2 = c.string();
+    return key2 && key2.end - key2.start === 32 ? type : void 0;
   }
   const size = type === "ecdsa-sha2-nistp256" ? 32 : type === "ecdsa-sha2-nistp384" ? 48 : type === "ecdsa-sha2-nistp521" ? 66 : 0;
   if (!size || c.text() !== type?.slice(11)) return;
@@ -52735,29 +54095,29 @@ function openssh(b, start) {
   if (cipher === "none") {
     if (kdf !== "none" || options.start !== options.end || (block.end - block.start) % 8 !== 0)
       return;
-    const key = new SshCursor(b, block.start, block.end);
-    if (key.uint() !== key.uint() || key.text() !== publicType) return;
+    const key2 = new SshCursor(b, block.start, block.end);
+    if (key2.uint() !== key2.uint() || key2.text() !== publicType) return;
     if (publicType === "ssh-rsa") {
-      const n = key.mpint();
-      const e = key.mpint();
-      const d = key.mpint();
-      const qi = key.mpint();
-      const p = key.mpint();
-      const q = key.mpint();
+      const n = key2.mpint();
+      const e = key2.mpint();
+      const d = key2.mpint();
+      const qi = key2.mpint();
+      const p = key2.mpint();
+      const q = key2.mpint();
       if (!rsaPublic(n, e) || !d || !qi || !p || !q || p * q !== n || d >= n || p <= 1n || q <= 1n || !crt(p, q, d % (p - 1n), d % (q - 1n), qi) || e * d % (p - 1n) !== 1n || e * d % (q - 1n) !== 1n || matchingPublic.mpint() !== e || matchingPublic.mpint() !== n)
         return;
     } else if (publicType === "ssh-ed25519") {
-      const pubkey = key.string();
-      const secret = key.string();
+      const pubkey = key2.string();
+      const secret = key2.string();
       if (!pubkey || !secret || pubkey.end - pubkey.start !== 32 || secret.end - secret.start !== 64 || !b.subarray(pubkey.start, pubkey.end).every((v, i) => v === b[secret.start + 32 + i]))
         return;
       const outer = matchingPublic.string();
       if (!b.subarray(pubkey.start, pubkey.end).every((v, i) => v === b[outer.start + i]))
         return;
     } else {
-      if (key.text() !== publicType.slice(11)) return;
-      const point = key.string();
-      const d = key.mpint();
+      if (key2.text() !== publicType.slice(11)) return;
+      const point = key2.string();
+      const d = key2.mpint();
       const size = publicType.endsWith("256") ? 32 : publicType.endsWith("384") ? 48 : 66;
       if (!point || b[point.start] !== 4 || point.end - point.start !== 1 + size * 2 || !d || d >= 1n << BigInt(size * 8))
         return;
@@ -52766,10 +54126,10 @@ function openssh(b, start) {
       if (!b.subarray(point.start, point.end).every((v, i) => v === b[outer.start + i]))
         return;
     }
-    if (!key.string()) return;
-    const padding = key.end - key.pos;
+    if (!key2.string()) return;
+    const padding = key2.end - key2.pos;
     if (padding > 8) return;
-    for (let i = 1; i <= padding; i++) if (b[key.pos++] !== i) return;
+    for (let i = 1; i <= padding; i++) if (b[key2.pos++] !== i) return;
     kind = "private";
   } else {
     if (!/^aes(128|192|256)-(ctr|cbc)$/.test(cipher) || kdf !== "bcrypt" || (block.end - block.start) % 16 !== 0)
@@ -52834,23 +54194,23 @@ function opensshRecovery(b, start) {
   if (observedEnd - c.pos < 8) return;
   if (kdf !== "none" || options.start !== options.end || end <= b.length && supported && count === 1)
     return;
-  const key = new SshCursor(b, c.pos, observedEnd);
-  if (key.uint() !== key.uint() || key.text() !== firstType) return;
+  const key2 = new SshCursor(b, c.pos, observedEnd);
+  if (key2.uint() !== key2.uint() || key2.text() !== firstType) return;
   if (supported && firstType === "ssh-rsa") {
-    const n = key.mpint();
-    const e = key.mpint();
-    const d = key.mpint();
+    const n = key2.mpint();
+    const e = key2.mpint();
+    const d = key2.mpint();
     if (!rsaPublic(n, e) || !d || d >= n) return;
   } else if (supported && firstType === "ssh-ed25519") {
-    const pub = key.string();
-    const size = key.uint();
-    if (!pub || pub.end - pub.start !== 32 || size !== 64 || key.pos >= observedEnd)
+    const pub = key2.string();
+    const size = key2.uint();
+    if (!pub || pub.end - pub.start !== 32 || size !== 64 || key2.pos >= observedEnd)
       return;
   } else if (supported) {
-    if (key.text() !== firstType?.slice(11) || !key.string() || !key.mpint())
+    if (key2.text() !== firstType?.slice(11) || !key2.string() || !key2.mpint())
       return;
   } else {
-    const data = key.string();
+    const data = key2.string();
     if (!data || data.start === data.end) return;
   }
   return {
@@ -53040,7 +54400,7 @@ function radix32(name, alphabet, fold, aliases = {}) {
     while (end && text[end - 1] === "=") end--;
     return end;
   };
-  const normalize = (text) => {
+  const normalize3 = (text) => {
     let result = "";
     const end = contentEnd(text);
     for (let i = 0; i < end; i++)
@@ -53051,7 +54411,7 @@ function radix32(name, alphabet, fold, aliases = {}) {
     name,
     alignment: 8,
     sourceQuantum: { characters: 8, prefixStable: true },
-    normalize,
+    normalize: normalize3,
     accepts: (text) => {
       const end = contentEnd(text);
       for (let i = 0; i < end; i++) if (digitAt(text, i) < 0) return false;
@@ -53780,9 +55140,9 @@ function inspectAge(text) {
 function hasEncodedRsaPrivateMember(frame) {
   const metrics = { encodedCharactersScanned: 0, ownershipSteps: 0 };
   for (const name of RSA_PRIVATE_FIELDS) {
-    const open4 = `<${name}>`;
-    for (let start = frame.indexOf(open4); start >= 0; ) {
-      const valueStart = start + open4.length;
+    const open6 = `<${name}>`;
+    for (let start = frame.indexOf(open6); start >= 0; ) {
+      const valueStart = start + open6.length;
       const closeStart = frame.indexOf(`</${name}>`, valueStart);
       const nextTag = frame.indexOf("<", valueStart);
       const valueEnd = closeStart >= 0 ? closeStart : nextTag >= 0 ? nextTag : frame.length;
@@ -53794,7 +55154,7 @@ function hasEncodedRsaPrivateMember(frame) {
       )) {
         return true;
       }
-      start = frame.indexOf(open4, valueStart);
+      start = frame.indexOf(open6, valueStart);
     }
   }
   return false;
@@ -53914,10 +55274,10 @@ function privateJwkFields(value) {
   }
   const object2 = (record22, parentField) => ({
     kind: "object",
-    edges: Object.entries(record22).map(([key, member]) => ({
-      key,
-      ...typeof member === "string" ? { valueToken: { value: member, field: parentField ?? key } } : {},
-      ...key === "oth" && Array.isArray(member) ? {
+    edges: Object.entries(record22).map(([key2, member]) => ({
+      key: key2,
+      ...typeof member === "string" ? { valueToken: { value: member, field: parentField ?? key2 } } : {},
+      ...key2 === "oth" && Array.isArray(member) ? {
         child: {
           kind: "array",
           edges: member.map((row, index) => ({
@@ -53968,8 +55328,8 @@ var EDGE_QUOTES = new RegExp(`^[${QUOTE_CLASS}]+|[${QUOTE_CLASS}]+$`, "g");
 var NAME_PREFIX = /^(?:jwk|jwks|private|priv|secret|signing|key)[_\-.:]/;
 var ENCODED_ATOM = /^[A-Za-z0-9+/=_-]+$/;
 var HEX_BYTE = /^[0-9a-fA-F]{2}$/;
-function normalizeMemberName(key) {
-  const name = key.replace(INVISIBLE, "").trim().toLowerCase().replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
+function normalizeMemberName(key2) {
+  const name = key2.replace(INVISIBLE, "").trim().toLowerCase().replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
   return PRIVATE_FIELDS.has(name) || COMPANION_FIELDS.has(name) || name === "kty" ? name : name.replace(NAME_PREFIX, "");
 }
 function octets(value) {
@@ -54044,10 +55404,10 @@ function hasImplicitKeyContext(observed, privateFields) {
     return false;
   });
 }
-function normalized(value, key) {
-  if (typeof value === "string" && BINARY_FIELDS.has(key))
+function normalized(value, key2) {
+  if (typeof value === "string" && BINARY_FIELDS.has(key2))
     return octets(value) ?? value;
-  if (key === "oth" && Array.isArray(value) && value.length <= 16)
+  if (key2 === "oth" && Array.isArray(value) && value.length <= 16)
     return value.map(
       (row) => row && typeof row === "object" && !Array.isArray(row) ? Object.fromEntries(
         Object.entries(row).map(([name, member]) => [
@@ -54114,7 +55474,7 @@ function recognizeJwkMembers(members) {
 }
 function recognizeJwkRecord(record22) {
   return recognizeJwkMembers(
-    Object.entries(record22).map(([key, value]) => ({ key, value }))
+    Object.entries(record22).map(([key2, value]) => ({ key: key2, value }))
   );
 }
 var ENTITY = /&(#x[0-9a-f]{1,6}|#\d{1,7}|colon|quot|apos|lt|gt|amp|equals|nbsp|sol|vert);/gi;
@@ -54436,14 +55796,14 @@ var LazyMap = class {
     this.initializer = initializer;
     this.cache = /* @__PURE__ */ new Map();
   }
-  has(key) {
-    return key in this.initializer;
+  has(key2) {
+    return key2 in this.initializer;
   }
-  get(key) {
-    if (this.cache.has(key)) return this.cache.get(key);
-    const fn = this.initializer[key];
+  get(key2) {
+    if (this.cache.has(key2)) return this.cache.get(key2);
+    const fn = this.initializer[key2];
     const val = fn ? fn() : null;
-    this.cache.set(key, val);
+    this.cache.set(key2, val);
     return val;
   }
 };
@@ -55824,7 +57184,7 @@ var Matcher = class Matcher2 {
     args.push(originalInput);
     if (hasNamedGroups) {
       const parsedGroups = this.getNamedGroups();
-      for (const key in parsedGroups) if (parsedGroups[key] === null) parsedGroups[key] = void 0;
+      for (const key2 in parsedGroups) if (parsedGroups[key2] === null) parsedGroups[key2] = void 0;
       args.push(parsedGroups);
     }
     return args;
@@ -56432,10 +57792,10 @@ var DFA = class DFA2 {
       if (next !== null) return next;
     }
     else {
-      const key = charCode + (anchor === RE2Flags.UNANCHORED ? 0 : Unicode.MAX_RUNE + 1);
+      const key2 = charCode + (anchor === RE2Flags.UNANCHORED ? 0 : Unicode.MAX_RUNE + 1);
       const keys = state.transKeys;
       const len = keys.length;
-      for (let i = 0; i < len; i++) if (keys[i] === key) return state.transVals[i];
+      for (let i = 0; i < len; i++) if (keys[i] === key2) return state.transVals[i];
     }
     const nextPCs = [];
     for (let i = 0; i < state.nfaStates.length; i++) {
@@ -56448,8 +57808,8 @@ var DFA = class DFA2 {
     if (charCode <= Unicode.MAX_LATIN1) if (anchor === RE2Flags.UNANCHORED) state.nextLatin1[charCode] = nextState;
     else state.nextLatin1Anchored[charCode] = nextState;
     else {
-      const key = charCode + (anchor === RE2Flags.UNANCHORED ? 0 : Unicode.MAX_RUNE + 1);
-      state.transKeys.push(key);
+      const key2 = charCode + (anchor === RE2Flags.UNANCHORED ? 0 : Unicode.MAX_RUNE + 1);
+      state.transKeys.push(key2);
       state.transVals.push(nextState);
     }
     return nextState;
@@ -58907,10 +60267,10 @@ var Parser = class Parser2 {
           iflags = re.flags & RE2Flags.FOLD_CASE;
         }
         if (iflags === strflags) {
-          let same = 0;
-          while (same < strlen && same < istrlen && str[same] === istr[same]) same++;
-          if (same > 0) {
-            strlen = same;
+          let same2 = 0;
+          while (same2 < strlen && same2 < istrlen && str[same2] === istr[same2]) same2++;
+          if (same2 > 0) {
+            strlen = same2;
             continue;
           }
         }
@@ -60412,7 +61772,7 @@ var RE2JS = class RE2JS2 {
     const namedGroups = this.namedGroups();
     if (Object.keys(namedGroups).length > 0) {
       const parsedGroups = m.getNamedGroups();
-      for (const key in parsedGroups) if (parsedGroups[key] === null) parsedGroups[key] = void 0;
+      for (const key2 in parsedGroups) if (parsedGroups[key2] === null) parsedGroups[key2] = void 0;
       result.groups = parsedGroups;
     } else result.groups = void 0;
     return result;
@@ -60484,7 +61844,7 @@ var RE2JS = class RE2JS2 {
       const namedGroups = this.namedGroups();
       if (Object.keys(namedGroups).length > 0) {
         const parsedGroups = m.getNamedGroups();
-        for (const key in parsedGroups) if (parsedGroups[key] === null) parsedGroups[key] = void 0;
+        for (const key2 in parsedGroups) if (parsedGroups[key2] === null) parsedGroups[key2] = void 0;
         result.groups = parsedGroups;
       } else result.groups = void 0;
       yield result;
@@ -60669,8 +62029,8 @@ function longestEmailDomainEnd2(value, domainStart, domainLimit) {
   }
   return null;
 }
-function isSensitiveKey2(key) {
-  const lowerKey = key.toLowerCase();
+function isSensitiveKey2(key2) {
+  const lowerKey = key2.toLowerCase();
   if (SENSITIVE_KEY_SAFE_EXACT2.has(lowerKey)) return false;
   if (SENSITIVE_KEY_EXACT2.has(lowerKey)) return true;
   if (SENSITIVE_KEY_FRAGMENTS2.some((fragment) => lowerKey.includes(fragment))) {
@@ -60940,7 +62300,7 @@ function assignmentGroups(source) {
       continue;
     }
     const path = assignment[1].split(".");
-    const key = path.pop();
+    const key2 = path.pop();
     const group = JSON.stringify([block, table, ...path]);
     const members = groups.get(group) ?? [];
     const scalar = /^\s*(?:"([A-Za-z0-9+/_=-]*|\[redacted\]|\[omitted: private recovery context\])"|'([A-Za-z0-9+/_=-]*|\[redacted\]|\[omitted: private recovery context\])'|([A-Za-z0-9+/_=-]*|\[redacted\]|\[omitted: private recovery context\]))\s*(?:[#;].*)?$/u.exec(
@@ -60951,14 +62311,14 @@ function assignmentGroups(source) {
       const delimiter = line.indexOf("=", assignment.index);
       const valueAt = line.indexOf(value, delimiter + 1);
       members.push({
-        key,
+        key: key2,
         value,
         span: { start: offset + valueAt, end: offset + valueAt + value.length },
         owned: true,
         replacement: "[redacted]"
       });
     } else {
-      members.push({ key, opaque: true, owned: false });
+      members.push({ key: key2, opaque: true, owned: false });
     }
     groups.set(group, members);
     offset += raw.length;
@@ -61067,12 +62427,12 @@ function projectStructuredText(source, project, options) {
       const afterRecord = after;
       const correspondence = mapKeys(node, beforeRecord, afterRecord, path);
       for (const pair of node.items) {
-        const key = String(pair.key.value);
-        const nextKey = correspondence.get(key);
-        if (key !== nextKey) replace(pair.key, nextKey);
-        diff(pair.value, beforeRecord[key], afterRecord[nextKey], [
+        const key2 = String(pair.key.value);
+        const nextKey = correspondence.get(key2);
+        if (key2 !== nextKey) replace(pair.key, nextKey);
+        diff(pair.value, beforeRecord[key2], afterRecord[nextKey], [
           ...path,
-          key
+          key2
         ]);
       }
     } else if ((0, import_yaml.isSeq)(node) && Array.isArray(before) && Array.isArray(after) && before.length === after.length) {
@@ -61086,24 +62446,24 @@ function projectStructuredText(source, project, options) {
 }
 function pemCarriers(text) {
   const carriers = [];
-  let open4;
+  let open6;
   const finish = (bodyEnd, end, closed) => {
-    if (!open4) return;
-    const privateLabel = /(?:^| )(?:PRIVATE KEY(?: BLOCK)?|SECRET KEY BLOCK)$/.test(open4.label) ? "private" : void 0;
+    if (!open6) return;
+    const privateLabel = /(?:^| )(?:PRIVATE KEY(?: BLOCK)?|SECRET KEY BLOCK)$/.test(open6.label) ? "private" : void 0;
     const spans = [];
     let preserveFraming = false;
     let malformedBody = false;
-    const body = text.slice(open4.body, bodyEnd);
-    const armor = /(?:^| )KEY BLOCK$/.test(open4.label);
+    const body = text.slice(open6.body, bodyEnd);
+    const armor = /(?:^| )KEY BLOCK$/.test(open6.label);
     let lineStart = 0;
     let payloadStarted = false;
     let payloadEvidence = false;
     let damagedPayloadLength = 0;
     let checksumSeen = false;
     for (const rawLine of body.split(/\r\n|\r|\n|\\r\\n|\\[rn]/)) {
-      const prefixLength = open4.prefix && rawLine.startsWith(open4.prefix) ? open4.prefix.length : 0;
+      const prefixLength = open6.prefix && rawLine.startsWith(open6.prefix) ? open6.prefix.length : 0;
       const line = rawLine.slice(prefixLength);
-      const start = open4.body + lineStart + prefixLength;
+      const start = open6.body + lineStart + prefixLength;
       preserveFraming ||= prefixLength > 0;
       const trimmed = line.trim();
       const header = !payloadStarted && /^[A-Za-z][A-Za-z0-9-]*: /.test(trimmed);
@@ -61155,20 +62515,20 @@ function pemCarriers(text) {
     const malformed = !closed || malformedBody || !spans.length;
     if (hasPayload && (!malformed || declaration))
       carriers.push({
-        text: malformedBody ? text.slice(open4.body, bodyEnd) : spans.map((s) => text.slice(s.start, s.end)).join(""),
-        spans: spans.length ? spans : [{ start: open4.body, end: bodyEnd }],
+        text: malformedBody ? text.slice(open6.body, bodyEnd) : spans.map((s) => text.slice(s.start, s.end)).join(""),
+        spans: spans.length ? spans : [{ start: open6.body, end: bodyEnd }],
         encoding: "base64",
-        envelope: { start: open4.start, end },
+        envelope: { start: open6.start, end },
         ...preserveFraming ? { preserveFraming: true } : {},
         ...declaration ? { declaration } : {},
         ...malformed ? { malformed: true } : {}
       });
-    open4 = void 0;
+    open6 = void 0;
   };
   for (const match of text.matchAll(/-----(BEGIN|END) ([A-Z0-9 ]+)-----/g)) {
     if (match[1] === "BEGIN") {
       finish(match.index, match.index, false);
-      open4 = {
+      open6 = {
         label: match[2],
         start: match.index,
         body: match.index + match[0].length,
@@ -61177,7 +62537,7 @@ function pemCarriers(text) {
           match.index
         )
       };
-    } else if (open4) {
+    } else if (open6) {
       finish(match.index, match.index + match[0].length, true);
     }
   }
@@ -61656,14 +63016,14 @@ function isSchemaNode(value) {
   if (Object.hasOwn(value, "type") && !typeIsValid(value.type)) return false;
   if (Object.hasOwn(value, "$ref") && typeof value.$ref !== "string")
     return false;
-  for (const key of MAP_APPLICATORS) {
-    if (Object.hasOwn(value, key) && !record2(value[key])) return false;
+  for (const key2 of MAP_APPLICATORS) {
+    if (Object.hasOwn(value, key2) && !record2(value[key2])) return false;
   }
-  for (const key of LIST_APPLICATORS) {
-    if (Object.hasOwn(value, key) && !Array.isArray(value[key])) return false;
+  for (const key2 of LIST_APPLICATORS) {
+    if (Object.hasOwn(value, key2) && !Array.isArray(value[key2])) return false;
   }
-  for (const key of ["enum", "examples", "required"]) {
-    if (Object.hasOwn(value, key) && !Array.isArray(value[key])) return false;
+  for (const key2 of ["enum", "examples", "required"]) {
+    if (Object.hasOwn(value, key2) && !Array.isArray(value[key2])) return false;
   }
   return true;
 }
@@ -61675,7 +63035,7 @@ function schemaRootOwnership(value) {
   const objectDeclaration = value.type === "object" && record2(value.properties);
   return declared || objectDeclaration ? { role: "schema", sensitiveInstance: false } : void 0;
 }
-function schemaChildOwnership(owner, key, value, sensitiveName) {
+function schemaChildOwnership(owner, key2, value, sensitiveName) {
   if (owner?.role === "instance") return owner;
   if (owner?.role === "property_names") return owner;
   if (owner?.role === "map")
@@ -61684,27 +63044,27 @@ function schemaChildOwnership(owner, key, value, sensitiveName) {
       sensitiveInstance: owner.sensitiveInstance || owner.sensitiveNames && sensitiveName
     } : void 0;
   if (owner?.role !== "schema") return void 0;
-  if (MAP_APPLICATORS.has(key) && record2(value))
+  if (MAP_APPLICATORS.has(key2) && record2(value))
     return {
       role: "map",
-      sensitiveNames: key === "properties" || key === "patternProperties",
-      sensitiveInstance: key === "$defs" || key === "definitions" ? false : owner.sensitiveInstance,
-      ...key === "dependencies" || key === "dependentRequired" ? { propertyNameLists: key === "dependencies" ? "or_schema" : "only" } : {}
+      sensitiveNames: key2 === "properties" || key2 === "patternProperties",
+      sensitiveInstance: key2 === "$defs" || key2 === "definitions" ? false : owner.sensitiveInstance,
+      ...key2 === "dependencies" || key2 === "dependentRequired" ? { propertyNameLists: key2 === "dependencies" ? "or_schema" : "only" } : {}
     };
-  if (LIST_APPLICATORS.has(key) && Array.isArray(value))
+  if (LIST_APPLICATORS.has(key2) && Array.isArray(value))
     return { role: "list", sensitiveInstance: owner.sensitiveInstance };
-  if (SINGLE_APPLICATORS.has(key)) {
-    if (Array.isArray(value) && key === "items")
+  if (SINGLE_APPLICATORS.has(key2)) {
+    if (Array.isArray(value) && key2 === "items")
       return { role: "list", sensitiveInstance: owner.sensitiveInstance };
     if (isSchemaNode(value))
       return { role: "schema", sensitiveInstance: owner.sensitiveInstance };
   }
   return { role: "instance" };
 }
-function schemaLiteralValue(owner, key) {
+function schemaLiteralValue(owner, key2) {
   if (owner?.role !== "schema" || !owner.sensitiveInstance) return void 0;
-  if (key === "default" || key === "const") return "single";
-  if (key === "enum" || key === "examples") return "list";
+  if (key2 === "default" || key2 === "const") return "single";
+  if (key2 === "enum" || key2 === "examples") return "list";
   return void 0;
 }
 var REDACTED2 = "[redacted]";
@@ -61758,10 +63118,10 @@ function jsonInputBytes(value) {
     seen.add(node);
     if (Object.getOwnPropertySymbols(node).length)
       throw new InspectionFault("input_not_plain_json");
-    for (const [key, property] of Object.entries(
+    for (const [key2, property] of Object.entries(
       Object.getOwnPropertyDescriptors(node)
     )) {
-      if (Array.isArray(node) && key === "length") continue;
+      if (Array.isArray(node) && key2 === "length") continue;
       if (!property.enumerable)
         throw new InspectionFault("input_not_plain_json");
       if (!("value" in property))
@@ -61929,7 +63289,7 @@ function inspectPass(input, metrics, work, decodedRepresentations, contextMode =
         if (fields2.has("")) return OMITTED;
         const projected = visit(child, depth, containers + 1);
         if (projected && typeof projected === "object")
-          for (const key of fields2) projected[key] = OMITTED;
+          for (const key2 of fields2) projected[key2] = OMITTED;
         return projected;
       });
     }
@@ -61945,24 +63305,24 @@ function inspectPass(input, metrics, work, decodedRepresentations, contextMode =
     );
     const result = /* @__PURE__ */ Object.create(null);
     const keyIdentities = /* @__PURE__ */ new Map();
-    for (const [key, value2] of Object.entries(record22)) {
-      const nextKey = textValue(key, depth, containers + 1);
-      if (nextKey !== key) state.sensitiveKeys = true;
+    for (const [key2, value2] of Object.entries(record22)) {
+      const nextKey = textValue(key2, depth, containers + 1);
+      if (nextKey !== key2) state.sensitiveKeys = true;
       if (Object.hasOwn(result, nextKey)) {
         retain("ambiguous_source_ownership");
         return contextMode ? OMITTED : node;
       }
-      keyIdentities.set(key, nextKey);
+      keyIdentities.set(key2, nextKey);
       const childOwner = schemaChildOwnership(
         owner,
-        key,
+        key2,
         value2,
-        isSensitiveKey2(key)
+        isSensitiveKey2(key2)
       );
       const declaration = owner?.role === "map" && (childOwner?.role === "schema" || childOwner?.role === "property_names");
-      const literal = schemaLiteralValue(owner, key);
+      const literal = schemaLiteralValue(owner, key2);
       const redactValue = (value3) => value3 === null || value3 === OMITTED ? value3 : REDACTED2;
-      result[nextKey] = literal === "list" && Array.isArray(value2) ? value2.map(redactValue) : (jwk.has(key) || literal === "single" || isSensitiveKey2(key) && !declaration) && value2 !== null && value2 !== REDACTED2 && value2 !== OMITTED ? REDACTED2 : visit(value2, depth, containers + 1, childOwner);
+      result[nextKey] = literal === "list" && Array.isArray(value2) ? value2.map(redactValue) : (jwk.has(key2) || literal === "single" || isSensitiveKey2(key2) && !declaration) && value2 !== null && value2 !== REDACTED2 && value2 !== OMITTED ? REDACTED2 : visit(value2, depth, containers + 1, childOwner);
     }
     projectedKeyIdentities.set(result, keyIdentities);
     if (recognizeJwkRecord(result).kind !== "not_private") {
@@ -61981,17 +63341,17 @@ function inspectPass(input, metrics, work, decodedRepresentations, contextMode =
       const row = v;
       const keys = Object.keys(row).sort();
       return keys.length === shape.length && keys.every(
-        (key, i) => key === shape[i] && typeof row[key] === typeof values[0][key]
+        (key2, i) => key2 === shape[i] && typeof row[key2] === typeof values[0][key2]
       );
     });
     const columns = strings ? [""] : homogeneous ? Object.keys(values[0]).filter(
-      (key) => values.every(
-        (v) => typeof v[key] === "string"
+      (key2) => values.every(
+        (v) => typeof v[key2] === "string"
       )
     ) : [];
-    for (const key of columns) {
+    for (const key2 of columns) {
       const members = values.map(
-        (v) => strings ? v : v[key]
+        (v) => strings ? v : v[key2]
       );
       let pending = [];
       const nativeMembers = [];
@@ -62035,7 +63395,7 @@ function inspectPass(input, metrics, work, decodedRepresentations, contextMode =
             for (let index = low; index < ranges.length && ranges[index].start < end; index++) {
               const range = ranges[index];
               const fields2 = affected.get(range.index) ?? /* @__PURE__ */ new Set();
-              fields2.add(key);
+              fields2.add(key2);
               affected.set(range.index, fields2);
             }
           }
@@ -62066,7 +63426,7 @@ function inspectPass(input, metrics, work, decodedRepresentations, contextMode =
           );
           for (const { memberIndex } of stream.members) {
             const fields2 = affected.get(memberIndex) ?? /* @__PURE__ */ new Set();
-            fields2.add(key);
+            fields2.add(key2);
             affected.set(memberIndex, fields2);
           }
         }
@@ -62313,11 +63673,11 @@ function inspectPass(input, metrics, work, decodedRepresentations, contextMode =
     return children;
   }
   function textValue(text, depth, containers) {
-    const key = `${depth}:${containers}:${text}`;
-    let observed = textObservations.get(key);
+    const key2 = `${depth}:${containers}:${text}`;
+    let observed = textObservations.get(key2);
     if (!observed) {
       observed = observe(() => projectText(text, depth, containers));
-      textObservations.set(key, observed);
+      textObservations.set(key2, observed);
     }
     if (observed.state.reason) retain(observed.state.reason);
     state.sensitiveKeys ||= observed.state.sensitiveKeys;
@@ -62650,8 +64010,8 @@ function sortForHash2(value) {
     return value.map((item) => sortForHash2(item));
   }
   if (value && typeof value === "object") {
-    return Object.keys(value).sort().reduce((acc, key) => {
-      acc[key] = sortForHash2(value[key]);
+    return Object.keys(value).sort().reduce((acc, key2) => {
+      acc[key2] = sortForHash2(value[key2]);
       return acc;
     }, {});
   }
@@ -62679,15 +64039,15 @@ function exactRecord(value, keys) {
   if (Object.getOwnPropertySymbols(value).length > 0) return null;
   const descriptors = Object.getOwnPropertyDescriptors(value);
   if (Object.keys(descriptors).some(
-    (key) => !descriptors[key].enumerable || !("value" in descriptors[key])
+    (key2) => !descriptors[key2].enumerable || !("value" in descriptors[key2])
   ))
     return null;
   const actual = Object.keys(descriptors).sort();
   const expected = [...keys].sort();
-  if (actual.length !== expected.length || !actual.every((key, index) => key === expected[index]))
+  if (actual.length !== expected.length || !actual.every((key2, index) => key2 === expected[index]))
     return null;
   const copy = /* @__PURE__ */ Object.create(null);
-  for (const key of actual) copy[key] = descriptors[key].value;
+  for (const key2 of actual) copy[key2] = descriptors[key2].value;
   return copy;
 }
 function parseCause(value) {
@@ -63699,11 +65059,11 @@ function parsePrivateSkillOperationalRetries(value, recovery, attempts, maxRecor
     ).find(
       (candidate) => candidate.candidate_ref === candidateRef && candidate.candidate_digest === entry.candidate_digest && candidate.outcome === "operational_failure"
     );
-    const key = `${entry.inspector_digest}:${entry.candidate_digest}`;
-    if (!attempt || attempt.candidate_digest !== entry.candidate_digest || attempt.inspection?.outcome !== "operational_failure" || !recoveryAttempt || seen.has(key)) {
+    const key2 = `${entry.inspector_digest}:${entry.candidate_digest}`;
+    if (!attempt || attempt.candidate_digest !== entry.candidate_digest || attempt.inspection?.outcome !== "operational_failure" || !recoveryAttempt || seen.has(key2)) {
       throw new Error("Private skill operational retry history is invalid.");
     }
-    seen.add(key);
+    seen.add(key2);
     return Object.freeze({
       candidate_ref: candidateRef,
       candidate_digest: String(entry.candidate_digest),
@@ -63918,20 +65278,20 @@ function inspectPrivateSkillCandidate(candidate) {
 }
 
 // src/private-skill-outbox.ts
-import { createCipheriv as createCipheriv3, createDecipheriv as createDecipheriv3, randomBytes as randomBytes6 } from "node:crypto";
+import { createCipheriv as createCipheriv3, createDecipheriv as createDecipheriv3, randomBytes as randomBytes7 } from "node:crypto";
 import {
   chmod as chmod3,
-  lstat as lstat3,
-  mkdir as mkdir3,
-  open as open3,
+  lstat as lstat4,
+  mkdir as mkdir4,
+  open as open5,
   readdir as readdir2,
-  rename as rename3,
+  rename as rename4,
   rm as rm2,
-  unlink as unlink3
+  unlink as unlink4
 } from "node:fs/promises";
 import { existsSync as existsSync3 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import { dirname as dirname4, join as join4 } from "node:path";
+import { homedir as homedir4 } from "node:os";
+import { dirname as dirname7, join as join7 } from "node:path";
 
 // src/private-skill-outbox-state.ts
 var PRIVATE_SKILL_REFORMULATION_MAX_ATTEMPTS = 3;
@@ -66173,118 +67533,120 @@ async function listPrivateSkillOutbox(options = {}) {
       options.now ?? /* @__PURE__ */ new Date()
     );
     const refreshed = await safeOutboxEntries(outbox.directory);
-    const terminals = readPrivateSkillTerminalRecords(
-      outbox.directory,
-      refreshed
-    );
-    const terminalMarkers = privateSkillTerminalMarkerDraftIds(refreshed);
-    const deletionMarkers = privateSkillTerminalMarkerDraftIds(
-      refreshed,
-      "deleted"
-    );
-    const items = [];
-    let refreshedInspection = false;
-    for (const entry of refreshed) {
-      if (entry.endsWith(".submitted.json")) {
-        const draftId = privateSkillDraftIdFromCanonicalEntry(entry);
-        if (deletionMarkers.has(draftId)) continue;
-        const record4 = terminals.submitted.get(draftId);
-        if (!record4) continue;
-        items.push({
-          draft_id: record4.draft_id,
-          state: "submitted",
-          candidate_digest: record4.candidate_digest,
-          attempts: record4.attempts,
-          reformulation_available: false,
-          reformulation_reason: null,
-          reformulation_status: null,
-          reformulation_attempt_count: 0,
-          reformulation_attempts_remaining: 0,
-          effective_candidate_digest: record4.candidate_digest,
-          next_retry_at: null,
-          last_error_code: null,
-          next_action: null,
-          created_at: record4.created_at,
-          updated_at: record4.updated_at,
-          completion_expires_at: record4.expires_at
-        });
-      } else if (/^psd_[A-Za-z0-9_-]{8,96}\.json$/u.test(entry)) {
-        const draftId = privateSkillDraftIdFromCanonicalEntry(entry);
-        if (terminalMarkers.has(draftId)) {
-          continue;
-        }
-        let draft;
-        try {
-          draft = await readPrivateSkillDraftFrom(
-            join4(outbox.directory, entry),
-            outbox.encryption
-          );
-        } catch {
-          continue;
-        }
-        const upgraded = upgradePrivateSkillOperationalFailureCeiling(draft);
-        if (upgraded !== draft) {
-          try {
-            await writePrivateSkillDraft(
-              upgraded,
-              outbox.directory,
-              outbox.encryption,
-              options.env
-            );
-          } catch (error) {
-            if (!(error instanceof PrivateOutboxCapacityError)) {
-              throw error;
-            }
+    return withWindowsPrivateDirectoryReadOperation(outbox.directory, refreshed, async () => {
+      const terminals = readPrivateSkillTerminalRecords(
+        outbox.directory,
+        refreshed
+      );
+      const terminalMarkers = privateSkillTerminalMarkerDraftIds(refreshed);
+      const deletionMarkers = privateSkillTerminalMarkerDraftIds(
+        refreshed,
+        "deleted"
+      );
+      const items = [];
+      let refreshedInspection = false;
+      for (const entry of refreshed) {
+        if (entry.endsWith(".submitted.json")) {
+          const draftId = privateSkillDraftIdFromCanonicalEntry(entry);
+          if (deletionMarkers.has(draftId)) continue;
+          const record4 = terminals.submitted.get(draftId);
+          if (!record4) continue;
+          items.push({
+            draft_id: record4.draft_id,
+            state: "submitted",
+            candidate_digest: record4.candidate_digest,
+            attempts: record4.attempts,
+            reformulation_available: false,
+            reformulation_reason: null,
+            reformulation_status: null,
+            reformulation_attempt_count: 0,
+            reformulation_attempts_remaining: 0,
+            effective_candidate_digest: record4.candidate_digest,
+            next_retry_at: null,
+            last_error_code: null,
+            next_action: null,
+            created_at: record4.created_at,
+            updated_at: record4.updated_at,
+            completion_expires_at: record4.expires_at
+          });
+        } else if (/^psd_[A-Za-z0-9_-]{8,96}\.json$/u.test(entry)) {
+          const draftId = privateSkillDraftIdFromCanonicalEntry(entry);
+          if (terminalMarkers.has(draftId)) {
+            continue;
           }
-          draft = upgraded;
-        }
-        if (!refreshedInspection) {
-          const refreshedDraft = refreshPrivateSkillInspector(
-            draft,
-            options.now ?? /* @__PURE__ */ new Date()
-          );
-          if (refreshedDraft !== draft) {
-            refreshedInspection = true;
+          let draft;
+          try {
+            draft = await readPrivateSkillDraftFrom(
+              join7(outbox.directory, entry),
+              outbox.encryption
+            );
+          } catch {
+            continue;
+          }
+          const upgraded = upgradePrivateSkillOperationalFailureCeiling(draft);
+          if (upgraded !== draft) {
             try {
               await writePrivateSkillDraft(
-                refreshedDraft,
+                upgraded,
                 outbox.directory,
                 outbox.encryption,
                 options.env
               );
-              draft = refreshedDraft;
             } catch (error) {
               if (!(error instanceof PrivateOutboxCapacityError)) {
                 throw error;
               }
             }
+            draft = upgraded;
           }
+          if (!refreshedInspection) {
+            const refreshedDraft = refreshPrivateSkillInspector(
+              draft,
+              options.now ?? /* @__PURE__ */ new Date()
+            );
+            if (refreshedDraft !== draft) {
+              refreshedInspection = true;
+              try {
+                await writePrivateSkillDraft(
+                  refreshedDraft,
+                  outbox.directory,
+                  outbox.encryption,
+                  options.env
+                );
+                draft = refreshedDraft;
+              } catch (error) {
+                if (!(error instanceof PrivateOutboxCapacityError)) {
+                  throw error;
+                }
+              }
+            }
+          }
+          items.push({
+            draft_id: draft.draft_id,
+            state: draft.state,
+            candidate_digest: draft.candidate_digest,
+            attempts: draft.attempts,
+            reformulation_available: privateSkillReformulationAvailable(draft),
+            reformulation_reason: draft.reformulation_reason,
+            reformulation_status: draft.reformulation_status,
+            reformulation_attempt_count: draft.reformulation_attempts.length,
+            reformulation_attempts_remaining: privateSkillReformulationAttemptsRemaining(draft),
+            effective_candidate_digest: effectivePrivateSkillCandidateDigest(draft),
+            next_retry_at: draft.next_retry_at,
+            last_error_code: draft.last_error_code,
+            inspection: draft.inspection ?? null,
+            native_context_pending: hasPendingNativeContext(draft),
+            next_action: privateSkillRecoveryTransition(draft).next_action,
+            created_at: draft.created_at,
+            updated_at: draft.updated_at,
+            completion_expires_at: null
+          });
         }
-        items.push({
-          draft_id: draft.draft_id,
-          state: draft.state,
-          candidate_digest: draft.candidate_digest,
-          attempts: draft.attempts,
-          reformulation_available: privateSkillReformulationAvailable(draft),
-          reformulation_reason: draft.reformulation_reason,
-          reformulation_status: draft.reformulation_status,
-          reformulation_attempt_count: draft.reformulation_attempts.length,
-          reformulation_attempts_remaining: privateSkillReformulationAttemptsRemaining(draft),
-          effective_candidate_digest: effectivePrivateSkillCandidateDigest(draft),
-          next_retry_at: draft.next_retry_at,
-          last_error_code: draft.last_error_code,
-          inspection: draft.inspection ?? null,
-          native_context_pending: hasPendingNativeContext(draft),
-          next_action: privateSkillRecoveryTransition(draft).next_action,
-          created_at: draft.created_at,
-          updated_at: draft.updated_at,
-          completion_expires_at: null
-        });
       }
-    }
-    return items.sort(
-      (left, right) => right.updated_at.localeCompare(left.updated_at) || right.draft_id.localeCompare(left.draft_id)
-    ).slice(0, Math.min(200, Math.max(1, options.limit ?? 50)));
+      return items.sort(
+        (left, right) => right.updated_at.localeCompare(left.updated_at) || right.draft_id.localeCompare(left.draft_id)
+      ).slice(0, Math.min(200, Math.max(1, options.limit ?? 50)));
+    });
   });
 }
 async function privateSkillOutboxSummary(options = {}) {
@@ -66300,118 +67662,120 @@ async function privateSkillOutboxSummary(options = {}) {
       options.now ?? /* @__PURE__ */ new Date()
     );
     const refreshed = await safeOutboxEntries(outbox.directory);
-    const terminals = readPrivateSkillTerminalRecords(
-      outbox.directory,
-      refreshed
-    );
-    const terminalMarkers = privateSkillTerminalMarkerDraftIds(refreshed);
-    const deletionMarkers = privateSkillTerminalMarkerDraftIds(
-      refreshed,
-      "deleted"
-    );
-    const counts = {
-      ready: 0,
-      awaiting_authorization: 0,
-      retry_scheduled: 0,
-      held_safety: 0,
-      held_validation: 0,
-      submitted: 0
-    };
-    const totalBytes = await retainedPrivateSkillOutboxBytes(outbox.directory);
-    let retainedBytes = 0;
-    let retainedCount = 0;
-    let tombstones = 0;
-    let corruptFiles = 0;
-    let awaitingDestinationCapability = 0;
-    for (const entry of refreshed) {
-      const path = join4(outbox.directory, entry);
-      const metadata = await lstat3(path).catch(() => null);
-      if (!metadata || metadata.isSymbolicLink() || !metadata.isFile()) {
-        continue;
-      }
-      if (entry.endsWith(".deleted.json")) {
-        const draftId = privateSkillDraftIdFromCanonicalEntry(entry);
-        if (terminals.deleted.has(draftId)) {
-          tombstones += 1;
-        } else {
-          corruptFiles += 1;
-        }
-        continue;
-      }
-      if (entry.endsWith(".submitted.json")) {
-        const draftId = privateSkillDraftIdFromCanonicalEntry(entry);
-        if (deletionMarkers.has(draftId)) continue;
-        if (terminals.submitted.has(draftId)) {
-          counts.submitted += 1;
-        } else {
-          corruptFiles += 1;
-        }
-        continue;
-      }
-      if (/^psd_[A-Za-z0-9_-]{8,96}\.json$/u.test(entry)) {
-        const draftId = privateSkillDraftIdFromCanonicalEntry(entry);
-        if (terminalMarkers.has(draftId)) {
-          retainedCount += 1;
-          retainedBytes += metadata.size;
+    return withWindowsPrivateDirectoryReadOperation(outbox.directory, refreshed, async () => {
+      const terminals = readPrivateSkillTerminalRecords(
+        outbox.directory,
+        refreshed
+      );
+      const terminalMarkers = privateSkillTerminalMarkerDraftIds(refreshed);
+      const deletionMarkers = privateSkillTerminalMarkerDraftIds(
+        refreshed,
+        "deleted"
+      );
+      const counts = {
+        ready: 0,
+        awaiting_authorization: 0,
+        retry_scheduled: 0,
+        held_safety: 0,
+        held_validation: 0,
+        submitted: 0
+      };
+      const totalBytes = await retainedPrivateSkillOutboxBytes(outbox.directory);
+      let retainedBytes = 0;
+      let retainedCount = 0;
+      let tombstones = 0;
+      let corruptFiles = 0;
+      let awaitingDestinationCapability = 0;
+      for (const entry of refreshed) {
+        const path = join7(outbox.directory, entry);
+        const metadata2 = await lstat4(path).catch(() => null);
+        if (!metadata2 || metadata2.isSymbolicLink() || !metadata2.isFile()) {
           continue;
         }
-        let draft;
-        try {
-          draft = await readPrivateSkillDraftFrom(path, outbox.encryption);
-        } catch (error) {
-          if (isPrivateOutboxKeyAccessError(error)) {
+        if (entry.endsWith(".deleted.json")) {
+          const draftId = privateSkillDraftIdFromCanonicalEntry(entry);
+          if (terminals.deleted.has(draftId)) {
+            tombstones += 1;
+          } else {
+            corruptFiles += 1;
+          }
+          continue;
+        }
+        if (entry.endsWith(".submitted.json")) {
+          const draftId = privateSkillDraftIdFromCanonicalEntry(entry);
+          if (deletionMarkers.has(draftId)) continue;
+          if (terminals.submitted.has(draftId)) {
+            counts.submitted += 1;
+          } else {
+            corruptFiles += 1;
+          }
+          continue;
+        }
+        if (/^psd_[A-Za-z0-9_-]{8,96}\.json$/u.test(entry)) {
+          const draftId = privateSkillDraftIdFromCanonicalEntry(entry);
+          if (terminalMarkers.has(draftId)) {
             retainedCount += 1;
-            retainedBytes += metadata.size;
+            retainedBytes += metadata2.size;
             continue;
           }
-          if (error instanceof PrivateOutboxStorageError) throw error;
-          corruptFiles += 1;
+          let draft;
+          try {
+            draft = await readPrivateSkillDraftFrom(path, outbox.encryption);
+          } catch (error) {
+            if (isPrivateOutboxKeyAccessError(error)) {
+              retainedCount += 1;
+              retainedBytes += metadata2.size;
+              continue;
+            }
+            if (error instanceof PrivateOutboxStorageError) throw error;
+            corruptFiles += 1;
+            retainedCount += 1;
+            retainedBytes += metadata2.size;
+            continue;
+          }
+          counts[draft.state] += 1;
+          if (isPrivateSkillDestinationCapabilityHold(draft)) {
+            awaitingDestinationCapability += 1;
+          }
           retainedCount += 1;
-          retainedBytes += metadata.size;
-          continue;
+          retainedBytes += metadata2.size;
         }
-        counts[draft.state] += 1;
-        if (isPrivateSkillDestinationCapabilityHold(draft)) {
-          awaitingDestinationCapability += 1;
-        }
-        retainedCount += 1;
-        retainedBytes += metadata.size;
       }
-    }
-    const ceilingBytes = privateSkillOutboxMaxBytes(options.env);
-    const recoveryItems = await privateSkillRecoveryItems({
-      ...options,
-      outboxDirectory: outbox.directory,
-      encryption: outbox.encryption
+      const ceilingBytes = privateSkillOutboxMaxBytes(options.env);
+      const recoveryItems = await privateSkillRecoveryItems({
+        ...options,
+        outboxDirectory: outbox.directory,
+        encryption: outbox.encryption
+      });
+      const retainedArtifacts = await retainedPrivateSkillArtifactStats(
+        outbox.directory
+      );
+      const capacity = privateOutboxCapacityState(
+        totalBytes,
+        ceilingBytes,
+        PRIVATE_SKILL_CAPTURE_HEADROOM_BYTES,
+        await readPrivateSkillCapacityRejection(outbox.directory)
+      );
+      return {
+        directory: outbox.directory,
+        encryption_source: outbox.encryption.source,
+        total_bytes: totalBytes,
+        ceiling_bytes: ceilingBytes,
+        ...capacity,
+        counts,
+        awaiting_destination_capability_count: awaitingDestinationCapability,
+        retained_count: retainedCount,
+        retained_bytes: retainedBytes,
+        deletion_tombstones: tombstones,
+        temporary_files: retainedArtifacts.temporaryFiles,
+        corrupt_files: Math.max(
+          corruptFiles,
+          recoveryItems.filter((item) => !item.diagnostic).length
+        ),
+        quarantined_bytes: retainedArtifacts.quarantinedBytes,
+        recovery_required_count: recoveryItems.length
+      };
     });
-    const retainedArtifacts = await retainedPrivateSkillArtifactStats(
-      outbox.directory
-    );
-    const capacity = privateOutboxCapacityState(
-      totalBytes,
-      ceilingBytes,
-      PRIVATE_SKILL_CAPTURE_HEADROOM_BYTES,
-      await readPrivateSkillCapacityRejection(outbox.directory)
-    );
-    return {
-      directory: outbox.directory,
-      encryption_source: outbox.encryption.source,
-      total_bytes: totalBytes,
-      ceiling_bytes: ceilingBytes,
-      ...capacity,
-      counts,
-      awaiting_destination_capability_count: awaitingDestinationCapability,
-      retained_count: retainedCount,
-      retained_bytes: retainedBytes,
-      deletion_tombstones: tombstones,
-      temporary_files: retainedArtifacts.temporaryFiles,
-      corrupt_files: Math.max(
-        corruptFiles,
-        recoveryItems.filter((item) => !item.diagnostic).length
-      ),
-      quarantined_bytes: retainedArtifacts.quarantinedBytes,
-      recovery_required_count: recoveryItems.length
-    };
   });
 }
 async function inspectPrivateSkillOutboxSnapshot(options = {}) {
@@ -66430,9 +67794,9 @@ async function inspectPrivateSkillOutboxSnapshot(options = {}) {
     };
   });
 }
-function privateSkillOutboxDirectory(env = process.env, homeDirectory = homedir3()) {
-  const stateRoot2 = env.XDG_STATE_HOME?.trim() || join4(homeDirectory, ".local", "state");
-  return join4(stateRoot2, "remembrance", "private-skills");
+function privateSkillOutboxDirectory(env = process.env, homeDirectory = homedir4()) {
+  const stateRoot2 = env.XDG_STATE_HOME?.trim() || join7(homeDirectory, ".local", "state");
+  return join7(stateRoot2, "remembrance", "private-skills");
 }
 function privateSkillOutboxMaxBytes(env = process.env) {
   const raw = env.REMEMBRANCE_PRIVATE_SKILL_OUTBOX_MAX_BYTES?.trim();
@@ -66468,28 +67832,32 @@ async function readyPrivateSkillOutbox(options, createEncryption = true) {
   return { directory, encryption };
 }
 async function ensurePrivateDirectory(path) {
-  await mkdir3(path, { recursive: true, mode: 448 });
-  const metadata = await lstat3(path);
-  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+  if (process.platform === "win32") {
+    await ensureWindowsPrivateDirectory(path);
+    return;
+  }
+  await mkdir4(path, { recursive: true, mode: 448 });
+  const metadata2 = await lstat4(path);
+  if (metadata2.isSymbolicLink() || !metadata2.isDirectory()) {
     throw new Error("Private skill outbox path is not a regular directory.");
   }
-  if (typeof process.getuid === "function" && metadata.uid !== process.getuid()) {
+  if (typeof process.getuid === "function" && metadata2.uid !== process.getuid()) {
     throw new Error("Private skill outbox is not owned by the current user.");
   }
   await chmod3(path, 448);
 }
 async function writePrivateSkillDraft(draft, directory, encryption, env = process.env, beforePublish, withdrawal = false) {
   const parsed = validatePrivateSkillDraft(draft);
-  const metadata = envelopeMetadata(parsed);
-  const nonce = randomBytes6(12);
+  const metadata2 = envelopeMetadata(parsed);
+  const nonce = randomBytes7(12);
   const cipher = createCipheriv3("aes-256-gcm", encryption.key, nonce);
-  cipher.setAAD(Buffer.from(canonicalJson(metadata)));
+  cipher.setAAD(Buffer.from(canonicalJson(metadata2)));
   const ciphertext = Buffer.concat([
     cipher.update(canonicalJson(parsed), "utf8"),
     cipher.final()
   ]);
   const envelope2 = {
-    ...metadata,
+    ...metadata2,
     encryption: {
       algorithm: "aes-256-gcm",
       key_source: encryption.source,
@@ -66507,7 +67875,7 @@ async function writePrivateSkillDraft(draft, directory, encryption, env = proces
   }
   const path = privateSkillDraftPath(directory, parsed.draft_id);
   await assertPrivateSkillOutboxEntryCapacity(directory, parsed.draft_id);
-  const currentSize = await lstat3(path).then(
+  const currentSize = await lstat4(path).then(
     (entry) => entry.isFile() && !entry.isSymbolicLink() ? entry.size : 0
   ).catch((error) => {
     if (isMissingError3(error)) return 0;
@@ -66535,17 +67903,17 @@ async function readPrivateSkillDraftFrom(path, encryption) {
   const envelope2 = parseEnvelope2(
     readSecureLocalText(path, { maxBytes: PRIVATE_SKILL_DRAFT_MAX_BYTES })
   );
-  const metadata = envelopeMetadataFromEnvelope(envelope2);
-  const key = await readPrivateLessonOutboxKey(
+  const metadata2 = envelopeMetadataFromEnvelope(envelope2);
+  const key2 = await readPrivateLessonOutboxKey(
     encryption,
     envelope2.encryption.key_source
   );
   const decipher = createDecipheriv3(
     "aes-256-gcm",
-    key,
+    key2,
     Buffer.from(envelope2.encryption.nonce, "base64url")
   );
-  decipher.setAAD(Buffer.from(canonicalJson(metadata)));
+  decipher.setAAD(Buffer.from(canonicalJson(metadata2)));
   decipher.setAuthTag(Buffer.from(envelope2.encryption.auth_tag, "base64url"));
   let plaintext;
   try {
@@ -66581,7 +67949,7 @@ async function readPrivateSkillDraftFrom(path, encryption) {
   return parsed;
 }
 function validatePrivateSkillDraft(value, previous, options = {}) {
-  if (!isRecord4(value)) throw new Error("Private skill draft is invalid.");
+  if (!isRecord5(value)) throw new Error("Private skill draft is invalid.");
   const draftId = String(value.draft_id ?? "");
   assertPrivateSkillDraftId(draftId);
   const state = String(value.state ?? "");
@@ -66806,7 +68174,7 @@ function validatePrivateSkillDraft(value, previous, options = {}) {
   return draft;
 }
 function parsePrivateSkillDestinationCapabilityHold(value) {
-  if (!isRecord4(value)) {
+  if (!isRecord5(value)) {
     throw new Error("Private skill destination capability hold is invalid.");
   }
   return {
@@ -66837,7 +68205,7 @@ function parseRetainedNativeContexts(value, draftId) {
   return contexts2;
 }
 function parsePrivateSkillNativeAuthorityState(value) {
-  if (!isRecord4(value) || Object.keys(value).sort().join(",") !== "generation,issuance_closed,prepared_events,version" || value.version !== "private-skill-native-authority-state-v1" || !Number.isSafeInteger(value.generation) || Number(value.generation) < 0 || typeof value.issuance_closed !== "boolean" || !Array.isArray(value.prepared_events) || value.prepared_events.length > PRIVATE_SKILL_NATIVE_EVENT_MAX || value.prepared_events.some(
+  if (!isRecord5(value) || Object.keys(value).sort().join(",") !== "generation,issuance_closed,prepared_events,version" || value.version !== "private-skill-native-authority-state-v1" || !Number.isSafeInteger(value.generation) || Number(value.generation) < 0 || typeof value.issuance_closed !== "boolean" || !Array.isArray(value.prepared_events) || value.prepared_events.length > PRIVATE_SKILL_NATIVE_EVENT_MAX || value.prepared_events.some(
     (event) => typeof event !== "string" || !/^sha256:[a-f0-9]{64}$/u.test(event)
   ) || new Set(value.prepared_events).size !== value.prepared_events.length)
     throw new Error("Private skill native authority state is invalid.");
@@ -66899,7 +68267,7 @@ function parsePrivateSkillReformulationAttempts(value, draftId, originalCandidat
   }
   const seen = /* @__PURE__ */ new Set();
   return value.map((raw) => {
-    if (!isRecord4(raw)) {
+    if (!isRecord5(raw)) {
       throw new Error("Private skill reformulation attempt is invalid.");
     }
     const candidate = privateSkillCaptureSchema.parse(raw.candidate);
@@ -66970,7 +68338,7 @@ function parsePrivateSkillSourceProjections(value, draftId, originalCandidateDig
   const projectedInputs = /* @__PURE__ */ new Set();
   const refreshes = /* @__PURE__ */ new Map();
   return value.map((raw) => {
-    if (!isRecord4(raw)) {
+    if (!isRecord5(raw)) {
       throw new Error("Private skill source projection is invalid.");
     }
     const inputCandidateDigest = privateSkillSha256(
@@ -67027,7 +68395,7 @@ function parsePrivateSkillDeliveryLineages(value, draftId, retainedCandidateDige
   }
   const seenKeys = /* @__PURE__ */ new Set();
   return value.map((raw, index) => {
-    if (!isRecord4(raw) || Object.keys(raw).sort().join(",") !== "candidate_digest,created_at,idempotency_key,possible_delivery_at,predecessor") {
+    if (!isRecord5(raw) || Object.keys(raw).sort().join(",") !== "candidate_digest,created_at,idempotency_key,possible_delivery_at,predecessor") {
       throw new Error("Private skill delivery lineage is invalid.");
     }
     const candidateDigest = privateSkillSha256(
@@ -67082,7 +68450,7 @@ function parsePrivateSkillDeliveryFences(value, lineages) {
 }
 function parsePrivateSkillDeliveryResolutionState(value, lineages, fences, projections, selectedLineage) {
   if (value === void 0 || value === null) return null;
-  if (!isRecord4(value) || Object.keys(value).sort().join(",") !== "candidate_digest,idempotency_key,pending_candidate_digest,reason_code,resolution_attempts,retryable,status") {
+  if (!isRecord5(value) || Object.keys(value).sort().join(",") !== "candidate_digest,idempotency_key,pending_candidate_digest,reason_code,resolution_attempts,retryable,status") {
     throw new Error("Private skill delivery resolution state is invalid.");
   }
   const active = selectedLineage === null ? void 0 : lineages[selectedLineage];
@@ -67214,7 +68582,7 @@ function parsePrivateSkillReformulationStatus(value) {
   throw new Error("Private skill reformulation status is invalid.");
 }
 function parsePrivateSkillDestination(value) {
-  if (!isRecord4(value)) {
+  if (!isRecord5(value)) {
     throw new Error("Private skill destination is invalid.");
   }
   return Object.freeze({
@@ -67230,7 +68598,7 @@ function parsePrivateSkillDestination(value) {
 }
 function parsePrivateSkillDestinationBinding(value) {
   if (value === void 0) return Object.freeze({ kind: "legacy_unbound" });
-  if (!isRecord4(value)) {
+  if (!isRecord5(value)) {
     throw new Error("Private skill destination binding is invalid.");
   }
   if (value.kind === "legacy_unbound") {
@@ -67373,7 +68741,7 @@ function envelopeMetadataFromEnvelope(envelope2) {
 }
 function parseEnvelope2(value) {
   const parsed = JSON.parse(value);
-  if (!isRecord4(parsed) || !isRecord4(parsed.encryption)) {
+  if (!isRecord5(parsed) || !isRecord5(parsed.encryption)) {
     throw new Error("Private skill outbox envelope is invalid.");
   }
   const envelope2 = parsed;
@@ -67389,7 +68757,7 @@ function parseEnvelope2(value) {
     "reformulation_reason",
     "reformulation_attempt_count"
   ];
-  const recoveryKeyCount = recoveryKeys.filter((key) => key in parsed).length;
+  const recoveryKeyCount = recoveryKeys.filter((key2) => key2 in parsed).length;
   if (recoveryKeyCount !== 0 && recoveryKeyCount !== recoveryKeys.length) {
     throw new Error("Private skill outbox recovery metadata is invalid.");
   }
@@ -67403,7 +68771,7 @@ function parseEnvelope2(value) {
 }
 function isPrivateSkillRecoveryActionOrNull(value) {
   if (value === void 0 || value === null) return true;
-  if (!isRecord4(value)) return false;
+  if (!isRecord5(value)) return false;
   const keys = Object.keys(value).sort();
   return keys.join(",") === "candidate_digest,draft_updated_at,inspector_digest,kind,version" && value.version === "private-skill-recovery-action-v1" && [
     "submit_candidate",
@@ -67420,7 +68788,7 @@ function hasEnvelopeReformulationMetadata(envelope2) {
 }
 function parseSubmittedRecord2(value) {
   const parsed = JSON.parse(value);
-  if (!isRecord4(parsed))
+  if (!isRecord5(parsed))
     throw new Error("Private skill completion record is invalid.");
   assertPrivateSkillDraftId(String(parsed.draft_id ?? ""));
   if (parsed.version !== "private-skill-outbox-submitted-v1" || parsed.state !== "submitted" || typeof parsed.candidate_digest !== "string" || !/^sha256:[a-f0-9]{64}$/u.test(parsed.candidate_digest) || typeof parsed.remote_status !== "string") {
@@ -67438,7 +68806,7 @@ function parseSubmittedRecord2(value) {
 }
 function parseDeletionTombstone2(value) {
   const parsed = JSON.parse(value);
-  if (!isRecord4(parsed)) {
+  if (!isRecord5(parsed)) {
     throw new Error("Private skill deletion marker is invalid.");
   }
   assertPrivateSkillDraftId(String(parsed.draft_id ?? ""));
@@ -67459,38 +68827,40 @@ function parseDeletionTombstone2(value) {
   };
 }
 function readPrivateSkillTerminalRecords(directory, entries) {
-  const deleted = /* @__PURE__ */ new Map();
-  const submitted = /* @__PURE__ */ new Map();
-  for (const entry of entries) {
-    if (!entry.endsWith(".deleted.json")) continue;
-    const draftId = privateSkillDraftIdFromCanonicalEntry(entry);
-    try {
-      const record4 = parseDeletionTombstone2(
-        readSecureLocalText(join4(directory, entry), {
-          maxBytes: PRIVATE_SKILL_MARKER_MAX_BYTES
-        })
-      );
-      if (record4.draft_id === draftId) deleted.set(draftId, record4);
-    } catch {
-      continue;
+  return withWindowsPrivateDirectoryReadOperation(directory, entries, () => {
+    const deleted = /* @__PURE__ */ new Map();
+    const submitted = /* @__PURE__ */ new Map();
+    for (const entry of entries) {
+      if (!entry.endsWith(".deleted.json")) continue;
+      const draftId = privateSkillDraftIdFromCanonicalEntry(entry);
+      try {
+        const record4 = parseDeletionTombstone2(
+          readSecureLocalText(join7(directory, entry), {
+            maxBytes: PRIVATE_SKILL_MARKER_MAX_BYTES
+          })
+        );
+        if (record4.draft_id === draftId) deleted.set(draftId, record4);
+      } catch {
+        continue;
+      }
     }
-  }
-  for (const entry of entries) {
-    if (!entry.endsWith(".submitted.json")) continue;
-    const draftId = privateSkillDraftIdFromCanonicalEntry(entry);
-    if (deleted.has(draftId)) continue;
-    try {
-      const record4 = parseSubmittedRecord2(
-        readSecureLocalText(join4(directory, entry), {
-          maxBytes: PRIVATE_SKILL_MARKER_MAX_BYTES
-        })
-      );
-      if (record4.draft_id === draftId) submitted.set(draftId, record4);
-    } catch {
-      continue;
+    for (const entry of entries) {
+      if (!entry.endsWith(".submitted.json")) continue;
+      const draftId = privateSkillDraftIdFromCanonicalEntry(entry);
+      if (deleted.has(draftId)) continue;
+      try {
+        const record4 = parseSubmittedRecord2(
+          readSecureLocalText(join7(directory, entry), {
+            maxBytes: PRIVATE_SKILL_MARKER_MAX_BYTES
+          })
+        );
+        if (record4.draft_id === draftId) submitted.set(draftId, record4);
+      } catch {
+        continue;
+      }
     }
-  }
-  return { submitted, deleted };
+    return { submitted, deleted };
+  });
 }
 function readPrivateSkillTerminalState(directory, draftId) {
   try {
@@ -67533,7 +68903,7 @@ async function reconcilePrivateSkillTerminalRecords(directory, entries, now) {
       privateSkillSubmittedPath(directory, draftId)
     );
     if (cleanupConfirmed && submittedRemoved && Date.parse(record4.expires_at) <= now.getTime()) {
-      await unlink3(privateSkillDeletionPath(directory, draftId)).catch(
+      await unlink4(privateSkillDeletionPath(directory, draftId)).catch(
         (error) => {
           if (!isMissingError3(error)) throw error;
         }
@@ -67545,7 +68915,7 @@ async function reconcilePrivateSkillTerminalRecords(directory, entries, now) {
       substantive.get(draftId) ?? []
     );
     if (cleanupConfirmed && Date.parse(record4.expires_at) <= now.getTime()) {
-      await unlink3(privateSkillSubmittedPath(directory, draftId)).catch(
+      await unlink4(privateSkillSubmittedPath(directory, draftId)).catch(
         (error) => {
           if (!isMissingError3(error)) throw error;
         }
@@ -67560,10 +68930,10 @@ async function privateSkillSubstantiveEntriesByDraft(directory, includeQuarantin
   };
   for (const entry of await readdir2(directory, { withFileTypes: true })) {
     const match = entry.name.match(/^(psd_[A-Za-z0-9_-]{8,96})\.json(?:\.|$)/u);
-    if (match) add(match[1], join4(directory, entry.name));
+    if (match) add(match[1], join7(directory, entry.name));
   }
   if (!includeQuarantine) return byDraft;
-  const quarantine = join4(directory, "quarantine");
+  const quarantine = join7(directory, "quarantine");
   for (const entry of await readdir2(quarantine, {
     withFileTypes: true
   }).catch((error) => {
@@ -67571,7 +68941,7 @@ async function privateSkillSubstantiveEntriesByDraft(directory, includeQuarantin
     throw error;
   })) {
     const match = entry.name.match(/^(psd_[A-Za-z0-9_-]{8,96})\./u);
-    if (match) add(match[1], join4(quarantine, entry.name));
+    if (match) add(match[1], join7(quarantine, entry.name));
   }
   return byDraft;
 }
@@ -67583,16 +68953,16 @@ async function removePrivateSkillTerminalArtifacts(paths) {
   return confirmed;
 }
 async function removePrivateSkillTerminalArtifact(path) {
-  const metadata = await lstat3(path).catch((error) => {
+  const metadata2 = await lstat4(path).catch((error) => {
     if (isMissingError3(error)) return null;
     return false;
   });
-  if (metadata === null) return true;
-  if (metadata === false || metadata.isDirectory() && !metadata.isSymbolicLink()) {
+  if (metadata2 === null) return true;
+  if (metadata2 === false || metadata2.isDirectory() && !metadata2.isSymbolicLink()) {
     return false;
   }
   try {
-    await unlink3(path);
+    await unlink4(path);
     return true;
   } catch (error) {
     return isMissingError3(error);
@@ -67629,71 +68999,74 @@ async function privateSkillRecoveryItems(options = {}) {
       options.now ?? /* @__PURE__ */ new Date()
     );
     const items = [];
-    for (const entry of await readdir2(outbox.directory, {
+    const inventoryEntries = await readdir2(outbox.directory, {
       withFileTypes: true
-    })) {
-      const match = entry.name.match(
-        /^(psd_[A-Za-z0-9_-]{8,96})(?:\.submitted|\.deleted)?\.json$/u
-      );
-      if (!match) continue;
-      const draftId = match[1];
-      if (entry.isSymbolicLink() || !entry.isFile()) {
-        items.push(privateSkillRecoveryItem(draftId, "unsafe_canonical_entry"));
-        continue;
-      }
-      try {
-        await validatePrivateSkillCanonicalPath(
-          join4(outbox.directory, entry.name),
-          entry.name,
-          outbox.encryption
+    });
+    return withWindowsPrivateDirectoryReadOperation(outbox.directory, process.platform === "win32" ? inventoryEntries.map((entry) => entry.name) : [], async () => {
+      for (const entry of inventoryEntries) {
+        const match = entry.name.match(
+          /^(psd_[A-Za-z0-9_-]{8,96})(?:\.submitted|\.deleted)?\.json$/u
         );
-      } catch (error) {
-        if (isPrivateOutboxKeyAccessError(error)) {
-          items.push(
-            privateSkillRecoveryItem(draftId, "undecryptable_entry", error)
-          );
+        if (!match) continue;
+        const draftId = match[1];
+        if (entry.isSymbolicLink() || !entry.isFile()) {
+          items.push(privateSkillRecoveryItem(draftId, "unsafe_canonical_entry"));
           continue;
         }
-        if (error instanceof PrivateOutboxStorageError) throw error;
+        try {
+          await validatePrivateSkillCanonicalPath(
+            join7(outbox.directory, entry.name),
+            entry.name,
+            outbox.encryption
+          );
+        } catch (error) {
+          if (isPrivateOutboxKeyAccessError(error)) {
+            items.push(
+              privateSkillRecoveryItem(draftId, "undecryptable_entry", error)
+            );
+            continue;
+          }
+          if (error instanceof PrivateOutboxStorageError) throw error;
+          items.push(
+            privateSkillRecoveryItem(
+              draftId,
+              error instanceof PrivateOutboxDecryptionError ? "undecryptable_entry" : "invalid_canonical_entry"
+            )
+          );
+        }
+      }
+      const quarantine = join7(outbox.directory, "quarantine");
+      const quarantined = await readdir2(quarantine, {
+        withFileTypes: true
+      }).catch((error) => {
+        if (isMissingError3(error)) return [];
+        throw error;
+      });
+      for (const entry of quarantined) {
+        const match = entry.name.match(/^(psd_[A-Za-z0-9_-]{8,96})\./u);
+        if (!match) continue;
         items.push(
           privateSkillRecoveryItem(
-            draftId,
-            error instanceof PrivateOutboxDecryptionError ? "undecryptable_entry" : "invalid_canonical_entry"
+            match[1],
+            entry.name.includes("conflict") ? "temporary_write_conflict" : "temporary_write_invalid"
           )
         );
       }
-    }
-    const quarantine = join4(outbox.directory, "quarantine");
-    const quarantined = await readdir2(quarantine, {
-      withFileTypes: true
-    }).catch((error) => {
-      if (isMissingError3(error)) return [];
-      throw error;
+      const lockQuarantine = join7(quarantine, "locks");
+      for (const entry of await readdir2(lockQuarantine, {
+        withFileTypes: true
+      }).catch((error) => {
+        if (isMissingError3(error)) return [];
+        throw error;
+      })) {
+        const match = entry.name.match(/^(psd_recovery_[a-f0-9]{24})\./u);
+        if (!match) continue;
+        items.push(
+          privateSkillRecoveryItem(match[1], "malformed_lock_artifact")
+        );
+      }
+      return deduplicateRecoveryItems(items);
     });
-    for (const entry of quarantined) {
-      const match = entry.name.match(/^(psd_[A-Za-z0-9_-]{8,96})\./u);
-      if (!match) continue;
-      items.push(
-        privateSkillRecoveryItem(
-          match[1],
-          entry.name.includes("conflict") ? "temporary_write_conflict" : "temporary_write_invalid"
-        )
-      );
-    }
-    const lockQuarantine = join4(quarantine, "locks");
-    for (const entry of await readdir2(lockQuarantine, {
-      withFileTypes: true
-    }).catch((error) => {
-      if (isMissingError3(error)) return [];
-      throw error;
-    })) {
-      const match = entry.name.match(/^(psd_recovery_[a-f0-9]{24})\./u);
-      if (!match) continue;
-      items.push(
-        privateSkillRecoveryItem(match[1], "malformed_lock_artifact")
-      );
-    }
-    return deduplicateRecoveryItems(items);
   });
 }
 function privateSkillRecoveryItem(draftId, reasonCode, storageError) {
@@ -67723,61 +69096,83 @@ function deduplicateRecoveryItems(items) {
 }
 async function reconcilePrivateSkillTemporaryWrites(directory, encryption) {
   const groups = /* @__PURE__ */ new Map();
-  for (const entry of await readdir2(directory, { withFileTypes: true })) {
-    if (/^\.capture-capacity\.json\.\d+\.[a-f0-9]{16}\.tmp$/u.test(entry.name) && entry.isFile()) {
-      await unlink3(join4(directory, entry.name));
-      continue;
+  const inventoryEntries = await readdir2(directory, { withFileTypes: true });
+  const inventoryNames = process.platform === "win32" ? inventoryEntries.filter((entry) => !entry.isDirectory() && /^(psd_[A-Za-z0-9_-]{8,96}(?:\.submitted|\.deleted)?\.json)\.\d+\.[a-f0-9]{16}\.tmp$/u.test(entry.name)).map((entry) => entry.name) : [];
+  return withWindowsPrivateDirectoryReadOperation(directory, inventoryNames, async () => {
+    for (const entry of inventoryEntries) {
+      if (/^\.capture-capacity\.json\.\d+\.[a-f0-9]{16}\.tmp$/u.test(entry.name) && entry.isFile()) {
+        await unlink4(join7(directory, entry.name));
+        continue;
+      }
+      const match = entry.name.match(
+        /^(psd_[A-Za-z0-9_-]{8,96}(?:\.submitted|\.deleted)?\.json)\.\d+\.[a-f0-9]{16}\.tmp$/u
+      );
+      if (!match || entry.isDirectory()) continue;
+      const target = match[1];
+      groups.set(target, [...groups.get(target) ?? [], entry.name]);
     }
-    const match = entry.name.match(
-      /^(psd_[A-Za-z0-9_-]{8,96}(?:\.submitted|\.deleted)?\.json)\.\d+\.[a-f0-9]{16}\.tmp$/u
-    );
-    if (!match || entry.isDirectory()) continue;
-    const target = match[1];
-    groups.set(target, [...groups.get(target) ?? [], entry.name]);
-  }
-  for (const [target, names] of groups) {
-    const targetPath = join4(directory, target);
-    const targetMetadata = await lstat3(targetPath).catch((error) => {
-      if (isMissingError3(error)) return null;
-      throw error;
-    });
-    const temporaryValues = [];
-    for (const name of names) {
-      const path = join4(directory, name);
-      try {
-        await validatePrivateSkillCanonicalPath(path, target, encryption);
-        temporaryValues.push({
-          name,
-          value: readSecureLocalText(path, {
+    for (const [target, names] of groups) {
+      const targetPath = join7(directory, target);
+      const targetMetadata = await lstat4(targetPath).catch((error) => {
+        if (isMissingError3(error)) return null;
+        throw error;
+      });
+      const temporaryValues = [];
+      for (const name of names) {
+        const path = join7(directory, name);
+        try {
+          await validatePrivateSkillCanonicalPath(path, target, encryption);
+          temporaryValues.push({
+            name,
+            value: readSecureLocalText(path, {
+              maxBytes: privateSkillCanonicalMaxBytes(target)
+            })
+          });
+        } catch (error) {
+          if (isPrivateOutboxKeyAccessError(error)) continue;
+          if (error instanceof PrivateOutboxStorageError) throw error;
+          if (error instanceof PrivateOutboxDecryptionError) continue;
+          await quarantinePrivateSkillTemporary(
+            directory,
+            target,
+            name,
+            "invalid"
+          );
+        }
+      }
+      if (temporaryValues.length === 0) continue;
+      if (targetMetadata) {
+        let targetValue = null;
+        try {
+          targetValue = readSecureLocalText(targetPath, {
             maxBytes: privateSkillCanonicalMaxBytes(target)
-          })
-        });
-      } catch (error) {
-        if (isPrivateOutboxKeyAccessError(error)) continue;
-        if (error instanceof PrivateOutboxStorageError) throw error;
-        if (error instanceof PrivateOutboxDecryptionError) continue;
-        await quarantinePrivateSkillTemporary(
-          directory,
-          target,
-          name,
-          "invalid"
-        );
+          });
+        } catch {
+          targetValue = null;
+        }
+        for (const temporary of temporaryValues) {
+          if (targetValue !== null && temporary.value === targetValue) {
+            await unlink4(join7(directory, temporary.name));
+          } else {
+            await quarantinePrivateSkillTemporary(
+              directory,
+              target,
+              temporary.name,
+              "conflict"
+            );
+          }
+        }
+        continue;
       }
-    }
-    if (temporaryValues.length === 0) continue;
-    if (targetMetadata) {
-      let targetValue = null;
-      try {
-        targetValue = readSecureLocalText(targetPath, {
-          maxBytes: privateSkillCanonicalMaxBytes(target)
-        });
-      } catch {
-        targetValue = null;
-      }
-      for (const temporary of temporaryValues) {
-        if (targetValue !== null && temporary.value === targetValue) {
-          await unlink3(join4(directory, temporary.name));
-        } else {
+      const first = temporaryValues[0];
+      if (temporaryValues.every((item) => item.value === first.value)) {
+        await rename4(join7(directory, first.name), targetPath);
+        if (process.platform !== "win32") await chmod3(targetPath, 384);
+        for (const duplicate of temporaryValues.slice(1)) {
+          await unlink4(join7(directory, duplicate.name));
+        }
+      } else {
+        for (const temporary of temporaryValues) {
           await quarantinePrivateSkillTemporary(
             directory,
             target,
@@ -67786,26 +69181,8 @@ async function reconcilePrivateSkillTemporaryWrites(directory, encryption) {
           );
         }
       }
-      continue;
     }
-    const first = temporaryValues[0];
-    if (temporaryValues.every((item) => item.value === first.value)) {
-      await rename3(join4(directory, first.name), targetPath);
-      await chmod3(targetPath, 384);
-      for (const duplicate of temporaryValues.slice(1)) {
-        await unlink3(join4(directory, duplicate.name));
-      }
-    } else {
-      for (const temporary of temporaryValues) {
-        await quarantinePrivateSkillTemporary(
-          directory,
-          target,
-          temporary.name,
-          "conflict"
-        );
-      }
-    }
-  }
+  });
 }
 async function validatePrivateSkillCanonicalPath(path, targetName, encryption) {
   const draftId = targetName.match(/^(psd_[A-Za-z0-9_-]{8,96})/u)?.[1];
@@ -67831,13 +69208,13 @@ function privateSkillCanonicalMaxBytes(targetName) {
   return targetName.endsWith(".json") && !targetName.endsWith(".submitted.json") && !targetName.endsWith(".deleted.json") ? PRIVATE_SKILL_DRAFT_MAX_BYTES : PRIVATE_SKILL_MARKER_MAX_BYTES;
 }
 async function quarantinePrivateSkillTemporary(directory, target, temporaryName, reason) {
-  const quarantine = join4(directory, "quarantine");
+  const quarantine = join7(directory, "quarantine");
   await ensurePrivateDirectory(quarantine);
-  await rename3(
-    join4(directory, temporaryName),
-    join4(
+  await rename4(
+    join7(directory, temporaryName),
+    join7(
       quarantine,
-      `${target.replace(/\.json$/u, "")}.${reason}.${randomBytes6(8).toString("hex")}.retained`
+      `${target.replace(/\.json$/u, "")}.${reason}.${randomBytes7(8).toString("hex")}.retained`
     )
   );
 }
@@ -67852,18 +69229,18 @@ async function retainedPrivateSkillArtifactStats(directory) {
     for (const entry of await readdir2(path, { withFileTypes: true })) {
       if (entry.name === `.${PRIVATE_SKILL_OUTBOX_LOCK_NAMESPACE}.lock`)
         continue;
-      const child = join4(path, entry.name);
-      const metadata = await lstat3(child).catch((error) => {
+      const child = join7(path, entry.name);
+      const metadata2 = await lstat4(child).catch((error) => {
         if (isMissingError3(error)) return null;
         throw error;
       });
-      if (!metadata) continue;
+      if (!metadata2) continue;
       if (entry.isDirectory() && !entry.isSymbolicLink()) {
         await visit(child, quarantined || entry.name === "quarantine");
         continue;
       }
-      totalBytes += metadata.size;
-      if (quarantined) quarantinedBytes += metadata.size;
+      totalBytes += metadata2.size;
+      if (quarantined) quarantinedBytes += metadata2.size;
       if (entry.name.endsWith(".tmp")) temporaryFiles += 1;
     }
   };
@@ -67873,7 +69250,7 @@ async function retainedPrivateSkillArtifactStats(directory) {
 function readPrivateSkillCapacityRejection(directory) {
   try {
     const parsed = JSON.parse(
-      readSecureLocalText(join4(directory, PRIVATE_SKILL_CAPACITY_STATE_FILE), {
+      readSecureLocalText(join7(directory, PRIVATE_SKILL_CAPACITY_STATE_FILE), {
         maxBytes: PRIVATE_SKILL_CAPACITY_STATE_MAX_BYTES
       })
     );
@@ -67884,7 +69261,7 @@ function readPrivateSkillCapacityRejection(directory) {
 }
 async function recordPrivateSkillCapacityRejection(directory, rejectedCaptureBytes) {
   await atomicWritePrivateText(
-    join4(directory, PRIVATE_SKILL_CAPACITY_STATE_FILE),
+    join7(directory, PRIVATE_SKILL_CAPACITY_STATE_FILE),
     `${canonicalJson({
       version: "private-outbox-capacity-v1",
       rejected_capture_bytes: rejectedCaptureBytes
@@ -67893,19 +69270,19 @@ async function recordPrivateSkillCapacityRejection(directory, rejectedCaptureByt
   );
 }
 async function removeCanonicalPrivateSkillEntry(path) {
-  const metadata = await lstat3(path).catch((error) => {
+  const metadata2 = await lstat4(path).catch((error) => {
     if (isMissingError3(error)) return null;
     throw error;
   });
-  if (!metadata) return;
-  if (metadata.isDirectory() && !metadata.isSymbolicLink()) {
+  if (!metadata2) return;
+  if (metadata2.isDirectory() && !metadata2.isSymbolicLink()) {
     await rm2(path, { recursive: true, force: true });
     return;
   }
-  await unlink3(path);
+  await unlink4(path);
 }
 async function privateSkillQuarantineEntriesForDraft(directory, draftId) {
-  const quarantine = join4(directory, "quarantine");
+  const quarantine = join7(directory, "quarantine");
   const entries = await readdir2(quarantine, { withFileTypes: true }).catch(
     (error) => {
       if (isMissingError3(error)) return [];
@@ -67914,8 +69291,8 @@ async function privateSkillQuarantineEntriesForDraft(directory, draftId) {
   );
   const matches = entries.filter(
     (entry) => entry.name.startsWith(`${draftId}.`) && (entry.isFile() || entry.isDirectory() || entry.isSymbolicLink())
-  ).map((entry) => join4(quarantine, entry.name));
-  const locks = join4(quarantine, "locks");
+  ).map((entry) => join7(quarantine, entry.name));
+  const locks = join7(quarantine, "locks");
   const lockEntries = await readdir2(locks, { withFileTypes: true }).catch(
     (error) => {
       if (isMissingError3(error)) return [];
@@ -67926,7 +69303,7 @@ async function privateSkillQuarantineEntriesForDraft(directory, draftId) {
     ...matches,
     ...lockEntries.filter(
       (entry) => entry.name.startsWith(`${draftId}.`) && (entry.isFile() || entry.isDirectory() || entry.isSymbolicLink())
-    ).map((entry) => join4(locks, entry.name))
+    ).map((entry) => join7(locks, entry.name))
   ];
 }
 async function managedPrivateSkillOutboxEntries(directory) {
@@ -67970,25 +69347,25 @@ async function atomicWritePrivateJson(path, value) {
   await atomicWritePrivateText(path, encoded);
 }
 async function atomicWritePrivateText(path, value, beforePublish) {
-  await ensurePrivateDirectory(dirname4(path));
-  const temporary = `${path}.${process.pid}.${randomBytes6(8).toString("hex")}.tmp`;
+  await ensurePrivateDirectory(dirname7(path));
+  const temporary = `${path}.${process.pid}.${randomBytes7(8).toString("hex")}.tmp`;
   let handle = null;
   try {
-    handle = await open3(temporary, "wx", 384);
+    handle = process.platform === "win32" ? await openWindowsPrivateFile(temporary) : await open5(temporary, "wx", 384);
     await handle.writeFile(value, "utf8");
     await handle.sync();
     await handle.close();
     handle = null;
-    await chmod3(temporary, 384);
+    if (process.platform !== "win32") await chmod3(temporary, 384);
     beforePublish?.();
-    await rename3(temporary, path);
-    await chmod3(path, 384);
+    await rename4(temporary, path);
+    if (process.platform !== "win32") await chmod3(path, 384);
   } catch (error) {
     if (handle !== null) {
       await handle.close().catch(() => {
       });
     }
-    await unlink3(temporary).catch(() => {
+    await unlink4(temporary).catch(() => {
     });
     throw error;
   }
@@ -68020,16 +69397,16 @@ async function withPrivateSkillDraftLock(draftId, operation) {
   }
 }
 function privateSkillDraftPath(directory, draftId) {
-  return join4(directory, `${draftId}.json`);
+  return join7(directory, `${draftId}.json`);
 }
 function privateSkillSubmittedPath(directory, draftId) {
-  return join4(directory, `${draftId}.submitted.json`);
+  return join7(directory, `${draftId}.submitted.json`);
 }
 function privateSkillDeletionPath(directory, draftId) {
-  return join4(directory, `${draftId}.deleted.json`);
+  return join7(directory, `${draftId}.deleted.json`);
 }
 function privateSkillDestinationAudiencePath(directory) {
-  return join4(directory, PRIVATE_SKILL_DESTINATION_AUDIENCES_FILE);
+  return join7(directory, PRIVATE_SKILL_DESTINATION_AUDIENCES_FILE);
 }
 function assertPrivateSkillDraftId(value) {
   if (!/^psd_[A-Za-z0-9_-]{8,96}$/u.test(value)) {
@@ -68237,7 +69614,7 @@ async function readPrivateSkillDestinationAudienceCache(directory) {
     throw error;
   }
   const value = JSON.parse(raw);
-  if (!isRecord4(value) || value.version !== PRIVATE_SKILL_DESTINATION_AUDIENCES_VERSION) {
+  if (!isRecord5(value) || value.version !== PRIVATE_SKILL_DESTINATION_AUDIENCES_VERSION) {
     throw new Error("Private skill destination audience history is invalid.");
   }
   if (!Array.isArray(value.entries) || value.entries.length > PRIVATE_SKILL_DESTINATION_AUDIENCES_MAX_ENTRIES) {
@@ -68245,7 +69622,7 @@ async function readPrivateSkillDestinationAudienceCache(directory) {
   }
   const seen = /* @__PURE__ */ new Set();
   const entries = value.entries.map((entry) => {
-    if (!isRecord4(entry)) {
+    if (!isRecord5(entry)) {
       throw new Error("Private skill destination audience entry is invalid.");
     }
     const parsed = {
@@ -68263,11 +69640,11 @@ async function readPrivateSkillDestinationAudienceCache(directory) {
       ),
       verified_at: requiredDate(entry.verified_at, "destination verified at")
     };
-    const key = `${parsed.api_base_sha256}:${parsed.credential_sha256}`;
-    if (seen.has(key)) {
+    const key2 = `${parsed.api_base_sha256}:${parsed.credential_sha256}`;
+    if (seen.has(key2)) {
       throw new Error("Private skill destination audience history is invalid.");
     }
-    seen.add(key);
+    seen.add(key2);
     return parsed;
   });
   return { version: PRIVATE_SKILL_DESTINATION_AUDIENCES_VERSION, entries };
@@ -68304,11 +69681,11 @@ function boundedStatus(value) {
   const normalized2 = value.trim();
   return normalized2 && normalized2.length <= 80 ? normalized2 : "accepted";
 }
-function isRecord4(value) {
+function isRecord5(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 function isMissingError3(error) {
-  return isRecord4(error) && error.code === "ENOENT";
+  return isRecord5(error) && error.code === "ENOENT";
 }
 
 // src/private-skill-recovery-context.ts
@@ -68333,7 +69710,7 @@ var unavailable2 = Object.freeze({ status: "context_unavailable" });
 function inspectRoot(value) {
   try {
     const result = inspectBoundedPrivateLearningRoot(value);
-    return isRecord5(result) ? result : null;
+    return isRecord6(result) ? result : null;
   } catch {
     return null;
   }
@@ -68352,14 +69729,14 @@ function independentlyUnchanged2(projection) {
   return unchangedProjection(inspectRoot(projection), projection);
 }
 function parseRecoveryInstructions(value, hasDomain) {
-  if (!isRecord5(value)) return null;
+  if (!isRecord6(value)) return null;
   const expected = /* @__PURE__ */ new Set([
     "title",
     "description",
     ...hasDomain ? ["domain_slug"] : [],
     "proposed_skill_md"
   ]);
-  if (Object.keys(value).length !== expected.size || Object.keys(value).some((key) => !expected.has(key)) || typeof value.title !== "string" || typeof value.description !== "string" || hasDomain && value.domain_slug !== null && typeof value.domain_slug !== "string" || typeof value.proposed_skill_md !== "string") {
+  if (Object.keys(value).length !== expected.size || Object.keys(value).some((key2) => !expected.has(key2)) || typeof value.title !== "string" || typeof value.description !== "string" || hasDomain && value.domain_slug !== null && typeof value.domain_slug !== "string" || typeof value.proposed_skill_md !== "string") {
     return null;
   }
   return Object.freeze({
@@ -68382,25 +69759,25 @@ function containsOmissionMarker(value) {
     (field) => typeof field === "string" && field.includes(PRIVATE_SKILL_RECOVERY_OMISSION_MARKER)
   );
 }
-function isRecord5(value) {
+function isRecord6(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function createPrivateSkillRecoveryContext(candidate) {
-  const instructions = Object.freeze({
+  const instructions2 = Object.freeze({
     title: candidate.title,
     description: candidate.description,
     ...candidate.domain_slug === void 0 ? {} : { domain_slug: candidate.domain_slug },
     proposed_skill_md: candidate.proposed_skill_md
   });
-  const initial = inspectRoot(instructions);
+  const initial = inspectRoot(instructions2);
   let projected = null;
   let sourceContentOmitted = false;
   if (initial?.status === "complete" && initial.outcome === "unchanged") {
-    projected = unchangedProjection(initial, instructions);
+    projected = unchangedProjection(initial, instructions2);
   } else if (initial?.status === "incomplete" && initial.outcome === "positive_recovery_need" && initial.safe_context?.partial === true) {
     const safeContext = parseRecoveryInstructions(
       initial.safe_context.value,
-      Object.hasOwn(instructions, "domain_slug")
+      Object.hasOwn(instructions2, "domain_slug")
     );
     if (safeContext && containsOmissionMarker(safeContext)) {
       projected = safeContext;
@@ -69215,24 +70592,25 @@ function publicOutboxSummary(summary) {
 }
 
 // ../codex-plugin/scripts/feedback-disposition.mjs
-import { createHash as createHash5, randomBytes as randomBytes7 } from "node:crypto";
+import { createHash as createHash5, randomBytes as randomBytes8 } from "node:crypto";
 import {
   chmodSync,
-  closeSync as closeSync3,
-  constants as constants5,
-  fstatSync as fstatSync3,
+  closeSync as closeSync5,
+  constants as constants7,
+  fstatSync as fstatSync5,
   fsyncSync,
-  lstatSync as lstatSync3,
+  lstatSync as lstatSync5,
   mkdirSync,
-  openSync as openSync3,
+  openSync as openSync5,
   opendirSync as opendirSync2,
   readSync as readSync3,
+  readdirSync as readdirSync2,
   renameSync,
   rmSync,
   writeFileSync
 } from "node:fs";
-import { homedir as homedir4, tmpdir as tmpdir2, userInfo as userInfo2 } from "node:os";
-import { dirname as dirname5, join as join5 } from "node:path";
+import { homedir as homedir5, tmpdir as tmpdir3, userInfo as userInfo2, platform as platform2 } from "node:os";
+import { dirname as dirname8, join as join8 } from "node:path";
 var FEEDBACK_DENIAL_VERSION = "feedback-denial-acknowledgement-v1";
 var FEEDBACK_DENIAL_SUBDIRECTORY = "feedback-denials";
 var FEEDBACK_DENIAL_RETENTION_MS = 14 * 24 * 60 * 60 * 1e3;
@@ -69255,7 +70633,7 @@ function normalizeInput(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
   const keys = Object.keys(input).sort();
   const expectedKeys = input.tool === "submit_feedback" ? ["query_id", "reason", "result_id", "tool"] : ["query_id", "reason", "tool"];
-  if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index]) || !["submit_query_feedback", "submit_feedback"].includes(input.tool) || input.reason !== "host_policy_denied" || !validIdentifier(input.query_id)) {
+  if (keys.length !== expectedKeys.length || keys.some((key2, index) => key2 !== expectedKeys[index]) || !["submit_query_feedback", "submit_feedback"].includes(input.tool) || input.reason !== "host_policy_denied" || !validIdentifier(input.query_id)) {
     return null;
   }
   if (input.tool === "submit_feedback") {
@@ -69292,7 +70670,7 @@ function exactEventDigest(input) {
 function localUsageOwnerId2() {
   const uid = currentUserId2();
   if (uid !== null) return `uid-${uid}`;
-  return `home-${createHash5("sha256").update(homedir4()).digest("hex").slice(0, 16)}`;
+  return `home-${createHash5("sha256").update(homedir5()).digest("hex").slice(0, 16)}`;
 }
 function currentUserId2() {
   try {
@@ -69303,13 +70681,13 @@ function currentUserId2() {
   return null;
 }
 function usageDirectory2(env) {
-  return env?.REMEMBRANCE_USAGE_DIR ? String(env.REMEMBRANCE_USAGE_DIR) : join5(tmpdir2(), `remembrance-usage-${localUsageOwnerId2()}`);
+  return env?.REMEMBRANCE_USAGE_DIR ? String(env.REMEMBRANCE_USAGE_DIR) : join8(tmpdir3(), `remembrance-usage-${localUsageOwnerId2()}`);
 }
 function markerDirectory(env) {
-  return join5(usageDirectory2(env), FEEDBACK_DENIAL_SUBDIRECTORY);
+  return join8(usageDirectory2(env), FEEDBACK_DENIAL_SUBDIRECTORY);
 }
 function markerPath(input, env) {
-  return join5(markerDirectory(env), `${exactEventDigest(input)}.json`);
+  return join8(markerDirectory(env), `${exactEventDigest(input)}.json`);
 }
 function isPosix2() {
   return currentUserId2() !== null;
@@ -69321,15 +70699,19 @@ function assertCurrentOwner(uid) {
   }
 }
 function ensurePrivateDirectory2(path) {
+  if (platform2() === "win32") {
+    ensureWindowsPrivateDirectorySync(path);
+    return;
+  }
   mkdirSync(path, { recursive: true, mode: 448 });
-  const metadata = lstatSync3(path);
-  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+  const metadata2 = lstatSync5(path);
+  if (metadata2.isSymbolicLink() || !metadata2.isDirectory()) {
     throw new Error("Local state is not a regular directory.");
   }
-  assertCurrentOwner(metadata.uid);
-  if (isPosix2() && (metadata.mode & 63) !== 0) {
+  assertCurrentOwner(metadata2.uid);
+  if (isPosix2() && (metadata2.mode & 63) !== 0) {
     chmodSync(path, 448);
-    const repaired = lstatSync3(path);
+    const repaired = lstatSync5(path);
     assertCurrentOwner(repaired.uid);
     if ((repaired.mode & 63) !== 0) {
       throw new Error("Local state directory permissions are not private.");
@@ -69337,21 +70719,32 @@ function ensurePrivateDirectory2(path) {
   }
 }
 function assertPrivateDirectory2(path) {
-  const metadata = lstatSync3(path);
-  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+  if (platform2() === "win32") {
+    const before = lstatSync5(path, { bigint: true });
+    if (before.isSymbolicLink() || !before.isDirectory()) throw new Error("Local state is not a regular directory.");
+    const descriptor = openSync5(path, constants7.O_RDONLY | (constants7.O_NOFOLLOW ?? 0));
+    try {
+      assertWindowsPrivateRead(path, "directory", before, fstatSync5(descriptor, { bigint: true }));
+    } finally {
+      closeSync5(descriptor);
+    }
+    return;
+  }
+  const metadata2 = lstatSync5(path);
+  if (metadata2.isSymbolicLink() || !metadata2.isDirectory()) {
     throw new Error("Local state is not a regular directory.");
   }
-  assertCurrentOwner(metadata.uid);
-  if (isPosix2() && (metadata.mode & 18) !== 0) {
+  assertCurrentOwner(metadata2.uid);
+  if (isPosix2() && (metadata2.mode & 18) !== 0) {
     throw new Error("Local state directory is writable by another user.");
   }
 }
-function assertPrivateMarker(metadata) {
-  if (metadata.isSymbolicLink() || !metadata.isFile() || metadata.size > MAX_FEEDBACK_DENIAL_MARKER_BYTES) {
+function assertPrivateMarker(metadata2) {
+  if (metadata2.isSymbolicLink() || !metadata2.isFile() || metadata2.size > MAX_FEEDBACK_DENIAL_MARKER_BYTES) {
     throw new Error("Local state marker is unsafe.");
   }
-  assertCurrentOwner(metadata.uid);
-  if (isPosix2() && (metadata.mode & 63) !== 0) {
+  assertCurrentOwner(metadata2.uid);
+  if (isPosix2() && (metadata2.mode & 63) !== 0) {
     throw new Error("Local state marker permissions are not private.");
   }
 }
@@ -69373,17 +70766,27 @@ function readBoundedDescriptor2(descriptor) {
   return Buffer.concat(chunks, total).toString("utf8");
 }
 function readMarker(path, expectedDigest) {
-  assertPrivateDirectory2(dirname5(dirname5(path)));
-  assertPrivateDirectory2(dirname5(path));
-  const before = lstatSync3(path);
+  if (platform2() === "win32") return withWindowsPrivateReadOperation([
+    { path: dirname8(dirname8(path)), kind: "directory" },
+    { path: dirname8(path), kind: "directory" },
+    { path, kind: "file" }
+  ], () => readMarkerChecked(path, expectedDigest));
+  return readMarkerChecked(path, expectedDigest);
+}
+function readMarkerChecked(path, expectedDigest, validatedMetadata = null) {
+  assertPrivateDirectory2(dirname8(dirname8(path)));
+  assertPrivateDirectory2(dirname8(path));
+  const windows = platform2() === "win32";
+  const before = windows ? lstatSync5(path, { bigint: true }) : lstatSync5(path);
   assertPrivateMarker(before);
-  const descriptor = openSync3(
+  const descriptor = openSync5(
     path,
-    constants5.O_RDONLY | (constants5.O_NOFOLLOW ?? 0)
+    constants7.O_RDONLY | (constants7.O_NOFOLLOW ?? 0)
   );
   try {
-    const opened = fstatSync3(descriptor);
+    const opened = windows ? fstatSync5(descriptor, { bigint: true }) : fstatSync5(descriptor);
     assertPrivateMarker(opened);
+    if (windows) assertWindowsPrivateRead(path, "file", before, opened);
     if (before.dev !== opened.dev || before.ino !== opened.ino) {
       throw new Error("Local state marker changed while opening.");
     }
@@ -69391,9 +70794,62 @@ function readMarker(path, expectedDigest) {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || parsed.version !== FEEDBACK_DENIAL_VERSION || parsed.event_digest !== `sha256:${expectedDigest}` || typeof parsed.acknowledged_at !== "string" || typeof parsed.expires_at !== "string" || !Number.isFinite(Date.parse(parsed.acknowledged_at)) || !Number.isFinite(Date.parse(parsed.expires_at))) {
       throw new Error("Local state marker is malformed.");
     }
+    if (validatedMetadata && windows) {
+      const after = fstatSync5(descriptor, { bigint: true });
+      if (sameMarkerTuple(opened, after) && opened.nlink === 1n) validatedMetadata(markerTuple(opened));
+    }
     return parsed;
   } finally {
-    closeSync3(descriptor);
+    closeSync5(descriptor);
+  }
+}
+var MARKER_IDENTITY_FIELDS = ["dev", "ino", "mode", "uid", "gid", "size", "nlink", "mtimeNs", "ctimeNs", "birthtimeNs"];
+function markerTuple(metadata2) {
+  return Object.freeze(Object.fromEntries(MARKER_IDENTITY_FIELDS.map((field) => [field, metadata2[field]])));
+}
+function sameMarkerTuple(first, second) {
+  return MARKER_IDENTITY_FIELDS.every((field) => typeof first[field] === "bigint" && first[field] === second[field]);
+}
+function ownedExpiryCandidate(metadata2, expected) {
+  return metadata2.isFile() && !metadata2.isSymbolicLink() && metadata2.nlink === 1n && sameMarkerTuple(expected, metadata2);
+}
+function flushWindowsExpiredMarkers(directory, expectedDirectory, candidates) {
+  if (candidates.length === 0) return 0;
+  const before = lstatSync5(directory, { bigint: true });
+  const parent = openSync5(directory, constants7.O_RDONLY | (constants7.O_NOFOLLOW ?? 0));
+  let removed = 0;
+  try {
+    const opened = fstatSync5(parent, { bigint: true });
+    assertWindowsPrivateRead(directory, "directory", before, opened);
+    const checkParent = () => {
+      const current = lstatSync5(directory, { bigint: true }), held = fstatSync5(parent, { bigint: true });
+      if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== expectedDirectory.dev || current.ino !== expectedDirectory.ino || held.dev !== current.dev || held.ino !== current.ino) throw new Error("Local acknowledgement parent changed.");
+    };
+    checkParent();
+    for (const candidate of candidates) {
+      checkParent();
+      let descriptor;
+      try {
+        if (!ownedExpiryCandidate(lstatSync5(candidate.path, { bigint: true }), candidate.metadata)) continue;
+        descriptor = openSync5(candidate.path, constants7.O_RDONLY | (constants7.O_NOFOLLOW ?? 0));
+        if (!ownedExpiryCandidate(fstatSync5(descriptor, { bigint: true }), candidate.metadata)) continue;
+      } catch {
+        continue;
+      } finally {
+        if (descriptor !== void 0) closeSync5(descriptor);
+      }
+      checkParent();
+      try {
+        if (!ownedExpiryCandidate(lstatSync5(candidate.path, { bigint: true }), candidate.metadata)) continue;
+        rmSync(candidate.path, { force: true });
+        removed += 1;
+      } catch {
+      }
+    }
+    checkParent();
+    return removed;
+  } finally {
+    closeSync5(parent);
   }
 }
 function removeExpiredMarker(path, marker, now) {
@@ -69401,26 +70857,46 @@ function removeExpiredMarker(path, marker, now) {
   rmSync(path, { force: true });
   return true;
 }
+function windowsPrivateDirectorySnapshot(directory) {
+  if (platform2() !== "win32") return [];
+  try {
+    return readdirSync2(directory);
+  } catch {
+    return [];
+  }
+}
 function cleanupExpiredMarkers(directory, now) {
+  const windows = platform2() === "win32";
+  const expectedDirectory = windows ? lstatSync5(directory, { bigint: true }) : null;
+  const expired = [];
   const handle = opendirSync2(directory);
   let markerCount = 0;
   let visited = 0;
   try {
-    while (visited <= MAX_FEEDBACK_DENIAL_MARKERS) {
-      const entry = handle.readSync();
-      if (!entry) break;
-      visited += 1;
-      if (!entry.isFile() || !MARKER_NAME_PATTERN.test(entry.name)) continue;
-      markerCount += 1;
-      const digest3 = entry.name.slice(0, -".json".length);
-      const path = join5(directory, entry.name);
-      try {
-        if (removeExpiredMarker(path, readMarker(path, digest3), now)) {
-          markerCount -= 1;
+    withWindowsPrivateReadOperation([{ path: dirname8(directory), kind: "directory" }], () => withWindowsPrivateDirectoryReadOperation(directory, windowsPrivateDirectorySnapshot(directory), () => {
+      while (visited <= MAX_FEEDBACK_DENIAL_MARKERS) {
+        const entry = handle.readSync();
+        if (!entry) break;
+        visited += 1;
+        if (!entry.isFile() || !MARKER_NAME_PATTERN.test(entry.name)) continue;
+        markerCount += 1;
+        const digest3 = entry.name.slice(0, -".json".length);
+        const path = join8(directory, entry.name);
+        try {
+          if (windows) {
+            let metadata2 = null;
+            const marker = readMarkerChecked(path, digest3, (verified) => {
+              metadata2 = verified;
+            });
+            if (Date.parse(marker.expires_at) <= now && metadata2 && expired.length < MAX_FEEDBACK_DENIAL_MARKERS) expired.push({ path, metadata: metadata2 });
+          } else if (removeExpiredMarker(path, readMarkerChecked(path, digest3), now)) {
+            markerCount -= 1;
+          }
+        } catch {
         }
-      } catch {
       }
-    }
+    }));
+    if (windows) markerCount -= flushWindowsExpiredMarkers(directory, expectedDirectory, expired);
     if (visited > MAX_FEEDBACK_DENIAL_MARKERS) {
       throw new Error("Local acknowledgement storage exceeds its entry limit.");
     }
@@ -69432,31 +70908,35 @@ function cleanupExpiredMarkers(directory, now) {
   }
 }
 function writeMarkerAtomically(path, marker) {
-  const temporaryPath = `${path}.${randomBytes7(8).toString("hex")}.tmp`;
-  let descriptor;
+  const temporaryPath = `${path}.${randomBytes8(8).toString("hex")}.tmp`;
+  let descriptor, owned;
   try {
-    descriptor = openSync3(
+    descriptor = platform2() === "win32" ? openWindowsPrivateFileSync(temporaryPath) : openSync5(
       temporaryPath,
-      constants5.O_WRONLY | constants5.O_CREAT | constants5.O_EXCL | (constants5.O_NOFOLLOW ?? 0),
+      constants7.O_WRONLY | constants7.O_CREAT | constants7.O_EXCL | (constants7.O_NOFOLLOW ?? 0),
       384
     );
+    owned = fstatSync5(descriptor, { bigint: true });
     writeFileSync(descriptor, `${JSON.stringify(marker)}
 `, {
       encoding: "utf8"
     });
     fsyncSync(descriptor);
-    closeSync3(descriptor);
+    closeSync5(descriptor);
     descriptor = void 0;
     renameSync(temporaryPath, path);
   } catch (error) {
     if (descriptor !== void 0) {
       try {
-        closeSync3(descriptor);
+        closeSync5(descriptor);
       } catch {
       }
     }
     try {
-      rmSync(temporaryPath, { force: true });
+      if (owned) {
+        const current = lstatSync5(temporaryPath, { bigint: true });
+        if (current.isFile() && !current.isSymbolicLink() && current.dev === owned.dev && current.ino === owned.ino && current.nlink === 1n && current.size === 0n) rmSync(temporaryPath, { force: true });
+      }
     } catch {
     }
     throw error;
@@ -69519,9 +70999,9 @@ function acknowledgeFeedbackDenial(input, env = process.env) {
 }
 
 // src/private-skill-handoff.ts
-import { chmod as chmod4, mkdir as mkdir4, readFile, writeFile } from "node:fs/promises";
-import { homedir as homedir5 } from "node:os";
-import { join as join6 } from "node:path";
+import { chmod as chmod4, lstat as lstat5, mkdir as mkdir5, writeFile } from "node:fs/promises";
+import { homedir as homedir6, platform as platform3 } from "node:os";
+import { join as join9 } from "node:path";
 async function queuePrivateSkillHandoff(rawInput, options = {}) {
   const input = organizationSkillHandoffRequestSchema.parse(rawInput);
   const bundle = buildOrganizationSkillHandoffBundle(
@@ -69529,12 +71009,15 @@ async function queuePrivateSkillHandoff(rawInput, options = {}) {
     options.now
   );
   const outboxDirectory = options.outboxDirectory ?? privateSkillOutboxDirectory2(options.homeDirectory);
-  await mkdir4(outboxDirectory, { recursive: true, mode: 448 });
-  await chmod4(outboxDirectory, 448);
-  const path = join6(outboxDirectory, `${bundle.bundle_id}.json`);
+  if (platform3() === "win32") await ensureWindowsPrivateDirectory(outboxDirectory);
+  else {
+    await mkdir5(outboxDirectory, { recursive: true, mode: 448 });
+    await chmod4(outboxDirectory, 448);
+  }
+  const path = join9(outboxDirectory, `${bundle.bundle_id}.json`);
   const serialized = `${JSON.stringify(bundle, null, 2)}
 `;
-  const writeNewHandoff = options.writeHandoffFile ?? writeFile;
+  const writeNewHandoff = options.writeHandoffFile ?? writePrivateHandoff;
   let alreadyPresent = false;
   try {
     await writeNewHandoff(path, serialized, {
@@ -69546,15 +71029,19 @@ async function queuePrivateSkillHandoff(rawInput, options = {}) {
     if (!isAlreadyExistsError3(error)) {
       throw error;
     }
+    const observed = await lstat5(path);
+    if (!Number.isSafeInteger(observed.size) || observed.size < 0) {
+      throw new Error("The existing private-skill handoff size is unavailable.");
+    }
     const existing = organizationSkillHandoffBundleSchema.parse(
-      JSON.parse(await readFile(path, "utf8"))
+      JSON.parse(readSecureLocalText(path, { maxBytes: observed.size, fatalUtf8: true }))
     );
     if (!sameHandoffPayload(existing, bundle)) {
       throw new Error("The existing private-skill handoff does not match.");
     }
     alreadyPresent = true;
   }
-  await chmod4(path, 384);
+  if (platform3() !== "win32") await chmod4(path, 384);
   const uploadBaseUrl = (options.uploadBaseUrl ?? "https://remembrance.dev").replace(/\/+$/, "");
   return {
     queued: true,
@@ -69567,11 +71054,20 @@ async function queuePrivateSkillHandoff(rawInput, options = {}) {
     next_step: `An organization admin must upload this file at ${uploadBaseUrl}/dashboard/skills/import. Do not claim the skills were submitted before the dashboard returns an import batch receipt.`
   };
 }
+var writePrivateHandoff = async (path, data, options) => {
+  if (platform3() !== "win32") return writeFile(path, data, options);
+  const handle = await openWindowsPrivateFile(path);
+  try {
+    await handle.writeFile(data, options.encoding);
+  } finally {
+    await handle.close();
+  }
+};
 function sameHandoffPayload(existing, expected) {
   return existing.bundle_id === expected.bundle_id && existing.schema_version === expected.schema_version && existing.kind === expected.kind && existing.destination === expected.destination && existing.source_runtime === expected.source_runtime && existing.handoff_reason === expected.handoff_reason && JSON.stringify(existing.skills) === JSON.stringify(expected.skills);
 }
-function privateSkillOutboxDirectory2(homeDirectory = homedir5()) {
-  return join6(homeDirectory, ".local", "state", "remembrance", "outbox");
+function privateSkillOutboxDirectory2(homeDirectory = homedir6()) {
+  return join9(homeDirectory, ".local", "state", "remembrance", "outbox");
 }
 function isAlreadyExistsError3(error) {
   return error instanceof Error && "code" in error && error.code === "EEXIST";
@@ -69651,24 +71147,15 @@ function createLocalPersistenceCapabilities(dependencies = {}) {
 }
 
 // src/admin-control-client.ts
-import { createHash as createHash9, randomBytes as randomBytes11 } from "node:crypto";
-import { unlinkSync as unlinkSync3 } from "node:fs";
-import { dirname as dirname9 } from "node:path";
+import { createHash as createHash8, randomBytes as randomBytes11 } from "node:crypto";
+import { unlinkSync as unlinkSync4 } from "node:fs";
+import { dirname as dirname11 } from "node:path";
 
 // src/admin-control-session-store.ts
-import { createHash as createHash6, randomBytes as randomBytes8 } from "node:crypto";
-import { mkdirSync as mkdirSync2, renameSync as renameSync2, unlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname6, join as join8 } from "node:path";
-
-// src/local-config-path.ts
-import { homedir as homedir6 } from "node:os";
-import { join as join7 } from "node:path";
-function remembranceConfigPath(env = process.env, homeDirectory = homedir6()) {
-  const configRoot = env.REMEMBRANCE_PLUGIN_HOST?.trim().toLowerCase() === "openclaw" ? join7(homeDirectory, ".config") : join7(homeDirectory, ".config");
-  return join7(configRoot, "remembrance", "config.json");
-}
-
-// src/admin-control-session-store.ts
+import { createHash as createHash6, randomBytes as randomBytes9 } from "node:crypto";
+import { closeSync as closeSync6, fstatSync as fstatSync6, lstatSync as lstatSync6, mkdirSync as mkdirSync2, renameSync as renameSync2, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname9, join as join10 } from "node:path";
+import { platform as platform4 } from "node:os";
 var id = external_exports.string().regex(/^aar_[A-Za-z0-9_-]{32}$/);
 var timestamp2 = external_exports.string().datetime();
 var pendingSchema = external_exports.object({
@@ -69693,10 +71180,11 @@ var activeSchema = external_exports.object({
 var stateSchema = external_exports.discriminatedUnion("state", [pendingSchema, activeSchema]);
 function storePath(baseUrl) {
   const digest3 = createHash6("sha256").update(baseUrl).digest("hex");
-  return join8(dirname6(remembranceConfigPath()), "admin-sessions", `${digest3}.json`);
+  return join10(dirname9(remembranceConfigPath()), "admin-sessions", `${digest3}.json`);
 }
 function secureDirectory(path) {
-  mkdirSync2(path, { recursive: true, mode: 448 });
+  if (platform4() === "win32") ensureWindowsPrivateDirectorySync(path);
+  else mkdirSync2(path, { recursive: true, mode: 448 });
   assertSecurePrivateLocalDirectory(path);
 }
 function readState(baseUrl) {
@@ -69716,13 +71204,29 @@ function readState(baseUrl) {
 }
 function saveState(state) {
   const path = storePath(state.base_url);
-  const temporary = `${path}.${randomBytes8(8).toString("hex")}.tmp`;
+  const temporary = `${path}.${randomBytes9(8).toString("hex")}.tmp`;
+  let owned = null;
   try {
-    writeFileSync2(temporary, JSON.stringify(state), { flag: "wx", mode: 384 });
+    if (platform4() === "win32") {
+      const descriptor = openWindowsPrivateFileSync(temporary);
+      try {
+        owned = fstatSync6(descriptor, { bigint: true });
+        writeFileSync2(descriptor, JSON.stringify(state));
+      } finally {
+        closeSync6(descriptor);
+      }
+      const candidate = lstatSync6(temporary, { bigint: true });
+      if (!candidate.isFile() || candidate.isSymbolicLink() || candidate.dev !== owned.dev || candidate.ino !== owned.ino) throw new Error("Administrative credential temporary changed.");
+    } else writeFileSync2(temporary, JSON.stringify(state), { flag: "wx", mode: 384 });
     renameSync2(temporary, path);
   } finally {
     try {
-      unlinkSync(temporary);
+      if (platform4() === "win32") {
+        if (owned) {
+          const current = lstatSync6(temporary, { bigint: true });
+          if (current.isFile() && !current.isSymbolicLink() && current.dev === owned.dev && current.ino === owned.ino) unlinkSync2(temporary);
+        }
+      } else unlinkSync2(temporary);
     } catch {
     }
   }
@@ -69755,63 +71259,579 @@ function getLocalAdminSession(baseUrl) {
 }
 
 // src/admin-control-vault.ts
-import { createHash as createHash8, randomBytes as randomBytes10 } from "node:crypto";
-import { mkdirSync as mkdirSync4, renameSync as renameSync4, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
-import { dirname as dirname8, join as join13 } from "node:path";
+import { createHash as createHash7, randomBytes as randomBytes10 } from "node:crypto";
+import { closeSync as closeSync7, fstatSync as fstatSync7, lstatSync as lstatSync7, mkdirSync as mkdirSync3, renameSync as renameSync3, unlinkSync as unlinkSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname10, join as join11 } from "node:path";
+import { platform as platform5 } from "node:os";
+var ADMIN_CREDENTIAL_ISSUANCE_OPERATIONS = Object.freeze(["api_keys.create", "agents.member_link.create"]);
+var recordSchema = external_exports.object({
+  version: external_exports.literal("admin-credential-vault-v1"),
+  base_url: external_exports.string(),
+  operation: external_exports.enum(["api_keys.create", "agents.member_link.create"]),
+  org_id: external_exports.string().regex(/^org_[a-f0-9]{18}$/).optional(),
+  request_id: external_exports.string().regex(/^acreq_[a-f0-9]{32}$/),
+  request_digest: external_exports.string().regex(/^[a-f0-9]{64}$/),
+  state: external_exports.enum(["pending", "not_delivered", "stored"]),
+  created_at: external_exports.string().datetime(),
+  secret: external_exports.string().min(1).max(4096).optional(),
+  key_id: external_exports.string().regex(/^key_[a-f0-9]{18}$/).optional(),
+  expires_at: external_exports.string().datetime().optional()
+}).strict();
+function pathFor(baseUrl, requestId) {
+  const destination = createHash7("sha256").update(baseUrl).digest("hex");
+  return join11(dirname10(remembranceConfigPath()), "admin-credential-vault", destination, `${requestId}.json`);
+}
+function privateDirectory(path) {
+  if (platform5() === "win32") ensureWindowsPrivateDirectorySync(path);
+  else mkdirSync3(path, { recursive: true, mode: 448 });
+  assertSecurePrivateLocalDirectory(path);
+}
+function prepareAdminCredentialDelivery(baseUrl, payload) {
+  if (!ADMIN_CREDENTIAL_ISSUANCE_OPERATIONS.includes(String(payload.operation))) return null;
+  const requestId = external_exports.string().regex(/^acreq_[a-f0-9]{32}$/).parse(payload.request_id);
+  const path = pathFor(baseUrl, requestId);
+  privateDirectory(dirname10(dirname10(path)));
+  privateDirectory(dirname10(path));
+  const digest3 = createHash7("sha256").update(canonicalJson(payload)).digest("hex");
+  try {
+    const existing = recordSchema.parse(JSON.parse(readSecureLocalText(path, { maxBytes: 16384 })));
+    if (existing.base_url !== baseUrl || existing.request_digest !== digest3 || existing.request_id !== requestId || existing.operation !== payload.operation) throw Error("Credential delivery identity conflict.");
+    if (existing.state === "stored" && !existing.secret) throw Error("Stored credential is unavailable.");
+    return { path, record: existing, readyToIssue: existing.state === "not_delivered" };
+  } catch (error) {
+    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
+  }
+  const record4 = recordSchema.parse({
+    version: "admin-credential-vault-v1",
+    base_url: baseUrl,
+    operation: payload.operation,
+    request_id: requestId,
+    request_digest: digest3,
+    state: "pending",
+    created_at: (/* @__PURE__ */ new Date()).toISOString(),
+    ...payload.org_id ? { org_id: payload.org_id } : {}
+  });
+  if (platform5() === "win32") {
+    const descriptor = openWindowsPrivateFileSync(path);
+    try {
+      writeFileSync3(descriptor, JSON.stringify(record4));
+    } finally {
+      closeSync7(descriptor);
+    }
+  } else writeFileSync3(path, JSON.stringify(record4), { mode: 384, flag: "wx" });
+  return { path, record: record4, readyToIssue: true };
+}
+function save(delivery, record4) {
+  const temporary = `${delivery.path}.${randomBytes10(8).toString("hex")}.tmp`;
+  let owned = null;
+  try {
+    const value = JSON.stringify(recordSchema.parse(record4));
+    if (platform5() === "win32") {
+      const descriptor = openWindowsPrivateFileSync(temporary);
+      try {
+        owned = fstatSync7(descriptor, { bigint: true });
+        writeFileSync3(descriptor, value);
+      } finally {
+        closeSync7(descriptor);
+      }
+      const candidate = lstatSync7(temporary, { bigint: true });
+      if (!candidate.isFile() || candidate.isSymbolicLink() || candidate.dev !== owned.dev || candidate.ino !== owned.ino) throw new Error("Administrative credential temporary changed.");
+    } else writeFileSync3(temporary, value, { mode: 384, flag: "wx" });
+    renameSync3(temporary, delivery.path);
+    delivery.record = record4;
+  } finally {
+    try {
+      if (platform5() === "win32") {
+        if (owned) {
+          const current = lstatSync7(temporary, { bigint: true });
+          if (current.isFile() && !current.isSymbolicLink() && current.dev === owned.dev && current.ino === owned.ino) unlinkSync3(temporary);
+        }
+      } else unlinkSync3(temporary);
+    } catch {
+    }
+  }
+}
+function adminCredentialDeliveryReceipt(delivery) {
+  return {
+    request_id: delivery.record.request_id,
+    operation: delivery.record.operation,
+    one_time_secret_stored: true,
+    vault_reference: delivery.path,
+    ...delivery.record.key_id ? { key_id: delivery.record.key_id } : {},
+    ...delivery.record.expires_at ? { expires_at: delivery.record.expires_at } : {},
+    instruction: platform5() === "win32" ? "The one-time credential is in a separate private local vault. Configure its intended client using local secret handling; never print it, copy it into chat, or replace the current organization credential implicitly." : "The one-time credential is in a separate mode-0600 local vault. Configure its intended client using local secret handling; never print it, copy it into chat, or replace the current organization credential implicitly."
+  };
+}
+function adminCredentialUnknownReceipt(delivery) {
+  return { ok: false, status: 0, body: {
+    code: "admin_credential_delivery_unknown",
+    delivery: "unknown",
+    request_id: delivery.record.request_id,
+    operation: delivery.record.operation,
+    retry_automatically: false,
+    next_action: { tool: "admin_read", arguments: {
+      operation: "admin.operations.status",
+      ...delivery.record.org_id ? { org_id: delivery.record.org_id } : {},
+      input: { request_id: delivery.record.request_id }
+    } },
+    instruction: delivery.record.operation === "api_keys.create" ? "Do not mint a replacement under a new request_id. Read this exact operation receipt, then inspect api_keys.list. If issuance succeeded but delivery was lost, explicitly revoke its issued key ID before requesting another. This vault reservation contains no recoverable secret yet." : "Do not mint a replacement under a new request_id. Read this exact operation receipt. An undelivered member-link credential expires automatically; confirm the existing link has expired before requesting another. This vault reservation contains no recoverable secret yet."
+  } };
+}
+function markAdminCredentialNotDelivered(delivery) {
+  save(delivery, { ...delivery.record, state: "not_delivered" });
+}
+function reserveAdminCredentialRetry(delivery) {
+  save(delivery, { ...delivery.record, state: "pending" });
+}
+function storeIssuedAdminCredential(delivery, body) {
+  const envelope2 = body && typeof body === "object" ? body : {};
+  if (envelope2.operation !== delivery.record.operation || envelope2.request_id !== delivery.record.request_id || !envelope2.result || typeof envelope2.result !== "object") return false;
+  const result = envelope2.result;
+  const secret = delivery.record.operation === "api_keys.create" ? result.api_key : result.token;
+  const grammar = delivery.record.operation === "api_keys.create" ? /^rem_[A-Za-z0-9_-]{43}$/ : /^mlink_[A-Za-z0-9_-]{43}$/;
+  if (typeof secret !== "string" || !grammar.test(secret)) return false;
+  const key2 = result.key && typeof result.key === "object" ? result.key : {};
+  save(delivery, {
+    ...delivery.record,
+    state: "stored",
+    secret,
+    ...typeof key2.id === "string" && /^key_[a-f0-9]{18}$/.test(key2.id) ? { key_id: key2.id } : {},
+    ...external_exports.string().datetime().safeParse(result.expires_at).success ? { expires_at: result.expires_at } : {}
+  });
+  return true;
+}
+
+// src/admin-control-client.ts
+var MAX_RESPONSE_BYTES = ADMIN_CONTROL_MAX_RESPONSE_BYTES;
+function failure(code, status, delivery = "unknown", requestId) {
+  return { ok: false, status, body: {
+    code,
+    error: "Administrative operation unavailable.",
+    delivery,
+    ...requestId ? { request_id: requestId } : {},
+    retry_automatically: false,
+    ...code === "admin_session_unauthorized" || code === "admin_authorization_exchange_failed" ? { next_action: "Call end_admin_session, then begin_admin_login for fresh browser approval. Never replace ordinary organization credentials." } : code === "admin_session_expired" || code === "admin_authentication_required" ? { next_action: "Call begin_admin_login for browser approval, or configure an authorized organization admin key separately." } : code === "admin_credential_vault_unavailable" ? { next_action: "No credential issuance was sent. Restore user-owned, private and writable local vault storage, or inspect this request_id's existing vault reservation. Never change a reserved request's input or silently mint a replacement." } : {}
+  } };
+}
+async function readJson(response) {
+  if (!response.body) throw new Error();
+  const reader = response.body.getReader();
+  const chunks = [];
+  let bytes = 0;
+  try {
+    for (; ; ) {
+      const next = await reader.read();
+      if (next.done) break;
+      bytes += next.value.byteLength;
+      if (bytes > MAX_RESPONSE_BYTES) throw new Error();
+      chunks.push(next.value);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } finally {
+    await reader.cancel().catch(() => {
+    });
+    reader.releaseLock();
+  }
+}
+async function request(transport, baseUrl, path, method, payload, credential, requestId) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3e4);
+  try {
+    const headers = { "content-type": "application/json" };
+    if (credential?.adminToken) headers["x-remembrance-admin-token"] = credential.adminToken;
+    else if (credential?.apiKey) headers["x-remembrance-api-key"] = credential.apiKey;
+    if (requestId) headers["Idempotency-Key"] = requestId;
+    const response = await transport.request(`${baseUrl}${path}`, {
+      method,
+      headers,
+      redirect: "manual",
+      signal: controller.signal,
+      ...payload !== void 0 ? { body: JSON.stringify(payload) } : {}
+    });
+    if (response.status >= 300 && response.status < 400) return { response, body: null, redirect: true };
+    return { response, body: await readJson(response), redirect: false };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function callAdminControlTool(name, payload, access, transport) {
+  const baseUrl = access.configuration.baseUrl;
+  const requestId = name === "admin_write" ? String(payload.request_id) : void 0;
+  let reservedDelivery = null;
+  if (access.configuration.source.startsWith("unusable_")) return failure("admin_destination_unavailable", 0, "not_delivered", requestId);
+  try {
+    secureDirectory(dirname11(storePath(baseUrl)));
+    return await withPrivateOutboxLock(dirname11(storePath(baseUrl)), "admin-session", async () => {
+      const state = readState(baseUrl);
+      if (name === "begin_admin_login") {
+        if (state && Date.parse(state.expires_at) > Date.now()) return { ok: true, ...publicState(state) };
+        const verifier = randomBytes11(32).toString("base64url");
+        const result2 = await request(transport, baseUrl, "/api/v1/admin/agent-sessions/authorize", "POST", {
+          code_challenge: createHash8("sha256").update(verifier).digest("base64url"),
+          code_challenge_method: "S256"
+        });
+        if (!result2.response.ok || result2.redirect) return failure("admin_authorization_unavailable", result2.response.status);
+        const started = pendingSchema.omit({ state: true, base_url: true, code_verifier: true, next_poll_at: true }).parse(result2.body);
+        const expectedUri = new URL("/admin/authorize-agent", baseUrl);
+        expectedUri.searchParams.set("request_id", started.request_id);
+        if (started.verification_uri !== expectedUri.toString() || Date.parse(started.expires_at) <= Date.now())
+          return failure("admin_authorization_destination_invalid", 0, "not_delivered");
+        const pending = {
+          ...started,
+          state: "pending",
+          base_url: baseUrl,
+          code_verifier: verifier,
+          next_poll_at: new Date(Date.now() + started.interval * 1e3).toISOString()
+        };
+        saveState(pending);
+        return { ok: true, ...publicState(pending) };
+      }
+      if (name === "complete_admin_login") {
+        if (!state || state.state !== "pending") return { ok: Boolean(state), ...publicState(state) };
+        if (Date.parse(state.expires_at) <= Date.now()) return { ok: false, ...publicState(state) };
+        if (Date.parse(state.next_poll_at) > Date.now()) return { ok: true, ...publicState(state) };
+        saveState({ ...state, next_poll_at: new Date(Date.now() + state.interval * 1e3).toISOString() });
+        const result2 = await request(transport, baseUrl, "/api/v1/admin/agent-sessions/token", "POST", {
+          request_id: state.request_id,
+          device_secret: state.device_secret,
+          code_verifier: state.code_verifier
+        });
+        if (result2.response.status === 409 && result2.body && typeof result2.body === "object" && "code" in result2.body && result2.body.code === "authorization_pending")
+          return { ok: true, ...publicState(readState(baseUrl)) };
+        if (!result2.response.ok || result2.redirect) return failure("admin_authorization_exchange_failed", result2.response.status);
+        const issued2 = external_exports.object({ access_token: activeSchema.shape.access_token, token_type: external_exports.literal("Bearer"), expires_at: timestamp2, session_id: id }).strict().parse(result2.body);
+        if (issued2.session_id !== state.request_id || Date.parse(issued2.expires_at) <= Date.now()) return failure("admin_authorization_response_invalid", 0);
+        const active = { state: "active", base_url: baseUrl, access_token: issued2.access_token, session_id: issued2.session_id, expires_at: issued2.expires_at };
+        saveState(active);
+        return { ok: true, ...publicState(active) };
+      }
+      if (name === "end_admin_session") {
+        let revocationConfirmed = false;
+        let sessionAlreadyInvalid = false;
+        if (state?.state === "active") {
+          const result2 = await request(transport, baseUrl, "/api/v1/admin/agent-sessions/current", "DELETE", void 0, { adminToken: state.access_token });
+          const body = result2.body && typeof result2.body === "object" ? result2.body : {};
+          revocationConfirmed = result2.response.ok && body.revoked === true;
+          sessionAlreadyInvalid = result2.response.status === 401 && body.code === "admin_session_invalid" && body.delivery === "not_delivered";
+          if (!revocationConfirmed && !sessionAlreadyInvalid)
+            return failure("admin_revocation_outcome_unknown", result2.response.status);
+        }
+        if (state) unlinkSync4(storePath(baseUrl));
+        return {
+          ok: true,
+          status: "signed_out",
+          server_revocation_confirmed: revocationConfirmed,
+          ...sessionAlreadyInvalid ? { server_session_already_invalid: true } : {}
+        };
+      }
+      if (state && state.state === "active" && Date.parse(state.expires_at) <= Date.now())
+        return failure("admin_session_expired", 401, "not_delivered", requestId);
+      const adminToken = state?.state === "active" ? state.access_token : void 0;
+      if (!adminToken && (!access.credential.apiKey || access.credential.source.startsWith("unusable_")))
+        return failure("admin_authentication_required", 401, "not_delivered", requestId);
+      let delivery = null;
+      try {
+        delivery = name === "admin_write" ? prepareAdminCredentialDelivery(baseUrl, payload) : null;
+      } catch {
+        return failure("admin_credential_vault_unavailable", 0, "not_delivered", requestId);
+      }
+      reservedDelivery = delivery;
+      if (delivery?.record.state === "stored") return { ok: true, status: 200, body: adminCredentialDeliveryReceipt(delivery) };
+      if (delivery && !delivery.readyToIssue) return adminCredentialUnknownReceipt(delivery);
+      if (delivery?.record.state === "not_delivered") reserveAdminCredentialRetry(delivery);
+      const path = name === "get_admin_capabilities" ? `/api/v1/admin/control${payload.org_id ? `?org_id=${encodeURIComponent(String(payload.org_id))}` : ""}` : `/api/v1/admin/control/${name === "admin_read" ? "read" : "write"}`;
+      const result = await request(
+        transport,
+        baseUrl,
+        path,
+        name === "get_admin_capabilities" ? "GET" : "POST",
+        name === "get_admin_capabilities" ? void 0 : payload,
+        { adminToken, apiKey: adminToken ? void 0 : access.credential.apiKey },
+        requestId
+      );
+      if (!result.response.ok || result.redirect) {
+        const record4 = result.body && typeof result.body === "object" ? result.body : {};
+        if (delivery && record4.delivery === "not_delivered") markAdminCredentialNotDelivered(delivery);
+        return failure(
+          result.response.status === 401 ? "admin_session_unauthorized" : "admin_operation_failed",
+          result.response.status,
+          record4.delivery === "not_delivered" ? "not_delivered" : "unknown",
+          requestId
+        );
+      }
+      const serialized = JSON.stringify(result.body);
+      const secrets = [
+        ...access.credential.apiKey ? [access.credential.apiKey] : [],
+        ...state?.state === "active" ? [state.access_token] : state?.state === "pending" ? [state.code_verifier, state.device_secret] : []
+      ];
+      if (secrets.some((secret) => serialized.includes(secret))) return failure("admin_response_invalid", result.response.status, "unknown", requestId);
+      if (delivery) {
+        if (!storeIssuedAdminCredential(delivery, result.body)) return adminCredentialUnknownReceipt(delivery);
+        return { ok: true, status: result.response.status, body: adminCredentialDeliveryReceipt(delivery) };
+      }
+      return {
+        ok: true,
+        status: result.response.status,
+        body: result.body,
+        ...name === "get_admin_capabilities" ? { server_validity_checked: true } : {}
+      };
+    }, { waitMs: 1e3 });
+  } catch {
+    if (reservedDelivery) return adminCredentialUnknownReceipt(reservedDelivery);
+    return failure("admin_operation_unavailable", 0, "unknown", requestId);
+  }
+}
+
+// ../core/src/redaction-request-budget.ts
+import { AsyncLocalStorage as AsyncLocalStorage4 } from "node:async_hooks";
+var requests = new AsyncLocalStorage4();
+trackRedactionRequests(() => requests.getStore());
+function withRedactionRequestBudget(run) {
+  return requests.getStore() ? run() : requests.run({}, run);
+}
+
+// src/review-repair-inspection.ts
+function inspectReviewRepairForTransport(value) {
+  const request2 = privateSkillReviewRepairRequestSchema.parse(value);
+  const inspection = inspectPrivateSkillCandidate(request2.capture);
+  if (inspection.status === "complete" && inspection.decision.outcome === "unchanged") {
+    const values = [];
+    const pending = [request2.expected_review_snapshot];
+    while (pending.length) {
+      const entry = pending.pop();
+      if (entry !== null && typeof entry === "object") pending.push(...Object.values(entry));
+      else values.push(entry);
+    }
+    try {
+      if (canonicalJson(withRedactionRequestBudget(() => redactPayload(values))) !== canonicalJson(values)) {
+        return { ready: false, refusal: {
+          status: "held",
+          code: "review_repair_wire_inspection_hold",
+          delivery: "not_delivered",
+          candidate_sent: false,
+          candidate_stored: false,
+          original_disposition: "unchanged",
+          next_action: "Retain the original. Read a fresh normal content-free review snapshot; do not send suspected secrets, rewrite the held request, or use another transport."
+        } };
+      }
+    } catch {
+      return { ready: false, refusal: {
+        status: "held",
+        code: "review_repair_wire_inspection_failure",
+        delivery: "not_delivered",
+        candidate_sent: false,
+        candidate_stored: false,
+        original_disposition: "unchanged",
+        next_action: "Retain the original. Correct the local inspection failure before retrying; do not reformulate around an operational failure."
+      } };
+    }
+    return { ready: true, request: request2 };
+  }
+  const reason = inspection.status === "complete" ? "authored_capture_changed_by_inspection" : inspection.status === "incomplete" ? inspection.reason : inspection.error_code;
+  return { ready: false, refusal: {
+    status: "held",
+    code: "review_repair_local_inspection_hold",
+    delivery: "not_delivered",
+    candidate_sent: false,
+    candidate_stored: false,
+    original_disposition: "unchanged",
+    reason_code: reason,
+    inspection: inspection.decision,
+    next_action: inspection.status === "invalid" ? "Retain the original. Correct the local inspection failure before retrying the same unchanged request; do not reformulate around an operational failure or use another transport." : "Retain the original. Prepare a complete safe replacement from authenticated task context and inspect it again. Do not recover suspected secrets, invent missing instructions, or bypass a host denial."
+  } };
+}
+
+// src/network-transport.ts
+import { AsyncLocalStorage as AsyncLocalStorage5 } from "node:async_hooks";
+var networkExecutionAuthority = new AsyncLocalStorage5();
+var guardedFetches = /* @__PURE__ */ new WeakSet();
+function installRuntimeFetchGuard() {
+  const delegate = globalThis.fetch;
+  if (typeof delegate !== "function" || guardedFetches.has(delegate)) return;
+  const guardedFetch = (input, init) => {
+    assertRemembranceNetworkEgressAllowed("ambient fetch");
+    return delegate.call(globalThis, input, init);
+  };
+  guardedFetches.add(guardedFetch);
+  globalThis.fetch = guardedFetch;
+}
+installRuntimeFetchGuard();
+async function runWithRemembranceNetworkExecution(authority, operation) {
+  const effectiveAuthority = restrictNetworkExecutionAuthority(authority);
+  installRuntimeFetchGuard();
+  return networkExecutionAuthority.run(effectiveAuthority, operation);
+}
+function restrictNetworkExecutionAuthority(requested) {
+  const parent = networkExecutionAuthority.getStore();
+  return parent?.networkBehavior === "local_only" ? parent : requested;
+}
+function assertRemembranceNetworkEgressAllowed(capability) {
+  const authority = networkExecutionAuthority.getStore();
+  if (authority?.networkBehavior === "local_only") {
+    throw new Error(
+      `Local-only tool attempted network egress through ${capability}: ${authority.toolName}.`
+    );
+  }
+}
+function createRemembranceNetworkTransport(fetchImpl) {
+  assertRemembranceNetworkEgressAllowed("transport construction");
+  const delegate = fetchImpl ?? globalThis.fetch;
+  const request2 = (input, init) => {
+    assertRemembranceNetworkEgressAllowed("transport request");
+    return delegate.call(globalThis, input, init);
+  };
+  return Object.freeze({ request: request2 });
+}
+
+// ../codex-plugin/scripts/windows-local-recovery.mjs
+import { win32 as win322 } from "node:path";
+var WINDOWS_LOCAL_RECOVERY_POWERSHELL = String.raw`
+$ErrorActionPreference = 'Stop'
+try {
+  $encoded = [Environment]::GetEnvironmentVariable('REMEMBRANCE_WINDOWS_RECOVERY_TARGET','Process')
+  if ($null -eq $encoded -or $encoded.Length -gt 12288 -or $encoded -notmatch '\A[A-Za-z0-9+/]*={0,2}\z') { throw 'Refused' }
+  $bytes = [Convert]::FromBase64String($encoded)
+  if ($bytes.Length -eq 0 -or $bytes.Length -gt 8192) { throw 'Refused' }
+  $request = [System.Text.UTF8Encoding]::new($false,$true).GetString($bytes) | Microsoft.PowerShell.Utility\ConvertFrom-Json
+  if ((@($request.PSObject.Properties.Name | Sort-Object) -join ',') -ne 'kind,path,schema' -or $request.schema -ne 'windows-local-recovery-v1') { throw 'Refused' }
+  $path = $request.path
+  if ($path -isnot [string] -or $path.Length -gt 2048 -or $path -notmatch '\A[A-Za-z]:[\\/]' -or $path -match '[\x00-\x1f]' -or $path.Substring(2).Contains(':') -or @($path -split '[\\/]' | Where-Object { $_ -eq '..' }).Count -gt 0) { throw 'Refused' }
+  if ($request.kind -notin @('file','directory')) { throw 'Refused' }
+  $path = [IO.Path]::GetFullPath($path)
+  $parent = [IO.Path]::GetDirectoryName($path)
+  if ([string]::IsNullOrEmpty($parent) -or $parent -eq $path) { throw 'Refused' }
+  $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+  $trusted = @($sid.Value,'S-1-5-18','S-1-5-32-544')
+  $sections = [Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Access
+  function Snapshot([string]$name,[bool]$directory,[bool]$currentOwner,[bool]$private) {
+    $attributes = [IO.File]::GetAttributes($name)
+    if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or (($attributes -band [IO.FileAttributes]::Directory) -ne 0) -ne $directory) { throw 'Refused' }
+    $acl = if ($directory) { [IO.Directory]::GetAccessControl($name,$sections) } else { [IO.File]::GetAccessControl($name,$sections) }
+    $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if (($currentOwner -and $owner -ne $sid.Value) -or (!$currentOwner -and $owner -notin $trusted)) { throw 'Refused' }
+    $binary = $acl.GetSecurityDescriptorBinaryForm()
+    $raw = [Security.AccessControl.RawSecurityDescriptor]::new($binary,0)
+    if ($null -eq $raw.DiscretionaryAcl -or $raw.DiscretionaryAcl.Count -gt 128) { throw 'Refused' }
+    # Numeric identity enumeration avoids account-name resolution/network lookup.
+    $rules = $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])
+    if ($rules.Count -gt 128) { throw 'Refused' }
+    foreach ($ace in $raw.DiscretionaryAcl) {
+      if ($ace -isnot [Security.AccessControl.CommonAce] -or $ace.IsCallback -or $ace.AceQualifier -notin @([Security.AccessControl.AceQualifier]::AccessAllowed,[Security.AccessControl.AceQualifier]::AccessDenied)) { throw 'Refused' }
+      # AceFlags is byte-backed; use lossless integer operands for PS5 bitwise operations.
+      $flags = [int]$ace.AceFlags
+      $inheritance = [int][Security.AccessControl.AceFlags]::ObjectInherit -bor [int][Security.AccessControl.AceFlags]::ContainerInherit
+      if ($currentOwner -and ($flags -band $inheritance) -ne 0) { throw 'Refused' }
+      if (($flags -band [int][Security.AccessControl.AceFlags]::InheritOnly) -ne 0) { continue }
+      if ($ace.AceQualifier -eq [Security.AccessControl.AceQualifier]::AccessAllowed -and $ace.SecurityIdentifier.Value -notin $trusted) {
+        $mask = [uint64]([int64]$ace.AccessMask -band 4294967295L)
+        if (($private -and $mask -ne 0) -or (($mask -band 1343029590L) -ne 0)) { throw 'Refused' }
+      }
+    }
+    return [Convert]::ToBase64String($binary)
+  }
+  function AssertEmptyDirectory([string]$name) {
+    $enumerator = [IO.Directory]::EnumerateFileSystemEntries($name).GetEnumerator()
+    try { if ($enumerator.MoveNext()) { throw 'Refused' } }
+    finally { if ($enumerator -is [IDisposable]) { $enumerator.Dispose() } }
+  }
+  $directory = $request.kind -eq 'directory'
+  $parentBefore = Snapshot $parent $true $false $false
+  $targetBefore = Snapshot $path $directory $true $false
+  if ($directory) { AssertEmptyDirectory $path }
+  $replacement = if ($directory) { New-Object Security.AccessControl.DirectorySecurity } else { New-Object Security.AccessControl.FileSecurity }
+  $replacement.SetOwner($sid)
+  $replacement.SetAccessRuleProtection($true,$false)
+  foreach ($principal in $trusted) {
+    $numeric = New-Object Security.Principal.SecurityIdentifier($principal)
+    $rule = New-Object Security.AccessControl.FileSystemAccessRule($numeric,[Security.AccessControl.FileSystemRights]::FullControl,[Security.AccessControl.InheritanceFlags]::None,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)
+    $replacement.AddAccessRule($rule)
+  }
+  # Recheck only exact-object/parent ACL metadata. No file body is opened.
+  if ((Snapshot $parent $true $false $false) -ne $parentBefore -or (Snapshot $path $directory $true $false) -ne $targetBefore) { throw 'Refused' }
+  if ($directory) { AssertEmptyDirectory $path; [IO.Directory]::SetAccessControl($path,$replacement) }
+  else { [IO.File]::SetAccessControl($path,$replacement) }
+  $null = Snapshot $path $directory $true $true
+  if ((Snapshot $parent $true $false $false) -ne $parentBefore) { throw 'Refused' }
+  [Console]::Out.WriteLine('Remembrance exact-object permissions restored. Rerun the indicated doctor or bootstrap tool.')
+  exit 0
+} catch {
+  [Console]::Error.WriteLine('Remembrance permission recovery held. Review only this object and its immediate parent ownership/ACL metadata. Restoring folder permissions may affect existing children; obtain owner review and scoped consent before broader OS repair. Preserve existing data and trust history, then rerun doctor or bootstrap after authorized restoration.')
+  exit 1
+}
+`.trim();
+var instructions = "Run this fixed recipe through the normal host shell for the internally selected local path. It changes only permissions on a current-owned file or empty directory, reads no credential body, and performs no network requests. Rerun the indicated tool only after success.";
+var refusal = "Use .NET GetAccessControl with Owner and Access sections, GetOwner(SecurityIdentifier), and GetAccessRules(true,true,SecurityIdentifier) to inspect only the selected object and immediate parent numeric ownership/ACL metadata (at most128 ACEs each). Read no file bodies or descendant content; prepare owner review. Restoring folder permissions may affect existing children. Obtain scoped owner consent before any broader OS repair, or restore original protection from an authorized known backup. Preserve data and trust history; rerun doctor/bootstrap after authorized restoration, not repeatedly during the hold.";
+function windowsLocalRecoveryStep(path, kind, tool) {
+  if (typeof path !== "string" || path.length > 2048 || !/^[A-Za-z]:[\\/]/u.test(path) || /[\x00-\x1f]/u.test(path) || path.slice(2).includes(":") || path.split(/[\\/]/u).includes("..") || !["file", "directory"].includes(kind) || !["get_connection_status", "bootstrap_agent_identity"].includes(tool)) throw new Error("Invalid Windows permission recovery target.");
+  path = win322.normalize(path);
+  if (win322.dirname(path) === path) throw new Error("Invalid Windows permission recovery target.");
+  return {
+    code: "restore_windows_private_permissions",
+    execution: "normal_host_shell",
+    executable: "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    arguments: ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(WINDOWS_LOCAL_RECOVERY_POWERSHELL, "utf16le").toString("base64")],
+    environment: { REMEMBRANCE_WINDOWS_RECOVERY_TARGET: Buffer.from(JSON.stringify({ schema: "windows-local-recovery-v1", path, kind }), "utf8").toString("base64") },
+    program: WINDOWS_LOCAL_RECOVERY_POWERSHELL,
+    instructions,
+    on_success: { tool, arguments: {} },
+    on_refusal: { code: "owner_review_required", instructions: refusal },
+    history_limit: "Restoring current permissions does not assess past access or revoke previously opened foreign handles; it makes no retroactive confidentiality claim."
+  };
+}
 
 // src/connection-status.ts
 import {
   chmodSync as chmodSync2,
+  closeSync as closeSync9,
   existsSync as existsSync5,
-  lstatSync as lstatSync4,
-  mkdirSync as mkdirSync3,
-  renameSync as renameSync3,
+  lstatSync as lstatSync9,
+  mkdirSync as mkdirSync4,
+  renameSync as renameSync4,
   rmSync as rmSync2,
-  writeFileSync as writeFileSync3
+  writeFileSync as writeFileSync4
 } from "node:fs";
-import { createHash as createHash7, randomBytes as randomBytes9 } from "node:crypto";
-import { isIP } from "node:net";
+import { createHash as createHash9, randomBytes as randomBytes12 } from "node:crypto";
 import { homedir as homedir10 } from "node:os";
-import { join as join12 } from "node:path";
+import { join as join15 } from "node:path";
 
 // src/codex-hook-approval.ts
 import { homedir as homedir8 } from "node:os";
-import { basename as basename2, dirname as dirname7, join as join10 } from "node:path";
+import { basename as basename2, dirname as dirname12, join as join13 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/codex-managed-hooks.ts
 import { readFileSync, statSync } from "node:fs";
 import { homedir as homedir7, userInfo as userInfo3 } from "node:os";
-import { join as join9 } from "node:path";
+import { join as join12 } from "node:path";
 var SETTING = "allow_managed_hooks_only";
 var PREFERENCE_FILE = "com.openai.codex.plist";
 var PREFERENCE_KEY = "requirements_toml_base64";
 var CLOUD_CACHE = "cloud-config-bundle-cache.json";
 var MAX_SOURCE_BYTES = 1024 * 1024;
-function codexManagedPolicySources(env, platform = process.platform) {
+function codexManagedPolicySources(env, platform6 = process.platform) {
   const root = env.REMEMBRANCE_CODEX_MANAGED_POLICY_ROOT ? String(env.REMEMBRANCE_CODEX_MANAGED_POLICY_ROOT) : "/";
   return {
-    requirementsFile: platform === "win32" ? null : join9(root, "etc", "codex", "requirements.toml"),
+    requirementsFile: platform6 === "win32" ? null : join12(root, "etc", "codex", "requirements.toml"),
     // Forced (MDM) values for this user, then for the device, then the
     // user's and the machine's own preferences. The ByHost and global
     // domains are not read.
-    preferenceFiles: platform === "darwin" ? [
-      join9(
+    preferenceFiles: platform6 === "darwin" ? [
+      join12(
         root,
         "Library",
         "Managed Preferences",
         userInfo3().username,
         PREFERENCE_FILE
       ),
-      join9(root, "Library", "Managed Preferences", PREFERENCE_FILE),
-      join9(root, homedir7(), "Library", "Preferences", PREFERENCE_FILE),
-      join9(root, "Library", "Preferences", PREFERENCE_FILE)
+      join12(root, "Library", "Managed Preferences", PREFERENCE_FILE),
+      join12(root, homedir7(), "Library", "Preferences", PREFERENCE_FILE),
+      join12(root, "Library", "Preferences", PREFERENCE_FILE)
     ] : []
   };
 }
 function codexRunsOnlyManagedHooks(codexHome, sources) {
   const settings = /* @__PURE__ */ new Set([
-    cloudSetting(join9(codexHome, CLOUD_CACHE)),
+    cloudSetting(join12(codexHome, CLOUD_CACHE)),
     preferenceSetting(sources.preferenceFiles),
     sources.requirementsFile === null ? void 0 : fileSetting(sources.requirementsFile)
   ]);
@@ -69821,9 +71841,9 @@ function codexRunsOnlyManagedHooks(codexHome, sources) {
 function readBounded(path, maxBytes) {
   let size;
   try {
-    const metadata = statSync(path);
-    if (!metadata.isFile()) throw new Error("not a regular file");
-    size = metadata.size;
+    const metadata2 = statSync(path);
+    if (!metadata2.isFile()) throw new Error("not a regular file");
+    size = metadata2.size;
   } catch (error) {
     if (error.code === "ENOENT") return null;
     throw error;
@@ -69857,19 +71877,19 @@ function cloudSetting(path) {
   const bytes = readBounded(path, MAX_SOURCE_BYTES);
   if (bytes === null) return void 0;
   const file = JSON.parse(utf8(bytes));
-  const signed = isRecord6(file) ? file.signed_payload : null;
+  const signed = isRecord7(file) ? file.signed_payload : null;
   const payload = typeof signed === "string" ? JSON.parse(signed) : signed;
-  if (!isRecord6(payload) || !isRecord6(payload.bundle)) unreadable();
+  if (!isRecord7(payload) || !isRecord7(payload.bundle)) unreadable();
   const expires = Date.parse(String(payload.expires_at));
   if (!Number.isFinite(expires)) unreadable();
   if (expires <= Date.now()) return void 0;
   const requirements = payload.bundle.requirements_toml;
   if (requirements == null) return void 0;
-  if (!isRecord6(requirements)) unreadable();
+  if (!isRecord7(requirements)) unreadable();
   const managed = requirements.enterprise_managed;
   let value;
   for (const fragment of managed == null ? [] : Array.isArray(managed) ? managed : [managed]) {
-    if (!isRecord6(fragment) || typeof fragment.contents !== "string") {
+    if (!isRecord7(fragment) || typeof fragment.contents !== "string") {
       unreadable();
     }
     const setting = requirementsSetting(fragment.contents);
@@ -69943,7 +71963,7 @@ function requirementsSetting(text) {
       at++;
     } while (closers.length > 0);
   };
-  const key = () => {
+  const key2 = () => {
     const parts = [];
     for (; ; ) {
       blank();
@@ -69979,14 +71999,14 @@ function requirementsSetting(text) {
     if (text[at] === "[") {
       const close = text[at + 1] === "[" ? "]]" : "]";
       at += close.length;
-      const table = key();
+      const table = key2();
       if (table[0] === SETTING || !text.startsWith(close, at)) unreadable();
       at += close.length;
       root = false;
       lineEnd();
       continue;
     }
-    const path = key();
+    const path = key2();
     if (text[at] !== "=") unreadable();
     at++;
     blank();
@@ -70008,7 +72028,7 @@ function requirementsSetting(text) {
     lineEnd();
   }
 }
-function preferenceString(bytes, key) {
+function preferenceString(bytes, key2) {
   const trailer = bytes.length - 32;
   if (bytes.toString("latin1", 0, 8) !== "bplist00") unreadable();
   const offsetSize = bytes[trailer + 6];
@@ -70052,7 +72072,7 @@ function preferenceString(bytes, key) {
   const ref = (index) => uint(bytes, dictionary.start + index * refSize, refSize);
   let value;
   for (let index = 0; index < dictionary.length; index++) {
-    if (text(ref(index), key.length) !== key) continue;
+    if (text(ref(index), key2.length) !== key2) continue;
     if (value !== void 0) unreadable();
     value = text(ref(dictionary.length + index));
   }
@@ -70066,7 +72086,7 @@ function uint(bytes, at, size) {
   if (!Number.isSafeInteger(value)) unreadable();
   return value;
 }
-function isRecord6(value) {
+function isRecord7(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -70082,19 +72102,19 @@ function readCodexHookApproval(options = {}) {
   if (host.trim().toLowerCase() !== "codex") return null;
   const unknown = { status: "unknown" };
   try {
-    const root = options.pluginRoot ?? dirname7(dirname7(fileURLToPath(import.meta.url)));
-    let codexHome = dirname7(root);
+    const root = options.pluginRoot ?? dirname12(dirname12(fileURLToPath(import.meta.url)));
+    let codexHome = dirname12(root);
     for (const name of CACHE_LAYOUT) {
       if (basename2(codexHome) !== name) return unknown;
-      codexHome = dirname7(codexHome);
+      codexHome = dirname12(codexHome);
     }
     const hooksFile = readBounded(
-      join10(root, "hooks", "hooks.json"),
+      join13(root, "hooks", "hooks.json"),
       MAX_HOOKS_BYTES
     );
     const hooks = hooksFile && expectedHooks(hooksFile.toString("utf8"));
     const trusted = trustedHashes(
-      readBounded(join10(codexHome, "config.toml"), MAX_CONFIG_BYTES)?.toString(
+      readBounded(join13(codexHome, "config.toml"), MAX_CONFIG_BYTES)?.toString(
         "utf8"
       ) ?? ""
     );
@@ -70121,7 +72141,7 @@ function readCodexHookApproval(options = {}) {
 }
 function expectedHooks(text) {
   const parsed = JSON.parse(text);
-  if (!isRecord7(parsed) || !isRecord7(parsed.hooks) || !onlyKeys(parsed, ["hooks"])) {
+  if (!isRecord8(parsed) || !isRecord8(parsed.hooks) || !onlyKeys(parsed, ["hooks"])) {
     return null;
   }
   const hooks = [];
@@ -70131,8 +72151,8 @@ function expectedHooks(text) {
     }
     const eventName = event.replace(/(?!^)[A-Z]/g, "_$&").toLowerCase();
     for (const [index, group] of groups.entries()) {
-      const handler = isRecord7(group) && Array.isArray(group.hooks) ? group.hooks[0] : null;
-      if (!isRecord7(group) || !onlyKeys(group, ["matcher", "hooks"]) || group.matcher !== void 0 && !nonEmptyString(group.matcher) || !Array.isArray(group.hooks) || group.hooks.length !== 1 || !isRecord7(handler) || !onlyKeys(handler, ["type", "command", "timeout", "statusMessage"]) || handler.type !== "command" || !nonEmptyString(handler.command) || handler.timeout !== void 0 && !(typeof handler.timeout === "number" && Number.isSafeInteger(handler.timeout) && handler.timeout > 0) || handler.statusMessage !== void 0 && !nonEmptyString(handler.statusMessage)) {
+      const handler = isRecord8(group) && Array.isArray(group.hooks) ? group.hooks[0] : null;
+      if (!isRecord8(group) || !onlyKeys(group, ["matcher", "hooks"]) || group.matcher !== void 0 && !nonEmptyString(group.matcher) || !Array.isArray(group.hooks) || group.hooks.length !== 1 || !isRecord8(handler) || !onlyKeys(handler, ["type", "command", "timeout", "statusMessage"]) || handler.type !== "command" || !nonEmptyString(handler.command) || handler.timeout !== void 0 && !(typeof handler.timeout === "number" && Number.isSafeInteger(handler.timeout) && handler.timeout > 0) || handler.statusMessage !== void 0 && !nonEmptyString(handler.statusMessage)) {
         return null;
       }
       const identity2 = {
@@ -70196,39 +72216,50 @@ function tablePath(text) {
   }
 }
 function sessionStartObserved(env, version) {
-  const directory = env.REMEMBRANCE_PLUGIN_HEALTH_DIR ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR) : join10(homedir8(), ".cache", "remembrance", "plugin-health");
+  const directory = env.REMEMBRANCE_PLUGIN_HEALTH_DIR ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR) : join13(homedir8(), ".cache", "remembrance", "plugin-health");
   try {
     const marker = JSON.parse(
-      String(readBounded(join10(directory, "codex.json"), MAX_MARKER_BYTES))
+      String(readBounded(join13(directory, "codex.json"), MAX_MARKER_BYTES))
     );
-    return isRecord7(marker) && marker.plugin_version === version && isRecord7(marker.components) && Number.isFinite(Date.parse(String(marker.components.session_start)));
+    return isRecord8(marker) && marker.plugin_version === version && isRecord8(marker.components) && Number.isFinite(Date.parse(String(marker.components.session_start)));
   } catch {
     return false;
   }
 }
 function onlyKeys(value, allowed) {
-  return Object.keys(value).every((key) => allowed.includes(key));
+  return Object.keys(value).every((key2) => allowed.includes(key2));
 }
 function nonEmptyString(value) {
   return typeof value === "string" && value.length > 0;
 }
-function isRecord7(value) {
+function isRecord8(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // src/local-agent-identity.ts
 import { createPrivateKey, createPublicKey as createPublicKey4 } from "node:crypto";
-import { existsSync as existsSync4 } from "node:fs";
+import { existsSync as existsSync4, lstatSync as lstatSync8, openSync as openSync6, fstatSync as fstatSync8, closeSync as closeSync8, constants as constants8 } from "node:fs";
 import { homedir as homedir9 } from "node:os";
-import { join as join11 } from "node:path";
+import { join as join14 } from "node:path";
 var nodeFileSystem = {
   exists: existsSync4,
   read: (path, maxBytes = MAX_LOCAL_IDENTITY_BYTES) => readSecureLocalText(path, {
     maxBytes,
     allowInsecurePermissions: true
   }),
-  mode: secureLocalFileMode
+  mode: secureLocalFileMode,
+  privateProtection: verifyWindowsLocalFileProtection
 };
+function verifyWindowsLocalFileProtection(path) {
+  const before = lstatSync8(path, { bigint: true });
+  const descriptor = openSync6(path, constants8.O_RDONLY | (constants8.O_NOFOLLOW ?? 0));
+  try {
+    assertWindowsPrivateRead(path, "file", before, fstatSync8(descriptor, { bigint: true }));
+    return true;
+  } finally {
+    closeSync8(descriptor);
+  }
+}
 var supportedProviders = /* @__PURE__ */ new Set([
   "other",
   "codex",
@@ -70238,14 +72269,14 @@ var supportedProviders = /* @__PURE__ */ new Set([
 function localAgentIdentityPath(env = process.env, homeDirectory = homedir9()) {
   const explicit = env.REMEMBRANCE_AGENT_KEY_PATH?.trim();
   if (explicit) return explicit;
-  return join11(
-    join11(homeDirectory, ".config"),
+  return join14(
+    join14(homeDirectory, ".config"),
     "remembrance",
     "agent-key.json"
   );
 }
 function parseStoredIdentity(value) {
-  if (!isRecord8(value)) return null;
+  if (!isRecord9(value)) return null;
   if (!supportedProviders.has(value.provider)) {
     return null;
   }
@@ -70291,16 +72322,37 @@ function localAgentIdentityStatus(env = process.env, fileSystem = nodeFileSystem
   let mode = null;
   let securePermissions = null;
   try {
-    const permissionBits = fileSystem.mode(path) & 511;
-    mode = permissionBits.toString(8).padStart(4, "0");
-    securePermissions = (permissionBits & 63) === 0;
+    if (process.platform === "win32") {
+      securePermissions = fileSystem.privateProtection?.(path) ?? null;
+    } else {
+      const permissionBits = fileSystem.mode(path) & 511;
+      mode = permissionBits.toString(8).padStart(4, "0");
+      securePermissions = (permissionBits & 63) === 0;
+    }
   } catch {
   }
+  if (process.platform === "win32" && securePermissions !== true) {
+    return identityStatus({
+      status: "permissions_unknown",
+      present: true,
+      valid: null,
+      nextAction: { code: "repair_agent_identity_permissions", arguments: {}, automatic: false, confirmation: false, recovery: windowsIdentityRecovery(path) }
+    });
+  }
   let identity2 = null;
+  let content2 = null;
   try {
-    identity2 = parseStoredIdentity(
-      JSON.parse(fileSystem.read(path, MAX_LOCAL_IDENTITY_BYTES))
-    );
+    content2 = fileSystem.read(path, MAX_LOCAL_IDENTITY_BYTES);
+  } catch {
+    if (process.platform === "win32") return identityStatus({
+      status: "permissions_unknown",
+      present: true,
+      valid: null,
+      nextAction: { code: "repair_agent_identity_permissions", arguments: {}, automatic: false, confirmation: false, recovery: windowsIdentityRecovery(path) }
+    });
+  }
+  try {
+    identity2 = content2 === null ? null : parseStoredIdentity(JSON.parse(content2));
   } catch {
   }
   if (!identity2) {
@@ -70360,6 +72412,13 @@ function localAgentIdentityStatus(env = process.env, fileSystem = nodeFileSystem
     nextAction: null
   });
 }
+function windowsIdentityRecovery(path) {
+  try {
+    return windowsLocalRecoveryStep(path, "file", "bootstrap_agent_identity");
+  } catch {
+    return void 0;
+  }
+}
 function identityStatus(args) {
   return {
     status: args.status,
@@ -70376,11 +72435,12 @@ function identityStatus(args) {
       tool: "bootstrap_agent_identity",
       arguments: args.nextAction.arguments,
       automatic_on_first_signed_submission: args.nextAction.automatic,
-      requires_confirmation: args.nextAction.confirmation
+      requires_confirmation: args.nextAction.confirmation,
+      ...args.nextAction.recovery ? { recovery: args.nextAction.recovery } : {}
     } : null
   };
 }
-function isRecord8(value) {
+function isRecord9(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
@@ -70413,50 +72473,56 @@ var nodeFileSystem2 = {
   exists: existsSync5,
   read: (path, maxBytes = MAX_LOCAL_CONFIG_BYTES) => readSecureLocalText(path, { maxBytes }),
   mode: secureLocalFileMode,
+  privateProtection: verifyWindowsLocalFileProtection,
   list: listSecureLocalDirectory
 };
 function recordConnectionDoctorLifecycleProbe(options = {}) {
   const env = options.env ?? process.env;
   const rawSurface = String(env.REMEMBRANCE_PLUGIN_HOST ?? "").trim().toLowerCase();
   if (!isPluginHostSurface(rawSurface)) return false;
-  const healthDir = env.REMEMBRANCE_PLUGIN_HEALTH_DIR ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR) : join12(
+  const healthDir = env.REMEMBRANCE_PLUGIN_HEALTH_DIR ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR) : join15(
     options.homeDirectory ?? homedir10(),
     ".cache",
     "remembrance",
     "plugin-health"
   );
-  const path = join12(healthDir, `${rawSurface}.json`);
+  const path = join15(healthDir, `${rawSurface}.json`);
   if (!existsSync5(path)) return false;
-  const temporaryPath = `${path}.${process.pid}.${randomBytes9(6).toString("hex")}.tmp`;
+  const temporaryPath = `${path}.${process.pid}.${randomBytes12(6).toString("hex")}.tmp`;
   try {
     const parsed = JSON.parse(
       readSecureLocalText(path, {
         maxBytes: MAX_LOCAL_LIFECYCLE_MARKER_BYTES
       })
     );
-    if (!isRecord9(parsed) || parsed.surface !== rawSurface) return false;
-    const components = isRecord9(parsed.components) ? parsed.components : {};
+    if (!isRecord10(parsed) || parsed.surface !== rawSurface) return false;
+    const components = isRecord10(parsed.components) ? parsed.components : {};
     if (typeof components.session_start !== "string") return false;
-    mkdirSync3(healthDir, { recursive: true, mode: 448 });
-    const directoryMetadata = lstatSync4(healthDir);
+    if (process.platform === "win32") ensureWindowsPrivateDirectorySync(healthDir);
+    else mkdirSync4(healthDir, { recursive: true, mode: 448 });
+    const directoryMetadata = lstatSync9(healthDir);
     if (directoryMetadata.isSymbolicLink() || !directoryMetadata.isDirectory()) {
       return false;
     }
-    chmodSync2(healthDir, 448);
-    writeFileSync3(
-      temporaryPath,
-      `${JSON.stringify({
-        ...parsed,
-        components: {
-          ...components,
-          [CONNECTION_DOCTOR_PROBE_COMPONENT]: (options.now ?? /* @__PURE__ */ new Date()).toISOString()
-        }
-      })}
-`,
-      { mode: 384, flag: "wx" }
-    );
-    renameSync3(temporaryPath, path);
-    chmodSync2(path, 384);
+    if (process.platform !== "win32") chmodSync2(healthDir, 448);
+    const value = `${JSON.stringify({
+      ...parsed,
+      components: {
+        ...components,
+        [CONNECTION_DOCTOR_PROBE_COMPONENT]: (options.now ?? /* @__PURE__ */ new Date()).toISOString()
+      }
+    })}
+`;
+    if (process.platform === "win32") {
+      const descriptor = openWindowsPrivateFileSync(temporaryPath);
+      try {
+        writeFileSync4(descriptor, value);
+      } finally {
+        closeSync9(descriptor);
+      }
+    } else writeFileSync4(temporaryPath, value, { mode: 384, flag: "wx" });
+    renameSync4(temporaryPath, path);
+    if (process.platform !== "win32") chmodSync2(path, 384);
     return true;
   } catch {
     try {
@@ -70528,7 +72594,7 @@ function readSharedConfigSnapshot(env, fileSystem) {
     const parsed = JSON.parse(
       fileSystem.read(path, MAX_LOCAL_CONFIG_BYTES)
     );
-    return isRecord9(parsed) ? { present: true, parsed, config: normalizeConfig(parsed) } : { present: true, parsed: null, config: {} };
+    return isRecord10(parsed) ? { present: true, parsed, config: normalizeConfig(parsed) } : { present: true, parsed: null, config: {} };
   } catch {
     return { present: true, parsed: null, config: {} };
   }
@@ -70583,20 +72649,40 @@ function sharedConfigStatus(env = process.env, fileSystem = nodeFileSystem2) {
   let mode = null;
   let securePermissions = null;
   try {
-    const permissionBits = fileSystem.mode(path) & 511;
-    mode = permissionBits.toString(8).padStart(4, "0");
-    securePermissions = (permissionBits & 63) === 0;
+    if (process.platform === "win32") {
+      securePermissions = fileSystem.privateProtection?.(path) ?? null;
+    } else {
+      const permissionBits = fileSystem.mode(path) & 511;
+      mode = permissionBits.toString(8).padStart(4, "0");
+      securePermissions = (permissionBits & 63) === 0;
+    }
   } catch {
   }
   let validJson = false;
   let config = {};
   try {
-    const parsed = JSON.parse(
-      fileSystem.read(path, MAX_LOCAL_CONFIG_BYTES)
-    );
-    validJson = isRecord9(parsed);
+    let content2;
+    try {
+      if (process.platform === "win32" && securePermissions !== true) throw new Error("Private protection unverified");
+      content2 = fileSystem.read(path, MAX_LOCAL_CONFIG_BYTES);
+    } catch (error) {
+      if (process.platform === "win32") {
+        validJson = null;
+        securePermissions = null;
+      }
+      throw error;
+    }
+    const parsed = JSON.parse(content2);
+    validJson = isRecord10(parsed);
     config = normalizeConfig(parsed);
   } catch {
+  }
+  let recovery;
+  if (process.platform === "win32" && securePermissions !== true) {
+    try {
+      recovery = windowsLocalRecoveryStep(path, "file", "get_connection_status");
+    } catch {
+    }
   }
   return {
     location,
@@ -70605,11 +72691,29 @@ function sharedConfigStatus(env = process.env, fileSystem = nodeFileSystem2) {
     api_key_present: Boolean(config.apiKey),
     api_url_present: Boolean(config.apiUrl),
     mode,
-    secure_permissions: securePermissions
+    secure_permissions: securePermissions,
+    ...recovery ? { next_action: recovery } : {}
   };
 }
 function localConnectionStatus(result, options) {
-  const response = isRecord9(result) ? result : {};
+  if (process.platform !== "win32") return localConnectionStatusWithinCredentialRead(result, options);
+  const env = options.env ?? process.env;
+  let entered = false;
+  try {
+    return withWindowsPrivateReadOperation([
+      { path: remembranceConfigPath(env), kind: "file" },
+      { path: localAgentIdentityPath(env), kind: "file" }
+    ], () => {
+      entered = true;
+      return localConnectionStatusWithinCredentialRead(result, options);
+    });
+  } catch (error) {
+    if (entered) throw error;
+    return localConnectionStatusWithinCredentialRead(result, options);
+  }
+}
+function localConnectionStatusWithinCredentialRead(result, options) {
+  const response = isRecord10(result) ? result : {};
   const env = options.env ?? process.env;
   const fileSystem = options.fileSystem ?? nodeFileSystem2;
   const credential = resolveApiCredential(env, fileSystem);
@@ -70700,7 +72804,7 @@ function localHostPolicyStatus(options) {
       explanation: "This host does not expose a reliable failed-tool or permission event to the plugin."
     };
   }
-  const directory = env.REMEMBRANCE_PLUGIN_ALERT_DIR ? String(env.REMEMBRANCE_PLUGIN_ALERT_DIR) : join12(homedir10(), ".cache", "remembrance", "plugin-alerts");
+  const directory = env.REMEMBRANCE_PLUGIN_ALERT_DIR ? String(env.REMEMBRANCE_PLUGIN_ALERT_DIR) : join15(homedir10(), ".cache", "remembrance", "plugin-alerts");
   const names = fileSystem.list ? (() => {
     try {
       return fileSystem.list?.(directory) ?? [];
@@ -70718,15 +72822,15 @@ function localHostPolicyStatus(options) {
       const sessionHash = name.split(".")[1];
       const parsed = JSON.parse(
         fileSystem.read(
-          join12(directory, name),
+          join15(directory, name),
           MAX_LOCAL_LIFECYCLE_MARKER_BYTES
         )
       );
-      if (!isRecord9(parsed) || parsed.schema_version !== 1 || parsed.surface !== surface || parsed.session_hash !== sessionHash || !Array.isArray(parsed.observations)) {
+      if (!isRecord10(parsed) || parsed.schema_version !== 1 || parsed.surface !== surface || parsed.session_hash !== sessionHash || !Array.isArray(parsed.observations)) {
         continue;
       }
       for (const candidate of parsed.observations) {
-        if (!isRecord9(candidate)) continue;
+        if (!isRecord10(candidate)) continue;
         const seenMs = typeof candidate.last_seen_at === "string" ? Date.parse(candidate.last_seen_at) : Number.NaN;
         if (Number.isFinite(seenMs) && seenMs <= nowMs + PLUGIN_HEALTH_MAX_FUTURE_SKEW_MS && nowMs - seenMs <= HOST_POLICY_OBSERVATION_MAX_AGE_MS && seenMs > latestMs) {
           latest = candidate;
@@ -70782,23 +72886,23 @@ function localPluginLifecycleHealth(options) {
   }
   const surface = rawSurface;
   const host = agentHostBySurface(surface);
-  const healthDir = env.REMEMBRANCE_PLUGIN_HEALTH_DIR ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR) : join12(homedir10(), ".cache", "remembrance", "plugin-health");
+  const healthDir = env.REMEMBRANCE_PLUGIN_HEALTH_DIR ? String(env.REMEMBRANCE_PLUGIN_HEALTH_DIR) : join15(homedir10(), ".cache", "remembrance", "plugin-health");
   const paths = lifecycleMarkerPaths(surface, healthDir, fileSystem);
   if (paths.length === 0) {
     return missingPluginLifecycleHealth(surface);
   }
   const nowMs = (options.now ?? /* @__PURE__ */ new Date()).getTime();
-  const genericPath = join12(healthDir, `${surface}.json`);
+  const genericPath = join15(healthDir, `${surface}.json`);
   const markerEntries = [];
   for (const path of paths) {
     try {
       const parsed = JSON.parse(
         fileSystem.read(path, MAX_LOCAL_LIFECYCLE_MARKER_BYTES)
       );
-      if (!isRecord9(parsed) || parsed.surface !== surface) {
+      if (!isRecord10(parsed) || parsed.surface !== surface) {
         continue;
       }
-      const components2 = isRecord9(parsed.components) ? parsed.components : {};
+      const components2 = isRecord10(parsed.components) ? parsed.components : {};
       markerEntries.push({
         path,
         marker: parsed,
@@ -70843,7 +72947,7 @@ function localPluginLifecycleHealth(options) {
     let latestValue;
     let latestMs = Number.NEGATIVE_INFINITY;
     for (const entry of cohort) {
-      const components2 = isRecord9(entry.marker.components) ? entry.marker.components : {};
+      const components2 = isRecord10(entry.marker.components) ? entry.marker.components : {};
       const value = components2[component];
       const valueMs = validLifecycleTimestamp(value, nowMs);
       if (valueMs > latestMs) {
@@ -70856,7 +72960,7 @@ function localPluginLifecycleHealth(options) {
   let latestDoctorProbe;
   let latestDoctorProbeMs = Number.NEGATIVE_INFINITY;
   for (const entry of cohort) {
-    const components2 = isRecord9(entry.marker.components) ? entry.marker.components : {};
+    const components2 = isRecord10(entry.marker.components) ? entry.marker.components : {};
     const value = components2[CONNECTION_DOCTOR_PROBE_COMPONENT];
     const valueMs = validLifecycleTimestamp(value, nowMs);
     if (valueMs > latestDoctorProbeMs) {
@@ -71024,7 +73128,7 @@ var HOOK_TRUST_UNAVAILABLE_REASONS = /* @__PURE__ */ new Set([
   "plugin_hooks_not_listed"
 ]);
 function normalizedPluginHookTrust(value) {
-  if (!isRecord9(value)) return null;
+  if (!isRecord10(value)) return null;
   const status = value.status;
   if (status !== "trusted" && status !== "review_required" && status !== "unavailable") {
     return null;
@@ -71049,7 +73153,7 @@ function normalizedPluginHookTrust(value) {
   const reviewEvents = Array.isArray(value.review_events) ? [...new Set(value.review_events)].filter(
     (event) => typeof event === "string" && allowedEvents.has(event)
   ).slice(0, 6) : [];
-  const hooks = Array.isArray(value.hooks) ? value.hooks.filter(isRecord9).filter(
+  const hooks = Array.isArray(value.hooks) ? value.hooks.filter(isRecord10).filter(
     (entry) => typeof entry.event === "string" && allowedEvents.has(entry.event)
   ).slice(0, 6).map((entry) => ({
     event: String(entry.event),
@@ -71069,7 +73173,7 @@ function apiDestinationStatus(baseUrl, source) {
   return {
     kind: normalized2 === "https://remembrance.dev" ? "remembrance_cloud" : "custom",
     source,
-    fingerprint: createHash7("sha256").update(normalized2, "utf8").digest("hex").slice(0, 16)
+    fingerprint: createHash9("sha256").update(normalized2, "utf8").digest("hex").slice(0, 16)
   };
 }
 function missingPluginLifecycleHealth(surface) {
@@ -71101,7 +73205,7 @@ function emptyPluginComponents() {
   );
 }
 function lifecycleMarkerPaths(surface, healthDir, fileSystem) {
-  const legacyPath = join12(healthDir, `${surface}.json`);
+  const legacyPath = join15(healthDir, `${surface}.json`);
   const paths = fileSystem.exists(legacyPath) ? [legacyPath] : [];
   const listed = fileSystem.list ? (() => {
     try {
@@ -71112,12 +73216,12 @@ function lifecycleMarkerPaths(surface, healthDir, fileSystem) {
   })() : [];
   const sessionPaths = listed.filter(
     (name) => name.startsWith(`${surface}.`) && name.endsWith(".json") && /^[a-z_]+\.[a-f0-9]{24}\.json$/.test(name)
-  ).slice(0, MAX_LOCAL_LIFECYCLE_MARKERS - paths.length).map((name) => join12(healthDir, name));
+  ).slice(0, MAX_LOCAL_LIFECYCLE_MARKERS - paths.length).map((name) => join15(healthDir, name));
   paths.push(...sessionPaths);
   return [...new Set(paths)].slice(0, MAX_LOCAL_LIFECYCLE_MARKERS);
 }
 function normalizeConfig(value) {
-  if (!isRecord9(value)) return {};
+  if (!isRecord10(value)) return {};
   const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim() : "";
   const apiUrl = typeof value.apiUrl === "string" ? value.apiUrl.trim() : "";
   const memberLinkToken = typeof value.memberLinkToken === "string" ? value.memberLinkToken.trim() : "";
@@ -71126,32 +73230,6 @@ function normalizeConfig(value) {
     ...apiUrl ? { apiUrl } : {},
     ...memberLinkToken && /^mlink_[A-Za-z0-9_-]{24,160}$/.test(memberLinkToken) ? { memberLinkToken } : {}
   };
-}
-function normalizeApiUrl(value, env) {
-  if (typeof value !== "string" || !value.trim()) {
-    return { baseUrl: null, issue: "invalid_url" };
-  }
-  const candidate = value.trim();
-  try {
-    const parsed = new URL(candidate);
-    if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
-      return { baseUrl: null, issue: "invalid_url" };
-    }
-    const loopback = isLoopbackHostname(parsed.hostname);
-    const privateDestination = isPrivateDestinationHostname(parsed.hostname);
-    if (parsed.protocol === "http:" && !loopback) {
-      return { baseUrl: null, issue: "insecure_remote_http" };
-    }
-    if (!loopback && privateDestination && env.REMEMBRANCE_ALLOW_PRIVATE_REGISTRY !== "true") {
-      return {
-        baseUrl: null,
-        issue: "private_destination_requires_opt_in"
-      };
-    }
-    return { baseUrl: candidate.replace(/\/+$/, ""), issue: null };
-  } catch {
-    return { baseUrl: null, issue: "invalid_url" };
-  }
 }
 function credentialForDestination(credential, configuration) {
   if (configuration.source.startsWith("unusable_")) {
@@ -71171,37 +73249,6 @@ function unusableDestinationBinding() {
     source: "unusable_destination_binding"
   };
 }
-function isLoopbackHostname(hostname) {
-  const normalized2 = normalizeHostname(hostname);
-  if (normalized2 === "localhost" || normalized2.endsWith(".localhost")) {
-    return true;
-  }
-  if (normalized2 === "::1") return true;
-  if (isIP(normalized2) === 4) {
-    return Number(normalized2.split(".")[0]) === 127;
-  }
-  return false;
-}
-function isPrivateDestinationHostname(hostname) {
-  const normalized2 = normalizeHostname(hostname);
-  if (normalized2.endsWith(".local") || normalized2.endsWith(".internal") || normalized2 === "localhost") {
-    return true;
-  }
-  const version = isIP(normalized2);
-  if (version === 4) return isNonPublicIpv4(normalized2);
-  if (version === 6) {
-    const compact = normalized2.toLowerCase();
-    return compact === "::" || compact === "::1" || compact.startsWith("fc") || compact.startsWith("fd") || /^fe[89ab]/.test(compact);
-  }
-  return false;
-}
-function isNonPublicIpv4(address) {
-  const [a = -1, b = -1] = address.split(".").map(Number);
-  return a === 0 || a === 10 || a === 127 || a === 100 && b >= 64 && b <= 127 || a === 169 && b === 254 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168 || a === 198 && (b === 18 || b === 19) || a >= 224;
-}
-function normalizeHostname(hostname) {
-  return hostname.replace(/^\[|\]$/g, "").toLowerCase();
-}
 function validLifecycleTimestamp(value, nowMs) {
   if (typeof value !== "string") return Number.NaN;
   const parsed = Date.parse(value);
@@ -71210,404 +73257,8 @@ function validLifecycleTimestamp(value, nowMs) {
   }
   return parsed;
 }
-function isRecord9(value) {
+function isRecord10(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-// src/admin-control-vault.ts
-var ADMIN_CREDENTIAL_ISSUANCE_OPERATIONS = Object.freeze(["api_keys.create", "agents.member_link.create"]);
-var recordSchema = external_exports.object({
-  version: external_exports.literal("admin-credential-vault-v1"),
-  base_url: external_exports.string(),
-  operation: external_exports.enum(["api_keys.create", "agents.member_link.create"]),
-  org_id: external_exports.string().regex(/^org_[a-f0-9]{18}$/).optional(),
-  request_id: external_exports.string().regex(/^acreq_[a-f0-9]{32}$/),
-  request_digest: external_exports.string().regex(/^[a-f0-9]{64}$/),
-  state: external_exports.enum(["pending", "not_delivered", "stored"]),
-  created_at: external_exports.string().datetime(),
-  secret: external_exports.string().min(1).max(4096).optional(),
-  key_id: external_exports.string().regex(/^key_[a-f0-9]{18}$/).optional(),
-  expires_at: external_exports.string().datetime().optional()
-}).strict();
-function pathFor(baseUrl, requestId) {
-  const destination = createHash8("sha256").update(baseUrl).digest("hex");
-  return join13(dirname8(remembranceConfigPath()), "admin-credential-vault", destination, `${requestId}.json`);
-}
-function privateDirectory(path) {
-  mkdirSync4(path, { recursive: true, mode: 448 });
-  assertSecurePrivateLocalDirectory(path);
-}
-function prepareAdminCredentialDelivery(baseUrl, payload) {
-  if (!ADMIN_CREDENTIAL_ISSUANCE_OPERATIONS.includes(String(payload.operation))) return null;
-  const requestId = external_exports.string().regex(/^acreq_[a-f0-9]{32}$/).parse(payload.request_id);
-  const path = pathFor(baseUrl, requestId);
-  privateDirectory(dirname8(dirname8(path)));
-  privateDirectory(dirname8(path));
-  const digest3 = createHash8("sha256").update(canonicalJson(payload)).digest("hex");
-  try {
-    const existing = recordSchema.parse(JSON.parse(readSecureLocalText(path, { maxBytes: 16384 })));
-    if (existing.base_url !== baseUrl || existing.request_digest !== digest3 || existing.request_id !== requestId || existing.operation !== payload.operation) throw Error("Credential delivery identity conflict.");
-    if (existing.state === "stored" && !existing.secret) throw Error("Stored credential is unavailable.");
-    return { path, record: existing, readyToIssue: existing.state === "not_delivered" };
-  } catch (error) {
-    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
-  }
-  const record4 = recordSchema.parse({
-    version: "admin-credential-vault-v1",
-    base_url: baseUrl,
-    operation: payload.operation,
-    request_id: requestId,
-    request_digest: digest3,
-    state: "pending",
-    created_at: (/* @__PURE__ */ new Date()).toISOString(),
-    ...payload.org_id ? { org_id: payload.org_id } : {}
-  });
-  writeFileSync4(path, JSON.stringify(record4), { mode: 384, flag: "wx" });
-  return { path, record: record4, readyToIssue: true };
-}
-function save(delivery, record4) {
-  const temporary = `${delivery.path}.${randomBytes10(8).toString("hex")}.tmp`;
-  try {
-    writeFileSync4(temporary, JSON.stringify(recordSchema.parse(record4)), { mode: 384, flag: "wx" });
-    renameSync4(temporary, delivery.path);
-    delivery.record = record4;
-  } finally {
-    try {
-      unlinkSync2(temporary);
-    } catch {
-    }
-  }
-}
-function adminCredentialDeliveryReceipt(delivery) {
-  return {
-    request_id: delivery.record.request_id,
-    operation: delivery.record.operation,
-    one_time_secret_stored: true,
-    vault_reference: delivery.path,
-    ...delivery.record.key_id ? { key_id: delivery.record.key_id } : {},
-    ...delivery.record.expires_at ? { expires_at: delivery.record.expires_at } : {},
-    instruction: "The one-time credential is in a separate mode-0600 local vault. Configure its intended client using local secret handling; never print it, copy it into chat, or replace the current organization credential implicitly."
-  };
-}
-function adminCredentialUnknownReceipt(delivery) {
-  return { ok: false, status: 0, body: {
-    code: "admin_credential_delivery_unknown",
-    delivery: "unknown",
-    request_id: delivery.record.request_id,
-    operation: delivery.record.operation,
-    retry_automatically: false,
-    next_action: { tool: "admin_read", arguments: {
-      operation: "admin.operations.status",
-      ...delivery.record.org_id ? { org_id: delivery.record.org_id } : {},
-      input: { request_id: delivery.record.request_id }
-    } },
-    instruction: delivery.record.operation === "api_keys.create" ? "Do not mint a replacement under a new request_id. Read this exact operation receipt, then inspect api_keys.list. If issuance succeeded but delivery was lost, explicitly revoke its issued key ID before requesting another. This vault reservation contains no recoverable secret yet." : "Do not mint a replacement under a new request_id. Read this exact operation receipt. An undelivered member-link credential expires automatically; confirm the existing link has expired before requesting another. This vault reservation contains no recoverable secret yet."
-  } };
-}
-function markAdminCredentialNotDelivered(delivery) {
-  save(delivery, { ...delivery.record, state: "not_delivered" });
-}
-function reserveAdminCredentialRetry(delivery) {
-  save(delivery, { ...delivery.record, state: "pending" });
-}
-function storeIssuedAdminCredential(delivery, body) {
-  const envelope2 = body && typeof body === "object" ? body : {};
-  if (envelope2.operation !== delivery.record.operation || envelope2.request_id !== delivery.record.request_id || !envelope2.result || typeof envelope2.result !== "object") return false;
-  const result = envelope2.result;
-  const secret = delivery.record.operation === "api_keys.create" ? result.api_key : result.token;
-  const grammar = delivery.record.operation === "api_keys.create" ? /^rem_[A-Za-z0-9_-]{43}$/ : /^mlink_[A-Za-z0-9_-]{43}$/;
-  if (typeof secret !== "string" || !grammar.test(secret)) return false;
-  const key = result.key && typeof result.key === "object" ? result.key : {};
-  save(delivery, {
-    ...delivery.record,
-    state: "stored",
-    secret,
-    ...typeof key.id === "string" && /^key_[a-f0-9]{18}$/.test(key.id) ? { key_id: key.id } : {},
-    ...external_exports.string().datetime().safeParse(result.expires_at).success ? { expires_at: result.expires_at } : {}
-  });
-  return true;
-}
-
-// src/admin-control-client.ts
-var MAX_RESPONSE_BYTES = ADMIN_CONTROL_MAX_RESPONSE_BYTES;
-function failure(code, status, delivery = "unknown", requestId) {
-  return { ok: false, status, body: {
-    code,
-    error: "Administrative operation unavailable.",
-    delivery,
-    ...requestId ? { request_id: requestId } : {},
-    retry_automatically: false,
-    ...code === "admin_session_unauthorized" || code === "admin_authorization_exchange_failed" ? { next_action: "Call end_admin_session, then begin_admin_login for fresh browser approval. Never replace ordinary organization credentials." } : code === "admin_session_expired" || code === "admin_authentication_required" ? { next_action: "Call begin_admin_login for browser approval, or configure an authorized organization admin key separately." } : code === "admin_credential_vault_unavailable" ? { next_action: "No credential issuance was sent. Restore user-owned, private and writable local vault storage, or inspect this request_id's existing vault reservation. Never change a reserved request's input or silently mint a replacement." } : {}
-  } };
-}
-async function readJson(response) {
-  if (!response.body) throw new Error();
-  const reader = response.body.getReader();
-  const chunks = [];
-  let bytes = 0;
-  try {
-    for (; ; ) {
-      const next = await reader.read();
-      if (next.done) break;
-      bytes += next.value.byteLength;
-      if (bytes > MAX_RESPONSE_BYTES) throw new Error();
-      chunks.push(next.value);
-    }
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } finally {
-    await reader.cancel().catch(() => {
-    });
-    reader.releaseLock();
-  }
-}
-async function request(transport, baseUrl, path, method, payload, credential, requestId) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 3e4);
-  try {
-    const headers = { "content-type": "application/json" };
-    if (credential?.adminToken) headers["x-remembrance-admin-token"] = credential.adminToken;
-    else if (credential?.apiKey) headers["x-remembrance-api-key"] = credential.apiKey;
-    if (requestId) headers["Idempotency-Key"] = requestId;
-    const response = await transport.request(`${baseUrl}${path}`, {
-      method,
-      headers,
-      redirect: "manual",
-      signal: controller.signal,
-      ...payload !== void 0 ? { body: JSON.stringify(payload) } : {}
-    });
-    if (response.status >= 300 && response.status < 400) return { response, body: null, redirect: true };
-    return { response, body: await readJson(response), redirect: false };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-async function callAdminControlTool(name, payload, access, transport) {
-  const baseUrl = access.configuration.baseUrl;
-  const requestId = name === "admin_write" ? String(payload.request_id) : void 0;
-  let reservedDelivery = null;
-  if (access.configuration.source.startsWith("unusable_")) return failure("admin_destination_unavailable", 0, "not_delivered", requestId);
-  try {
-    secureDirectory(dirname9(storePath(baseUrl)));
-    return await withPrivateOutboxLock(dirname9(storePath(baseUrl)), "admin-session", async () => {
-      const state = readState(baseUrl);
-      if (name === "begin_admin_login") {
-        if (state && Date.parse(state.expires_at) > Date.now()) return { ok: true, ...publicState(state) };
-        const verifier = randomBytes11(32).toString("base64url");
-        const result2 = await request(transport, baseUrl, "/api/v1/admin/agent-sessions/authorize", "POST", {
-          code_challenge: createHash9("sha256").update(verifier).digest("base64url"),
-          code_challenge_method: "S256"
-        });
-        if (!result2.response.ok || result2.redirect) return failure("admin_authorization_unavailable", result2.response.status);
-        const started = pendingSchema.omit({ state: true, base_url: true, code_verifier: true, next_poll_at: true }).parse(result2.body);
-        const expectedUri = new URL("/admin/authorize-agent", baseUrl);
-        expectedUri.searchParams.set("request_id", started.request_id);
-        if (started.verification_uri !== expectedUri.toString() || Date.parse(started.expires_at) <= Date.now())
-          return failure("admin_authorization_destination_invalid", 0, "not_delivered");
-        const pending = {
-          ...started,
-          state: "pending",
-          base_url: baseUrl,
-          code_verifier: verifier,
-          next_poll_at: new Date(Date.now() + started.interval * 1e3).toISOString()
-        };
-        saveState(pending);
-        return { ok: true, ...publicState(pending) };
-      }
-      if (name === "complete_admin_login") {
-        if (!state || state.state !== "pending") return { ok: Boolean(state), ...publicState(state) };
-        if (Date.parse(state.expires_at) <= Date.now()) return { ok: false, ...publicState(state) };
-        if (Date.parse(state.next_poll_at) > Date.now()) return { ok: true, ...publicState(state) };
-        saveState({ ...state, next_poll_at: new Date(Date.now() + state.interval * 1e3).toISOString() });
-        const result2 = await request(transport, baseUrl, "/api/v1/admin/agent-sessions/token", "POST", {
-          request_id: state.request_id,
-          device_secret: state.device_secret,
-          code_verifier: state.code_verifier
-        });
-        if (result2.response.status === 409 && result2.body && typeof result2.body === "object" && "code" in result2.body && result2.body.code === "authorization_pending")
-          return { ok: true, ...publicState(readState(baseUrl)) };
-        if (!result2.response.ok || result2.redirect) return failure("admin_authorization_exchange_failed", result2.response.status);
-        const issued2 = external_exports.object({ access_token: activeSchema.shape.access_token, token_type: external_exports.literal("Bearer"), expires_at: timestamp2, session_id: id }).strict().parse(result2.body);
-        if (issued2.session_id !== state.request_id || Date.parse(issued2.expires_at) <= Date.now()) return failure("admin_authorization_response_invalid", 0);
-        const active = { state: "active", base_url: baseUrl, access_token: issued2.access_token, session_id: issued2.session_id, expires_at: issued2.expires_at };
-        saveState(active);
-        return { ok: true, ...publicState(active) };
-      }
-      if (name === "end_admin_session") {
-        let revocationConfirmed = false;
-        let sessionAlreadyInvalid = false;
-        if (state?.state === "active") {
-          const result2 = await request(transport, baseUrl, "/api/v1/admin/agent-sessions/current", "DELETE", void 0, { adminToken: state.access_token });
-          const body = result2.body && typeof result2.body === "object" ? result2.body : {};
-          revocationConfirmed = result2.response.ok && body.revoked === true;
-          sessionAlreadyInvalid = result2.response.status === 401 && body.code === "admin_session_invalid" && body.delivery === "not_delivered";
-          if (!revocationConfirmed && !sessionAlreadyInvalid)
-            return failure("admin_revocation_outcome_unknown", result2.response.status);
-        }
-        if (state) unlinkSync3(storePath(baseUrl));
-        return {
-          ok: true,
-          status: "signed_out",
-          server_revocation_confirmed: revocationConfirmed,
-          ...sessionAlreadyInvalid ? { server_session_already_invalid: true } : {}
-        };
-      }
-      if (state && state.state === "active" && Date.parse(state.expires_at) <= Date.now())
-        return failure("admin_session_expired", 401, "not_delivered", requestId);
-      const adminToken = state?.state === "active" ? state.access_token : void 0;
-      if (!adminToken && (!access.credential.apiKey || access.credential.source.startsWith("unusable_")))
-        return failure("admin_authentication_required", 401, "not_delivered", requestId);
-      let delivery = null;
-      try {
-        delivery = name === "admin_write" ? prepareAdminCredentialDelivery(baseUrl, payload) : null;
-      } catch {
-        return failure("admin_credential_vault_unavailable", 0, "not_delivered", requestId);
-      }
-      reservedDelivery = delivery;
-      if (delivery?.record.state === "stored") return { ok: true, status: 200, body: adminCredentialDeliveryReceipt(delivery) };
-      if (delivery && !delivery.readyToIssue) return adminCredentialUnknownReceipt(delivery);
-      if (delivery?.record.state === "not_delivered") reserveAdminCredentialRetry(delivery);
-      const path = name === "get_admin_capabilities" ? `/api/v1/admin/control${payload.org_id ? `?org_id=${encodeURIComponent(String(payload.org_id))}` : ""}` : `/api/v1/admin/control/${name === "admin_read" ? "read" : "write"}`;
-      const result = await request(
-        transport,
-        baseUrl,
-        path,
-        name === "get_admin_capabilities" ? "GET" : "POST",
-        name === "get_admin_capabilities" ? void 0 : payload,
-        { adminToken, apiKey: adminToken ? void 0 : access.credential.apiKey },
-        requestId
-      );
-      if (!result.response.ok || result.redirect) {
-        const record4 = result.body && typeof result.body === "object" ? result.body : {};
-        if (delivery && record4.delivery === "not_delivered") markAdminCredentialNotDelivered(delivery);
-        return failure(
-          result.response.status === 401 ? "admin_session_unauthorized" : "admin_operation_failed",
-          result.response.status,
-          record4.delivery === "not_delivered" ? "not_delivered" : "unknown",
-          requestId
-        );
-      }
-      const serialized = JSON.stringify(result.body);
-      const secrets = [
-        ...access.credential.apiKey ? [access.credential.apiKey] : [],
-        ...state?.state === "active" ? [state.access_token] : state?.state === "pending" ? [state.code_verifier, state.device_secret] : []
-      ];
-      if (secrets.some((secret) => serialized.includes(secret))) return failure("admin_response_invalid", result.response.status, "unknown", requestId);
-      if (delivery) {
-        if (!storeIssuedAdminCredential(delivery, result.body)) return adminCredentialUnknownReceipt(delivery);
-        return { ok: true, status: result.response.status, body: adminCredentialDeliveryReceipt(delivery) };
-      }
-      return {
-        ok: true,
-        status: result.response.status,
-        body: result.body,
-        ...name === "get_admin_capabilities" ? { server_validity_checked: true } : {}
-      };
-    }, { waitMs: 1e3 });
-  } catch {
-    if (reservedDelivery) return adminCredentialUnknownReceipt(reservedDelivery);
-    return failure("admin_operation_unavailable", 0, "unknown", requestId);
-  }
-}
-
-// ../core/src/redaction-request-budget.ts
-import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
-var requests = new AsyncLocalStorage3();
-trackRedactionRequests(() => requests.getStore());
-function withRedactionRequestBudget(run) {
-  return requests.getStore() ? run() : requests.run({}, run);
-}
-
-// src/review-repair-inspection.ts
-function inspectReviewRepairForTransport(value) {
-  const request2 = privateSkillReviewRepairRequestSchema.parse(value);
-  const inspection = inspectPrivateSkillCandidate(request2.capture);
-  if (inspection.status === "complete" && inspection.decision.outcome === "unchanged") {
-    const values = [];
-    const pending = [request2.expected_review_snapshot];
-    while (pending.length) {
-      const entry = pending.pop();
-      if (entry !== null && typeof entry === "object") pending.push(...Object.values(entry));
-      else values.push(entry);
-    }
-    try {
-      if (canonicalJson(withRedactionRequestBudget(() => redactPayload(values))) !== canonicalJson(values)) {
-        return { ready: false, refusal: {
-          status: "held",
-          code: "review_repair_wire_inspection_hold",
-          delivery: "not_delivered",
-          candidate_sent: false,
-          candidate_stored: false,
-          original_disposition: "unchanged",
-          next_action: "Retain the original. Read a fresh normal content-free review snapshot; do not send suspected secrets, rewrite the held request, or use another transport."
-        } };
-      }
-    } catch {
-      return { ready: false, refusal: {
-        status: "held",
-        code: "review_repair_wire_inspection_failure",
-        delivery: "not_delivered",
-        candidate_sent: false,
-        candidate_stored: false,
-        original_disposition: "unchanged",
-        next_action: "Retain the original. Correct the local inspection failure before retrying; do not reformulate around an operational failure."
-      } };
-    }
-    return { ready: true, request: request2 };
-  }
-  const reason = inspection.status === "complete" ? "authored_capture_changed_by_inspection" : inspection.status === "incomplete" ? inspection.reason : inspection.error_code;
-  return { ready: false, refusal: {
-    status: "held",
-    code: "review_repair_local_inspection_hold",
-    delivery: "not_delivered",
-    candidate_sent: false,
-    candidate_stored: false,
-    original_disposition: "unchanged",
-    reason_code: reason,
-    inspection: inspection.decision,
-    next_action: inspection.status === "invalid" ? "Retain the original. Correct the local inspection failure before retrying the same unchanged request; do not reformulate around an operational failure or use another transport." : "Retain the original. Prepare a complete safe replacement from authenticated task context and inspect it again. Do not recover suspected secrets, invent missing instructions, or bypass a host denial."
-  } };
-}
-
-// src/network-transport.ts
-import { AsyncLocalStorage as AsyncLocalStorage4 } from "node:async_hooks";
-var networkExecutionAuthority = new AsyncLocalStorage4();
-var guardedFetches = /* @__PURE__ */ new WeakSet();
-function installRuntimeFetchGuard() {
-  const delegate = globalThis.fetch;
-  if (typeof delegate !== "function" || guardedFetches.has(delegate)) return;
-  const guardedFetch = (input, init) => {
-    assertRemembranceNetworkEgressAllowed("ambient fetch");
-    return delegate.call(globalThis, input, init);
-  };
-  guardedFetches.add(guardedFetch);
-  globalThis.fetch = guardedFetch;
-}
-installRuntimeFetchGuard();
-async function runWithRemembranceNetworkExecution(authority, operation) {
-  const effectiveAuthority = restrictNetworkExecutionAuthority(authority);
-  installRuntimeFetchGuard();
-  return networkExecutionAuthority.run(effectiveAuthority, operation);
-}
-function restrictNetworkExecutionAuthority(requested) {
-  const parent = networkExecutionAuthority.getStore();
-  return parent?.networkBehavior === "local_only" ? parent : requested;
-}
-function assertRemembranceNetworkEgressAllowed(capability) {
-  const authority = networkExecutionAuthority.getStore();
-  if (authority?.networkBehavior === "local_only") {
-    throw new Error(
-      `Local-only tool attempted network egress through ${capability}: ${authority.toolName}.`
-    );
-  }
-}
-function createRemembranceNetworkTransport(fetchImpl) {
-  assertRemembranceNetworkEgressAllowed("transport construction");
-  const delegate = fetchImpl ?? globalThis.fetch;
-  const request2 = (input, init) => {
-    assertRemembranceNetworkEgressAllowed("transport request");
-    return delegate.call(globalThis, input, init);
-  };
-  return Object.freeze({ request: request2 });
 }
 
 // src/private-skill-native-context-cli.ts
@@ -71748,9 +73399,9 @@ async function checkClientUpdate(input) {
 }
 
 // src/installed-client-version.ts
-import { lstat as lstat4, readdir as readdir3, readFile as readFile2 } from "node:fs/promises";
+import { lstat as lstat6, readdir as readdir3, readFile } from "node:fs/promises";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { basename as basename3, dirname as dirname10, join as join14 } from "node:path";
+import { basename as basename3, dirname as dirname13, join as join16 } from "node:path";
 var MAX_MANIFEST_BYTES2 = 16 * 1024;
 var MAX_ANCESTORS = 5;
 var MAX_VERSION_SIBLINGS = 64;
@@ -71774,7 +73425,7 @@ async function detectInstalledClientVersion(input) {
   } catch {
     return unavailable3(input.runningVersion);
   }
-  const roots = ancestorDirectories(dirname10(bundlePath));
+  const roots = ancestorDirectories(dirname13(bundlePath));
   const discovered = /* @__PURE__ */ new Set();
   let versionedRoot = null;
   for (const root of roots) {
@@ -71785,9 +73436,9 @@ async function detectInstalledClientVersion(input) {
     break;
   }
   if (versionedRoot) {
-    const parent = dirname10(versionedRoot);
+    const parent = dirname13(versionedRoot);
     for (const name of await boundedSafeDirectoryNames(parent)) {
-      const siblingRoot = join14(parent, name);
+      const siblingRoot = join16(parent, name);
       const version = await readRemembranceVersion(siblingRoot, input.surface);
       if (version === name) discovered.add(version);
     }
@@ -71809,7 +73460,7 @@ function ancestorDirectories(start) {
   let current = start;
   for (let index = 0; index < MAX_ANCESTORS; index += 1) {
     roots.push(current);
-    const parent = dirname10(current);
+    const parent = dirname13(current);
     if (parent === current) break;
     current = parent;
   }
@@ -71817,7 +73468,7 @@ function ancestorDirectories(start) {
 }
 async function readRemembranceVersion(root, surface) {
   for (const relative of SURFACE_MANIFESTS[surface]) {
-    const manifest = await readBoundedRegularJson(join14(root, relative));
+    const manifest = await readBoundedRegularJson(join16(root, relative));
     if (!manifest || !isRemembranceManifest(manifest)) continue;
     const version = manifest.version;
     if (typeof version === "string" && parseStableClientVersion(version)) {
@@ -71828,14 +73479,14 @@ async function readRemembranceVersion(root, surface) {
 }
 async function readBoundedRegularJson(path) {
   try {
-    const metadata = await lstat4(path);
-    if (metadata.isSymbolicLink() || !metadata.isFile() || metadata.size > MAX_MANIFEST_BYTES2) {
+    const metadata2 = await lstat6(path);
+    if (metadata2.isSymbolicLink() || !metadata2.isFile() || metadata2.size > MAX_MANIFEST_BYTES2) {
       return null;
     }
-    const text = await readFile2(path, "utf8");
+    const text = await readFile(path, "utf8");
     if (Buffer.byteLength(text, "utf8") > MAX_MANIFEST_BYTES2) return null;
     const parsed = JSON.parse(text);
-    return isRecord10(parsed) ? parsed : null;
+    return isRecord11(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -71861,7 +73512,7 @@ function unavailable3(runningVersion) {
     installed_version: null
   };
 }
-function isRecord10(value) {
+function isRecord11(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
@@ -72043,10 +73694,19 @@ function inspectPrivateLearningOutbox2(input, dependencies = {}) {
 }
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.2.25" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.2.26" : "0.0.0-dev";
 var tools2 = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var nativeContextCliRequested = process.argv[2] === "--native-context";
+var configureCliRequested = process.argv[2] === "configure" && isStandaloneServerEntry();
+function isStandaloneServerEntry() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath3(import.meta.url));
+  } catch {
+    return false;
+  }
+}
 function legacyBroadWritesEnabled(env = process.env) {
   return /^(1|true|yes)$/iu.test(
     env.REMEMBRANCE_ENABLE_LEGACY_BROAD_WRITES ?? ""
@@ -72095,7 +73755,7 @@ async function waitForPrincipalSessionBackgroundTasksForTests() {
     await Promise.allSettled([...principalSessionBackgroundTasks]);
   }
 }
-if (!doctorCliRequested && !nativeContextCliRequested) {
+if (!doctorCliRequested && !nativeContextCliRequested && !configureCliRequested) {
   process.stdin.on("data", (chunk) => {
     inputBuffer = Buffer.concat([inputBuffer, chunk]);
     processMessages().catch(() => {
@@ -72198,7 +73858,7 @@ async function dispatchJsonRpcRequest(request2) {
     const hookApproval = readCodexHookApproval({
       runningVersion: SERVER_VERSION
     });
-    const instructions = hookApproval ? withRemembranceMcpNotice(
+    const instructions2 = hookApproval ? withRemembranceMcpNotice(
       withUpdate,
       hookApproval.status === "pending_approval" ? CODEX_HOOKS_PENDING_APPROVAL_NOTICE : hookApproval.status === "managed_hooks_disabled" ? CODEX_MANAGED_HOOKS_ONLY_NOTICE : CODEX_HOOK_TRUST_UNREADABLE_NOTICE
     ) : withUpdate;
@@ -72211,7 +73871,7 @@ async function dispatchJsonRpcRequest(request2) {
           name: "@remembrance-ai/mcp-server",
           version: SERVER_VERSION
         },
-        instructions
+        instructions: instructions2
       }
     };
   }
@@ -72502,7 +74162,7 @@ async function callNetworkToolWithinExecution(definition, payload, access, trans
       payload
     );
   }
-  if (definition.name === "submit_private_lesson_candidate" && isRecord11(payload) && typeof payload.draft_id === "string") {
+  if (definition.name === "submit_private_lesson_candidate" && isRecord12(payload) && typeof payload.draft_id === "string") {
     return submitPrivateLessonDraft(
       payload.draft_id,
       access,
@@ -72510,7 +74170,7 @@ async function callNetworkToolWithinExecution(definition, payload, access, trans
       transport
     );
   }
-  if (definition.name === "submit_private_skill_candidate" && isRecord11(payload) && typeof payload.draft_id === "string") {
+  if (definition.name === "submit_private_skill_candidate" && isRecord12(payload) && typeof payload.draft_id === "string") {
     return submitPrivateSkillDraft(
       payload.draft_id,
       access,
@@ -72582,9 +74242,9 @@ function assertToolPayloadBoundary(definition, payload, options = {}) {
   }
 }
 function queryFeedbackProseContainsSensitiveMaterial(payload) {
-  if (!isRecord11(payload)) return false;
+  if (!isRecord12(payload)) return false;
   const notes = Array.isArray(payload.results) ? payload.results.flatMap(
-    (result) => isRecord11(result) && typeof result.note === "string" ? [result.note] : []
+    (result) => isRecord12(result) && typeof result.note === "string" ? [result.note] : []
   ) : [];
   if (typeof payload.missing_capability === "string") {
     notes.push(payload.missing_capability);
@@ -72613,7 +74273,7 @@ function apiConfigurationErrorMessage(issue, setting) {
   return `${setting} is invalid. Set it to an absolute HTTP(S) registry URL without credentials, query parameters, or fragments, or intentionally remove it before using remote Remembrance tools.`;
 }
 function clientHealthReportFromConnectionStatus(status) {
-  const health = isRecord11(status.plugin_health) ? status.plugin_health : null;
+  const health = isRecord12(status.plugin_health) ? status.plugin_health : null;
   if (!health || health.expected !== true || health.status !== "degraded") {
     return null;
   }
@@ -72623,9 +74283,9 @@ function clientHealthReportFromConnectionStatus(status) {
   }
   const host = agentHostBySurface(surface);
   if (!host || !host.plugin) return null;
-  const components = isRecord11(health.components) ? health.components : {};
-  const observed = (name) => isRecord11(components[name]) && components[name]?.observed === true ? "active" : "not_observed";
-  const issueCodes3 = Array.isArray(health.issues) ? health.issues.map((issue) => isRecord11(issue) ? issue.code : null).filter((code) => typeof code === "string") : [];
+  const components = isRecord12(health.components) ? health.components : {};
+  const observed = (name) => isRecord12(components[name]) && components[name]?.observed === true ? "active" : "not_observed";
+  const issueCodes3 = Array.isArray(health.issues) ? health.issues.map((issue) => isRecord12(issue) ? issue.code : null).filter((code) => typeof code === "string") : [];
   const allowedIssueCodes = /* @__PURE__ */ new Set([
     "native_hooks_not_observed",
     "session_start_not_observed",
@@ -73011,10 +74671,10 @@ async function deliverPrivateSkillDraft(draftId, access, mode, transport) {
       transport
     }
   );
-  if (!isRecord11(result) || result.ok !== true || !isRecord11(result.body)) {
+  if (!isRecord12(result) || result.ok !== true || !isRecord12(result.body)) {
     const destinationBodyLimit = privateSkillDestinationBodyLimit(
-      isRecord11(result) && typeof result.status === "number" ? result.status : 0,
-      isRecord11(result) ? result.body : void 0,
+      isRecord12(result) && typeof result.status === "number" ? result.status : 0,
+      isRecord12(result) ? result.body : void 0,
       selected.candidate.proposed_skill_md.length
     );
     draft = await persistPrivateSkillFailure(
@@ -73199,8 +74859,8 @@ async function persistPrivateSkillFailure(draft, result, destinationBodyLimit) {
         updated_at: (/* @__PURE__ */ new Date()).toISOString()
       };
     }
-    const status = isRecord11(result) && typeof result.status === "number" ? result.status : 0;
-    const code = isRecord11(result) && result.redirect_rejected === true ? "private_destination_redirect_rejected" : privateSkillFailureCode(status);
+    const status = isRecord12(result) && typeof result.status === "number" ? result.status : 0;
+    const code = isRecord12(result) && result.redirect_rejected === true ? "private_destination_redirect_rejected" : privateSkillFailureCode(status);
     if (status === 401 || status === 403) {
       return {
         ...current,
@@ -73218,7 +74878,7 @@ async function persistPrivateSkillFailure(draft, result, destinationBodyLimit) {
         attempts,
         next_retry_at: privateSkillRetryAt(
           attempts,
-          retryAfterDelayMs(isRecord11(result) ? result.retry_after : void 0)
+          retryAfterDelayMs(isRecord12(result) ? result.retry_after : void 0)
         ),
         last_error_code: code,
         updated_at: (/* @__PURE__ */ new Date()).toISOString()
@@ -73328,7 +74988,7 @@ async function fetchPrivateSkillDestinationCapability(access, transport) {
   } finally {
     clearTimeout(timeout);
   }
-  const envelope2 = isRecord11(body) ? body.capability : void 0;
+  const envelope2 = isRecord12(body) ? body.capability : void 0;
   for (const refreshKeys of [false, true]) {
     try {
       const keySet = await fetchValueProofKeySet(
@@ -73341,7 +75001,7 @@ async function fetchPrivateSkillDestinationCapability(access, transport) {
         capability: verifyPrivateSkillCapabilityEnvelope({ envelope: envelope2, keySet }).payload
       };
     } catch {
-      if (!isRecord11(envelope2)) break;
+      if (!isRecord12(envelope2)) break;
     }
   }
   return { status: "unverified", retry_after_ms: null };
@@ -74326,7 +75986,7 @@ async function verifyPrivateLessonEnvelopeWithKeyRefresh(envelope2, kind, access
       if (kind === "policy") {
         const policy = signedPrivateLessonPolicySchema.safeParse(envelope2);
         const keys = privateLessonVerificationKeySetSchema.safeParse(refreshedKeySet);
-        if (!policy.success || canonicalJson(policy.data.payload) === policy.data.canonical_payload && (!keys.success || !keys.data.keys.some((key) => key.kid === policy.data.key_id))) {
+        if (!policy.success || canonicalJson(policy.data.payload) === policy.data.canonical_payload && (!keys.success || !keys.data.keys.some((key2) => key2.kid === policy.data.key_id))) {
           throw new PrivateLessonRemoteError(
             "Private lesson policy verification is temporarily unavailable.",
             0,
@@ -74365,14 +76025,14 @@ function verifyPrivateLessonEnvelope(envelope2, kind, keySet) {
 }
 var PRIVATE_LESSON_PAYLOAD_OVER_POLICY = "payload_exceeds_policy_limit";
 function privateLessonRefusalCode(body) {
-  if (!isRecord11(body)) return null;
+  if (!isRecord12(body)) return null;
   if (typeof body.code === "string") return body.code;
-  return isRecord11(body.details) && typeof body.details.code === "string" ? body.details.code : null;
+  return isRecord12(body.details) && typeof body.details.code === "string" ? body.details.code : null;
 }
 function requirePrivateLessonRemoteBody(result, operation) {
-  const response = isRecord11(result) ? result : {};
+  const response = isRecord12(result) ? result : {};
   const status = typeof response.status === "number" ? response.status : 0;
-  if (response.ok !== true || !isRecord11(response.body)) {
+  if (response.ok !== true || !isRecord12(response.body)) {
     const responseCode = privateLessonRefusalCode(response.body);
     if (status === 409 && (responseCode === "unsupported_redaction_version" || responseCode === "unsupported_redactor_digest" || responseCode === "redactor_profile_unavailable")) {
       throw new PrivateLessonProfileCompatibilityError(
@@ -74427,7 +76087,7 @@ function privateLessonHoldIdempotencyKey(draft, eventDigest) {
   ).replace(/^sha256:/, "")}`;
 }
 function privateLessonPolicyRefreshRequiredResponse(result) {
-  if (!isRecord11(result) || result.status !== 409 || !isRecord11(result.body)) {
+  if (!isRecord12(result) || result.status !== 409 || !isRecord12(result.body)) {
     return false;
   }
   return result.body.code === "policy_changed" || result.body.error === "Private lesson policy changed; refresh policy before retrying.";
@@ -74742,11 +76402,11 @@ function publicOutboxSummary2(summary) {
   const { directory: _directory, ...safe } = summary;
   return safe;
 }
-function stringField(record4, key) {
-  const value = record4[key];
+function stringField(record4, key2) {
+  const value = record4[key2];
   if (typeof value !== "string" || !value) {
     throw new PrivateLessonPolicySafetyError(
-      `Private lesson response omitted ${key}.`
+      `Private lesson response omitted ${key2}.`
     );
   }
   return value;
@@ -75004,7 +76664,23 @@ async function createAndPersistIdentity(args, keyPath) {
     private_key: String(privateKey.export({ type: "pkcs8", format: "pem" })),
     created_at: (/* @__PURE__ */ new Date()).toISOString()
   };
-  await mkdir5(dirname11(keyPath), { recursive: true, mode: 448 });
+  if (process.platform === "win32") {
+    let persisted = identity2;
+    let reusedExistingIdentity = false;
+    await writeSecureLocalConfig(keyPath, (existing) => {
+      if (existing !== null && !args.force_rotate) {
+        const parsed = parseStoredIdentity(JSON.parse(existing));
+        if (!parsed) throw new McpPublicError("The existing protected identity is invalid. Restore the original key, or explicitly rotate its trust history.");
+        persisted = parsed;
+        reusedExistingIdentity = true;
+        return existing;
+      }
+      return `${JSON.stringify(identity2, null, 2)}
+`;
+    }, { maxBytes: MAX_LOCAL_IDENTITY_BYTES });
+    return { identity: persisted, reusedExistingIdentity };
+  }
+  await mkdir6(dirname14(keyPath), { recursive: true, mode: 448 });
   try {
     await writeFile2(keyPath, `${JSON.stringify(identity2, null, 2)}
 `, {
@@ -75027,19 +76703,20 @@ async function readIdentity(path = identityPath()) {
     return null;
   }
   try {
-    const identity2 = parseStoredIdentity(
-      JSON.parse(
-        readSecureLocalText(path, {
-          maxBytes: MAX_LOCAL_IDENTITY_BYTES,
-          repairPermissions: true
-        })
-      )
-    );
+    let content2;
+    try {
+      content2 = readSecureLocalText(path, { maxBytes: MAX_LOCAL_IDENTITY_BYTES, repairPermissions: true });
+    } catch (error) {
+      if (process.platform === "win32") throw new McpPublicError(path === identityPath() ? "Windows local identity protection could not be verified. Preserve the existing identity. Read get_connection_status.local_signing_identity.next_action.recovery and execute its bounded instructions through the normal host shell. If it returns owner_review_required, prepare the indicated metadata-only owner review before broader OS repair; retry bootstrap_agent_identity only after authorized restoration." : "Windows protection for the explicitly selected custom identity could not be verified. Preserve its data and trust history. Inspect only the exact file and immediate parent numeric ownership/ACL metadata, prepare scoped owner review, and restore original protection under authorized OS authority before retrying this custom path. No permissions on a different default identity should be changed.");
+      throw error;
+    }
+    const identity2 = parseStoredIdentity(JSON.parse(content2));
     if (!identity2) {
       throw new Error("invalid identity");
     }
     return identity2;
-  } catch {
+  } catch (error) {
+    if (process.platform === "win32" && error instanceof McpPublicError) throw error;
     throw new McpPublicError(
       "The local Remembrance agent identity is unreadable, invalid, or cannot be secured. Restore the original key file, or explicitly run bootstrap_agent_identity with force_rotate: true to start a new trust history."
     );
@@ -75399,11 +77076,11 @@ function configuredProjectPath() {
 }
 var readsWithoutProjectKey = /* @__PURE__ */ new WeakSet();
 function cursorProjectReasons(result) {
-  return configuredClientSurface() === "cursor" && isRecord11(result) && readsWithoutProjectKey.has(result) ? [{ code: "cursor_project_unknown" }] : [];
+  return configuredClientSurface() === "cursor" && isRecord12(result) && readsWithoutProjectKey.has(result) ? [{ code: "cursor_project_unknown" }] : [];
 }
 function principalSessionAuthenticationFailed(response, body) {
   if (response.status !== 401 && response.status !== 403) return false;
-  if (!isRecord11(body) || typeof body.error !== "string") return false;
+  if (!isRecord12(body) || typeof body.error !== "string") return false;
   return /principal session|economics session|installation session|agent principal|installation principal/i.test(
     body.error
   );
@@ -75457,8 +77134,8 @@ async function runLocalConnectionDoctor(options, execution = "mcp_tool", access 
     item_count: null
   };
   if (options.active_read_probe && !localConfigurationError) {
-    const resultRecord = isRecord11(catalogResult) ? catalogResult : {};
-    const body = isRecord11(resultRecord.body) ? resultRecord.body : {};
+    const resultRecord = isRecord12(catalogResult) ? catalogResult : {};
+    const body = isRecord12(resultRecord.body) ? resultRecord.body : {};
     const skills = Array.isArray(body.skills) ? body.skills : null;
     activeReadProbe.succeeded = resultRecord.ok === true && skills !== null;
     activeReadProbe.item_count = skills ? skills.length : null;
@@ -75680,7 +77357,7 @@ async function callDoctorReadProbe(definition, payload, access, transport) {
   }) : first;
 }
 function isTransientDoctorProbeFailure(result) {
-  if (!isRecord11(result) || result.ok === true) return false;
+  if (!isRecord12(result) || result.ok === true) return false;
   const status = typeof result.status === "number" ? result.status : 0;
   return status === 0 || status === 408 || status === 425 || status >= 500;
 }
@@ -75891,10 +77568,10 @@ function endpointFor(definition, payload) {
     return query2 ? `${endpoint}?${query2}` : endpoint;
   }
   const queryKeys = definition.name === "list_skills" ? ["q", "slug", "cursor", "limit"] : definition.name === "get_review_comparison" ? ["job_id", "review_provenance"] : ["query_id", "result_id"];
-  for (const key of queryKeys) {
-    const value = payload[key];
+  for (const key2 of queryKeys) {
+    const value = payload[key2];
     if (typeof value === "string" && value || typeof value === "number" && Number.isFinite(value)) {
-      params.set(key, String(value));
+      params.set(key2, String(value));
     }
   }
   const query = params.toString();
@@ -75995,7 +77672,7 @@ async function ensurePrincipalSessionToken(access = resolveApiAccess(), transpor
       transport
     );
   }
-  if (!isRecord11(challengeResponse) || typeof challengeResponse.challenge_id !== "string" || !challengeResponse.challenge_id || typeof challengeResponse.signing_payload !== "string" || !challengeResponse.signing_payload) {
+  if (!isRecord12(challengeResponse) || typeof challengeResponse.challenge_id !== "string" || !challengeResponse.challenge_id || typeof challengeResponse.signing_payload !== "string" || !challengeResponse.signing_payload) {
     throw new PrincipalSessionError("session_invalid_response", "challenge");
   }
   const challenge = challengeResponse;
@@ -76015,7 +77692,7 @@ async function ensurePrincipalSessionToken(access = resolveApiAccess(), transpor
     access,
     transport
   );
-  if (!isRecord11(exchangeResponse) || typeof exchangeResponse.session_token !== "string" || !exchangeResponse.session_token || typeof exchangeResponse.expires_at !== "string" || !(Date.parse(exchangeResponse.expires_at) > Date.now() + 6e4)) {
+  if (!isRecord12(exchangeResponse) || typeof exchangeResponse.session_token !== "string" || !exchangeResponse.session_token || typeof exchangeResponse.expires_at !== "string" || !(Date.parse(exchangeResponse.expires_at) > Date.now() + 6e4)) {
     throw new PrincipalSessionError("session_invalid_response", "exchange");
   }
   cachedPrincipalSession = {
@@ -76065,7 +77742,7 @@ async function directPrincipalSessionRequest(payload, access, transport) {
   }
 }
 function normalizedMcpClientInfo(value) {
-  if (!isRecord11(value)) return null;
+  if (!isRecord12(value)) return null;
   const name = boundedLocalProfileField(value.name);
   if (!name) return null;
   return {
@@ -76118,7 +77795,7 @@ function mustFindTool(name) {
   }
   return tool;
 }
-function isRecord11(value) {
+function isRecord12(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 function identityPath(explicit) {
@@ -76153,7 +77830,14 @@ ${body}`;
   return `${body}
 `;
 }
-if (nativeContextCliRequested) {
+if (configureCliRequested) {
+  void runConfigureCli(process.argv.slice(3), { writeSecureLocalConfig }).then((code) => {
+    process.exitCode = code;
+  }).catch(() => {
+    process.stderr.write("Remembrance configuration could not be saved safely.\n");
+    process.exitCode = 1;
+  });
+} else if (nativeContextCliRequested) {
   void runPrivateSkillNativeContextCli().then((code) => {
     process.exitCode = code;
   }).catch(() => {

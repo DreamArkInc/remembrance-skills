@@ -12,6 +12,7 @@
 import { readFileSync } from "node:fs";
 import process from "node:process";
 import {
+  parseHookInputJson,
   checkForClientUpdate,
   disabled,
   HOOK_CONTEXT_BUDGETS,
@@ -164,7 +165,7 @@ async function main() {
   let input = {};
   try {
     const raw = await readStdin();
-    input = raw.trim() ? JSON.parse(raw) : {};
+    input = raw.trim() ? parseHookInputJson(raw) : {};
   } catch {
     input = {};
   }

@@ -58,6 +58,22 @@ printf '{"apiKey":"YOUR_ORG_KEY","apiUrl":"https://remembrance.dev"}\n' > ~/.con
 chmod 600 ~/.config/remembrance/config.json
 ```
 
+### Native Windows
+
+Windows support and secure credential setup require Remembrance 0.2.26 or newer. Install the current client, then verify the connection in the actual host.
+
+Run setup in the Windows environment that runs the Gateway; WSL uses its own
+Linux paths and environment. The Bash key-file block above is for POSIX/WSL,
+not a Windows ACL recipe. Native Windows uses the shared
+`$HOME\.config\remembrance\config.json`. Follow the masked-input
+[Windows credential setup guide](../../skills/remembrancer/references/remembrance-setup.md#windows-credential-setup),
+which uses the secure `configure --stdin` command in Remembrance 0.2.26 or newer. Restart
+the Gateway after key changes and ask the agent to run `run_connection_doctor`.
+For a manual absolute Node path in PowerShell, use
+`(Get-Command node -CommandType Application).Source`.
+
+If a local tool returns `restore_windows_private_permissions`, run its exact returned normal-shell recipe for the selected current-owned file or empty directory. It preserves file contents and changes only that object's permissions. A nonempty directory, foreign owner, or grants allowing another user to modify the object or parent can return `owner_review_required`: inspect only the selected object and immediate-parent ownership/ACL metadata, obtain scoped owner review before broader repair, then resume the returned `get_connection_status` or `bootstrap_agent_identity` step and run `run_connection_doctor`. Preserve existing state: do not delete retained data or rotate keys to repair permissions. Restored permissions make no claim about past access or previously opened handles.
+
 In a centrally managed environment, the setup command's equivalent
 conversation-access setting in `~/.openclaw/openclaw.json` is:
 
@@ -403,9 +419,9 @@ next agent that queries — the more the network is used, the smarter it gets.
 
 ## Conversation access
 
-**In short.** As soon as OpenClaw loads this plugin, even before you grant
-conversation access, the plugin reads your prompts, tool calls and incoming
-messages on this computer. Of its automatic requests, only a search carries
+When its hooks are enabled, the plugin reads your prompts, tool calls and
+incoming messages on this computer. Older hosts can run some of these hooks
+before a conversation-access grant; see the version boundary below. Of its automatic requests, only a search carries
 text from your conversation: when a prompt looks like reusable work, the plugin
 sends a cleaned copy of it to Remembrance. Cleaning removes common secrets and
 private network addresses, and the copy is cut to 1,200 characters. Everything
@@ -428,11 +444,13 @@ organization's administrator has approved that processing. The
 This is a **non-bundled plugin**. OpenClaw runs a non-bundled plugin's raw
 conversation hooks only after the operator's grant,
 `plugins.entries.remembrance.hooks.allowConversationAccess: true`, which
-`openclaw remembrance setup` writes. Of this plugin's hooks, only
-`before_agent_finalize`, which reads the final answer, is such a hook. Before
-the grant, OpenClaw (2026.7.1-2, the version this plugin is built and verified
-against) holds only `before_agent_finalize` and runs the other five hooks.
-Four of them see conversation content:
+`openclaw remembrance setup` writes. Current OpenClaw hosts require the grant
+for both `before_prompt_build` and `before_agent_finalize`; prompt modification
+also requires that `allowPromptModification` is not false. The existing
+2026.7.1-2 qualification is historical: that host holds only
+`before_agent_finalize` before the grant and runs the other registered hooks.
+Do not infer current-host behavior from that older receipt. The following
+describes the plugin's content paths when each hook is enabled:
 
 - `before_prompt_build` sees each prompt (`prompt` and `messages`). It updates
   the session's notes on this computer and adds context to the prompt:
@@ -521,15 +539,12 @@ local start-up record and makes two requests without conversation content:
    to a private-skill draft kept on this computer, or withdraws it, and makes
    no request.
 
-Without the grant, nothing breaks: OpenClaw names the held hook only in a
-`warn` diagnostic of `openclaw plugins inspect remembrance --runtime`, and
-`openclaw plugins doctor` reports no issue.
-
-> "Non-bundled plugins that need raw conversation hooks (`before_model_resolve`,
-> `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`,
-> `agent_end`, or `before_agent_run`) must set … `allowConversationAccess`."
-> — [Plugin hooks](https://docs.openclaw.ai/plugins/hooks),
-> [Configuration reference](https://docs.openclaw.ai/gateway/configuration-reference).
+Without the grant, current hosts can leave prompt and completion hooks
+unavailable even when the plugin appears installed. Run the setup command,
+inspect `openclaw plugins inspect remembrance --runtime`, and verify the
+running lifecycle rather than treating a clean generic doctor as hook proof.
+See the current [hook permissions](https://docs.openclaw.ai/plugins/hooks) and
+[configuration reference](https://docs.openclaw.ai/gateway/configuration-reference).
 
 ## MCP tools
 

@@ -13,6 +13,7 @@
 
 import process from "node:process";
 import {
+  parseHookInputJson,
   agentLedgerIdFor,
   debugLog,
   foldTurnLedgerIntoSession,
@@ -206,7 +207,7 @@ export async function main() {
   const raw = await readStdin();
   let input = {};
   try {
-    input = raw.trim() ? JSON.parse(raw) : {};
+    input = raw.trim() ? parseHookInputJson(raw) : {};
   } catch (error) {
     debugLog(process.env, "hook_input_parse_error", {
       error: errorName(error),

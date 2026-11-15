@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${PLUGIN_ROOT}/scripts/node-launcher\" \"${PLUGIN_ROOT}/scripts/session-start.mjs\""
+            "command": "sh \"${PLUGIN_ROOT}/scripts/node-launcher\" \"${PLUGIN_ROOT}/scripts/session-start.mjs\"",
+            "commandWindows": "\"${PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${PLUGIN_ROOT}/scripts/session-start.mjs\""
           }
         ]
       }
@@ -16,7 +17,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${PLUGIN_ROOT}/scripts/node-launcher\" \"${PLUGIN_ROOT}/scripts/query-on-prompt.mjs\""
+            "command": "sh \"${PLUGIN_ROOT}/scripts/node-launcher\" \"${PLUGIN_ROOT}/scripts/query-on-prompt.mjs\"",
+            "commandWindows": "\"${PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${PLUGIN_ROOT}/scripts/query-on-prompt.mjs\""
           }
         ]
       }
@@ -27,7 +29,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${PLUGIN_ROOT}/scripts/node-launcher\" \"${PLUGIN_ROOT}/scripts/record-detail-open.mjs\""
+            "command": "sh \"${PLUGIN_ROOT}/scripts/node-launcher\" \"${PLUGIN_ROOT}/scripts/record-detail-open.mjs\"",
+            "commandWindows": "\"${PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${PLUGIN_ROOT}/scripts/record-detail-open.mjs\""
           }
         ]
       }
@@ -37,7 +40,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${PLUGIN_ROOT}/scripts/node-launcher\" \"${PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\""
+            "command": "sh \"${PLUGIN_ROOT}/scripts/node-launcher\" \"${PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\"",
+            "commandWindows": "\"${PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\""
           }
         ]
       }
@@ -47,7 +51,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${PLUGIN_ROOT}/scripts/node-launcher\" \"${PLUGIN_ROOT}/scripts/subagent-start.mjs\""
+            "command": "sh \"${PLUGIN_ROOT}/scripts/node-launcher\" \"${PLUGIN_ROOT}/scripts/subagent-start.mjs\"",
+            "commandWindows": "\"${PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${PLUGIN_ROOT}/scripts/subagent-start.mjs\""
           }
         ]
       }
@@ -57,7 +62,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${PLUGIN_ROOT}/scripts/node-launcher\" \"${PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\""
+            "command": "sh \"${PLUGIN_ROOT}/scripts/node-launcher\" \"${PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\"",
+            "commandWindows": "\"${PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\""
           }
         ]
       }

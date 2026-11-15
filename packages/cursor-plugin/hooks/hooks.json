@@ -3,37 +3,37 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "sh ./scripts/node-launcher ./scripts/session-start.mjs",
+        "command": "\"${CURSOR_PLUGIN_ROOT}/scripts/node-launcher\" \"${CURSOR_PLUGIN_ROOT}/scripts/session-start.mjs\"",
         "timeout": 5
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "sh ./scripts/node-launcher ./scripts/record-task-eligibility.mjs",
+        "command": "\"${CURSOR_PLUGIN_ROOT}/scripts/node-launcher\" \"${CURSOR_PLUGIN_ROOT}/scripts/record-task-eligibility.mjs\"",
         "timeout": 5
       }
     ],
     "afterMCPExecution": [
       {
-        "command": "sh ./scripts/node-launcher ./scripts/record-mcp-use.mjs",
+        "command": "\"${CURSOR_PLUGIN_ROOT}/scripts/node-launcher\" \"${CURSOR_PLUGIN_ROOT}/scripts/record-mcp-use.mjs\"",
         "timeout": 5
       }
     ],
     "postToolUse": [
       {
-        "command": "sh ./scripts/node-launcher ./scripts/post-tool-use.mjs",
+        "command": "\"${CURSOR_PLUGIN_ROOT}/scripts/node-launcher\" \"${CURSOR_PLUGIN_ROOT}/scripts/post-tool-use.mjs\"",
         "timeout": 5
       }
     ],
     "preCompact": [
       {
-        "command": "sh ./scripts/node-launcher ./scripts/pre-compact.mjs",
+        "command": "\"${CURSOR_PLUGIN_ROOT}/scripts/node-launcher\" \"${CURSOR_PLUGIN_ROOT}/scripts/pre-compact.mjs\"",
         "timeout": 5
       }
     ],
     "stop": [
       {
-        "command": "sh ./scripts/node-launcher ./scripts/contribute-on-stop.mjs",
+        "command": "\"${CURSOR_PLUGIN_ROOT}/scripts/node-launcher\" \"${CURSOR_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\"",
         "timeout": 5,
         "loop_limit": 1
       }

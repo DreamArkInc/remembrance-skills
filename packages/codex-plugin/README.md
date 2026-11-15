@@ -73,7 +73,9 @@ changes a registration holds that hook until you approve it again. Updating
 from 0.1.x to 0.2.0 changed all five then registered: Codex held
 `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` as modified and
 the new `SubagentStop` as new, and ran no Remembrance hook until you approved
-them in the review above. Updating from 0.2.18 asks for a review of one hook
+them in the review above. The following 0.2.18 trust-preservation statements
+apply to non-Windows installations. Windows adds platform-specific commands
+and uses the native host's normal hook review. Updating from 0.2.18 asks for a review of one hook
 only: the new `SubagentStart`, which gives subagents the preference snapshot.
 Until you approve it, a subagent starts without that snapshot and, before
 governed work, uses the one in its own `query_skills` or `invoke_skill` result
@@ -154,9 +156,7 @@ else `node` on PATH, else Node.js 18.17.0+ from nvm, volta, fnm, n, asdf,
 nodenv, mise, Homebrew, `/usr/local` or `/usr/bin`. The ChatGPT desktop app may
 not have your shell's PATH either: install Node.js 18.17.0+ in one of those
 locations, or start Codex from a terminal where `node` works, then fully quit
-and reopen Codex. On native Windows, the hooks and the MCP entry start the
-launcher with `sh`, so they need `sh` (Git for Windows `usr\bin`) on the PATH
-Codex sees.
+and reopen Codex. On native Windows, the Codex hooks use `commandWindows` with `scripts/node-launcher.cmd`; its MCP entry resolves the extensionless launcher to the same Windows twin. Neither Remembrance entry needs `sh` on PATH.
 
 On a fresh Codex session, Remembrance checks a credential-free public release
 manifest. When a newer verified plugin exists, Codex receives the trusted local

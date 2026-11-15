@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 import process from "node:process";
 import {
+  parseHookInputJson,
   bindPrivateSkillNativeCapture,
   clearHighMatchSurfaceIfOpened,
   clearHighMatchSurfaceForExplicitSelection,
@@ -503,7 +504,7 @@ async function main() {
   let input = {};
   try {
     const raw = await readStdin();
-    input = raw.trim() ? JSON.parse(raw) : {};
+    input = raw.trim() ? parseHookInputJson(raw) : {};
     await handleMcpUse(input);
   } catch {
     // Fail open; afterMCPExecution is observational.

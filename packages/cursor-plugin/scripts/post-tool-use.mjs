@@ -12,6 +12,7 @@
 
 import process from "node:process";
 import {
+  parseHookInputJson,
   disabled,
   HOOK_CONTEXT_BUDGETS,
   isEntryScript,
@@ -104,7 +105,7 @@ async function main() {
   let output = {};
   try {
     const raw = await readStdin();
-    output = await handlePostToolUse(raw.trim() ? JSON.parse(raw) : {});
+    output = await handlePostToolUse(raw.trim() ? parseHookInputJson(raw) : {});
   } catch {
     // Fail open; a tool result never waits on preference pickup.
   }

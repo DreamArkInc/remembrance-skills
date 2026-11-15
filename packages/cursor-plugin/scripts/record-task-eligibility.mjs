@@ -8,6 +8,7 @@
 
 import process from "node:process";
 import {
+  parseHookInputJson,
   capturePrivateSkillNativeUserPrompt,
   createContinuationDirective,
   disabled,
@@ -138,7 +139,7 @@ async function readStdin() {
 async function main() {
   try {
     const raw = await readStdin();
-    await handlePromptEligibility(raw.trim() ? JSON.parse(raw) : {});
+    await handlePromptEligibility(raw.trim() ? parseHookInputJson(raw) : {});
   } catch {
     // Fail open; this observer must never block the user's prompt.
   }

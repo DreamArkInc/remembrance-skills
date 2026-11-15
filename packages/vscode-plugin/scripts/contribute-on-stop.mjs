@@ -48,6 +48,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  parseHookInputJson,
   agentLedgerIdFor,
   completionContinuationReason,
   contributeDisabled,
@@ -386,7 +387,7 @@ async function main() {
   let input = {};
   try {
     const raw = await readStdin();
-    input = raw ? JSON.parse(raw) : {};
+    input = raw ? parseHookInputJson(raw) : {};
   } catch {
     // Malformed input → allow the stop.
     return;

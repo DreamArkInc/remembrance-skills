@@ -2,6 +2,7 @@
 
 import process from "node:process";
 import {
+  parseHookInputJson,
   hostPolicyAlertTextForOperation,
   isEntryScript,
   markHostPolicyAlertDelivered,
@@ -58,7 +59,7 @@ async function readStdin() {
 async function main() {
   try {
     const raw = await readStdin();
-    const result = handleHostPolicyDenial(raw.trim() ? JSON.parse(raw) : {});
+    const result = handleHostPolicyDenial(raw.trim() ? parseHookInputJson(raw) : {});
     if (result) process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch {
     // Observability is best effort and may never interfere with host execution.

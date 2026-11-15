@@ -4,7 +4,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "@remembrance-ai/mcp-server@0.2.25"
+        "@remembrance-ai/mcp-server@0.2.26"
       ],
       "env": {
         "REMEMBRANCE_PLUGIN_HOST": "cursor",

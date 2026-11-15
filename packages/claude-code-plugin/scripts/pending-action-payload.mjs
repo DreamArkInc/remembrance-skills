@@ -6,7 +6,8 @@
 // arguments a capture_learning preference route returned. The hook core seals
 // it when it records the debt and opens it when a demand shows it; the
 // bundled MCP server's local get_pending_action_payload opens it for the
-// agent that owes it. Node built-ins only; no network, no process access.
+// agent that owes it. No network or body egress; Windows protection uses the
+// same fixed native ACL inspector as the other local private readers.
 //
 // On disk: owner decision 2 (Task 13) approved encrypted local retention with
 // the plugin's existing local encryption, no new prompts, existing records
@@ -32,6 +33,7 @@
 // A follow-up an earlier build kept in plaintext (local_resupply_payload)
 // stays readable here and is never rewritten; preference arguments were never
 // kept in plaintext, and a plaintext copy beside one is never returned.
+import { assertWindowsPrivateRead, withWindowsPrivateDirectoryReadOperation } from "./windows-private-read.mjs";
 import {
   createCipheriv,
   createDecipheriv,
@@ -47,7 +49,7 @@ import {
   readSync,
   readdirSync,
 } from "node:fs";
-import { homedir, tmpdir, userInfo } from "node:os";
+import { homedir, tmpdir, userInfo, platform } from "node:os";
 import { join } from "node:path";
 
 export const RESUPPLY_ENVELOPE_VERSION = "completion-resupply-envelope-v1";
@@ -287,6 +289,19 @@ function assertOwned(metadata) {
 }
 
 function assertPrivateDirectory(path) {
+  if (platform() === "win32") {
+    let descriptor;
+    try {
+      const before = lstatSync(path, { bigint: true });
+      if (before.isSymbolicLink() || !before.isDirectory()) throw windowsProtectionRefusal();
+      descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      assertWindowsPrivateRead(path, "directory", before, fstatSync(descriptor, { bigint: true }));
+    } catch (error) {
+      if (error?.code === "ENOENT") throw error;
+      throw windowsProtectionRefusal();
+    } finally { if (descriptor !== undefined) closeSync(descriptor); }
+    return;
+  }
   const metadata = lstatSync(path);
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
     throw new Error("Local state is not a regular directory.");
@@ -304,6 +319,10 @@ function assertPrivateDirectory(path) {
 const UNSAFE_RECORD = "REMEMBRANCE_UNSAFE_RECORD";
 const unsafeRecord = (message, access = false) =>
   Object.assign(new Error(message), { code: UNSAFE_RECORD, access });
+const windowsProtectionRefusal = () => Object.assign(
+  unsafeRecord("Windows local state protection could not be verified.", true),
+  { localProtectionUnverified: true },
+);
 
 function assertPrivateRecord(metadata, maxBytes = OBLIGATION_MAX_BYTES) {
   if (
@@ -329,15 +348,34 @@ function readRecord(path) {
 // One regular, private, user-owned file of at most `maxBytes`, never through
 // a symlink, read in bounded chunks.
 function readRecordText(path, maxBytes) {
-  const before = lstatSync(path);
+  try { return readRecordTextChecked(path, maxBytes); }
+  catch (error) {
+    // Windows absence is ENOENT only. Every other rejected filesystem read
+    // remains an explicit retained-state hold, including structural rejection.
+    // Keep the existing access/type flag so inventory causes retain meaning.
+    if (platform() === "win32" && error?.code !== "ENOENT") {
+      if (error?.code === UNSAFE_RECORD) { error.localProtectionUnverified = true; throw error; }
+      throw windowsProtectionRefusal();
+    }
+    throw error;
+  }
+}
+
+function readRecordTextChecked(path, maxBytes) {
+  const windows = platform() === "win32";
+  const before = windows ? lstatSync(path, { bigint: true }) : lstatSync(path);
   assertPrivateRecord(before, maxBytes);
   const descriptor = openSync(
     path,
     constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
   );
   try {
-    const opened = fstatSync(descriptor);
+    const opened = windows ? fstatSync(descriptor, { bigint: true }) : fstatSync(descriptor);
     assertPrivateRecord(opened, maxBytes);
+    if (windows) {
+      try { assertWindowsPrivateRead(path, "file", before, opened); }
+      catch { throw windowsProtectionRefusal(); }
+    }
     if (before.dev !== opened.dev || before.ino !== opened.ino) {
       throw new Error("Local state record changed while opening.");
     }
@@ -447,17 +485,21 @@ export async function readPendingActionPayload(input, env, { readKey }) {
   // Age never closes an action: only completing, declining or withdrawing
   // it does.
   let record = null;
+  const retainedUsable = retainedRootsUsable(env);
+  let protectionUnverified = platform() === "win32" && !retainedUsable;
   for (const directory of [
-    ...(retainedRootsUsable(env)
+    ...(retainedUsable
       ? [join(retainedLedgerRoot(env), `${request.ledger}.obligations`)]
       : []),
     join(usageDirectory(env), `${request.ledger}.obligations`),
   ]) {
     try {
       assertPrivateDirectory(directory);
-      for (const name of readdirSync(directory)
+      const windowsReadNames = readdirSync(directory)
         .sort()
-        .slice(0, LEDGER_ENTRY_LIMIT)) {
+        .slice(0, LEDGER_ENTRY_LIMIT);
+withWindowsPrivateDirectoryReadOperation(directory, windowsReadNames, () => {
+for (const name of windowsReadNames) {
         if (
           !name.startsWith(request.action_id) ||
           !/^[a-f0-9]{32}\.json$/u.test(name)
@@ -480,16 +522,25 @@ export async function readPendingActionPayload(input, env, { readKey }) {
             record = candidate;
             break;
           }
-        } catch {
+        } catch (error) {
+          if (error?.localProtectionUnverified) protectionUnverified = true;
           // One unreadable record must not answer for another.
         }
       }
-    } catch {
+});
+    } catch (error) {
+      if (error?.localProtectionUnverified) protectionUnverified = true;
       // A missing or unsafe ledger must not hide the other one.
     }
     if (record) break;
   }
-  if (!record) return notFound;
+  if (!record) {
+    if (protectionUnverified) return withoutPayload("unavailable", request, {
+      reason: "local_protection_unverified",
+      guidance: "Windows protection for retained local state could not be verified. The retained bytes are preserved. Inspect only the selected ledger/file and immediate parent numeric ownership and ACL metadata. Restore original protection only under safe scoped authority; restoring folder permissions may affect existing children and requires owner review before broader OS repair. Do not rotate keys, delete retained data, or treat repeated inspection as recovery. Retry get_pending_action_payload after authorized restoration.",
+    });
+    return notFound;
+  }
   const preference = record.kind === "capture_next_action";
   const guidance = GUIDANCE[record.kind];
   const transferred =
@@ -704,7 +755,9 @@ export function inventoryRetainedKeyConsumers(
   // mode alone may be one whose mode changed: unreadable, so the step shown
   // is to make it a user-owned 0600 file again, never to move it aside.
   const fileCause = (error, name) =>
-    (error?.code === UNSAFE_RECORD &&
+    error?.localProtectionUnverified && error.access
+      ? "unreadable"
+      : (error?.code === UNSAFE_RECORD &&
       !(error.access && RECORD_FILE.test(name))) ||
     error instanceof SyntaxError
       ? "unclassified"
@@ -773,11 +826,14 @@ export function inventoryRetainedKeyConsumers(
       if (!(root && missing(error))) leftDirectory(area, "unlisted");
       return;
     }
-    for (const entry of entries) {
+    withWindowsPrivateDirectoryReadOperation(path, platform() === "win32" ? entries.map(entry => entry.name) : [], () => {
+for (const entry of entries) {
       if (RECORD_FILE.test(entry.name)) {
         ledgerRecord(area, path, entry.name);
       }
     }
+
+});
   };
   // A root holding one <ledger>.obligations directory per ledger.
   const ledgerRoot = (area, root) => {
@@ -792,7 +848,8 @@ export function inventoryRetainedKeyConsumers(
       .filter((entry) => LEDGER_DIRECTORY.test(entry.name))
       .map((entry) => entry.name)
       .sort();
-    for (const name of ledgers) {
+    withWindowsPrivateDirectoryReadOperation(root, platform() === "win32" ? entries.map(entry => entry.name) : [], () => {
+for (const name of ledgers) {
       if (directories >= limits.ledgers) {
         leftDirectory(area, "bounded");
         continue;
@@ -820,6 +877,7 @@ export function inventoryRetainedKeyConsumers(
         // A count that cannot be read only leaves the report short.
       }
     }
+});
   };
   // An outbox lane, every level of it, classified by content.
   const lane = (area, path, root) => {
@@ -838,7 +896,8 @@ export function inventoryRetainedKeyConsumers(
       if (!(root && missing(error))) leftDirectory(area, "unlisted");
       return;
     }
-    for (const entry of entries) {
+    withWindowsPrivateDirectoryReadOperation(path, platform() === "win32" ? entries.map(entry => entry.name) : [], () => {
+for (const entry of entries) {
       const file = join(path, entry.name);
       if (entry.isDirectory()) {
         lane(area, file, false);
@@ -882,6 +941,8 @@ export function inventoryRetainedKeyConsumers(
         leftFile(area, "unclassified");
       }
     }
+
+});
   };
 
   const outboxLanes = lanes ?? [
@@ -1015,19 +1076,25 @@ export function retainedKeyHoldRemediation(codes) {
   const unreadable = where("unreadable");
   if (unreadable) {
     sentences.push(
-      `Files in ${unreadable} could not be read: make them user-owned 0600 files again, or move aside those Remembrance did not write, then retry.`,
+      platform() === "win32"
+        ? `Files in ${unreadable} could not be read safely. Preserve retained data and keys. Inspect only numeric ownership/ACL metadata for the affected file and immediate parent; restore original protection under scoped authority. Broader folder repair may affect existing children and requires owner review. Retry after authorized restoration.`
+        : `Files in ${unreadable} could not be read: make them user-owned 0600 files again, or move aside those Remembrance did not write, then retry.`,
     );
   }
   const unclassified = where("unclassified");
   if (unclassified) {
     sentences.push(
-      `Move aside files in ${unclassified} that Remembrance did not write (for example .DS_Store), and make a file Remembrance wrote whose owner or mode changed a user-owned 0600 file again instead of moving it aside, then retry.`,
+      platform() === "win32"
+        ? `Items in ${unclassified} could not be classified as safe Remembrance records. Preserve retained data and keys; inspect only item type, size, and numeric ownership/ACL metadata for the item and immediate parent. Establish provenance under scoped owner review before restoring or relocating anything; do not rotate keys or treat unknown records as disposable.`
+        : `Move aside files in ${unclassified} that Remembrance did not write (for example .DS_Store), and make a file Remembrance wrote whose owner or mode changed a user-owned 0600 file again instead of moving it aside, then retry.`,
     );
   }
   const unlisted = where("unlisted");
   if (unlisted) {
     sentences.push(
-      `A directory at or in ${unlisted} could not be listed safely (a symlink, another user's, or writable by others): move aside what Remembrance did not create and keep the rest user-owned with mode 0700, then retry.`,
+      platform() === "win32"
+        ? `A directory at or in ${unlisted} could not be listed safely. Preserve its records; inspect only numeric ownership/ACL metadata for the directory and immediate parent. Restoring folder permissions may affect existing children: obtain scoped owner review before broader OS repair, then retry after authorized restoration.`
+        : `A directory at or in ${unlisted} could not be listed safely (a symlink, another user's, or writable by others): move aside what Remembrance did not create and keep the rest user-owned with mode 0700, then retry.`,
     );
   }
   if ([...named].some((area) => area !== "hook_ledgers")) {

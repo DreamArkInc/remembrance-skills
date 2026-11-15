@@ -4,7 +4,7 @@
 // prints {} and never returns user_message text.
 
 import process from "node:process";
-import { isEntryScript } from "./hook-core.mjs";
+import { parseHookInputJson, isEntryScript } from "./hook-core.mjs";
 import {
   cursorSessionId,
   updateCursorPreferenceState,
@@ -31,7 +31,7 @@ async function readStdin() {
 async function main() {
   try {
     const raw = await readStdin();
-    handlePreCompact(raw.trim() ? JSON.parse(raw) : {});
+    handlePreCompact(raw.trim() ? parseHookInputJson(raw) : {});
   } catch {
     // Fail open; compaction never waits on this observer.
   }

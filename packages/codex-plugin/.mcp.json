@@ -1,9 +1,8 @@
 {
   "mcpServers": {
     "remembrance": {
-      "command": "sh",
+      "command": "./scripts/node-launcher",
       "args": [
-        "./scripts/node-launcher",
         "./servers/remembrance-mcp.mjs"
       ],
       "cwd": ".",

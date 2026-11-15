@@ -13,8 +13,10 @@ const validSession = value => exactToken(value, SESSION) && !/^(?:unknown|null|u
 /** Qualify only a trusted reply_dispatch callback's ordinary Telegram DM text.
  * The callback must supply cfg from its second, host-owned hook argument:
  * nativeContextAuthorityEvent({ ...event, cfg: hookContext.cfg }, dependencies).
- * resolveCommandAuthorization comes from openclaw/plugin-sdk/command-auth;
- * it is a trusted bootstrap dependency, never an MCP argument or permission flag.
+ * The trusted bootstrap adapter awaits command-auth-native's async authorization
+ * resolver, or its older sync-only contract. Only a host missing that SDK
+ * entrypoint uses the legacy command-auth subpath.
+ * This dependency is never an MCP argument or permission flag.
  *
  * RawBody is canonical host text: OpenClaw may already normalize newlines,
  * system tags and provider text. Preserve the complete observed string; never

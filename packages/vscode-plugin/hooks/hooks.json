@@ -7,7 +7,8 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.mjs\"",
-            "windows": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.mjs\""
+            "windows": "& \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.mjs\"",
+            "powershell": "& \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.mjs\""
           }
         ]
       }
@@ -19,7 +20,8 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher\" \"${CLAUDE_PLUGIN_ROOT}/scripts/query-on-prompt.mjs\"",
-            "windows": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/query-on-prompt.mjs\""
+            "windows": "& \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/query-on-prompt.mjs\"",
+            "powershell": "& \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/query-on-prompt.mjs\""
           }
         ]
       }
@@ -31,7 +33,8 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher\" \"${CLAUDE_PLUGIN_ROOT}/scripts/record-detail-open.mjs\"",
-            "windows": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/record-detail-open.mjs\""
+            "windows": "& \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/record-detail-open.mjs\"",
+            "powershell": "& \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/record-detail-open.mjs\""
           }
         ]
       }
@@ -43,7 +46,8 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher\" \"${CLAUDE_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\"",
-            "windows": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\""
+            "windows": "& \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\"",
+            "powershell": "& \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\""
           }
         ]
       }
@@ -55,7 +59,8 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher\" \"${CLAUDE_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\"",
-            "windows": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\""
+            "windows": "& \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\"",
+            "powershell": "& \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\""
           }
         ]
       }
@@ -67,7 +72,8 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher\" \"${CLAUDE_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\"",
-            "windows": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\""
+            "windows": "& \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\"",
+            "powershell": "& \"${CLAUDE_PLUGIN_ROOT}/scripts/node-launcher.cmd\" \"${CLAUDE_PLUGIN_ROOT}/scripts/contribute-on-stop.mjs\""
           }
         ]
       }

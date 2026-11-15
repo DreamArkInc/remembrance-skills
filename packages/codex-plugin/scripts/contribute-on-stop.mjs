@@ -32,6 +32,7 @@
 
 import process from "node:process";
 import {
+  parseHookInputJson,
   agentLedgerIdFor,
   completionContinuationReason,
   decideStop,
@@ -106,7 +107,7 @@ async function main() {
   let input = {};
   try {
     const raw = await readStdin();
-    input = raw.trim() ? JSON.parse(raw) : {};
+    input = raw.trim() ? parseHookInputJson(raw) : {};
   } catch {
     // Malformed input → allow the stop.
     return;

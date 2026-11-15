@@ -229,8 +229,7 @@ directory". The hooks start through `scripts/node-launcher`, which uses
 `REMEMBRANCE_NODE` when it is set, else `node` on PATH, else Node.js 18.17.0+
 from nvm, volta, fnm, n, asdf, nodenv, mise, Homebrew, `/usr/local` or
 `/usr/bin`. `npx` starts `node` through PATH, so if the MCP server does not
-start, start Cursor from a terminal where `npx` works. On Windows, Cursor runs
-hooks in PowerShell, where they need `sh` (Git for Windows `usr\bin`) on PATH.
+start, start Cursor from a terminal where `npx` works. On native Windows, the Cursor hooks resolve `scripts/node-launcher` to its `node-launcher.cmd` twin and require PowerShell 7 (`pwsh`) on Cursor's inherited PATH; these hook entries do not need `sh`.
 
 For org-scoped access, write the shared Remembrance config once:
 
@@ -299,12 +298,7 @@ else `node` on PATH, else Node.js 18.17.0+ from nvm, volta, fnm, n, asdf,
 nodenv, mise, Homebrew, `/usr/local` or `/usr/bin`. In VS Code only PATH and
 that search apply: start VS Code with `code .` from a terminal where `node`
 works, or install Node.js 18.17.0+ in one of those locations, then restart VS
-Code. On Windows, VS Code runs each hook's `windows` form, which calls `node`
-directly and needs no `sh`, but skips the launcher: the first `node` on the PATH
-VS Code sees runs the hooks without the Node.js 18.17.0 floor check, so keep
-Node.js 18.17.0+ first on that PATH. The MCP entry still starts the launcher
-with `sh`, so it needs `sh` (Git for Windows `usr\bin`) on the PATH VS Code
-sees.
+Code. On Windows, the VS Code hooks run `scripts/node-launcher.cmd` through PowerShell and enforce the Node.js 18.17.0 minimum. The MCP entry still starts the launcher with `sh`, so it needs Git for Windows' `usr\bin` on the PATH inherited by VS Code.
 
 ### Gemini CLI
 
@@ -394,9 +388,7 @@ else `node` on PATH, else Node.js 18.17.0+ from nvm, volta, fnm, n, asdf,
 nodenv, mise, Homebrew, `/usr/local` or `/usr/bin`. The ChatGPT desktop app may
 not have your shell's PATH either: install Node.js 18.17.0+ in one of those
 locations, or start Codex from a terminal where `node` works, then fully quit
-and reopen Codex. On native Windows, the hooks and the MCP entry start the
-launcher with `sh`, so they need `sh` (Git for Windows `usr\bin`) on the PATH
-Codex sees.
+and reopen Codex. On native Windows, the Codex hooks use `commandWindows` with `scripts/node-launcher.cmd`; its MCP entry resolves the extensionless launcher to the same Windows twin. Neither Remembrance entry needs `sh` on PATH.
 
 Codex will not run new or changed plugin hooks until their exact definitions are
 trusted. If Codex shows a **Hooks need review** screen, choose **Review hooks**
@@ -489,6 +481,115 @@ use the scoped native confirmation described above. If source authority cannot
 be verified, retain the protected draft and follow its exact recovery action;
 a hold is not a submitted contribution or completed recovery. Full setup:
 [remembrance-setup](skills/remembrancer/references/remembrance-setup.md).
+
+### Windows and WSL
+
+Windows support and secure credential setup require Remembrance 0.2.26 or newer. Install the current client, then verify the connection in the actual host.
+
+Choose the environment where the agent actually runs. Native Windows examples
+below use **PowerShell**. A host running inside **WSL2** uses the Linux/Bash
+instructions, Linux Node.js, and its Linux home directory instead. Installing
+Node.js or configuring Remembrance on Windows does not configure a WSL agent,
+and a Windows desktop app does not inherit a WSL shell's environment.
+
+Install the host first, following its official Windows requirements. The
+Remembrance local MCP/hooks minimum of Node.js 18.17.0 does not replace a host's
+higher requirement. Pi 1.5.2 requires Node.js 22.19.0 or newer. OpenClaw's current
+host requirements are higher; follow the requirements for the OpenClaw version
+you actually install. The existing release qualification pins OpenCode 1.18.10,
+Pi 1.5.2, and OpenClaw 2026.7.1-2; a newer host or a different operating system
+needs its own compatibility verification. In particular, current OpenCode v2
+installation documentation is not proof that the v1 adapter is v2-qualified.
+
+| Host | Native Windows installation |
+| --- | --- |
+| Codex | Install the native Codex CLI and use the PowerShell setup below. Native Windows supports PowerShell and a Windows sandbox; WSL is optional. [Official Windows guide](https://developers.openai.com/codex/windows/) |
+| Claude Code | Run `claude plugin marketplace add dreamarkinc/remembrance-skills`, then `claude plugin install remembrance@remembrance`. The host supports Windows 10 1809+/Server 2019+; Git for Windows supplies Bash for shell-based plugin hooks even when the host itself can use PowerShell. [Official setup](https://code.claude.com/docs/en/setup) |
+| Cursor | Install PowerShell 7 as described below, then use **Customize > Plugins** or the approved team marketplace in the native Windows editor. The desktop hooks require `pwsh` on Cursor's inherited PATH and use the bundled Windows launcher. [Windows downloads](https://cursor.com/download), [hook execution](https://cursor.com/docs/hooks) |
+| VS Code | Use the native Windows editor, select the intended agent harness, then **Chat: Install Plugin From Source** with `https://github.com/dreamarkinc/remembrance-skills`. Available plugin components depend on the harness and organization policy. The Remembrance MCP launcher also requires Git for Windows' `sh` on the PATH inherited by VS Code; this is a plugin dependency, separate from the editor's requirements. [Windows setup](https://code.visualstudio.com/docs/setup/windows), [agent plugins](https://code.visualstudio.com/docs/agent-customization/agent-plugins) |
+| OpenCode | With a compatible native Windows host installed, run `npx.cmd -y @remembrance-ai/opencode-plugin setup`. For current OpenCode v2, official Windows installation uses standalone binaries; keep the adapter-version boundary above. [Official installation](https://opencode.ai/docs/) |
+| Pi | With Pi 1.5.2 and Node.js 22.19.0+ installed, run `pi install npm:@remembrance-ai/pi-plugin`. Native Pi uses Git Bash by default; its optional PowerShell tool does not remove Bash from every command path. [Official Windows guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/windows.md) |
+| OpenClaw | In the environment that runs the Gateway, run `openclaw plugins install clawhub:@remembrance/openclaw-plugin`, then `openclaw remembrance setup`. Native PowerShell CLI/Gateway and WSL2 are separate supported host routes; Windows Hub's local Gateway may run in its app-owned WSL environment. [Official Windows guide](https://docs.openclaw.ai/platforms/windows), [host Node requirements](https://docs.openclaw.ai/install/node) |
+| Any MCP client | Use hosted `https://remembrance.dev/api/mcp`, or test local stdio from PowerShell with `npx.cmd -y @remembrance-ai/mcp-server`. Configure process launching in the client's documented Windows form; a terminal command is not a universal MCP JSON configuration. [Official Windows MCP example](https://modelcontextprotocol.io/docs/develop/connect-local-servers) |
+
+#### Cursor Windows prerequisite
+
+Native Windows requires PowerShell 7 for Cursor's desktop hooks. Install
+the stable MSI package using Microsoft's [official installation instructions](https://learn.microsoft.com/en-us/powershell/scripting/install/install-powershell-on-windows):
+
+```powershell
+winget install --id Microsoft.PowerShell --source winget --installer-type wix
+```
+
+If WinGet is unavailable, use the MSI download in those instructions. Fully quit
+Cursor after installation and reopen it from a fresh terminal so it inherits
+the updated PATH. In that terminal, `pwsh -NoProfile -Command '$PSVersionTable.PSVersion.Major'`
+must print `7`. Keep Node.js and npm on that same inherited PATH. This extra
+dependency applies to Cursor hooks; the private filesystem checker continues
+to use Windows PowerShell 5.1, and other hosts keep their documented prerequisites.
+This launcher qualification does not establish a complete native Cursor app session.
+
+#### Codex PowerShell setup
+
+Use PowerShell 5.1 or PowerShell 7 with the native Codex CLI on PATH. To choose
+a different installed executable, set `CODEX_CLI` to its full path in this
+process first. The block stops at the first failed step and opens Codex for the
+same hook review described above. This setup block does not establish a
+completed native Windows host installation; follow the connection checks below.
+
+```powershell
+& {
+  $ErrorActionPreference = 'Stop'
+  if ($env:CODEX_CLI) {
+    $candidate = Get-Item -LiteralPath $env:CODEX_CLI -ErrorAction Stop
+    if ($candidate.PSIsContainer) { throw 'CODEX_CLI must name an executable file.' }
+    $codexCli = $candidate.FullName
+  } else {
+    $codexCli = (Get-Command codex -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+  }
+  & $codexCli plugin marketplace add dreamarkinc/remembrance-skills
+  if ($LASTEXITCODE -ne 0) { throw 'Codex marketplace add failed.' }
+  & $codexCli plugin marketplace upgrade remembrance
+  if ($LASTEXITCODE -ne 0) { throw 'Codex marketplace upgrade failed.' }
+  & $codexCli plugin add remembrance@remembrance
+  if ($LASTEXITCODE -ne 0) { throw 'Codex plugin add failed.' }
+  & $codexCli
+  if ($LASTEXITCODE -ne 0) { throw 'Codex launch failed.' }
+}
+```
+
+Use `npx.cmd` from PowerShell if its `npx.ps1` shim is blocked; no execution-policy
+change is needed. If an npm-installed host has the same issue, use its `.cmd`
+shim, such as `pi.cmd` or `openclaw.cmd`. For existing shell-based plugin
+launchers, Git for Windows' `usr\bin` directory supplies `sh`; make it visible
+on the PATH inherited by the desktop host and fully restart that host. A
+successful terminal launch alone does not verify the desktop host's PATH.
+
+The default native Windows shared configuration is
+`$HOME\.config\remembrance\config.json`, normally
+`C:\Users\<you>\.config\remembrance\config.json`; it is not an arbitrary
+Electron application's AppData folder. The corresponding default local identity
+is `$HOME\.config\remembrance\agent-key.json`. Existing explicit path
+overrides still apply. Inside WSL these are Linux paths under the WSL user's
+home. Do not copy credentials between those environments merely to make a
+missing-tool error disappear.
+
+Remembrance 0.2.26 or newer supports masked stdin configuration through
+`npx.cmd --yes @remembrance-ai/mcp-server configure --stdin`. Follow the
+[Windows credential setup guide](skills/remembrancer/references/remembrance-setup.md#windows-credential-setup)
+for the complete masked-input block. The guide preserves unrelated settings
+and refuses malformed or insecure state; existing scoped permission recovery
+and private-submit consent still apply.
+
+If a local tool returns `restore_windows_private_permissions`, run its exact returned normal-shell recipe for the selected current-owned file or empty directory. It preserves file contents and changes only that object's permissions. A nonempty directory, foreign owner, or grants allowing another user to modify the object or parent can return `owner_review_required`: inspect only the selected object and immediate-parent ownership/ACL metadata, obtain scoped owner review before broader repair, then resume the returned `get_connection_status` or `bootstrap_agent_identity` step and run `run_connection_doctor`. Preserve existing state: do not delete retained data or rotate keys to repair permissions. Restored permissions make no claim about past access or previously opened handles.
+
+After installing the client, fully restart the actual host and run
+its Remembrance `run_connection_doctor`. With no host tool available, run
+`npx.cmd --yes @remembrance-ai/mcp-server doctor --json`; that checks the
+CLI's connection, not native hook registration. Complete the same host trust
+review and exact private-submit approvals as on other platforms. A Windows installation does not grant consent,
+establish source authority, or turn a retained private draft into a completed
+submission.
 
 ### Codex — remote MCP fallback
 

@@ -54,8 +54,10 @@
 // event.messages). The core still fails open if none match.
 
 import { accessSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 import {
   agentLedgerIdFor,
   bindPrivateSkillNativeCapture,
@@ -111,7 +113,29 @@ import { nativeContextAuthorityEvent } from "./native-context-authority.mjs";
 export { handlePrivateLessonSubmitApproval } from "./private-lesson-approval.mjs";
 
 async function resolveNativeCommandAuthorization(input) {
-  const sdk = await import("openclaw/plugin-sdk/command-auth");
+  const resolveSdk = createRequire(import.meta.url).resolve;
+  let sdkPath;
+  let nativeSdk = true;
+  try {
+    sdkPath = resolveSdk("openclaw/plugin-sdk/command-auth-native");
+  } catch (error) {
+    if (
+      error?.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED" &&
+      error?.code !== "MODULE_NOT_FOUND"
+    ) throw error;
+    // Some older hosts expose only command-auth. Decide compatibility at resolution,
+    // never after module initialization or an authorization attempt has failed.
+    sdkPath = resolveSdk("openclaw/plugin-sdk/command-auth");
+    nativeSdk = false;
+  }
+  const sdk = await import(pathToFileURL(sdkPath).href);
+  if (nativeSdk && sdk.resolveCommandAuthorizationAsync !== undefined) {
+    if (typeof sdk.resolveCommandAuthorizationAsync !== "function") {
+      throw new TypeError("OpenClaw SDK async authorization resolver is invalid.");
+    }
+    return sdk.resolveCommandAuthorizationAsync(input);
+  }
+  // The pinned older host also has command-auth-native, with a sync-only API.
   return sdk.resolveCommandAuthorization(input);
 }
 

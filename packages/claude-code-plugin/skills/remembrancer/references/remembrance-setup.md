@@ -8,7 +8,7 @@ REST/HTTPS, skill-only installs, enterprise org keys, local identity, and common
 ## When to use
 
 - The user asks how to install Remembrance for Claude Code, Codex, OpenClaw,
-  Cursor, Pi, Gemini, or another agent.
+  Cursor, VS Code, OpenCode, Pi, Gemini, or another agent.
 - The user has an enterprise/org API key and needs to make an agent use
   org-scoped skills or private overlays.
 - MCP tools such as run_connection_doctor, get_connection_status, query_skills,
@@ -186,9 +186,11 @@ unrelated roots, genealogy, ancestry, or memorial packages.
 
 The setup command preserves existing OpenClaw settings, enables conversation
 access, and registers the bundled local MCP by its installed absolute path.
-Before that grant, OpenClaw already runs the plugin's prompt, tool and
-subagent-end hooks and holds only its completion hook (before_agent_finalize):
-the prompt hook reads each prompt and, unless `REMEMBRANCE_AUTO_QUERY=0`,
+Current OpenClaw hosts require the grant for both `before_prompt_build` and
+`before_agent_finalize`; prompt modification also requires that
+`allowPromptModification` is not false. The older 2026.7.1-2 qualification
+held only completion before the grant; it does not establish current-host
+behavior. When enabled, the prompt hook reads each prompt and, unless `REMEMBRANCE_AUTO_QUERY=0`,
 sends a reusable-looking prompt, redacted, as a registry query.
 In centrally managed environments, apply this equivalent configuration in
 "~/.openclaw/openclaw.json":
@@ -250,6 +252,172 @@ Private capture still requires verified source authority. If the actual
 producer cannot be verified, retain the protected draft and follow its bounded
 recovery instructions through the existing exact private action. A user-role
 label, session ID, or tool claim is not proof; a retained hold is not a submitted contribution or completed recovery.
+
+### Windows and WSL
+
+Windows support and secure credential setup require Remembrance 0.2.26 or newer. Install the current client, then verify the connection in the actual host.
+
+Choose the environment where the agent actually runs. Native Windows examples
+below use **PowerShell**. A host running inside **WSL2** uses the Linux/Bash
+instructions, Linux Node.js, and its Linux home directory instead. Installing
+Node.js or configuring Remembrance on Windows does not configure a WSL agent,
+and a Windows desktop app does not inherit a WSL shell's environment.
+
+Install the host first, following its official Windows requirements. The
+Remembrance local MCP/hooks minimum of Node.js 18.17.0 does not replace a host's
+higher requirement. Pi 1.5.2 requires Node.js 22.19.0 or newer. OpenClaw's current
+host requirements are higher; follow the requirements for the OpenClaw version
+you actually install. The existing release qualification pins OpenCode 1.18.10,
+Pi 1.5.2, and OpenClaw 2026.7.1-2; a newer host or a different operating system
+needs its own compatibility verification. In particular, current OpenCode v2
+installation documentation is not proof that the v1 adapter is v2-qualified.
+
+| Host | Native Windows installation |
+| --- | --- |
+| Codex | Install the native Codex CLI and use the PowerShell setup below. Native Windows supports PowerShell and a Windows sandbox; WSL is optional. [Official Windows guide](https://developers.openai.com/codex/windows/) |
+| Claude Code | Run `claude plugin marketplace add dreamarkinc/remembrance-skills`, then `claude plugin install remembrance@remembrance`. The host supports Windows 10 1809+/Server 2019+; Git for Windows supplies Bash for shell-based plugin hooks even when the host itself can use PowerShell. [Official setup](https://code.claude.com/docs/en/setup) |
+| Cursor | Install PowerShell 7 as described below, then use **Customize > Plugins** or the approved team marketplace in the native Windows editor. The desktop hooks require `pwsh` on Cursor's inherited PATH and use the bundled Windows launcher. [Windows downloads](https://cursor.com/download), [hook execution](https://cursor.com/docs/hooks) |
+| VS Code | Use the native Windows editor, select the intended agent harness, then **Chat: Install Plugin From Source** with `https://github.com/dreamarkinc/remembrance-skills`. Available plugin components depend on the harness and organization policy. The Remembrance MCP launcher also requires Git for Windows' `sh` on the PATH inherited by VS Code; this is a plugin dependency, separate from the editor's requirements. [Windows setup](https://code.visualstudio.com/docs/setup/windows), [agent plugins](https://code.visualstudio.com/docs/agent-customization/agent-plugins) |
+| OpenCode | With a compatible native Windows host installed, run `npx.cmd -y @remembrance-ai/opencode-plugin setup`. For current OpenCode v2, official Windows installation uses standalone binaries; keep the adapter-version boundary above. [Official installation](https://opencode.ai/docs/) |
+| Pi | With Pi 1.5.2 and Node.js 22.19.0+ installed, run `pi install npm:@remembrance-ai/pi-plugin`. Native Pi uses Git Bash by default; its optional PowerShell tool does not remove Bash from every command path. [Official Windows guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/windows.md) |
+| OpenClaw | In the environment that runs the Gateway, run `openclaw plugins install clawhub:@remembrance/openclaw-plugin`, then `openclaw remembrance setup`. Native PowerShell CLI/Gateway and WSL2 are separate supported host routes; Windows Hub's local Gateway may run in its app-owned WSL environment. [Official Windows guide](https://docs.openclaw.ai/platforms/windows), [host Node requirements](https://docs.openclaw.ai/install/node) |
+| Any MCP client | Use hosted `https://remembrance.dev/api/mcp`, or test local stdio from PowerShell with `npx.cmd -y @remembrance-ai/mcp-server`. Configure process launching in the client's documented Windows form; a terminal command is not a universal MCP JSON configuration. [Official Windows MCP example](https://modelcontextprotocol.io/docs/develop/connect-local-servers) |
+
+#### Cursor Windows prerequisite
+
+Native Windows requires PowerShell 7 for Cursor's desktop hooks. Install
+the stable MSI package using Microsoft's [official installation instructions](https://learn.microsoft.com/en-us/powershell/scripting/install/install-powershell-on-windows):
+
+```powershell
+winget install --id Microsoft.PowerShell --source winget --installer-type wix
+```
+
+If WinGet is unavailable, use the MSI download in those instructions. Fully quit
+Cursor after installation and reopen it from a fresh terminal so it inherits
+the updated PATH. In that terminal, `pwsh -NoProfile -Command '$PSVersionTable.PSVersion.Major'`
+must print `7`. Keep Node.js and npm on that same inherited PATH. This extra
+dependency applies to Cursor hooks; the private filesystem checker continues
+to use Windows PowerShell 5.1, and other hosts keep their documented prerequisites.
+This launcher qualification does not establish a complete native Cursor app session.
+
+#### Codex PowerShell setup
+
+Use PowerShell 5.1 or PowerShell 7 with the native Codex CLI on PATH. To choose
+a different installed executable, set `CODEX_CLI` to its full path in this
+process first. The block stops at the first failed step and opens Codex for the
+same hook review described above. This setup block does not establish a
+completed native Windows host installation; follow the connection checks below.
+
+~~~powershell
+& {
+  $ErrorActionPreference = 'Stop'
+  if ($env:CODEX_CLI) {
+    $candidate = Get-Item -LiteralPath $env:CODEX_CLI -ErrorAction Stop
+    if ($candidate.PSIsContainer) { throw 'CODEX_CLI must name an executable file.' }
+    $codexCli = $candidate.FullName
+  } else {
+    $codexCli = (Get-Command codex -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+  }
+  & $codexCli plugin marketplace add dreamarkinc/remembrance-skills
+  if ($LASTEXITCODE -ne 0) { throw 'Codex marketplace add failed.' }
+  & $codexCli plugin marketplace upgrade remembrance
+  if ($LASTEXITCODE -ne 0) { throw 'Codex marketplace upgrade failed.' }
+  & $codexCli plugin add remembrance@remembrance
+  if ($LASTEXITCODE -ne 0) { throw 'Codex plugin add failed.' }
+  & $codexCli
+  if ($LASTEXITCODE -ne 0) { throw 'Codex launch failed.' }
+}
+~~~
+
+Use `npx.cmd` from PowerShell if its `npx.ps1` shim is blocked; no execution-policy
+change is needed. If an npm-installed host has the same issue, use its `.cmd`
+shim, such as `pi.cmd` or `openclaw.cmd`. For existing shell-based plugin
+launchers, Git for Windows' `usr\bin` directory supplies `sh`; make it visible
+on the PATH inherited by the desktop host and fully restart that host. A
+successful terminal launch alone does not verify the desktop host's PATH.
+
+The default native Windows shared configuration is
+`$HOME\.config\remembrance\config.json`, normally
+`C:\Users\<you>\.config\remembrance\config.json`; it is not an arbitrary
+Electron application's AppData folder. The corresponding default local identity
+is `$HOME\.config\remembrance\agent-key.json`. Existing explicit path
+overrides still apply. Inside WSL these are Linux paths under the WSL user's
+home. Do not copy credentials between those environments merely to make a
+missing-tool error disappear.
+
+#### Windows credential setup
+
+Remembrance 0.2.26 or newer provides `configure --stdin` through the npm
+package. The command below downloads the current client with npm before
+passing the credential through standard input.
+
+Run this block in Windows PowerShell 5.1 or PowerShell 7, and enter the key only
+at the masked prompt. For an organization registry, replace the public API URL
+with its approved HTTPS base URL.
+
+~~~powershell
+& {
+    $ErrorActionPreference = 'Stop'
+    $OutputEncoding = [Text.UTF8Encoding]::new($false)
+    $remembranceSecureKey = $null
+    $remembranceKeyBstr = [IntPtr]::Zero
+    $remembranceConfigJson = $null
+    try {
+        $remembranceSecureKey = Read-Host 'Remembrance API key' -AsSecureString
+        $remembranceKeyBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($remembranceSecureKey)
+        $remembranceConfigJson = @{
+            apiKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($remembranceKeyBstr)
+            apiUrl = 'https://remembrance.dev'
+        } | Microsoft.PowerShell.Utility\ConvertTo-Json -Compress
+        $remembranceConfigJson | npx.cmd --yes @remembrance-ai/mcp-server configure --stdin
+        $remembranceNativeExit = $LASTEXITCODE
+        if ($remembranceNativeExit -ne 0) {
+            throw 'Remembrance configuration did not complete.'
+        }
+    }
+    finally {
+        $remembranceConfigJson = $null
+        if ($remembranceKeyBstr -ne [IntPtr]::Zero) {
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($remembranceKeyBstr)
+            $remembranceKeyBstr = [IntPtr]::Zero
+        }
+        if ($null -ne $remembranceSecureKey) {
+            $remembranceSecureKey.Dispose()
+            $remembranceSecureKey = $null
+        }
+    }
+}
+~~~
+
+The command passes the key through memory/stdin, saves the shared configuration
+with private protection before credential bytes, and preserves unrelated
+settings. Malformed or insecure existing files are refused unchanged. Setup
+does not contact the registry or bootstrap an agent identity. Do not replace
+the secure writer with `Set-Content`, `Out-File`, a key-bearing argument or
+environment variable, or a post-write permission repair.
+
+The block frees the BSTR allocation and drops managed references. JSON
+conversion still creates a temporary plaintext string in process memory;
+cleanup does not guarantee immediate erasure of managed strings. Encoding and
+error handling remain local to the block; no profile or execution-policy change
+is needed.
+
+Native qualification exercised the same masked-input transport and secure
+configuration command with synthetic keys against an exact local bundle on
+Windows Server 2022 and Node.js 24.15.0 in Windows PowerShell 5.1 and PowerShell 7.
+That fixture did not download the package with npm.
+It did not exercise a human interactive prompt or complete native host app
+session, and it does not establish a system-cold-start bound.
+
+If a local tool returns `restore_windows_private_permissions`, run its exact returned normal-shell recipe for the selected current-owned file or empty directory. It preserves file contents and changes only that object's permissions. A nonempty directory, foreign owner, or grants allowing another user to modify the object or parent can return `owner_review_required`: inspect only the selected object and immediate-parent ownership/ACL metadata, obtain scoped owner review before broader repair, then resume the returned `get_connection_status` or `bootstrap_agent_identity` step and run `run_connection_doctor`. Preserve existing state: do not delete retained data or rotate keys to repair permissions. Restored permissions make no claim about past access or previously opened handles.
+
+After installing the client, fully restart the actual host and run
+its Remembrance `run_connection_doctor`. With no host tool available, run
+`npx.cmd --yes @remembrance-ai/mcp-server doctor --json`; that checks the
+CLI's connection, not native hook registration. Complete the same host trust
+review and exact private-submit approvals as on other platforms. A Windows installation does not grant consent,
+establish source authority, or turn a retained private draft into a completed
+submission.
 
 After installing any native plugin, restart the agent app/session and approve
 the runtime's trust request when one appears. For Codex, complete the hook
@@ -829,7 +997,7 @@ paths, or raw logs. Set `REMEMBRANCE_HEALTH_REPORTING=0` to disable that
 best-effort report.
 
 If no Remembrance MCP tool is visible, run
-`npx @remembrance-ai/mcp-server@0.2.25 doctor`. This safely verifies registry,
+`npx @remembrance-ai/mcp-server@0.2.26 doctor`. This safely verifies registry,
 credential, and catalog-read access outside the host, but it deliberately
 reports host registration as unobservable. Update or reinstall the native
 plugin, fully restart the host, then rerun `run_connection_doctor` inside it.
@@ -1902,8 +2070,8 @@ and require organization scope before contribution work. See the official
 
 ### Approve OpenClaw
 
-Pin the exact plugin id, grant its conversation access (without it, OpenClaw
-holds only the completion hook), and filter the saved Remembrance MCP server.
+Pin the exact plugin id, grant its conversation access for the host's gated
+prompt and completion hooks, and filter the saved Remembrance MCP server.
 `plugins.deny` wins over the allowlist. The `minimal` tool profile hides
 MCP tools, and `tools.deny: ["bundle-mcp"]` disables them:
 
@@ -2049,7 +2217,7 @@ Restart Pi and call `run_connection_doctor` to confirm organization scope.
 ### Approve other MCP clients
 
 Register exactly `https://remembrance.dev/api/mcp` or the exact local
-`npx @remembrance-ai/mcp-server@0.2.25` command. Use the recommended organization
+`npx @remembrance-ai/mcp-server@0.2.26` command. Use the recommended organization
 tool list above when the client supports tool filtering. Supply the
 organization key through the client's secret/header mechanism, then run
 `run_connection_doctor` and require organization scope before private writes.
@@ -2086,13 +2254,13 @@ https://remembrance.dev/api/mcp
 Local stdio MCP server:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.25
+npx @remembrance-ai/mcp-server@0.2.26
 ~~~
 
 Independent setup check when the host does not expose Remembrance tools:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.25 doctor
+npx @remembrance-ai/mcp-server@0.2.26 doctor
 ~~~
 
 This verifies registry, credential, and catalog-read access without submitting
@@ -2324,9 +2492,8 @@ session skills.
 - "OpenClaw search found another Remembrance package": do not install it unless
   it points to dreamarkinc/remembrance-skills and exposes the Remembrance MCP
   tools.
-- "OpenClaw hooks do nothing": without allowConversationAccess, OpenClaw holds
-  only the completion hook (before_agent_finalize) and still runs the prompt,
-  tool and subagent-end hooks. Run "openclaw remembrance setup", verify
+- "OpenClaw hooks do nothing": current hosts require allowConversationAccess
+  for prompt and completion hooks. Run "openclaw remembrance setup", verify
   allowConversationAccess is true, run "openclaw mcp doctor remembrance
   --probe", and restart OpenClaw after plugin install/config changes.
 - "Claude desktop ignores env vars": put env in the user-scoped Claude settings

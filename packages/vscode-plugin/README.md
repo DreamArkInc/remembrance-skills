@@ -24,12 +24,7 @@ else `node` on PATH, else Node.js 18.17.0+ from nvm, volta, fnm, n, asdf,
 nodenv, mise, Homebrew, `/usr/local` or `/usr/bin`. In VS Code only PATH and
 that search apply: start VS Code with `code .` from a terminal where `node`
 works, or install Node.js 18.17.0+ in one of those locations, then restart VS
-Code. On Windows, VS Code runs each hook's `windows` form, which calls `node`
-directly and needs no `sh`, but skips the launcher: the first `node` on the PATH
-VS Code sees runs the hooks without the Node.js 18.17.0 floor check, so keep
-Node.js 18.17.0+ first on that PATH. The MCP entry still starts the launcher
-with `sh`, so it needs `sh` (Git for Windows `usr\bin`) on the PATH VS Code
-sees.
+Code. On Windows, the VS Code hooks run `scripts/node-launcher.cmd` through PowerShell and enforce the Node.js 18.17.0 minimum. The MCP entry still starts the launcher with `sh`, so it needs Git for Windows' `usr\bin` on the PATH inherited by VS Code.
 
 ## Install
 

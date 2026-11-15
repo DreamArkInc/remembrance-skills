@@ -1,3 +1,5 @@
+import { assertWindowsPrivateRead, withWindowsPrivateReadOperation, withWindowsPrivateDirectoryReadOperation } from "./windows-private-read.mjs";
+import { ensureWindowsPrivateDirectorySync, openWindowsPrivateFileSync } from "./windows-private-create.mjs";
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -10,11 +12,12 @@ import {
   openSync,
   opendirSync,
   readSync,
+  readdirSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir, userInfo } from "node:os";
+import { homedir, tmpdir, userInfo, platform } from "node:os";
 import { dirname, join } from "node:path";
 
 const FEEDBACK_DENIAL_VERSION = "feedback-denial-acknowledgement-v1";
@@ -136,6 +139,7 @@ function assertCurrentOwner(uid) {
 }
 
 function ensurePrivateDirectory(path) {
+  if (platform() === "win32") { ensureWindowsPrivateDirectorySync(path); return; }
   mkdirSync(path, { recursive: true, mode: 0o700 });
   const metadata = lstatSync(path);
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
@@ -153,6 +157,14 @@ function ensurePrivateDirectory(path) {
 }
 
 function assertPrivateDirectory(path) {
+  if (platform() === "win32") {
+    const before = lstatSync(path, { bigint: true });
+    if (before.isSymbolicLink() || !before.isDirectory()) throw new Error("Local state is not a regular directory.");
+    const descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try { assertWindowsPrivateRead(path, "directory", before, fstatSync(descriptor, { bigint: true })); }
+    finally { closeSync(descriptor); }
+    return;
+  }
   const metadata = lstatSync(path);
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
     throw new Error("Local state is not a regular directory.");
@@ -196,17 +208,28 @@ function readBoundedDescriptor(descriptor) {
 }
 
 function readMarker(path, expectedDigest) {
+  if (platform() === "win32") return withWindowsPrivateReadOperation([
+    { path: dirname(dirname(path)), kind: "directory" },
+    { path: dirname(path), kind: "directory" },
+    { path, kind: "file" },
+  ], () => readMarkerChecked(path, expectedDigest));
+  return readMarkerChecked(path, expectedDigest);
+}
+
+function readMarkerChecked(path, expectedDigest, validatedMetadata = null) {
   assertPrivateDirectory(dirname(dirname(path)));
   assertPrivateDirectory(dirname(path));
-  const before = lstatSync(path);
+  const windows = platform() === "win32";
+  const before = windows ? lstatSync(path, { bigint: true }) : lstatSync(path);
   assertPrivateMarker(before);
   const descriptor = openSync(
     path,
     constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
   );
   try {
-    const opened = fstatSync(descriptor);
+    const opened = windows ? fstatSync(descriptor, { bigint: true }) : fstatSync(descriptor);
     assertPrivateMarker(opened);
+    if (windows) assertWindowsPrivateRead(path, "file", before, opened);
     if (before.dev !== opened.dev || before.ino !== opened.ino) {
       throw new Error("Local state marker changed while opening.");
     }
@@ -224,10 +247,63 @@ function readMarker(path, expectedDigest) {
     ) {
       throw new Error("Local state marker is malformed.");
     }
+    if (validatedMetadata && windows) {
+      const after = fstatSync(descriptor, { bigint: true });
+      // Bind the expiry decision to the actual consuming FD's pre-read tuple.
+      // A concurrent update during parsing never becomes a deletion candidate.
+      if (sameMarkerTuple(opened, after) && opened.nlink === 1n) validatedMetadata(markerTuple(opened));
+    }
     return parsed;
   } finally {
     closeSync(descriptor);
   }
+}
+
+const MARKER_IDENTITY_FIELDS = ["dev", "ino", "mode", "uid", "gid", "size", "nlink", "mtimeNs", "ctimeNs", "birthtimeNs"];
+function markerTuple(metadata) { return Object.freeze(Object.fromEntries(MARKER_IDENTITY_FIELDS.map(field => [field, metadata[field]]))); }
+function sameMarkerTuple(first, second) {
+  return MARKER_IDENTITY_FIELDS.every(field => typeof first[field] === "bigint" && first[field] === second[field]);
+}
+function ownedExpiryCandidate(metadata, expected) {
+  return metadata.isFile() && !metadata.isSymbolicLink() && metadata.nlink === 1n && sameMarkerTuple(expected, metadata);
+}
+
+// Windows only: read every marker in original iterator order before deleting
+// independent expired rows. Store metadata, never marker bodies, across phases.
+// This is an observed-identity check under the private-parent model, not CAS.
+function flushWindowsExpiredMarkers(directory, expectedDirectory, candidates) {
+  if (candidates.length === 0) return 0;
+  const before = lstatSync(directory, { bigint: true });
+  const parent = openSync(directory, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  let removed = 0;
+  try {
+    const opened = fstatSync(parent, { bigint: true });
+    assertWindowsPrivateRead(directory, "directory", before, opened);
+    const checkParent = () => {
+      const current = lstatSync(directory, { bigint: true }), held = fstatSync(parent, { bigint: true });
+      if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== expectedDirectory.dev || current.ino !== expectedDirectory.ino || held.dev !== current.dev || held.ino !== current.ino) throw new Error("Local acknowledgement parent changed.");
+    };
+    checkParent();
+    for (const candidate of candidates) {
+      checkParent();
+      let descriptor;
+      try {
+        if (!ownedExpiryCandidate(lstatSync(candidate.path, { bigint: true }), candidate.metadata)) continue;
+        descriptor = openSync(candidate.path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+        if (!ownedExpiryCandidate(fstatSync(descriptor, { bigint: true }), candidate.metadata)) continue;
+      } catch { continue; }
+      finally { if (descriptor !== undefined) closeSync(descriptor); }
+      // Windows must release the file probe before unlink. Keep a final narrow
+      // path/parent check; replaced or updated records remain available.
+      checkParent();
+      try {
+        if (!ownedExpiryCandidate(lstatSync(candidate.path, { bigint: true }), candidate.metadata)) continue;
+        rmSync(candidate.path, { force: true }); removed += 1;
+      } catch { /* Preserve unknown or changed candidates. */ }
+    }
+    checkParent();
+    return removed;
+  } finally { closeSync(parent); }
 }
 
 function removeExpiredMarker(path, marker, now) {
@@ -236,12 +312,21 @@ function removeExpiredMarker(path, marker, now) {
   return true;
 }
 
+function windowsPrivateDirectorySnapshot(directory) {
+  if (platform() !== "win32") return [];
+  try { return readdirSync(directory); } catch { return []; }
+}
+
 function cleanupExpiredMarkers(directory, now) {
+  const windows = platform() === "win32";
+  const expectedDirectory = windows ? lstatSync(directory, { bigint: true }) : null;
+  const expired = [];
   const handle = opendirSync(directory);
   let markerCount = 0;
   let visited = 0;
   try {
-    while (visited <= MAX_FEEDBACK_DENIAL_MARKERS) {
+    withWindowsPrivateReadOperation([{ path: dirname(directory), kind: "directory" }], () => withWindowsPrivateDirectoryReadOperation(directory, windowsPrivateDirectorySnapshot(directory), () => {
+while (visited <= MAX_FEEDBACK_DENIAL_MARKERS) {
       const entry = handle.readSync();
       if (!entry) break;
       visited += 1;
@@ -250,13 +335,20 @@ function cleanupExpiredMarkers(directory, now) {
       const digest = entry.name.slice(0, -".json".length);
       const path = join(directory, entry.name);
       try {
-        if (removeExpiredMarker(path, readMarker(path, digest), now)) {
+        if (windows) {
+          let metadata = null;
+          const marker = readMarkerChecked(path, digest, verified => { metadata = verified; });
+          if (Date.parse(marker.expires_at) <= now && metadata && expired.length < MAX_FEEDBACK_DENIAL_MARKERS) expired.push({ path, metadata });
+        } else if (removeExpiredMarker(path, readMarkerChecked(path, digest), now)) {
           markerCount -= 1;
         }
       } catch {
         // One corrupt marker cannot acknowledge or remove another event.
       }
     }
+
+}));
+    if (windows) markerCount -= flushWindowsExpiredMarkers(directory, expectedDirectory, expired);
     if (visited > MAX_FEEDBACK_DENIAL_MARKERS) {
       throw new Error("Local acknowledgement storage exceeds its entry limit.");
     }
@@ -270,9 +362,9 @@ function cleanupExpiredMarkers(directory, now) {
 
 function writeMarkerAtomically(path, marker) {
   const temporaryPath = `${path}.${randomBytes(8).toString("hex")}.tmp`;
-  let descriptor;
+  let descriptor, owned;
   try {
-    descriptor = openSync(
+    descriptor = platform() === "win32" ? openWindowsPrivateFileSync(temporaryPath) : openSync(
       temporaryPath,
       constants.O_WRONLY |
         constants.O_CREAT |
@@ -280,6 +372,7 @@ function writeMarkerAtomically(path, marker) {
         (constants.O_NOFOLLOW ?? 0),
       0o600,
     );
+    owned = fstatSync(descriptor, { bigint: true });
     writeFileSync(descriptor, `${JSON.stringify(marker)}\n`, {
       encoding: "utf8",
     });
@@ -296,7 +389,12 @@ function writeMarkerAtomically(path, marker) {
       }
     }
     try {
-      rmSync(temporaryPath, { force: true });
+      // An exclusive-create collision owns nothing. Never delete an unknown,
+      // replaced, linked, or nonempty candidate while preserving the failure.
+      if (owned) {
+        const current = lstatSync(temporaryPath, { bigint: true });
+        if (current.isFile() && !current.isSymbolicLink() && current.dev === owned.dev && current.ino === owned.ino && current.nlink === 1n && current.size === 0n) rmSync(temporaryPath, { force: true });
+      }
     } catch {
       // Preserve the original persistence failure.
     }

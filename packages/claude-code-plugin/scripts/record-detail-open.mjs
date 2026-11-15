@@ -2,6 +2,7 @@
 
 import process from "node:process";
 import {
+  parseHookInputJson,
   agentLedgerIdFor,
   bindPrivateSkillNativeCapture,
   clearHighMatchSurfaceIfOpened,
@@ -263,7 +264,7 @@ async function readStdin() {
 async function main() {
   try {
     const raw = await readStdin();
-    await handlePostToolUse(raw.trim() ? JSON.parse(raw) : {});
+    await handlePostToolUse(raw.trim() ? parseHookInputJson(raw) : {});
   } catch {
     // Observation only. Never affect the completed tool call.
   }

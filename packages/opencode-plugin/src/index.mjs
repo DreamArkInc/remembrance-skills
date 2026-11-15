@@ -42,6 +42,7 @@
 
 import { readFileSync } from "node:fs";
 import process from "node:process";
+import { createOpenCodeV2Setup } from "./v2.mjs";
 import {
   bindPrivateSkillNativeCapture,
   HOST_POLICY_ALERT_TEXT,
@@ -282,6 +283,7 @@ async function notify(client, message, variant = "info") {
 export const Remembrance = async (context = {}) => {
   const { client } = context;
   const env = process.env;
+  const active = () => { try { return context.isActive?.() !== false; } catch { return false; } };
   const version = pluginVersion();
   // OpenCode emits message metadata and message text separately. Track both
   // sides so either delivery order works, then query exactly once.
@@ -297,6 +299,10 @@ export const Remembrance = async (context = {}) => {
   const turnContext = new Map();
   const userMessages = new Map();
   const pendingTextParts = new Map();
+  context.onInvalidate?.(() => {
+    for (const map of [messageSessions, pendingGuidance, pendingClientUpdates, turnContext, userMessages, pendingTextParts]) map.clear();
+    queriedMessages.clear();
+  });
 
   async function observeHostPolicyDenial({
     eventType,
@@ -304,6 +310,7 @@ export const Remembrance = async (context = {}) => {
     toolName,
     value,
   }) {
+    if (!active()) return false;
     const observation = recordHostPolicyDenial(
       {
         surface: SURFACE,
@@ -317,6 +324,7 @@ export const Remembrance = async (context = {}) => {
     );
     if (!observation) return false;
     await notify(client, HOST_POLICY_ALERT_TEXT, "error");
+    if (!active()) return false;
     markHostPolicyAlertDelivered(SURFACE, sessionId, observation.id, env);
     return true;
   }
@@ -338,6 +346,7 @@ export const Remembrance = async (context = {}) => {
   }
 
   function recordLifecycle(component, sessionId) {
+    if (!active()) return;
     try {
       const credential = resolveApiCredential(env);
       recordPluginLifecycleHealth(
@@ -352,6 +361,7 @@ export const Remembrance = async (context = {}) => {
         env,
       );
     } catch (error) {
+      if (!active()) return;
       debugLog(env, "opencode_lifecycle_health_failed", {
         component,
         error: String(error),
@@ -360,6 +370,7 @@ export const Remembrance = async (context = {}) => {
   }
 
   async function handleSessionCreated(event) {
+    if (!active()) return;
     try {
       const sessionId = sessionIdFromEvent(event, event);
       recordLifecycle("session_start", sessionId);
@@ -385,6 +396,7 @@ export const Remembrance = async (context = {}) => {
             hostSurface: "cli",
             clientVersion: version,
             hostVersion: "",
+            fetchImpl: context.fetchImpl,
           },
           env,
         ).catch(() => null),
@@ -392,10 +404,12 @@ export const Remembrance = async (context = {}) => {
           {
             surface: SURFACE,
             currentVersion: version,
+            fetchImpl: context.fetchImpl,
           },
           env,
         ).catch(() => null),
       ]);
+      if (!active()) return;
       if (clientUpdate?.notice) {
         pendingClientUpdates.set(sessionId, clientUpdate.notice);
       }
@@ -407,6 +421,7 @@ export const Remembrance = async (context = {}) => {
               "run_connection_doctor verifies the active connection and gives one exact next step without exposing the key.",
       );
     } catch (error) {
+      if (!active()) return;
       debugLog(env, "opencode_session_created_failed", {
         error: String(error),
       });
@@ -414,6 +429,7 @@ export const Remembrance = async (context = {}) => {
   }
 
   async function handlePrompt(prompt, sessionId, messageId, nativeSessionId) {
+    if (!active()) return;
     const messageKey = messageId ?? `${sessionId}:${prompt}`;
     if (queriedMessages.has(messageKey)) return;
     queriedMessages.add(messageKey);
@@ -441,9 +457,13 @@ export const Remembrance = async (context = {}) => {
       sessionId: ledgerId,
       subagentSession: !isRecordedMainSession(sessionId, env),
       nativeSessionId,
-      nativeContextBridge: context.nativeContextBridge,
+      fetchImpl: context.fetchImpl,
+      nativeContextBridge: context.nativeContextAuthority === false
+        ? async () => ({ status: "unavailable", reason_code: "native_context_v2_authority_unproven" })
+        : context.nativeContextBridge,
       userAgent: "@remembrance-ai/opencode-plugin",
     });
+    if (!active()) return;
     if (result?.eligible) {
       recordTaskEligibility(ledgerId, env);
     }
@@ -478,6 +498,7 @@ export const Remembrance = async (context = {}) => {
   }
 
   async function handleChatMessage(input, output) {
+    if (!active()) return;
     try {
       if (!isUserMessageEvent(input, output)) return;
       // A user message without text (only a file, image or subtask part)
@@ -491,6 +512,7 @@ export const Remembrance = async (context = {}) => {
         prompt ? nativeSessionIdFromEvent(input, output) : null,
       );
     } catch (error) {
+      if (!active()) return;
       debugLog(env, "opencode_chat_message_failed", {
         error: String(error),
       });
@@ -498,6 +520,7 @@ export const Remembrance = async (context = {}) => {
   }
 
   async function handleSystemTransform(input, output) {
+    if (!active()) return;
     try {
       const sessionId = sessionIdFromEvent(input, output);
       const guidance = pendingGuidance.get(sessionId);
@@ -569,16 +592,19 @@ export const Remembrance = async (context = {}) => {
           },
           {
             env,
+            fetchImpl: context.fetchImpl,
             userAgent: "@remembrance-ai/opencode-plugin",
           },
         );
       }
+      if (!active()) return;
       await log(
         client,
         "debug",
         "Added Remembrance context to the current model turn.",
       );
     } catch (error) {
+      if (!active()) return;
       debugLog(env, "opencode_system_transform_failed", {
         error: String(error),
       });
@@ -586,6 +612,7 @@ export const Remembrance = async (context = {}) => {
   }
 
   async function handleMessageUpdated(event) {
+    if (!active()) return;
     try {
       if (!isUserMessageEvent(event, event)) return;
       const sessionId = sessionIdFromEvent(event, event);
@@ -603,6 +630,7 @@ export const Remembrance = async (context = {}) => {
         );
       }
     } catch (error) {
+      if (!active()) return;
       debugLog(env, "opencode_message_updated_failed", {
         error: String(error),
       });
@@ -610,6 +638,7 @@ export const Remembrance = async (context = {}) => {
   }
 
   async function handleMessagePartUpdated(event) {
+    if (!active()) return;
     try {
       const prompt = promptFromMessageEvent(event, event);
       const messageId = messageIdFromEvent(event, event);
@@ -627,11 +656,13 @@ export const Remembrance = async (context = {}) => {
       }
       await handlePrompt(prompt, sessionId, messageId, nativeSessionId);
     } catch (error) {
+      if (!active()) return;
       debugLog(env, "opencode_prompt_hook_failed", { error: String(error) });
     }
   }
 
   async function handleSessionIdle(event) {
+    if (!active()) return;
     let sessionId = "opencode-session";
     try {
       sessionId = sessionIdFromEvent(event, event);
@@ -639,18 +670,21 @@ export const Remembrance = async (context = {}) => {
       const ledgerId = sessionTreeLedgerId(sessionId, env);
       await reportTaskOutcomesOnStop(ledgerId, event, {
         env,
+        fetchImpl: context.fetchImpl,
         userAgent: "@remembrance-ai/opencode-plugin",
       });
+      if (!active()) return;
       const decision = decideStop(
         { session_id: ledgerId },
         { env, subagentSession: !isRecordedMainSession(sessionId, env) },
       );
       if (decision?.allow !== false || !decision?.reason) return;
       const delivered = await notify(client, decision.reason);
-      if (!delivered) return;
+      if (!delivered || !active()) return;
       writePromptedCount(ledgerId, decision.useCount ?? 1, env);
       acknowledgePrivateAuthorizationReminders(decision.reason, env, ledgerId);
     } catch (error) {
+      if (!active()) return;
       debugLog(env, "opencode_completion_hook_failed", {
         error: String(error),
       });
@@ -658,7 +692,7 @@ export const Remembrance = async (context = {}) => {
       clearSessionState(sessionId);
       // Until the next user prompt a model request is no agent turn (OpenCode
       // runs one for a manual compaction), so it gets no pending notice.
-      if (pendingClientUpdates.has(sessionId)) turnContext.set(sessionId, []);
+      if (active() && pendingClientUpdates.has(sessionId)) turnContext.set(sessionId, []);
     }
   }
 
@@ -666,6 +700,7 @@ export const Remembrance = async (context = {}) => {
     "chat.message": handleChatMessage,
 
     event: async ({ event } = {}) => {
+      if (!active()) return;
       try {
         if (!event || typeof event.type !== "string") return;
         if (event.type === "session.created") {
@@ -706,6 +741,7 @@ export const Remembrance = async (context = {}) => {
           clearSessionState(sessionId);
         }
       } catch (error) {
+        if (!active()) return;
         debugLog(env, "opencode_event_dispatch_failed", {
           error: String(error),
         });
@@ -715,6 +751,7 @@ export const Remembrance = async (context = {}) => {
     "experimental.chat.system.transform": handleSystemTransform,
 
     "tool.execute.after": async (input, output) => {
+      if (!active()) return;
       try {
         const sessionId = sessionIdFromEvent(input, output);
         const tool = toolNameFromEvent(input, output);
@@ -755,6 +792,7 @@ export const Remembrance = async (context = {}) => {
           );
           await recordDirectiveFollowThroughForTool(ledgerId, tool, output, {
             env,
+            fetchImpl: context.fetchImpl,
           });
           return;
         }
@@ -807,8 +845,9 @@ export const Remembrance = async (context = {}) => {
             env,
             nativeContextBridge: context.nativeContextBridge,
             // Tool output is untrusted payload, not native provenance.
-            nativeSessionId: nativeSessionIdFromEvent(input, null),
+            nativeSessionId: context.nativeContextAuthority === false ? null : nativeSessionIdFromEvent(input, null),
           });
+          if (!active()) return;
           observeSuccessfulCompletionTool(
             ledgerId,
             tool,
@@ -827,6 +866,7 @@ export const Remembrance = async (context = {}) => {
           env,
         );
       } catch (error) {
+        if (!active()) return;
         debugLog(env, "opencode_tool_observer_failed", {
           error: String(error),
         });
@@ -846,7 +886,12 @@ function toolArgumentsFromEvent(input) {
   return value && typeof value === "object" ? value : {};
 }
 
+export const setup = createOpenCodeV2Setup(Remembrance);
+
 export default Object.freeze({
   id: "@remembrance-ai/opencode-plugin",
   server: Remembrance,
+  setup,
 });
+
+export { createOpenCodeV2Setup };

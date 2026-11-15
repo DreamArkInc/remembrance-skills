@@ -72,7 +72,7 @@ setlocal EnableDelayedExpansion
 endlocal
 :exec
 "%_node%" %*
-exit /b
+exit /b %errorlevel%
 
 :try
 rem Set _node to %1 when it is an .exe file whose -v output is at or above

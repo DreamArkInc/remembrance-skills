@@ -24,6 +24,7 @@ import {
   sign as signPayload,
 } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   chmodSync,
   closeSync,
@@ -46,9 +47,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { isIP } from "node:net";
-import { homedir, tmpdir } from "node:os";
+import { homedir, tmpdir, platform as osPlatform } from "node:os";
 import { dirname, join } from "node:path";
 import process from "node:process";
+import { assertWindowsPrivateRead, withWindowsPrivateReadOperation, withWindowsPrivateDirectoryReadOperation } from "./windows-private-read.mjs";
+import { ensureWindowsPrivateDirectorySync, openWindowsPrivateFileSync } from "./windows-private-create.mjs";
+export { withWindowsPrivateReadOperation } from "./windows-private-read.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   acknowledgeFeedbackDenial,
@@ -78,6 +82,13 @@ import {
 } from "./private-learning-hook-policy.mjs";
 
 export { composeBoundedHookContext } from "./private-learning-hook-policy.mjs";
+
+// Cursor's Windows PowerShell transport can prefix native stdin with a UTF-8
+// BOM. Normalize that one transport prefix; preserve JSON content and errors.
+// Each entrypoint keeps its existing empty-input guard and failure policy.
+export function parseHookInputJson(raw) {
+  return JSON.parse(raw.startsWith("\uFEFF") ? raw.slice(1) : raw);
+}
 
 const DEFAULT_API_URL = "https://remembrance.dev";
 const DEFAULT_LIMIT = 3;
@@ -2399,6 +2410,30 @@ export function emptyQueryContext(
 
 // --- High-level query orchestration ------------------------------------------
 
+// Callback-local paths only: no bytes, authority snapshots, or TTL. Nested
+// lifecycle readers reuse the same optional proof and still read current bytes.
+// Optional metadata enumeration never advances an existing streaming iterator.
+function windowsPrivateDirectorySnapshot(directory) {
+  if (osPlatform() !== "win32") return [];
+  try { return readdirSync(directory); } catch { return []; }
+}
+const windowsCredentialReadScopes = new AsyncLocalStorage();
+function withWindowsHookCredentialReads(env, callback) {
+  if (process.platform !== "win32") return callback();
+  const paths = [remembranceConfigPath(env), agentIdentityPath(env)];
+  const key = paths.join("\0");
+  if (windowsCredentialReadScopes.getStore() === key) return callback();
+  let entered = false;
+  const invoke = () => { entered = true; return windowsCredentialReadScopes.run(key, callback); };
+  try { return withWindowsPrivateReadOperation(paths.map(path => ({ path, kind: "file" })), invoke); }
+  catch (error) {
+    if (entered) throw error;
+    // Preserve existing failure classification if optional setup failed. A
+    // callback failure is never retried or allowed to repeat a network action.
+    return windowsCredentialReadScopes.run(key, callback);
+  }
+}
+
 // Full prompt-hook result. `eligible` means this turn should be recovered at
 // completion even if no registry result was consumed. `consumed` means a real
 // query completed; `matched` means that response contained at least one result
@@ -2409,6 +2444,10 @@ export function emptyQueryContext(
 // `options.projectKeyFallback: false` keeps a host that cannot name it from
 // using its own directory.
 export async function runPromptHook(prompt, options = {}) {
+  return withWindowsHookCredentialReads(options.env ?? process.env, () => runPromptHookWithinCredentialRead(prompt, options));
+}
+
+async function runPromptHookWithinCredentialRead(prompt, options = {}) {
   const result = await buildPromptHookResult(prompt, options);
   if (!options.deferReminderAcknowledgement) {
     acknowledgePrivateAuthorizationReminders(
@@ -3808,7 +3847,9 @@ function clearKnownTerminalAuthorizationOpportunities(env) {
   const directory = privateLearningLifecycleDirectory(env);
   try {
     assertSecureHookDirectory(lstatSync(directory));
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const windowsReadNames = readdirSync(directory, { withFileTypes: true });
+withWindowsPrivateDirectoryReadOperation(directory, osPlatform() === "win32" ? windowsReadNames.map(entry => entry.name) : [], () => {
+for (const entry of windowsReadNames) {
       const match = entry.name.match(
         /^((?:pld|psd)_[A-Za-z0-9_-]{8,96})\.(authorization|parked|held-notice|release-offer)\.json$/,
       );
@@ -3824,6 +3865,7 @@ function clearKnownTerminalAuthorizationOpportunities(env) {
       }
       clearPrivateDraftMarkers(match[1], env, [match[2]]);
     }
+});
   } catch {
     // Terminal cleanup is best-effort and never controls retained draft state.
   }
@@ -4044,7 +4086,7 @@ function writePrivateUsageMarker(path, value, retry = true) {
   const temporaryPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     ensureSecureHookDirectory(dirname(path));
-    writeFileSync(temporaryPath, String(value), {
+    writePrivateHookFile(temporaryPath, String(value), {
       mode: 0o600,
       flag: "wx",
     });
@@ -4394,7 +4436,8 @@ function readCompletionLedger(
       if ((directory === temporary || directory === kept) && names.length > 256) {
         ownComplete = false;
       }
-      for (const name of names.slice(0, 256)) {
+      withWindowsPrivateDirectoryReadOperation(directory, osPlatform() === "win32" ? names.slice(0, 256) : [], () => {
+for (const name of names.slice(0, 256)) {
         if (!/^[a-f0-9]{32}\.json$/.test(name)) continue;
         const path = join(directory, name);
         try {
@@ -4463,6 +4506,8 @@ function readCompletionLedger(
           // One malformed marker must not hide other pending work.
         }
       }
+
+});
     } catch (error) {
       // Session-local feedback and durable draft obligations are independent.
       if (
@@ -4671,7 +4716,8 @@ function readPointedCompletionObligations(
     }
     present = true;
     try {
-      for (;;) {
+      withWindowsPrivateDirectoryReadOperation(directory, windowsPrivateDirectorySnapshot(directory), () => {
+for (;;) {
         if (
           walk.presented >= COMPLETION_OBLIGATION_LIMIT ||
           walk.examined >= COMPLETION_POINTER_SCAN_LIMIT
@@ -4832,6 +4878,8 @@ function readPointedCompletionObligations(
         );
         walk.presented += 1;
       }
+
+});
     } catch {
       // One unreadable home must not hide the other.
       complete = false;
@@ -5003,7 +5051,8 @@ function readAssociatedCompletionObligations(
       continue;
     }
     try {
-      for (;;) {
+      withWindowsPrivateDirectoryReadOperation(directory, windowsPrivateDirectorySnapshot(directory), () => {
+for (;;) {
         if (walk.examined >= COMPLETION_POINTER_SCAN_LIMIT) {
           complete = false;
           break;
@@ -5057,6 +5106,8 @@ function readAssociatedCompletionObligations(
           complete = false;
         }
       }
+
+});
     } catch {
       complete = false;
     } finally {
@@ -6578,7 +6629,7 @@ function createPrivateLessonKey(env, keychain) {
     // An existing directory others can write to is refused, not repaired.
     if (existsSync(directory)) assertSecureHookDirectory(lstatSync(directory));
     ensureSecureHookDirectory(directory);
-    writeFileSync(temporaryPath, `${randomBytes(32).toString("base64url")}\n`, {
+    writePrivateHookFile(temporaryPath, `${randomBytes(32).toString("base64url")}\n`, {
       mode: 0o600,
       flag: "wx",
     });
@@ -8936,7 +8987,9 @@ function scanPrivateOutbox(env, directory, pattern, maxBytes, evaluate) {
   const drafts = new Map();
   if (!privateOutboxReadable(env, directory)) return { readable: false, drafts };
   try {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const windowsReadNames = readdirSync(directory, { withFileTypes: true });
+withWindowsPrivateDirectoryReadOperation(directory, osPlatform() === "win32" ? windowsReadNames.map(entry => entry.name) : [], () => {
+for (const entry of windowsReadNames) {
       const draftId = entry.name.match(pattern)?.[1];
       if (!draftId) continue;
       let known = null;
@@ -8952,6 +9005,7 @@ function scanPrivateOutbox(env, directory, pattern, maxBytes, evaluate) {
       }
       drafts.set(draftId, known ?? { envelope: null });
     }
+});
     return { readable: true, drafts };
   } catch {
     return { readable: false, drafts: new Map() };
@@ -9692,7 +9746,9 @@ function readPrivateDrafts(env) {
   if (organizationPrivateLessonAuthorized(env)) {
     try {
       assertSecureHookDirectory(lstatSync(directory));
-      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const windowsReadNames = readdirSync(directory, { withFileTypes: true });
+withWindowsPrivateDirectoryReadOperation(directory, osPlatform() === "win32" ? windowsReadNames.map(entry => entry.name) : [], () => {
+for (const entry of windowsReadNames) {
         const match = entry.name.match(
           /^((?:pld|psd)_[A-Za-z0-9_-]{8,96})\.(parked|held-notice|release-offer)\.json$/,
         );
@@ -9703,6 +9759,7 @@ function readPrivateDrafts(env) {
           match[2] === "parked" && readPrivateParkedMarker(match[1], env);
         if (marker) parked.set(match[1], marker);
       }
+});
     } catch {
       // No lifecycle directory yet: nothing is parked or noticed.
     }
@@ -10212,7 +10269,9 @@ function dropPrivateHint(draftId, env) {
 function allowPrivateLane(prefix, env) {
   clearPrivateLessonHostPolicyDenials(env);
   try {
-    for (const name of readdirSync(privateLearningLifecycleDirectory(env))) {
+    const windowsReadNames = readdirSync(privateLearningLifecycleDirectory(env));
+withWindowsPrivateDirectoryReadOperation(privateLearningLifecycleDirectory(env), windowsReadNames, () => {
+for (const name of windowsReadNames) {
       const draftId = name.match(/^((?:pld|psd)_[A-Za-z0-9_-]{8,96})\.parked\.json$/)?.[1];
       if (!draftId?.startsWith(prefix)) continue;
       const marker = readPrivateParkedMarker(draftId, env);
@@ -10225,6 +10284,7 @@ function allowPrivateLane(prefix, env) {
         env,
       );
     }
+});
   } catch {
     // Nothing parked yet.
   }
@@ -10507,7 +10567,7 @@ function createHookIdentity(runtime, env = process.env) {
       created_at: new Date().toISOString(),
     };
     ensureSecureHookDirectory(dirname(path));
-    writeFileSync(path, `${JSON.stringify(identity, null, 2)}\n`, {
+    writePrivateHookFile(path, `${JSON.stringify(identity, null, 2)}\n`, {
       mode: 0o600,
       flag: "wx",
     });
@@ -10628,6 +10688,14 @@ function principalSessionCachePath(
 }
 
 export function readHookPrincipalSession(
+  runtime,
+  env = process.env,
+  access,
+) {
+  return withWindowsHookCredentialReads(env, () => readHookPrincipalSessionWithinCredentialRead(runtime, env, access));
+}
+
+function readHookPrincipalSessionWithinCredentialRead(
   runtime,
   env = process.env,
   access = resolveApiAccessSnapshot(env),
@@ -10768,6 +10836,13 @@ export function clearHookPrincipalSession(
 }
 
 export async function warmPrincipalSession(
+  options,
+  env = process.env,
+) {
+  return withWindowsHookCredentialReads(env, () => warmPrincipalSessionWithinCredentialRead(options, env));
+}
+
+async function warmPrincipalSessionWithinCredentialRead(
   {
     runtime,
     hostSurface = null,
@@ -11028,7 +11103,7 @@ function writeHookPrincipalSession(path, value) {
   const temporaryPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     ensureSecureHookDirectory(dirname(path));
-    writeFileSync(temporaryPath, `${JSON.stringify(value)}\n`, {
+    writePrivateHookFile(temporaryPath, `${JSON.stringify(value)}\n`, {
       mode: 0o600,
       flag: "wx",
     });
@@ -11977,7 +12052,11 @@ function projectKeyReasons(projectKey, projectNamed) {
 // connection, 429 or 5xx falls back to that copy once, and anything else
 // renders read_failed (401 and 403 also delete the copy). Null when nothing
 // is delivered: automation is off or the caller has no organization key.
-export async function projectPreferenceSnapshot({
+export async function projectPreferenceSnapshot(options = {}) {
+  return withWindowsHookCredentialReads(options.env ?? process.env, () => projectPreferenceSnapshotWithinCredentialRead(options));
+}
+
+async function projectPreferenceSnapshotWithinCredentialRead({
   runtime,
   env = process.env,
   fetchImpl = fetch,
@@ -12314,7 +12393,7 @@ function writeCachedClientRelease(path, manifest, now) {
   const temporaryPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     ensureSecureHookDirectory(dirname(path));
-    writeFileSync(
+    writePrivateHookFile(
       temporaryPath,
       `${JSON.stringify({ schema_version: 1, checked_at: now, manifest })}\n`,
       { mode: 0o600, flag: "wx" },
@@ -12867,7 +12946,7 @@ function writePluginAlertState(surface, sessionId, state, env = process.env) {
   const temporaryPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     ensureSecureHookDirectory(dirname(path));
-    writeFileSync(temporaryPath, `${JSON.stringify(state)}\n`, {
+    writePrivateHookFile(temporaryPath, `${JSON.stringify(state)}\n`, {
       mode: 0o600,
       flag: "wx",
     });
@@ -12916,7 +12995,8 @@ function recentPrivateLessonHostDenial(env = process.env) {
     const entries = readdirSync(directory, { withFileTypes: true });
     if (entries.length > PLUGIN_ALERT_LIMIT) return true;
     const cutoff = Date.now() - PLUGIN_ALERT_TTL_MS;
-    for (const entry of entries) {
+    return withWindowsPrivateDirectoryReadOperation(directory, osPlatform() === "win32" ? entries.map(entry => entry.name) : [], () => {
+for (const entry of entries) {
       if (
         !entry.isFile() ||
         entry.isSymbolicLink() ||
@@ -12942,6 +13022,8 @@ function recentPrivateLessonHostDenial(env = process.env) {
         return true;
       }
     }
+return false;
+});
   } catch {
     // An unreadable or malformed alert store cannot prove that retrying is
     // authorized. Keep retained private lessons local until the state is
@@ -12955,7 +13037,9 @@ export function clearPrivateLessonHostPolicyDenials(env = process.env) {
   const directory = pluginAlertDir(env);
   let changed = false;
   try {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const windowsReadNames = readdirSync(directory, { withFileTypes: true });
+withWindowsPrivateDirectoryReadOperation(directory, osPlatform() === "win32" ? windowsReadNames.map(entry => entry.name) : [], () => {
+for (const entry of windowsReadNames) {
       if (
         !entry.isFile() ||
         entry.isSymbolicLink() ||
@@ -12986,6 +13070,7 @@ export function clearPrivateLessonHostPolicyDenials(env = process.env) {
         );
       }
     }
+});
   } catch {
     return false;
   }
@@ -13352,7 +13437,7 @@ export function recordPluginLifecycleHealth(
   const temporaryPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     ensureSecureHookDirectory(dirname(path));
-    writeFileSync(temporaryPath, `${JSON.stringify(payload)}\n`, {
+    writePrivateHookFile(temporaryPath, `${JSON.stringify(payload)}\n`, {
       mode: 0o600,
       flag: "wx",
     });
@@ -14136,6 +14221,21 @@ function normalizeHostname(hostname) {
 }
 
 function readSecureHookFile(path, maxBytes) {
+  if (process.platform === "win32") {
+    const before = lstatSync(path, { bigint: true });
+    if (before.isSymbolicLink() || !before.isFile() || before.size > maxBytes) {
+      throw new Error("Remembrance local state is not a bounded regular file.");
+    }
+    const descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      const opened = fstatSync(descriptor, { bigint: true });
+      if (opened.isSymbolicLink() || !opened.isFile() || opened.size > maxBytes) {
+        throw new Error("Remembrance local state is not a bounded regular file.");
+      }
+      assertWindowsPrivateRead(path, "file", before, opened);
+      return readBoundedHookDescriptor(descriptor, maxBytes);
+    } finally { closeSync(descriptor); }
+  }
   const parent = lstatSync(dirname(path));
   assertSecureHookDirectory(parent);
   const before = lstatSync(path);
@@ -14156,7 +14256,17 @@ function readSecureHookFile(path, maxBytes) {
   }
 }
 
+// Windows must establish private ACLs before the first substantive byte.
+// Publication and winner adoption remain with each existing caller.
+function writePrivateHookFile(path, value, options) {
+  if (process.platform !== "win32") return writeFileSync(path, value, options);
+  const descriptor = openWindowsPrivateFileSync(path);
+  try { writeFileSync(descriptor, value); }
+  finally { closeSync(descriptor); }
+}
+
 function ensureSecureHookDirectory(path) {
+  if (process.platform === "win32") return ensureWindowsPrivateDirectorySync(path);
   mkdirSync(path, { recursive: true, mode: 0o700 });
   const metadata = lstatSync(path);
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) {

@@ -2,6 +2,7 @@
 
 import process from "node:process";
 import {
+  parseHookInputJson,
   contributeDisabled,
   isEntryScript,
   recordTaskEligibility,
@@ -52,7 +53,7 @@ export function processLocalMemoryHookInput(raw, options = {}) {
   let input = {};
   try {
     const serialized = String(raw ?? "");
-    input = serialized.trim() ? JSON.parse(serialized) : {};
+    input = serialized.trim() ? parseHookInputJson(serialized) : {};
   } catch {
     input = {};
   }
