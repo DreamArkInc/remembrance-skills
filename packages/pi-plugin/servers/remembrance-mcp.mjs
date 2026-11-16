@@ -25443,7 +25443,7 @@ var seedSkills = [
     summary: "Operational setup and troubleshooting workflow for Remembrance across Claude Code, Codex, OpenClaw, Cursor, Pi, Gemini, MCP, REST, skill-only installs, enterprise keys, and local agent identity.",
     status: "active",
     visibility: "public",
-    version: "0.1.57",
+    version: "0.1.58",
     domains: ["agent-skills", "mcp", "resource-discovery"],
     tags: [
       "remembrance",
@@ -25493,7 +25493,7 @@ var seedSkills = [
         "pi",
         "rest"
       ],
-      version: "0.1.57",
+      version: "0.1.58",
       status: "active",
       visibility: "public",
       providers: ["codex", "claude", "cursor", "openclaw", "pi", "generic"],
@@ -26364,7 +26364,7 @@ paths, or raw logs. Set \`REMEMBRANCE_HEALTH_REPORTING=0\` to disable that
 best-effort report.
 
 If no Remembrance MCP tool is visible, run
-\`npx @remembrance-ai/mcp-server@0.2.26 doctor\`. This safely verifies registry,
+\`npx @remembrance-ai/mcp-server@0.2.27 doctor\`. This safely verifies registry,
 credential, and catalog-read access outside the host, but it deliberately
 reports host registration as unobservable. Update or reinstall the native
 plugin, fully restart the host, then rerun \`run_connection_doctor\` inside it.
@@ -27070,7 +27070,7 @@ Restart Pi and call \`run_connection_doctor\` to confirm organization scope.
 ### Approve other MCP clients
 
 Register exactly \`https://remembrance.dev/api/mcp\` or the exact local
-\`npx @remembrance-ai/mcp-server@0.2.26\` command. Use the recommended organization
+\`npx @remembrance-ai/mcp-server@0.2.27\` command. Use the recommended organization
 tool list above when the client supports tool filtering. Supply the
 organization key through the client's secret/header mechanism, then run
 \`run_connection_doctor\` and require organization scope before private writes.
@@ -27107,13 +27107,13 @@ https://remembrance.dev/api/mcp
 Local stdio MCP server:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.26
+npx @remembrance-ai/mcp-server@0.2.27
 ~~~
 
 Independent setup check when the host does not expose Remembrance tools:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.26 doctor
+npx @remembrance-ai/mcp-server@0.2.27 doctor
 ~~~
 
 This verifies registry, credential, and catalog-read access without submitting
@@ -72112,7 +72112,10 @@ function readCodexHookApproval(options = {}) {
       join13(root, "hooks", "hooks.json"),
       MAX_HOOKS_BYTES
     );
-    const hooks = hooksFile && expectedHooks(hooksFile.toString("utf8"));
+    const hooks = hooksFile && expectedHooks(
+      hooksFile.toString("utf8"),
+      options.platform ?? process.platform
+    );
     const trusted = trustedHashes(
       readBounded(join13(codexHome, "config.toml"), MAX_CONFIG_BYTES)?.toString(
         "utf8"
@@ -72139,7 +72142,7 @@ function readCodexHookApproval(options = {}) {
     return unknown;
   }
 }
-function expectedHooks(text) {
+function expectedHooks(text, platform6) {
   const parsed = JSON.parse(text);
   if (!isRecord8(parsed) || !isRecord8(parsed.hooks) || !onlyKeys(parsed, ["hooks"])) {
     return null;
@@ -72152,7 +72155,13 @@ function expectedHooks(text) {
     const eventName = event.replace(/(?!^)[A-Z]/g, "_$&").toLowerCase();
     for (const [index, group] of groups.entries()) {
       const handler = isRecord8(group) && Array.isArray(group.hooks) ? group.hooks[0] : null;
-      if (!isRecord8(group) || !onlyKeys(group, ["matcher", "hooks"]) || group.matcher !== void 0 && !nonEmptyString(group.matcher) || !Array.isArray(group.hooks) || group.hooks.length !== 1 || !isRecord8(handler) || !onlyKeys(handler, ["type", "command", "timeout", "statusMessage"]) || handler.type !== "command" || !nonEmptyString(handler.command) || handler.timeout !== void 0 && !(typeof handler.timeout === "number" && Number.isSafeInteger(handler.timeout) && handler.timeout > 0) || handler.statusMessage !== void 0 && !nonEmptyString(handler.statusMessage)) {
+      if (!isRecord8(group) || !onlyKeys(group, ["matcher", "hooks"]) || group.matcher !== void 0 && !nonEmptyString(group.matcher) || !Array.isArray(group.hooks) || group.hooks.length !== 1 || !isRecord8(handler) || !onlyKeys(handler, [
+        "type",
+        "command",
+        "commandWindows",
+        "timeout",
+        "statusMessage"
+      ]) || handler.type !== "command" || !nonEmptyString(handler.command) || handler.commandWindows !== void 0 && (!nonEmptyString(handler.commandWindows) || platform6 !== "darwin") || handler.timeout !== void 0 && !(typeof handler.timeout === "number" && Number.isSafeInteger(handler.timeout) && handler.timeout > 0) || handler.statusMessage !== void 0 && !nonEmptyString(handler.statusMessage)) {
         return null;
       }
       const identity2 = {
@@ -73694,7 +73703,7 @@ function inspectPrivateLearningOutbox2(input, dependencies = {}) {
 }
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.2.26" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.2.27" : "0.0.0-dev";
 var tools2 = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var nativeContextCliRequested = process.argv[2] === "--native-context";
