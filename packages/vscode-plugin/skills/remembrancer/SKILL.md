@@ -225,7 +225,7 @@ Do not use this skill when:
    because the installation is not linked to a member, keep the adaptation to
    this task and say once that linking the installation lets it persist.
 
-6. Use the selected skill or resource. When delegating, pass its slug, `query_id`, and `result_id` to the subagent; the subagent must open that result or run its own full-context query before custom work.
+6. Use the selected skill or resource. When delegating, pass its slug, `query_id`, `result_id`, and any `version_id`. If the result gives a `version_id`, the subagent can call `invoke_skill` with the slug and exact version before custom work, and only the child reports the delegated task's terminal outcome on its invocation. Otherwise the parent reports the terminal outcome. The parent keeps the original query receipt for query-fit feedback. If no version ID is given, the child opens the correlated result or runs its own full-context query.
 7. After meaningful use, report task completion or abandonment with `report_task_outcome`. Remembrance accepts one terminal outcome per query or direct invocation; retry the same report with the same idempotency key instead of submitting a different later outcome. Use only result IDs from `task_outcome.eligible_result_ids`. Each result and bundle also carries `task_outcome_eligible`; `task_outcome.available` is true only when at least one result is eligible. One result ID attributes the outcome to that result. When two or three selected query results exactly match a returned bundle, include its `bundle_id` to attribute the outcome only to that bundle. Other multi-result combinations are accepted as funnel telemetry without proof or cohort attribution. Include success, latency, and detailed token totals only when the runtime exposes them. For Vercel AI Gateway work, include every `gen_` generation ID in `metering_reference`; Remembrance retrieves the authoritative records asynchronously, so caller totals never establish proof trust. Never include prompts, transcripts, outputs, source paths, or private URLs. Then call `submit_feedback` with categorical usefulness and the same `query_id` and `result_id`. Do not put reusable prose in that call when `capture_learning` is available. Route reusable content through `capture_learning` separately. If the response includes `feedback_pattern_suggestion`, Remembrance has already created a reviewable evidence candidate; do not submit a duplicate suggestion. Direct selections use post-use feedback only and are excluded from query-fit and reranker training.
 8. Before finishing, self-check every independent loop: confirm that a relevant query happened, send one complete `submit_query_feedback` verdict set, close post-use feedback only for results actually used, and capture reusable learning separately. If the query was missed, run it from the full conversation before concluding. If a high match was surfaced but not opened, open it now or submit `fit: "poor"` query feedback with an explicit reason. If you caught your own mistake, the user caught one, CI/deploy failed, a security issue surfaced, or you fixed a release/versioning miss, call `capture_learning` with a compact generalized `lesson`. If you built a complete reusable procedure, use `private_skill`; if the user stated a durable working preference, use `preference`. Invoke only the exact `next_action` returned. Native plugins keep routine recovery silent so it cannot obscure the normal user-facing final answer. Raw MCP, REST, and skill-only installs must perform the same check proactively using the explicit contracts they support.
 9. If no suitable skill exists, read `private_learning_capture`. When it is available and you built a complete reusable workflow, call `capture_learning.private_skill` with the complete instructions. Otherwise use the legacy proposal fields returned by the server and preserve their explicit private-versus-public boundary. Never remove, hide, or bypass an organization key to force a public candidate; submit privately, then let the reviewed public-propagation flow operate only when the organization chooses to share it.
@@ -252,6 +252,31 @@ organization, destination, visibility, credential, or public fallback:
 Never compress a finished skill into a lesson. Query-result fit is not a
 capture route: always use `submit_query_feedback` for good, partial, or poor
 matches. Post-use usefulness stays in `submit_feedback`.
+
+For private organizations that collect task estimates, include `token_estimate`
+on a lesson, a private skill idea, or a suggestion when you can estimate the
+work that led to it. Give the recurring problem an opaque random ID (`prb_`
+plus 32 lowercase hexadecimal digits). Give each separate execution a fresh
+`run_id` (`run_` plus 32 lowercase hexadecimal digits) and share it with
+everyone reporting on that execution. When reporting use on the same problem,
+send the same problem ID, the current execution's token estimate and its
+query/result IDs with `submit_feedback`. Count the work once across the parent
+and participating subagents. Use the observed model and reasoning effort and
+set an unavailable revision or success to null. Omit the estimate if the
+work cannot be counted reliably. Query-fit ratings have a separate purpose.
+For query-selected single-skill work, the report links the completed outcome
+and feedback in either order. Check `token_estimate_recorded` before
+claiming the estimate was recorded. A successful submission to an older
+server without this field leaves accounting unknown.
+
+If an eligible optional result's summary helped solve the task without opening
+the skill, send `summary_use: {run_id, offer_id}` with its original query and
+result IDs in `submit_feedback`. Copy the row's `summary_use_offer_id` as
+`offer_id`. Check `summary_use_recorded` in the response. Include a
+reliable estimate when available, using the same run ID. If you later use the
+full skill on this execution, keep that run ID for the opened-skill report.
+Seeing a result or rating its fit does not count as using its summary.
+Continue to open applicable high matches.
 
 Do not ask for separate conversational permission before querying, opening a
 returned result, submitting bounded query-fit or categorical post-use feedback,

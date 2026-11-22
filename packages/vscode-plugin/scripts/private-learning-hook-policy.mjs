@@ -568,7 +568,9 @@ const SKILL_PREFERENCES_RECOVERY =
 // their one recovery line. Blocked lines are never cut, so a unit that cannot
 // keep its notes is left out (""). Null when the text has no skill notes.
 function boundedCandidateUnit(text, maxLength) {
-  const lines = text.split("\n");
+  // This path may clip the summary while retaining the scoped notes. An
+  // offer after those notes certifies the complete unit, so drop it first.
+  const lines = text.replace(/ \[summary_use\.offer_id=suo_[a-f0-9]{18}\]$/u, "").split("\n");
   const start = lines.findIndex((line) => line.startsWith("Skill notes for "));
   if (start < 0) return null;
   const head = lines.slice(0, start).join("\n");

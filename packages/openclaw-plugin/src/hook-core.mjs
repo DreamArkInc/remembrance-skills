@@ -1675,6 +1675,11 @@ export function formatContext(
         .filter(autoQuerySkillAllowed)
         .slice(0, itemLimit)
     : [];
+  const pinnedSkills = new Set(
+    skills.filter((skill) =>
+      typeof skill.version_id === "string" && SKILL_VERSION_ID_PATTERN.test(skill.version_id),
+    ),
+  );
   const resources = Array.isArray(body?.resources)
     ? body.resources
         .filter(autoQueryResponseCandidateAllowed)
@@ -1745,7 +1750,9 @@ export function formatContext(
   }
   if (skills.length > 0 || resources.length > 0) {
     requiredTailLines.push(
-      "Delegating this task? Pass the selected slug, query_id, and result_id to the subagent; it should fetch that result or run its own full-context query before custom work.",
+      pinnedSkills.size > 0
+        ? "Delegating this task? Pass slug, query_id, result_id and any version_id. With a version ID, the child calls invoke_skill with slug and version_id. Only the child reports the delegated outcome for that invocation. Otherwise it fetches or searches for the result."
+        : "Delegating this task? Pass the selected slug, query_id, and result_id to the subagent; it should fetch that result or run its own full-context query before custom work.",
     );
   }
 
@@ -1760,14 +1767,19 @@ export function formatContext(
     );
     candidateSections.push({
       header: "Skills:",
-      lines: skills.map((skill) =>
-        [
-          `- [${matchTierLabel(skill.match_tier)}] ${safeText(skill.slug, 80)} (${candidateEvidenceLabel(skill)}${skill.result_id ? `, result ${safeText(skill.result_id, 80)}` : ""}): ${safeText(skill.description, MAX_CONTEXT_FIELD_CHARS)}${candidateDecisionLabel(skill)}`,
-          notes.get(String(skill.slug ?? "")),
+      lines: skills.map((skill) => {
+        const description = safeText(skill.description, MAX_CONTEXT_FIELD_CHARS);
+        const skillNotes = notes.get(String(skill.slug ?? ""));
+        const offer = skillNotes?.includes(SKILL_PREFERENCES_NOT_SHOWN)
+          ? ""
+          : summaryUseOfferHint(body, queryId, skill, description);
+        return [
+          `- [${matchTierLabel(skill.match_tier)}] ${safeText(skill.slug, 80)} (${candidateEvidenceLabel(skill)}${skill.result_id ? `, result ${safeText(skill.result_id, 80)}` : ""}${pinnedSkills.has(skill) ? `, version_id ${skill.version_id}` : ""}): ${description}${candidateDecisionLabel(skill)}${skillNotes ? "" : offer}`,
+          skillNotes ? `${skillNotes}${offer}` : null,
         ]
           .filter(Boolean)
-          .join("\n"),
-      ),
+          .join("\n");
+      }),
     });
   }
   if (resources.length > 0) {
@@ -1786,6 +1798,27 @@ export function formatContext(
     requiredTailLines,
     maxChars: options.maxChars ?? MAX_CONTEXT_CHARS,
   });
+}
+
+function summaryUseOfferHint(body, queryId, skill, displayedDescription) {
+  if (
+    typeof skill.summary_use_offer_id !== "string" ||
+    !/^suo_[a-f0-9]{18}$/u.test(skill.summary_use_offer_id) ||
+    body.skill_access?.scope !== "organization" ||
+    queryId !== body.query_id ||
+    typeof queryId !== "string" ||
+    !/^rq_[a-z0-9_-]{1,77}$/iu.test(queryId) ||
+    !["possible", "exploratory"].includes(skill.match_tier) ||
+    typeof skill.result_id !== "string" ||
+    !/^qres_[a-z0-9_-]{1,75}$/iu.test(skill.result_id) ||
+    typeof skill.slug !== "string" ||
+    safeText(skill.slug, 80) !== skill.slug ||
+    skill.description_truncated === true ||
+    skill.description !== displayedDescription
+  ) return "";
+  // Keep this suffix one short word. Both native context allocators cut at
+  // whitespace within 96 characters, so a cut cannot expose part of it.
+  return ` [summary_use.offer_id=${skill.summary_use_offer_id}]`;
 }
 
 const AUTO_QUERY_CONTEXT_HEADER = "Remembrance auto-query context:";
@@ -11601,6 +11634,8 @@ export function parsePreferenceSnapshotHeader(text) {
   };
 }
 
+const SKILL_PREFERENCES_NOT_SHOWN = "not shown here; before following this skill,";
+
 export function renderSkillPreferenceNotes(input) {
   const redact = input.redact ?? redactPrompt;
   const shownText = (text) =>
@@ -11641,7 +11676,7 @@ export function renderSkillPreferenceNotes(input) {
         ? "Preferences for this skill are"
         : `${hidden}${shown > 0 ? " more" : ""} ${hidden === 1 ? "preference for this skill is" : "preferences for this skill are"}`;
     lines.push(
-      `- ${subject} not shown here; before following this skill, ${call}.`,
+      `- ${subject} ${SKILL_PREFERENCES_NOT_SHOWN} ${call}.`,
     );
   }
   const required = input.advisory.filter((item) => item.required);
@@ -12558,7 +12593,7 @@ const MAX_SESSION_SKILLS_BYTES = 16 * 1024;
 // Slugs and version ids are written verbatim into the directive, so only the
 // server's strict identifier grammars are accepted.
 const SESSION_SKILL_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const SESSION_SKILL_VERSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/;
+const SKILL_VERSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/;
 
 function sessionSkillsAccess(env) {
   if (disabled(env?.REMEMBRANCE_SESSION_SKILLS)) return null;
@@ -12581,7 +12616,7 @@ function sanitizeSessionSkills(value) {
       SESSION_SKILL_SLUG_PATTERN.test(slug) &&
       (versionId === null ||
         (typeof versionId === "string" &&
-          SESSION_SKILL_VERSION_ID_PATTERN.test(versionId))) &&
+          SKILL_VERSION_ID_PATTERN.test(versionId))) &&
       // A pin names one exact version; without it the pin cannot be honored.
       (!pinned || versionId !== null);
     return valid ? [{ slug, version_id: versionId, pinned }] : [];
