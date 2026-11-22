@@ -1293,6 +1293,34 @@ export function inferConstraints(prompt) {
 
 // --- Query (fetch + timeout, fail-open) --------------------------------------
 
+// Every hook registry send stays at its configured destination. Preserve a
+// caller's stricter error mode; never let adapters follow redirects carrying
+// credentials, prompt-derived payloads or session material. Refuse before any
+// response header/body can trigger session refresh, caches or queue completion.
+export async function requestHookRegistry(fetchImpl, url, init = {}) {
+  const response = await fetchImpl(url, {
+    ...init,
+    redirect: init.redirect === "error" ? "error" : "manual",
+  });
+  if (
+    response?.redirected === true ||
+    response?.type === "opaqueredirect" ||
+    (response?.status >= 300 && response?.status < 400)
+  ) {
+    // Release a pooled response without consuming untrusted redirect content.
+    // Cancellation is best-effort and must not delay or replace the refusal.
+    try {
+      void response.body?.cancel()?.catch(() => {});
+    } catch {
+      // An adapter may already have closed or locked the response stream.
+    }
+    const error = new Error("Hook registry redirect refused.");
+    error.name = "HookRegistryRedirectError";
+    throw error;
+  }
+  return response;
+}
+
 // Query Remembrance. Returns { body } on success, null on any failure (HTTP
 // error, timeout, malformed JSON, thrown error). Never throws.
 // The credential and principal-session headers a hook's registry request
@@ -1338,7 +1366,8 @@ export async function queryRemembrance(payload, options = {}) {
           ? `${PRIVATE_LEARNING_CAPTURE_CAPABILITY}, ${RELEVANCE_JUDGE_WAIT_CAPABILITY}`
           : PRIVATE_LEARNING_CAPTURE_CAPABILITY,
     };
-    const response = await fetchImpl(
+    const response = await requestHookRegistry(
+      fetchImpl,
       `${access.apiConfiguration.apiUrl}/api/v1/agent/query`,
       {
         method: "POST",
@@ -1520,7 +1549,8 @@ export async function reportDirectiveEvent(event, options = {}) {
     if (principalSession?.token) {
       headers["x-remembrance-principal-session"] = principalSession.token;
     }
-    const response = await fetchImpl(
+    const response = await requestHookRegistry(
+      fetchImpl,
       `${access.apiConfiguration.apiUrl}/api/v1/agent/directive-events`,
       {
         method: "POST",
@@ -8527,7 +8557,8 @@ async function postTaskOutcome(payload, options = {}) {
     if (principalSession?.token) {
       headers["x-remembrance-principal-session"] = principalSession.token;
     }
-    const response = await (options.fetchImpl ?? fetch)(
+    const response = await requestHookRegistry(
+      options.fetchImpl ?? fetch,
       `${access.apiConfiguration.apiUrl}/api/v1/agent/task-outcomes`,
       {
         method: "POST",
@@ -10629,7 +10660,8 @@ function canonicalHookJson(value) {
 async function registerHookIdentity(identity, fetchImpl, access, signal) {
   let ownerBinding = null;
   try {
-    const bindingResponse = await fetchImpl(
+    const bindingResponse = await requestHookRegistry(
+      fetchImpl,
       `${access.apiConfiguration.apiUrl}/api/v1/agent/keys/register`,
       {
         method: "GET",
@@ -10644,7 +10676,8 @@ async function registerHookIdentity(identity, fetchImpl, access, signal) {
         ownerBinding = candidate;
       }
     }
-  } catch {
+  } catch (error) {
+    if (errorName(error) === "HookRegistryRedirectError") return false;
     // Registration remains fail-open; an existing same-scope key can still use
     // the legacy proof while new organization claims require the binding.
   }
@@ -10668,7 +10701,8 @@ async function registerHookIdentity(identity, fetchImpl, access, signal) {
     Buffer.from(signingPayload),
     createPrivateKey(identity.private_key),
   ).toString("base64url");
-  const response = await fetchImpl(
+  const response = await requestHookRegistry(
+    fetchImpl,
     `${access.apiConfiguration.apiUrl}/api/v1/agent/keys/register`,
     {
       method: "POST",
@@ -10971,7 +11005,7 @@ async function warmPrincipalSessionUncached(
   let lastStatus = 0;
   let lastRetryAfter = null;
   const answered = async (...request) => {
-    const response = await fetchImpl(...request);
+    const response = await requestHookRegistry(fetchImpl, ...request);
     lastStatus = Number(response?.status) || 0;
     lastRetryAfter = response?.headers?.get?.("retry-after") ?? null;
     return response;
@@ -11108,7 +11142,8 @@ async function warmPrincipalSessionUncached(
 }
 
 async function postPrincipalSession(payload, fetchImpl, access, signal) {
-  const response = await fetchImpl(
+  const response = await requestHookRegistry(
+    fetchImpl,
     `${access.apiConfiguration.apiUrl}/api/v1/agent/principal-sessions`,
     {
       method: "POST",
@@ -11785,7 +11820,8 @@ async function readEffectivePreferences(request, options) {
         env,
         options.userAgent,
       );
-      const response = await fetchImpl(
+      const response = await requestHookRegistry(
+        fetchImpl,
         `${options.access.apiConfiguration.apiUrl}/api/v1/agent/preferences/effective`,
         {
           method: "POST",
@@ -12317,7 +12353,7 @@ async function getBoundedJson(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchImpl(url, {
+    const response = await requestHookRegistry(fetchImpl, url, {
       headers,
       signal: controller.signal,
     });
@@ -14008,7 +14044,8 @@ export async function recordExplicitPreferenceObservations(
           )
           .digest("hex");
         const submit = (token) =>
-          (options.fetchImpl ?? fetch)(
+          requestHookRegistry(
+            options.fetchImpl ?? fetch,
             `${access.apiConfiguration.apiUrl}/api/v1/agent/preferences`,
             {
               method: "POST",

@@ -375,6 +375,8 @@ function signBase64Url(privateKeyPem, payload) {
 async function post(path, body, idempotencyKey) {
   const response = await fetch(`${api}${path}`, {
     method: "POST",
+    // Credentials and signed submission bytes belong only to this destination.
+    redirect: "error",
     headers: {
       "content-type": "application/json",
       ...(idempotencyKey ? { "idempotency-key": idempotencyKey } : {}),
@@ -395,6 +397,7 @@ async function post(path, body, idempotencyKey) {
 
 async function get(path) {
   const response = await fetch(`${api}${path}`, {
+    redirect: "error",
     headers: {
       ...(process.env.REMEMBRANCE_API_KEY
         ? { "x-remembrance-api-key": process.env.REMEMBRANCE_API_KEY }

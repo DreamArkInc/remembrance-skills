@@ -25230,6 +25230,19 @@ var organizationReviewAssessmentSchema = external_exports.discriminatedUnion("ki
     defer_effect: organizationReviewText
   }).strict()
 ]);
+var publicReviewAssessmentSchema = external_exports.discriminatedUnion("kind", [
+  organizationReviewAssessmentSchema.options[0],
+  organizationReviewAssessmentSchema.options[1].extend({
+    source_basis: organizationReviewSourceBasisSchema
+  }),
+  organizationReviewAssessmentSchema.options[2].extend({
+    draft_mode: external_exports.enum(["append_addendum", "requires_authoring"]).default("requires_authoring")
+  }),
+  organizationReviewAssessmentSchema.options[3].extend({
+    authorized_role: external_exports.literal("global_admin"),
+    decision_scope: external_exports.literal("registry_governance")
+  })
+]);
 var verifierOutputSchema = external_exports.object({
   recommended_action: verifierActionSchema,
   confidence: external_exports.number().min(0).max(1),
@@ -25260,6 +25273,7 @@ var verifierOutputSchema = external_exports.object({
   // raw accept. Null preserves ordinary supported verification through existing
   // gates; it adds no authority. Missing/malformed thin classifications repair
   // asynchronously. Older external approvers retain their original protocol.
+  public_review: publicReviewAssessmentSchema.nullable().optional().catch(null),
   organization_review: organizationReviewAssessmentSchema.nullable().optional().catch(null)
 });
 
@@ -25725,7 +25739,7 @@ var seedSkills = [
     summary: "Operational setup and troubleshooting workflow for Remembrance across Claude Code, Codex, OpenClaw, Cursor, Pi, Gemini, MCP, REST, skill-only installs, enterprise keys, and local agent identity.",
     status: "active",
     visibility: "public",
-    version: "0.1.60",
+    version: "0.1.61",
     domains: ["agent-skills", "mcp", "resource-discovery"],
     tags: [
       "remembrance",
@@ -25775,7 +25789,7 @@ var seedSkills = [
         "pi",
         "rest"
       ],
-      version: "0.1.60",
+      version: "0.1.61",
       status: "active",
       visibility: "public",
       providers: ["codex", "claude", "cursor", "openclaw", "pi", "generic"],
@@ -26646,7 +26660,7 @@ paths, or raw logs. Set \`REMEMBRANCE_HEALTH_REPORTING=0\` to disable that
 best-effort report.
 
 If no Remembrance MCP tool is visible, run
-\`npx @remembrance-ai/mcp-server@0.2.29 doctor\`. This safely verifies registry,
+\`npx @remembrance-ai/mcp-server@0.2.30 doctor\`. This safely verifies registry,
 credential, and catalog-read access outside the host, but it deliberately
 reports host registration as unobservable. Update or reinstall the native
 plugin, fully restart the host, then rerun \`run_connection_doctor\` inside it.
@@ -27352,7 +27366,7 @@ Restart Pi and call \`run_connection_doctor\` to confirm organization scope.
 ### Approve other MCP clients
 
 Register exactly \`https://remembrance.dev/api/mcp\` or the exact local
-\`npx @remembrance-ai/mcp-server@0.2.29\` command. Use the recommended organization
+\`npx @remembrance-ai/mcp-server@0.2.30\` command. Use the recommended organization
 tool list above when the client supports tool filtering. Supply the
 organization key through the client's secret/header mechanism, then run
 \`run_connection_doctor\` and require organization scope before private writes.
@@ -27389,13 +27403,13 @@ https://remembrance.dev/api/mcp
 Local stdio MCP server:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.29
+npx @remembrance-ai/mcp-server@0.2.30
 ~~~
 
 Independent setup check when the host does not expose Remembrance tools:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.29 doctor
+npx @remembrance-ai/mcp-server@0.2.30 doctor
 ~~~
 
 This verifies registry, credential, and catalog-read access without submitting
@@ -71550,6 +71564,7 @@ import { closeSync as closeSync7, fstatSync as fstatSync7, lstatSync as lstatSyn
 import { dirname as dirname10, join as join11 } from "node:path";
 import { platform as platform5 } from "node:os";
 var ADMIN_CREDENTIAL_ISSUANCE_OPERATIONS = Object.freeze(["api_keys.create", "agents.member_link.create"]);
+var apiKeyIdSchema = external_exports.string().regex(/^(?:ak|key)_[a-f0-9]{18}$/);
 var recordSchema = external_exports.object({
   version: external_exports.literal("admin-credential-vault-v1"),
   base_url: external_exports.string(),
@@ -71560,7 +71575,7 @@ var recordSchema = external_exports.object({
   state: external_exports.enum(["pending", "not_delivered", "stored"]),
   created_at: external_exports.string().datetime(),
   secret: external_exports.string().min(1).max(4096).optional(),
-  key_id: external_exports.string().regex(/^key_[a-f0-9]{18}$/).optional(),
+  key_id: apiKeyIdSchema.optional(),
   expires_at: external_exports.string().datetime().optional()
 }).strict();
 function pathFor(baseUrl, requestId) {
@@ -71681,7 +71696,7 @@ function storeIssuedAdminCredential(delivery, body) {
     ...delivery.record,
     state: "stored",
     secret,
-    ...typeof key2.id === "string" && /^key_[a-f0-9]{18}$/.test(key2.id) ? { key_id: key2.id } : {},
+    ...apiKeyIdSchema.safeParse(key2.id).success ? { key_id: key2.id } : {},
     ...external_exports.string().datetime().safeParse(result.expires_at).success ? { expires_at: result.expires_at } : {}
   });
   return true;
@@ -71964,7 +71979,11 @@ function createRemembranceNetworkTransport(fetchImpl) {
   const delegate = fetchImpl ?? globalThis.fetch;
   const request2 = (input, init) => {
     assertRemembranceNetworkEgressAllowed("transport request");
-    return delegate.call(globalThis, input, init);
+    const redirect = init?.redirect ?? (input instanceof Request ? input.redirect : void 0);
+    return delegate.call(globalThis, input, {
+      ...init,
+      redirect: redirect === "manual" ? "manual" : "error"
+    });
   };
   return Object.freeze({ request: request2 });
 }
@@ -73989,7 +74008,7 @@ function inspectPrivateLearningOutbox2(input, dependencies = {}) {
 }
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.2.29" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.2.30" : "0.0.0-dev";
 var tools2 = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var nativeContextCliRequested = process.argv[2] === "--native-context";
