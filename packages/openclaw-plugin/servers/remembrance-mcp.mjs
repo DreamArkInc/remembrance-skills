@@ -24953,6 +24953,86 @@ var proposedSkillMetadataSchema = external_exports.object({
   rationale: external_exports.string().trim().min(1).max(PROPOSED_METADATA_MAX_RATIONALE_LENGTH),
   model: external_exports.string().trim().min(1).max(PROPOSED_METADATA_MAX_MODEL_LENGTH)
 });
+var organizationReviewText = external_exports.string().trim().min(1).max(2e3);
+var organizationReviewReference = external_exports.string().trim().min(1).max(MAX_SHORT_TEXT_LENGTH);
+var organizationReviewSourceBasisSchema = external_exports.object({
+  source_quote: external_exports.string().min(1).max(MAX_LONG_TEXT_LENGTH),
+  warrant: organizationReviewText,
+  claim_status: external_exports.enum([
+    "present_unresolved",
+    "resolved",
+    "hypothetical",
+    "absent"
+  ]),
+  preserves_scope_and_modality: external_exports.boolean()
+}).strict();
+var organizationReviewEvidenceFields = {
+  evidence_assessments: external_exports.array(
+    external_exports.object({
+      outcome_id: organizationReviewReference,
+      relation: external_exports.enum([
+        "supporting",
+        "contradicting",
+        "irrelevant",
+        "unknown"
+      ]),
+      reason: organizationReviewText
+    }).strict()
+  ).max(10).optional()
+};
+var organizationReviewAssessmentSchema = external_exports.discriminatedUnion("kind", [
+  external_exports.object({
+    kind: external_exports.literal("observation"),
+    reason: organizationReviewText,
+    ...organizationReviewEvidenceFields
+  }).strict(),
+  external_exports.object({
+    kind: external_exports.literal("evidence_waiting"),
+    reason: organizationReviewText,
+    ...organizationReviewEvidenceFields,
+    // Optional for historical protected-artifact reads; new active work must
+    // supply and source-bind this witness through the normal completion gate.
+    source_basis: organizationReviewSourceBasisSchema.optional(),
+    claim: external_exports.object({
+      statement: organizationReviewText,
+      supporting_outcome: organizationReviewText,
+      contradicting_outcome: organizationReviewText,
+      skill_slug: organizationReviewReference.nullable(),
+      skill_version_id: organizationReviewReference.nullable(),
+      conditions: external_exports.array(organizationReviewText).max(12)
+    }).strict()
+  }).strict(),
+  external_exports.object({
+    kind: external_exports.literal("amendment"),
+    reason: organizationReviewText,
+    ...organizationReviewEvidenceFields,
+    requested_change: organizationReviewText,
+    source_quote: external_exports.string().min(1).max(MAX_LONG_TEXT_LENGTH),
+    skill_slug: organizationReviewReference.nullable(),
+    skill_version_id: organizationReviewReference.nullable(),
+    draft_mode: external_exports.enum([
+      "append_addendum",
+      "requires_authoring",
+      "refresh_public_source"
+    ]).default("requires_authoring")
+  }).strict(),
+  external_exports.object({
+    kind: external_exports.literal("human_decision"),
+    reason: organizationReviewText,
+    ...organizationReviewEvidenceFields,
+    question: organizationReviewText,
+    authorized_role: external_exports.literal("organization_admin"),
+    decision_scope: external_exports.enum([
+      "access",
+      "policy",
+      "safety_exception",
+      "irreducible_choice"
+    ]),
+    approve_effect: organizationReviewText,
+    decline_effect: organizationReviewText,
+    defer_effect: organizationReviewText
+  }).strict()
+]);
 var verifierOutputSchema = external_exports.object({
   recommended_action: verifierActionSchema,
   confidence: external_exports.number().min(0).max(1),
@@ -24978,7 +25058,12 @@ var verifierOutputSchema = external_exports.object({
   // or malformed topology fragment must not discard an otherwise valid safety
   // verdict; it degrades to null, which the topology router retains as
   // evidence-only rather than allowing an unclassified mutation.
-  topology_assessment: skillTopologyAssessmentSchema.nullable().default(null).catch(null)
+  topology_assessment: skillTopologyAssessmentSchema.nullable().default(null).catch(null),
+  // Explicit dispositions are unverified service work, even beside a conflicting
+  // raw accept. Null preserves ordinary supported verification through existing
+  // gates; it adds no authority. Missing/malformed thin classifications repair
+  // asynchronously. Older external approvers retain their original protocol.
+  organization_review: organizationReviewAssessmentSchema.nullable().optional().catch(null)
 });
 
 // ../core/src/verification-policy.ts
@@ -25443,7 +25528,7 @@ var seedSkills = [
     summary: "Operational setup and troubleshooting workflow for Remembrance across Claude Code, Codex, OpenClaw, Cursor, Pi, Gemini, MCP, REST, skill-only installs, enterprise keys, and local agent identity.",
     status: "active",
     visibility: "public",
-    version: "0.1.58",
+    version: "0.1.59",
     domains: ["agent-skills", "mcp", "resource-discovery"],
     tags: [
       "remembrance",
@@ -25493,7 +25578,7 @@ var seedSkills = [
         "pi",
         "rest"
       ],
-      version: "0.1.58",
+      version: "0.1.59",
       status: "active",
       visibility: "public",
       providers: ["codex", "claude", "cursor", "openclaw", "pi", "generic"],
@@ -26364,7 +26449,7 @@ paths, or raw logs. Set \`REMEMBRANCE_HEALTH_REPORTING=0\` to disable that
 best-effort report.
 
 If no Remembrance MCP tool is visible, run
-\`npx @remembrance-ai/mcp-server@0.2.27 doctor\`. This safely verifies registry,
+\`npx @remembrance-ai/mcp-server@0.2.28 doctor\`. This safely verifies registry,
 credential, and catalog-read access outside the host, but it deliberately
 reports host registration as unobservable. Update or reinstall the native
 plugin, fully restart the host, then rerun \`run_connection_doctor\` inside it.
@@ -27070,7 +27155,7 @@ Restart Pi and call \`run_connection_doctor\` to confirm organization scope.
 ### Approve other MCP clients
 
 Register exactly \`https://remembrance.dev/api/mcp\` or the exact local
-\`npx @remembrance-ai/mcp-server@0.2.27\` command. Use the recommended organization
+\`npx @remembrance-ai/mcp-server@0.2.28\` command. Use the recommended organization
 tool list above when the client supports tool filtering. Supply the
 organization key through the client's secret/header mechanism, then run
 \`run_connection_doctor\` and require organization scope before private writes.
@@ -27107,13 +27192,13 @@ https://remembrance.dev/api/mcp
 Local stdio MCP server:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.27
+npx @remembrance-ai/mcp-server@0.2.28
 ~~~
 
 Independent setup check when the host does not expose Remembrance tools:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.27 doctor
+npx @remembrance-ai/mcp-server@0.2.28 doctor
 ~~~
 
 This verifies registry, credential, and catalog-read access without submitting
@@ -73703,7 +73788,7 @@ function inspectPrivateLearningOutbox2(input, dependencies = {}) {
 }
 var MAX_REMOTE_RESPONSE_BYTES = 4 * 1024 * 1024;
 var DOCTOR_PROBE_TIMEOUT_MS = 7500;
-var SERVER_VERSION = true ? "0.2.27" : "0.0.0-dev";
+var SERVER_VERSION = true ? "0.2.28" : "0.0.0-dev";
 var tools2 = toolDefinitions;
 var doctorCliRequested = process.argv[2] === "doctor";
 var nativeContextCliRequested = process.argv[2] === "--native-context";
