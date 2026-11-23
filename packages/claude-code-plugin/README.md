@@ -577,20 +577,21 @@ high match silently so the next user prompt can ask Claude to fetch it or report
 explicit poor-fit feedback; a `PostToolUse` hook clears that marker only after the same slug and
 `query_id`/`result_id` open successfully.
 Without an organization key, the server's relevance judge chooses what a search
-is shown from the top 20 public candidates: Jev (TypeSafe, through Vercel AI
-Gateway) rates each candidate first, and a language model decides the ones Jev
+is shown from the top 20 public candidates: a fast relevance model rates every
+candidate first, and a language model decides the ones the relevance model
 leaves undecided while there is time. It receives the search's task text and
 public skill cards only. Every request asks for zero retention and no prompt
-training; for Jev, zero retention rests on Remembrance's account-specific
-agreement with TypeSafe through Vercel, which the Gateway does not confirm.
-With an organization key, a search is judged only under the organization's
-managed processing grant for semantic search, and Jev rates it first only when
-that grant also approves TypeSafe, under the owner-attested zero-retention
-agreement with TypeSafe (owner decisions 36 and 64), which covers this judge
-stage and no other purpose: its task text and skill cards, the organization's
-own included, go only to the hosts that grant approves, each asked for zero
-retention and no prompt training. Without that grant nothing is sent and the
-search keeps the rule's list.
+training; for the relevance model, zero retention rests on Remembrance's
+account-specific agreement with the relevance model's provider, which our AI
+gateway does not confirm. With an organization key, a search is judged only
+under the organization's managed processing grant for semantic search, and the
+relevance model rates it first only when that grant also approves its
+provider, under the owner-attested zero-retention agreement with that provider
+(owner decisions 36 and 64), which covers this judge stage and no other
+purpose: its task text and skill cards, the organization's own included, go
+only to the hosts that grant approves, each asked for zero retention and no
+prompt training. Without that grant nothing is sent and the search keeps the
+rule's list.
 A card shows a skill's use and exclusion conditions only where the
 platform generated them or a person reviewed them. A use condition only
 promotes a result, and only an exclusion its author stated or a person
@@ -653,10 +654,11 @@ Environment:
 - `REMEMBRANCE_AUTO_QUERY_LIMIT`: result limit, default `3`, max `10`.
 - `REMEMBRANCE_AUTO_QUERY_TIMEOUT_MS`: hook request timeout. The search waits
   `3000` by default, so the server's relevance judge can take its longer
-  2,000 ms hook deadline when Jev leaves candidates undecided; the hook's
-  other requests wait `2000`. A value applies to every hook request, and one
-  under `3000` tells the server not to wait that long. A stopped search whose
-  preference read and search both hang delays the prompt about 5 s.
+  2,000 ms hook deadline when the relevance model leaves candidates undecided;
+  the hook's other requests wait `2000`. A value applies to every hook
+  request, and one under `3000` tells the server not to wait that long. A
+  stopped search whose preference read and search both hang delays the prompt
+  about 5 s.
 - `REMEMBRANCE_AUTO_QUERY_HYGIENE=0`: also searches host-generated text a
   trigger word matches (a Codex commit or pull-request generation prompt, a
   subagent hand-back, pasted `git status` output, an explicit local skill

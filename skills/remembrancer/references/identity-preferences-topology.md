@@ -63,7 +63,7 @@ token. Linking does not rotate the organization key or create another billed
 agent. Members can rename their linked installations; organization admins can
 assign, reassign, activate, or deactivate installations and label child runtime
 profiles independently. Automatic runtime check-ins preserve custom profile
-labels. Agent responses never contain member email addresses, Clerk IDs, or
+labels. Agent responses never contain member email addresses, account IDs, or
 internal organization IDs.
 
 ## Preference contract

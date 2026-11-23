@@ -236,20 +236,21 @@ server still records the missing-skill demand.
 Set `REMEMBRANCE_AUTO_QUERY_TASK_SHAPE=0` to search keyword-triggered prompts
 only.
 Without an organization key, the server's relevance judge chooses what a search
-is shown from the top 20 public candidates: Jev (TypeSafe, through Vercel AI
-Gateway) rates each candidate first, and a language model decides the ones Jev
+is shown from the top 20 public candidates: a fast relevance model rates every
+candidate first, and a language model decides the ones the relevance model
 leaves undecided while there is time. It receives the search's task text and
 public skill cards only. Every request asks for zero retention and no prompt
-training; for Jev, zero retention rests on Remembrance's account-specific
-agreement with TypeSafe through Vercel, which the Gateway does not confirm.
-With an organization key, a search is judged only under the organization's
-managed processing grant for semantic search, and Jev rates it first only when
-that grant also approves TypeSafe, under the owner-attested zero-retention
-agreement with TypeSafe (owner decisions 36 and 64), which covers this judge
-stage and no other purpose: its task text and skill cards, the organization's
-own included, go only to the hosts that grant approves, each asked for zero
-retention and no prompt training. Without that grant nothing is sent and the
-search keeps the rule's list.
+training; for the relevance model, zero retention rests on Remembrance's
+account-specific agreement with the relevance model's provider, which our AI
+gateway does not confirm. With an organization key, a search is judged only
+under the organization's managed processing grant for semantic search, and the
+relevance model rates it first only when that grant also approves its
+provider, under the owner-attested zero-retention agreement with that provider
+(owner decisions 36 and 64), which covers this judge stage and no other
+purpose: its task text and skill cards, the organization's own included, go
+only to the hosts that grant approves, each asked for zero retention and no
+prompt training. Without that grant nothing is sent and the search keeps the
+rule's list.
 A card shows a skill's use and exclusion conditions only where the
 platform generated them or a person reviewed them. A use condition only
 promotes a result, and only an exclusion its author stated or a person
