@@ -1,6 +1,6 @@
 {
   "name": "@remembrance-ai/pi-plugin",
-  "version": "0.2.32",
+  "version": "0.2.33",
   "license": "Apache-2.0",
   "description": "Native Pi extension for Remembrance discovery, preferences, feedback, and protected learning.",
   "type": "module",

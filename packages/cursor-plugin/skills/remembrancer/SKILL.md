@@ -254,16 +254,25 @@ capture route: always use `submit_query_feedback` for good, partial, or poor
 matches. Post-use usefulness stays in `submit_feedback`.
 
 For private organizations that collect task estimates, include `token_estimate`
-on a lesson, a private skill idea, or a suggestion when you can estimate the
+on a lesson, a private skill idea, or a suggestion when you can measure the
 work that led to it. Give the recurring problem an opaque random ID (`prb_`
 plus 32 lowercase hexadecimal digits). Give each separate execution a fresh
 `run_id` (`run_` plus 32 lowercase hexadecimal digits) and share it with
 everyone reporting on that execution. When reporting use on the same problem,
-send the same problem ID, the current execution's token estimate and its
-query/result IDs with `submit_feedback`. Count the work once across the parent
-and participating subagents. Use the observed model and reasoning effort and
-set an unavailable revision or success to null. Omit the estimate if the
-work cannot be counted reliably. Query-fit ratings have a separate purpose.
+send the same problem ID, the current execution's estimate and its query/result
+IDs with `submit_feedback`. The estimate can include `total_tokens`,
+`task_duration_ms`, or both. Count tokens once across the parent and
+participating subagents. Set `task_duration_ms` to elapsed wall-clock
+milliseconds from task start to the first usable final answer, including waiting
+and retries. For a failed attempt, measure until work stops. For the original
+run, stop timing before drafting or submitting the resulting contribution.
+Use the host's task timestamps or a single parent timer. Leave duration
+unknown if the task start was not observed.
+Count elapsed time only once across parallel or delegated work. Use a positive
+integer up to 2,592,000,000 ms (30 days). Use the observed model and reasoning
+effort and set an unavailable revision or success to null.
+Omit unknown measurements and omit the envelope if neither is known.
+Query-fit ratings have a separate purpose.
 For query-selected single-skill work, the report links the completed outcome
 and feedback in either order. Check `token_estimate_recorded` before
 claiming the estimate was recorded. A successful submission to an older

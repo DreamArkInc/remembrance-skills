@@ -997,7 +997,7 @@ paths, or raw logs. Set `REMEMBRANCE_HEALTH_REPORTING=0` to disable that
 best-effort report.
 
 If no Remembrance MCP tool is visible, run
-`npx @remembrance-ai/mcp-server@0.2.32 doctor`. This safely verifies registry,
+`npx @remembrance-ai/mcp-server@0.2.33 doctor`. This safely verifies registry,
 credential, and catalog-read access outside the host, but it deliberately
 reports host registration as unobservable. Update or reinstall the native
 plugin, fully restart the host, then rerun `run_connection_doctor` inside it.
@@ -2217,7 +2217,7 @@ Restart Pi and call `run_connection_doctor` to confirm organization scope.
 ### Approve other MCP clients
 
 Register exactly `https://remembrance.dev/api/mcp` or the exact local
-`npx @remembrance-ai/mcp-server@0.2.32` command. Use the recommended organization
+`npx @remembrance-ai/mcp-server@0.2.33` command. Use the recommended organization
 tool list above when the client supports tool filtering. Supply the
 organization key through the client's secret/header mechanism, then run
 `run_connection_doctor` and require organization scope before private writes.
@@ -2254,13 +2254,13 @@ https://remembrance.dev/api/mcp
 Local stdio MCP server:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.32
+npx @remembrance-ai/mcp-server@0.2.33
 ~~~
 
 Independent setup check when the host does not expose Remembrance tools:
 
 ~~~bash
-npx @remembrance-ai/mcp-server@0.2.32 doctor
+npx @remembrance-ai/mcp-server@0.2.33 doctor
 ~~~
 
 This verifies registry, credential, and catalog-read access without submitting
